@@ -157,6 +157,133 @@ func (s *Server) sendSessionsEvent(w http.ResponseWriter, flusher http.Flusher) 
 	flusher.Flush()
 }
 
+func parsePaneTarget(path string) (tmux.Pane, error) {
+	// Path format: /pane/session:window.pane or /pane/session:window.pane/send
+	path = strings.TrimPrefix(path, "/pane/")
+	path = strings.TrimSuffix(path, "/send")
+
+	// Parse session:window.pane
+	var session string
+	var window, pane int
+
+	colonIdx := strings.Index(path, ":")
+	if colonIdx == -1 {
+		return tmux.Pane{Session: path, Window: 0, Index: 0}, nil
+	}
+
+	session = path[:colonIdx]
+	rest := path[colonIdx+1:]
+
+	dotIdx := strings.Index(rest, ".")
+	if dotIdx == -1 {
+		fmt.Sscanf(rest, "%d", &window)
+	} else {
+		fmt.Sscanf(rest[:dotIdx], "%d", &window)
+		fmt.Sscanf(rest[dotIdx+1:], "%d", &pane)
+	}
+
+	return tmux.Pane{Session: session, Window: window, Index: pane}, nil
+}
+
 func (s *Server) handlePane(w http.ResponseWriter, r *http.Request) {
-	w.Write([]byte("pane handler - will implement next"))
+	pane, err := parsePaneTarget(r.URL.Path)
+	if err != nil {
+		http.Error(w, "invalid pane target", http.StatusBadRequest)
+		return
+	}
+
+	// Handle send action
+	if strings.HasSuffix(r.URL.Path, "/send") {
+		s.handlePaneSend(w, r, pane)
+		return
+	}
+
+	accept := r.Header.Get("Accept")
+	if strings.Contains(accept, "text/event-stream") || r.URL.Query().Get("stream") == "1" {
+		s.streamPane(w, r, pane)
+		return
+	}
+
+	output, err := s.tmux.CapturePane(pane, 500)
+	if err != nil {
+		http.Error(w, "failed to capture pane: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	parseResult := parser.Parse(output)
+
+	data := struct {
+		Pane        tmux.Pane
+		Output      string
+		ParseResult parser.Result
+	}{
+		Pane:        pane,
+		Output:      output,
+		ParseResult: parseResult,
+	}
+
+	s.templates.ExecuteTemplate(w, "pane.html", data)
+}
+
+func (s *Server) handlePaneSend(w http.ResponseWriter, r *http.Request, pane tmux.Pane) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	r.ParseForm()
+	input := r.FormValue("input")
+	special := r.FormValue("special") == "true"
+
+	var err error
+	if special {
+		err = s.tmux.SendSpecialKey(pane, input)
+	} else {
+		err = s.tmux.SendKeys(pane, input, true)
+	}
+
+	if err != nil {
+		http.Error(w, "failed to send keys: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) streamPane(w http.ResponseWriter, r *http.Request, pane tmux.Pane) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "SSE not supported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	var lastOutput string
+
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			output, err := s.tmux.CapturePane(pane, 500)
+			if err != nil {
+				continue
+			}
+
+			if output != lastOutput {
+				lastOutput = output
+				for _, line := range strings.Split(output, "\n") {
+					fmt.Fprintf(w, "data: %s\n", line)
+				}
+				fmt.Fprintf(w, "\n")
+				flusher.Flush()
+			}
+		}
+	}
 }
