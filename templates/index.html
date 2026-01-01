@@ -1,9 +1,9 @@
 {{define "index.html"}}
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="h-full">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
     <title>tmux-dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
@@ -11,11 +11,16 @@
     <script src="https://cdn.jsdelivr.net/npm/ansi_up@6/ansi_up.min.js"></script>
     <style>
         .terminal { font-family: ui-monospace, monospace; }
+        html, body {
+            height: 100%;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+        }
     </style>
 </head>
-<body class="bg-gray-100 min-h-screen overflow-y-auto">
-<div class="max-w-lg mx-auto p-4 pb-20">
-    <header class="flex items-center justify-between mb-6 sticky top-0 bg-gray-100 py-2 -mt-2 z-10">
+<body class="bg-gray-100 min-h-full">
+<div class="max-w-lg mx-auto p-4 pb-24">
+    <header class="flex items-center justify-between mb-6 sticky top-0 bg-gray-100 py-3 z-10">
         <h1 class="text-xl font-bold text-gray-800">tmux-dashboard</h1>
         <button
             hx-get="/sessions"
