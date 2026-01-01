@@ -1,0 +1,67 @@
+{{define "sessions"}}
+{{if .NeedsAttention}}
+<section class="mb-6">
+    <h2 class="text-sm font-semibold text-gray-600 mb-3 uppercase tracking-wide">
+        Needs Attention ({{len .NeedsAttention}})
+    </h2>
+    {{range .NeedsAttention}}
+    <a href="/pane/{{.Session.Name}}:0.0" class="block mb-3">
+        <div class="bg-white rounded-lg shadow p-4 border-l-4 border-red-500">
+            <div class="flex items-center gap-2 mb-2">
+                <span class="w-3 h-3 rounded-full {{if eq .ParseResult.Type.String "error"}}bg-red-500{{else}}bg-orange-500{{end}}"></span>
+                <span class="font-medium text-gray-900">{{.Session.Name}}</span>
+            </div>
+            <p class="text-sm text-gray-600 mb-2">
+                {{if eq .ParseResult.Type.String "error"}}Error encountered
+                {{else if eq .ParseResult.Type.String "choice"}}Waiting for choice
+                {{else if eq .ParseResult.Type.String "question"}}Waiting for input
+                {{else}}Needs attention{{end}}
+            </p>
+            {{if .ParseResult.Question}}
+            <p class="text-sm text-gray-800 italic">"{{truncate .ParseResult.Question 60}}"</p>
+            {{end}}
+            {{if .ParseResult.Choices}}
+            <div class="flex gap-2 mt-3">
+                {{range $i, $c := .ParseResult.Choices}}
+                {{if lt $i 4}}
+                <button
+                    hx-post="/pane/{{$.Session.Name}}:0.0/send"
+                    hx-vals='{"input": "{{add $i 1}}"}'
+                    class="px-3 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded"
+                    onclick="event.stopPropagation()"
+                >{{add $i 1}}</button>
+                {{end}}
+                {{end}}
+            </div>
+            {{end}}
+            <p class="text-xs text-gray-400 mt-2">{{timeAgo .Session.LastActivity}}</p>
+        </div>
+    </a>
+    {{end}}
+</section>
+{{end}}
+
+{{if .OtherSessions}}
+<section>
+    <h2 class="text-sm font-semibold text-gray-600 mb-3 uppercase tracking-wide">
+        Other Sessions ({{len .OtherSessions}})
+    </h2>
+    <div class="bg-white rounded-lg shadow divide-y">
+        {{range .OtherSessions}}
+        <a href="/pane/{{.Name}}:0.0" class="flex items-center gap-3 p-3 hover:bg-gray-50">
+            <span class="w-2 h-2 rounded-full {{if .Attached}}bg-green-500{{else}}bg-gray-300{{end}}"></span>
+            <span class="text-gray-700">{{.Name}}</span>
+            <span class="text-xs text-gray-400 ml-auto">{{.Windows}} win</span>
+        </a>
+        {{end}}
+    </div>
+</section>
+{{end}}
+
+{{if and (not .NeedsAttention) (not .OtherSessions)}}
+<div class="text-center py-12 text-gray-500">
+    <p>No tmux sessions running</p>
+    <p class="text-sm mt-2">Start a tmux session to see it here</p>
+</div>
+{{end}}
+{{end}}
