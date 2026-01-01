@@ -24,6 +24,11 @@ type Pane struct {
 }
 
 func (p Pane) Target() string {
+	// If window/pane are default (0), just use session name
+	// This lets tmux pick the active window/pane
+	if p.Window == 0 && p.Index == 0 {
+		return p.Session
+	}
 	return fmt.Sprintf("%s:%d.%d", p.Session, p.Window, p.Index)
 }
 
