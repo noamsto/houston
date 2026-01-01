@@ -8,8 +8,12 @@ build:
 run: build
     ./tmux-dashboard
 
-# Run with go run (for development), finds available port
+# Run with hot reload (air)
 dev:
+    air
+
+# Run without hot reload, finds available port
+run-dev:
     #!/usr/bin/env bash
     for port in 8080 8081 8082 8083 8084 8085; do
         if ! nc -z localhost $port 2>/dev/null; then

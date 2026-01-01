@@ -1,5 +1,6 @@
 # Build output
 tmux-dashboard
+tmp/
 
 # Editor/IDE
 .idea/

@@ -1,0 +1,16 @@
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  cmd = "go build -o ./tmp/tmux-dashboard ."
+  bin = "./tmp/tmux-dashboard"
+  args_bin = ["-addr", "localhost:8080"]
+  include_ext = ["go", "html", "js"]
+  exclude_dir = ["tmp", "vendor", ".git"]
+  delay = 500
+
+[log]
+  time = false
+
+[misc]
+  clean_on_exit = true
