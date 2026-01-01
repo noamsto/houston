@@ -2,6 +2,7 @@
 package status
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,17 +15,29 @@ const (
 	StatusUnknown Status = iota
 	StatusIdle
 	StatusWorking
-	StatusNeedsAttention
+	StatusWaiting    // Waiting for user input
+	StatusPermission // Waiting for permission
 )
 
 func (s Status) String() string {
-	return [...]string{"unknown", "idle", "working", "needs_attention"}[s]
+	return [...]string{"unknown", "idle", "working", "waiting", "permission"}[s]
+}
+
+func (s Status) NeedsAttention() bool {
+	return s == StatusWaiting || s == StatusPermission
 }
 
 type SessionStatus struct {
 	Session   string
 	Status    Status
+	Message   string
+	Tool      string
 	UpdatedAt time.Time
+}
+
+// IsFresh returns true if the status was updated within the given duration
+func (s SessionStatus) IsFresh(d time.Duration) bool {
+	return time.Since(s.UpdatedAt) < d
 }
 
 type Watcher struct {
@@ -35,23 +48,86 @@ func NewWatcher(dir string) *Watcher {
 	return &Watcher{dir: dir}
 }
 
-func readStatusFile(path string) (Status, error) {
+// statusFile represents the JSON structure from the hook script
+type statusFile struct {
+	TmuxSession      string `json:"tmux_session"`
+	Status           string `json:"status"`
+	Message          string `json:"message"`
+	Tool             string `json:"tool"`
+	NotificationType string `json:"notification_type"`
+	Timestamp        int64  `json:"timestamp"`
+}
+
+func parseStatus(s string) Status {
+	switch s {
+	case "idle":
+		return StatusIdle
+	case "working":
+		return StatusWorking
+	case "waiting":
+		return StatusWaiting
+	case "permission":
+		return StatusPermission
+	default:
+		return StatusUnknown
+	}
+}
+
+func readStatusFile(path string) (SessionStatus, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return StatusUnknown, err
+		return SessionStatus{}, err
 	}
 
+	// Try JSON first (new format)
+	var sf statusFile
+	if err := json.Unmarshal(data, &sf); err == nil && sf.Status != "" {
+		return SessionStatus{
+			Session:   sf.TmuxSession,
+			Status:    parseStatus(sf.Status),
+			Message:   sf.Message,
+			Tool:      sf.Tool,
+			UpdatedAt: time.Unix(sf.Timestamp, 0),
+		}, nil
+	}
+
+	// Fallback to plain text (old format)
 	content := strings.TrimSpace(string(data))
+	info, _ := os.Stat(path)
+	modTime := time.Now()
+	if info != nil {
+		modTime = info.ModTime()
+	}
+
+	var status Status
 	switch content {
 	case "needs_attention":
-		return StatusNeedsAttention, nil
+		status = StatusWaiting
 	case "working":
-		return StatusWorking, nil
+		status = StatusWorking
 	case "idle":
-		return StatusIdle, nil
+		status = StatusIdle
 	default:
-		return StatusUnknown, nil
+		status = StatusUnknown
 	}
+
+	return SessionStatus{
+		Status:    status,
+		UpdatedAt: modTime,
+	}, nil
+}
+
+// filenameToSession converts escaped filename back to session name
+func filenameToSession(filename string) string {
+	// Remove .json extension if present
+	name := strings.TrimSuffix(filename, ".json")
+	// Convert % back to /
+	return strings.ReplaceAll(name, "%", "/")
+}
+
+// sessionToFilename converts session name to safe filename
+func sessionToFilename(session string) string {
+	return strings.ReplaceAll(session, "/", "%") + ".json"
 }
 
 func (w *Watcher) GetAll() map[string]SessionStatus {
@@ -68,41 +144,38 @@ func (w *Watcher) GetAll() map[string]SessionStatus {
 		}
 
 		path := filepath.Join(w.dir, entry.Name())
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
-
 		status, err := readStatusFile(path)
 		if err != nil {
 			continue
 		}
 
-		result[entry.Name()] = SessionStatus{
-			Session:   entry.Name(),
-			Status:    status,
-			UpdatedAt: info.ModTime(),
+		sessionName := filenameToSession(entry.Name())
+		if status.Session == "" {
+			status.Session = sessionName
 		}
+
+		result[sessionName] = status
 	}
 
 	return result
 }
 
 func (w *Watcher) Get(session string) (SessionStatus, bool) {
+	// Try JSON file first
+	jsonPath := filepath.Join(w.dir, sessionToFilename(session))
+	if status, err := readStatusFile(jsonPath); err == nil {
+		if status.Session == "" {
+			status.Session = session
+		}
+		return status, true
+	}
+
+	// Try plain filename (old format)
 	path := filepath.Join(w.dir, session)
-	info, err := os.Stat(path)
-	if err != nil {
-		return SessionStatus{}, false
+	if status, err := readStatusFile(path); err == nil {
+		status.Session = session
+		return status, true
 	}
 
-	status, err := readStatusFile(path)
-	if err != nil {
-		return SessionStatus{}, false
-	}
-
-	return SessionStatus{
-		Session:   session,
-		Status:    status,
-		UpdatedAt: info.ModTime(),
-	}, true
+	return SessionStatus{}, false
 }

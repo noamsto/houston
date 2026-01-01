@@ -18,7 +18,7 @@ func main() {
 
 	if *statusDir == "" {
 		home, _ := os.UserHomeDir()
-		*statusDir = filepath.Join(home, ".local", "state", "claude")
+		*statusDir = filepath.Join(home, ".local", "state", "tmux-dashboard")
 	}
 
 	srv, err := server.New(server.Config{

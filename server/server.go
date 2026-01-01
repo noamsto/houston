@@ -92,15 +92,22 @@ func (s *Server) buildSessionsData() sessionsData {
 	for _, sess := range sessions {
 		st, hasStatus := statuses[sess.Name]
 
-		// Capture pane output for parsing
-		pane := tmux.Pane{Session: sess.Name, Window: 0, Index: 0}
-		output, _ := s.tmux.CapturePane(pane, 100)
-		parseResult := parser.Parse(output)
+		var needsAttention bool
+		var parseResult parser.Result
 
-		needsAttention := hasStatus && st.Status == status.StatusNeedsAttention
-		needsAttention = needsAttention || parseResult.Type == parser.TypeError
-		needsAttention = needsAttention || parseResult.Type == parser.TypeChoice
-		needsAttention = needsAttention || parseResult.Type == parser.TypeQuestion
+		// Priority 1: Fresh hook status (< 30s old)
+		if hasStatus && st.IsFresh(30*time.Second) {
+			needsAttention = st.Status.NeedsAttention()
+		} else {
+			// Priority 2: Fallback to terminal parsing
+			pane := tmux.Pane{Session: sess.Name, Window: 0, Index: 0}
+			output, _ := s.tmux.CapturePane(pane, 100)
+			parseResult = parser.Parse(output)
+
+			needsAttention = parseResult.Type == parser.TypeError ||
+				parseResult.Type == parser.TypeChoice ||
+				parseResult.Type == parser.TypeQuestion
+		}
 
 		if needsAttention {
 			data.NeedsAttention = append(data.NeedsAttention, sessionWithStatus{
