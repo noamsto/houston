@@ -93,18 +93,11 @@
 </div>
 
 <script>
-    // Auto-scroll to bottom on load
-    document.addEventListener('DOMContentLoaded', function() {
-        const container = document.getElementById('output-container');
-        container.scrollTop = container.scrollHeight;
-    });
-
     // Convert ANSI codes in output
     document.addEventListener('htmx:afterSwap', function(e) {
         if (e.target.id === 'output') {
             const ansi = new AnsiUp();
             e.target.innerHTML = ansi.ansi_to_html(e.target.textContent);
-            e.target.parentElement.scrollTop = e.target.parentElement.scrollHeight;
         }
     });
 
