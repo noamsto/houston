@@ -1,0 +1,11 @@
+# Build output
+tmux-dashboard
+
+# Editor/IDE
+.idea/
+.vscode/
+*.swp
+*~
+
+# Claude Code
+.claude/
