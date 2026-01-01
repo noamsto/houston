@@ -39,8 +39,9 @@ func Parse(output string) Result {
 	lastLines := lastN(lines, 30)
 	text := strings.Join(lastLines, "\n")
 
-	// Check for errors first (highest priority)
-	if matches := errorPattern.FindStringSubmatch(text); len(matches) > 0 {
+	// Check for errors only in the last 5 lines (recent errors only)
+	recentText := strings.Join(lastN(lines, 5), "\n")
+	if matches := errorPattern.FindStringSubmatch(recentText); len(matches) > 0 {
 		return Result{
 			Type:         TypeError,
 			ErrorSnippet: strings.TrimSpace(matches[0]),
