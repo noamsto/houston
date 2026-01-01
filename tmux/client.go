@@ -95,3 +95,18 @@ func (c *Client) CapturePane(p Pane, lines int) (string, error) {
 
 	return string(out), nil
 }
+
+func (c *Client) SendKeys(p Pane, keys string, enter bool) error {
+	args := []string{"send-keys", "-t", p.Target(), keys}
+	if enter {
+		args = append(args, "Enter")
+	}
+
+	cmd := exec.Command(c.tmuxPath, args...)
+	return cmd.Run()
+}
+
+func (c *Client) SendSpecialKey(p Pane, key string) error {
+	cmd := exec.Command(c.tmuxPath, "send-keys", "-t", p.Target(), key)
+	return cmd.Run()
+}
