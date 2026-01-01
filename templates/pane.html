@@ -1,8 +1,19 @@
-{{template "layout" .}}
-
-{{define "title"}}{{.Pane.Session}} - tmux-dashboard{{end}}
-
-{{define "content"}}
+{{define "pane.html"}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Pane.Session}} - tmux-dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.10/dist/ext/sse.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/ansi_up@6/ansi_up.min.js"></script>
+    <style>
+        .terminal { font-family: ui-monospace, monospace; }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
 <div class="flex flex-col h-screen max-w-lg mx-auto">
     <!-- Header -->
     <header class="flex items-center gap-3 p-4 bg-white border-b">
@@ -118,4 +129,7 @@
         }
     });
 </script>
+    <script src="/static/app.js"></script>
+</body>
+</html>
 {{end}}
