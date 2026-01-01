@@ -5,11 +5,13 @@
 # Install: Add to ~/.claude/settings.json:
 # {
 #   "hooks": {
-#     "Notification": [{"hooks": [{"type": "command", "command": "path/to/claude-hook.sh"}]}],
-#     "Stop": [{"hooks": [{"type": "command", "command": "path/to/claude-hook.sh"}]}],
-#     "PreToolUse": [{"hooks": [{"type": "command", "command": "path/to/claude-hook.sh"}]}]
+#     "Notification": [{"hooks": [{"type": "command", "command": "path/to/claude-hook.sh"}]}]
 #   }
 # }
+#
+# Optional hooks (not required - terminal parsing handles most cases):
+# - Stop: marks session as idle when agent finishes
+# - PreToolUse: shows current tool (noisy, fires constantly)
 
 set -euo pipefail
 

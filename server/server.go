@@ -95,19 +95,20 @@ func (s *Server) buildSessionsData() sessionsData {
 		var needsAttention bool
 		var parseResult parser.Result
 
-		// Priority 1: Fresh hook status (< 30s old)
-		if hasStatus && st.IsFresh(30*time.Second) {
-			needsAttention = st.Status.NeedsAttention()
-		} else {
-			// Priority 2: Fallback to terminal parsing
-			pane := tmux.Pane{Session: sess.Name, Window: 0, Index: 0}
-			output, _ := s.tmux.CapturePane(pane, 100)
-			parseResult = parser.Parse(output)
+		// Check hook status first (for Claude permission/idle prompts)
+		hookNeedsAttention := hasStatus && st.IsFresh(30*time.Second) && st.Status.NeedsAttention()
 
-			needsAttention = parseResult.Type == parser.TypeError ||
-				parseResult.Type == parser.TypeChoice ||
-				parseResult.Type == parser.TypeQuestion
-		}
+		// Always check terminal for app-level prompts (brainstorming, choices, etc)
+		pane := tmux.Pane{Session: sess.Name, Window: 0, Index: 0}
+		output, _ := s.tmux.CapturePane(pane, 100)
+		parseResult = parser.Parse(output)
+
+		terminalNeedsAttention := parseResult.Type == parser.TypeError ||
+			parseResult.Type == parser.TypeChoice ||
+			parseResult.Type == parser.TypeQuestion
+
+		// Either source can trigger attention
+		needsAttention = hookNeedsAttention || terminalNeedsAttention
 
 		if needsAttention {
 			data.NeedsAttention = append(data.NeedsAttention, sessionWithStatus{
