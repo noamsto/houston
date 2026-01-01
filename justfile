@@ -8,9 +8,16 @@ build:
 run: build
     ./tmux-dashboard
 
-# Run with go run (for development)
+# Run with go run (for development), finds available port
 dev:
-    go run . -addr localhost:8080
+    #!/usr/bin/env bash
+    for port in 8080 8081 8082 8083 8084 8085; do
+        if ! nc -z localhost $port 2>/dev/null; then
+            exec go run . -addr localhost:$port
+        fi
+    done
+    echo "No available port found in range 8080-8085"
+    exit 1
 
 # Remove build artifacts
 clean:
