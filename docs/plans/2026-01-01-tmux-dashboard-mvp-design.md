@@ -244,7 +244,14 @@ POST /pane/:session/:window/:pane/send
 - Success/failure rates
 - Export reports
 
-### v0.6 - Advanced Features
+### v0.6 - Desktop Experience
+- Responsive desktop layout (multi-column view)
+- Side-by-side session list + pane output
+- Desktop keyboard shortcuts
+- Resizable panes
+- Summary dashboard with all agents visible
+
+### v0.7 - Advanced Features
 - Multiple server support (SSH to hosts)
 - Push notifications (service worker)
 - Scheduled agent tasks
@@ -253,9 +260,15 @@ POST /pane/:session/:window/:pane/send
 
 ### v1.0 - Polish
 - PWA / native wrapper
-- Biometric auth option
 - Themes and customization
-- Desktop keyboard shortcuts
+- Performance optimizations
+
+### v1.1 - Security Hardening
+- Input validation and sanitization
+- Rate limiting on SSE connections
+- Optional authentication (basic auth, Tailscale headers)
+- Security headers
+- CSRF protection
 
 ## Project Structure
 
