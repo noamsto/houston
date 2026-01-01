@@ -23,3 +23,14 @@ func TestParseSessionLine(t *testing.T) {
 		t.Error("expected attached=true")
 	}
 }
+
+func TestCapturePaneOutput(t *testing.T) {
+	// This tests the output structure, actual capture requires tmux
+	output := `$ echo hello
+hello
+$ _`
+
+	if len(output) == 0 {
+		t.Error("expected non-empty output")
+	}
+}

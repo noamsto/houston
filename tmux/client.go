@@ -17,6 +17,16 @@ type Session struct {
 	LastActivity time.Time
 }
 
+type Pane struct {
+	Session string
+	Window  int
+	Index   int
+}
+
+func (p Pane) Target() string {
+	return fmt.Sprintf("%s:%d.%d", p.Session, p.Window, p.Index)
+}
+
 type Client struct {
 	tmuxPath string
 }
@@ -70,4 +80,18 @@ func (c *Client) ListSessions() ([]Session, error) {
 	}
 
 	return sessions, nil
+}
+
+func (c *Client) CapturePane(p Pane, lines int) (string, error) {
+	cmd := exec.Command(c.tmuxPath, "capture-pane",
+		"-t", p.Target(),
+		"-p",
+		"-S", fmt.Sprintf("-%d", lines))
+
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("capture-pane failed: %w", err)
+	}
+
+	return string(out), nil
 }
