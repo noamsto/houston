@@ -861,6 +861,18 @@ templ IndexPage() {
 				selectedTarget = null;
 			}
 
+			function refreshActionBar() {
+				if (!selectedTarget) return;
+				// Find the updated window element
+				const windowEl = document.querySelector(
+					`.window[data-session="${selectedTarget.session}"][data-window="${selectedTarget.window}"]`
+				);
+				if (windowEl) {
+					// Re-trigger selectWindow to refresh the action bar content
+					selectWindow(windowEl);
+				}
+			}
+
 			function sendInput() {
 				if (!selectedTarget) return;
 				const input = document.getElementById('actionInput');
@@ -923,6 +935,8 @@ templ IndexPage() {
 					if (currentFilter) {
 						filterSessions(currentFilter);
 					}
+					// Refresh action bar if open
+					refreshActionBar();
 				};
 
 				evtSource.onerror = function() {
