@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -14,7 +15,17 @@ import (
 func main() {
 	addr := flag.String("addr", "127.0.0.1:8080", "HTTP listen address")
 	statusDir := flag.String("status-dir", "", "Directory for hook status files")
+	debug := flag.Bool("debug", false, "Enable debug logging")
 	flag.Parse()
+
+	// Configure slog
+	logLevel := slog.LevelInfo
+	if *debug {
+		logLevel = slog.LevelDebug
+	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: logLevel,
+	})))
 
 	if *statusDir == "" {
 		home, _ := os.UserHomeDir()

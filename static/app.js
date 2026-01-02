@@ -20,18 +20,4 @@ document.addEventListener('DOMContentLoaded', function() {
     document.body.addEventListener('htmx:sseError', function(e) {
         console.log('SSE connection lost, will reconnect...');
     });
-
-    // Auto-scroll output on new content
-    document.body.addEventListener('htmx:afterSwap', function(e) {
-        if (e.target.id === 'output') {
-            const container = document.getElementById('output-container');
-            if (container) {
-                // Only auto-scroll if already near bottom
-                const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100;
-                if (isNearBottom) {
-                    container.scrollTop = container.scrollHeight;
-                }
-            }
-        }
-    });
 });

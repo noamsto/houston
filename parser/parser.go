@@ -20,15 +20,29 @@ func (t ResultType) String() string {
 	return [...]string{"idle", "working", "question", "choice", "error"}[t]
 }
 
+type Mode int
+
+const (
+	ModeUnknown Mode = iota
+	ModeInsert
+	ModeNormal
+)
+
+func (m Mode) String() string {
+	return [...]string{"unknown", "insert", "normal"}[m]
+}
+
 type Result struct {
 	Type         ResultType
+	Mode         Mode
 	Question     string
 	Choices      []string
 	ErrorSnippet string
 }
 
 var (
-	choicePattern   = regexp.MustCompile(`(?m)^\s*([1-4])[.)\]]\s+(.+)$`)
+	// Match choice lines: allow cursor chars (❯, >, -, *) before the number
+	choicePattern   = regexp.MustCompile(`(?m)^\s*[❯>\-\*]?\s*([1-4])[.)\]]\s+(.+)$`)
 	questionPattern = regexp.MustCompile(`(?m)^(.+\?)\s*$`)
 	errorPattern    = regexp.MustCompile(`(?mi)(error|failed|exception)[:\s]+(.{0,100})`)
 	approvalPattern = regexp.MustCompile(`(?i)(proceed|continue|look right|does this|should i)\?`)
@@ -39,11 +53,15 @@ func Parse(output string) Result {
 	lastLines := lastN(lines, 30)
 	text := strings.Join(lastLines, "\n")
 
+	// Detect mode from last few lines
+	mode := detectMode(lastN(lines, 5))
+
 	// Check for errors only in the last 5 lines (recent errors only)
 	recentText := strings.Join(lastN(lines, 5), "\n")
 	if matches := errorPattern.FindStringSubmatch(recentText); len(matches) > 0 {
 		return Result{
 			Type:         TypeError,
+			Mode:         mode,
 			ErrorSnippet: strings.TrimSpace(matches[0]),
 		}
 	}
@@ -64,6 +82,7 @@ func Parse(output string) Result {
 
 		return Result{
 			Type:     TypeChoice,
+			Mode:     mode,
 			Question: question,
 			Choices:  choices,
 		}
@@ -74,6 +93,7 @@ func Parse(output string) Result {
 		if qMatches := questionPattern.FindAllStringSubmatch(text, -1); len(qMatches) > 0 {
 			return Result{
 				Type:     TypeQuestion,
+				Mode:     mode,
 				Question: strings.TrimSpace(qMatches[len(qMatches)-1][1]),
 			}
 		}
@@ -86,12 +106,26 @@ func Parse(output string) Result {
 		if strings.Contains(strings.Join(lastN(lines, 5), "\n"), lastQ) {
 			return Result{
 				Type:     TypeQuestion,
+				Mode:     mode,
 				Question: strings.TrimSpace(lastQ),
 			}
 		}
 	}
 
-	return Result{Type: TypeIdle}
+	return Result{Type: TypeIdle, Mode: mode}
+}
+
+// detectMode checks for INSERT or NORMAL mode indicators in the output
+func detectMode(lines []string) Mode {
+	for _, line := range lines {
+		if strings.Contains(line, "-- INSERT --") {
+			return ModeInsert
+		}
+		if strings.Contains(line, "-- NORMAL --") {
+			return ModeNormal
+		}
+	}
+	return ModeUnknown
 }
 
 func lastN(slice []string, n int) []string {

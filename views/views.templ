@@ -1,0 +1,501 @@
+package views
+
+import (
+	"fmt"
+	"net/url"
+	"time"
+
+	"github.com/noams/tmux-dashboard/parser"
+	"github.com/noams/tmux-dashboard/tmux"
+)
+
+// SessionWithStatus combines session info with its status
+type SessionWithStatus struct {
+	Session     tmux.Session
+	ParseResult parser.Result
+}
+
+// SessionsData holds data for the sessions list
+type SessionsData struct {
+	NeedsAttention []SessionWithStatus
+	OtherSessions  []tmux.Session
+}
+
+// PaneData holds data for the pane view
+type PaneData struct {
+	Pane        tmux.Pane
+	Output      string
+	ParseResult parser.Result
+	Windows     []tmux.Window
+	Panes       []tmux.PaneInfo
+}
+
+// Helper functions
+func urlEncode(s string) string {
+	return url.PathEscape(s)
+}
+
+func timeAgo(t time.Time) string {
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		return t.Format("Jan 2")
+	}
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
+}
+
+// IndexPage renders the main dashboard page
+templ IndexPage() {
+	<!DOCTYPE html>
+	<html lang="en" class="h-full">
+	<head>
+		<meta charset="UTF-8"/>
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
+		<title>tmux-dashboard</title>
+		<script src="https://cdn.tailwindcss.com"></script>
+		<script src="https://unpkg.com/htmx.org@1.9.10"></script>
+		<script src="https://unpkg.com/htmx.org@1.9.10/dist/ext/sse.js"></script>
+		<style>
+			.terminal { font-family: ui-monospace, monospace; }
+			html, body {
+				height: 100%;
+				overflow-y: auto;
+				-webkit-overflow-scrolling: touch;
+			}
+		</style>
+	</head>
+	<body class="bg-gray-100 h-full overflow-y-auto">
+		<div class="max-w-lg mx-auto p-4 pb-24 min-h-full">
+			<header class="flex items-center justify-between mb-6 sticky top-0 bg-gray-100 py-3 z-10">
+				<h1 class="text-xl font-bold text-gray-800">tmux-dashboard</h1>
+				<button
+					hx-get="/sessions"
+					hx-target="#sessions"
+					hx-swap="innerHTML"
+					class="p-2 rounded-full hover:bg-gray-200"
+				>
+					<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+					</svg>
+				</button>
+			</header>
+			<div
+				id="sessions"
+				hx-ext="sse"
+				sse-connect="/sessions?stream=1"
+				sse-swap="message"
+				hx-swap="innerHTML"
+			>
+				<div class="text-center py-8 text-gray-500">
+					Loading sessions...
+				</div>
+			</div>
+		</div>
+		<script src="/static/app.js"></script>
+		<script>
+			document.body.addEventListener('htmx:afterSwap', function(e) {
+				if (e.target.id === 'sessions') {
+					htmx.process(e.target);
+				}
+			});
+		</script>
+	</body>
+	</html>
+}
+
+// Sessions renders the sessions list (used for SSE updates)
+templ Sessions(data SessionsData) {
+	if len(data.NeedsAttention) > 0 {
+		<section class="mb-6">
+			<h2 class="text-sm font-semibold text-gray-600 mb-3 uppercase tracking-wide">
+				Needs Attention ({ fmt.Sprintf("%d", len(data.NeedsAttention)) })
+			</h2>
+			for _, item := range data.NeedsAttention {
+				@sessionCard(item)
+			}
+		</section>
+	}
+	if len(data.OtherSessions) > 0 {
+		<section>
+			<h2 class="text-sm font-semibold text-gray-600 mb-3 uppercase tracking-wide">
+				Other Sessions ({ fmt.Sprintf("%d", len(data.OtherSessions)) })
+			</h2>
+			<div class="bg-white rounded-lg shadow divide-y">
+				for _, sess := range data.OtherSessions {
+					<a href={ templ.SafeURL("/pane/" + urlEncode(sess.Name)) } class="flex items-center gap-3 p-3 hover:bg-gray-50">
+						<span class={ "w-2 h-2 rounded-full", templ.KV("bg-green-500", sess.Attached), templ.KV("bg-gray-300", !sess.Attached) }></span>
+						<span class="text-gray-700">{ sess.Name }</span>
+						<span class="text-xs text-gray-400 ml-auto">{ fmt.Sprintf("%d win", sess.Windows) }</span>
+					</a>
+				}
+			</div>
+		</section>
+	}
+	if len(data.NeedsAttention) == 0 && len(data.OtherSessions) == 0 {
+		<div class="text-center py-12 text-gray-500">
+			<p>No tmux sessions running</p>
+			<p class="text-sm mt-2">Start a tmux session to see it here</p>
+		</div>
+	}
+}
+
+// sessionCard renders a single session that needs attention
+templ sessionCard(item SessionWithStatus) {
+	<a href={ templ.SafeURL("/pane/" + urlEncode(item.Session.Name)) } class="block mb-3">
+		<div class="bg-white rounded-lg shadow p-4 border-l-4 border-red-500">
+			<div class="flex items-center gap-2 mb-2">
+				<span class={ "w-3 h-3 rounded-full", templ.KV("bg-red-500", item.ParseResult.Type.String() == "error"), templ.KV("bg-orange-500", item.ParseResult.Type.String() != "error") }></span>
+				<span class="font-medium text-gray-900">{ item.Session.Name }</span>
+			</div>
+			<p class="text-sm text-gray-600 mb-2">
+				if item.ParseResult.Type.String() == "error" {
+					Error encountered
+				} else if item.ParseResult.Type.String() == "choice" {
+					Waiting for choice
+				} else if item.ParseResult.Type.String() == "question" {
+					Waiting for input
+				} else {
+					Needs attention
+				}
+			</p>
+			if item.ParseResult.Question != "" {
+				<p class="text-sm text-gray-800 italic">"{ truncate(item.ParseResult.Question, 60) }"</p>
+			}
+			if len(item.ParseResult.Choices) > 0 {
+				<div class="flex gap-2 mt-3">
+					for i := range item.ParseResult.Choices {
+						if i < 4 {
+							<button
+								type="button"
+								hx-post={ "/pane/" + urlEncode(item.Session.Name) + "/send" }
+								hx-vals={ fmt.Sprintf(`{"input": "%d", "noenter": "true"}`, i+1) }
+								hx-swap="none"
+								class="px-3 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded"
+								onclick="event.preventDefault(); event.stopPropagation();"
+							>{ fmt.Sprintf("%d", i+1) }</button>
+						}
+					}
+				</div>
+			}
+			<p class="text-xs text-gray-400 mt-2">{ timeAgo(item.Session.LastActivity) }</p>
+		</div>
+	</a>
+}
+
+// PanePage renders the pane view
+templ PanePage(data PaneData) {
+	<!DOCTYPE html>
+	<html lang="en">
+	<head>
+		<meta charset="UTF-8"/>
+		<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+		<title>{ data.Pane.Session } - tmux-dashboard</title>
+		<script src="https://cdn.tailwindcss.com"></script>
+		<script src="https://unpkg.com/htmx.org@1.9.10"></script>
+		<script src="https://unpkg.com/htmx.org@1.9.10/dist/ext/sse.js"></script>
+		<style>
+			.terminal {
+				font-family: ui-monospace, monospace;
+				-webkit-user-select: text;
+				user-select: text;
+				cursor: text;
+			}
+		</style>
+	</head>
+	<body class="bg-gray-100 min-h-screen">
+		<div class="flex flex-col h-screen max-w-lg mx-auto">
+			<!-- Header -->
+			<header class="flex items-center gap-3 p-4 bg-white border-b">
+				<a href="/" class="p-2 -ml-2 hover:bg-gray-100 rounded">
+					<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path>
+					</svg>
+				</a>
+				<h1 class="font-medium text-gray-900 flex-1">{ data.Pane.Session }</h1>
+				<div class="relative">
+					<button class="p-2 hover:bg-gray-100 rounded" onclick="toggleMenu()">
+						<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z"></path>
+						</svg>
+					</button>
+					<div id="menu" class="hidden absolute right-0 mt-2 w-48 bg-white rounded-lg shadow-lg border z-10">
+						<button
+							hx-post={ "/pane/" + data.Pane.URLTarget() + "/send" }
+							hx-vals='{"input": "C-c", "special": "true"}'
+							class="w-full text-left px-4 py-2 hover:bg-gray-100"
+						>Send Ctrl+C</button>
+						<button
+							onclick="scrollToTop()"
+							class="w-full text-left px-4 py-2 hover:bg-gray-100"
+						>Scroll to top</button>
+						<button
+							hx-get={ "/pane/" + data.Pane.URLTarget() }
+							hx-target="#output"
+							hx-swap="innerHTML"
+							class="w-full text-left px-4 py-2 hover:bg-gray-100"
+						>Refresh</button>
+					</div>
+				</div>
+			</header>
+			<!-- Window/Pane selector -->
+			if len(data.Windows) > 1 || len(data.Panes) > 1 {
+				<div class="flex gap-2 p-2 bg-gray-200 border-b text-sm overflow-x-auto">
+					if len(data.Windows) > 1 {
+						for _, w := range data.Windows {
+							<a
+								href={ templ.SafeURL("/pane/" + urlEncode(data.Pane.Session) + ":" + fmt.Sprintf("%d", w.Index)) }
+								class={ "px-3 py-1 rounded whitespace-nowrap", templ.KV("bg-blue-500 text-white", w.Index == data.Pane.Window), templ.KV("bg-white hover:bg-gray-100", w.Index != data.Pane.Window) }
+							>
+								{ fmt.Sprintf("%d: %s", w.Index, w.Name) }
+							</a>
+						}
+					}
+					if len(data.Panes) > 1 {
+						<span class="text-gray-400 px-1">|</span>
+						for _, p := range data.Panes {
+							<a
+								href={ templ.SafeURL("/pane/" + urlEncode(data.Pane.Session) + ":" + fmt.Sprintf("%d.%d", data.Pane.Window, p.Index)) }
+								class={ "px-2 py-1 rounded whitespace-nowrap", templ.KV("bg-green-500 text-white", p.Index == data.Pane.Index), templ.KV("bg-white hover:bg-gray-100", p.Index != data.Pane.Index) }
+							>
+								{ fmt.Sprintf("P%d", p.Index) }
+								<span class="text-xs opacity-70">{ p.Command }</span>
+							</a>
+						}
+					}
+				</div>
+			}
+			<!-- Output area -->
+			<div
+				id="output-container"
+				class="flex-1 overflow-y-auto bg-gray-900"
+				hx-ext="sse"
+				sse-connect={ "/pane/" + data.Pane.URLTarget() + "?stream=1" }
+				sse-swap="message"
+				hx-target="#output"
+				hx-swap="none"
+			>
+				<pre id="output" class="terminal text-sm text-gray-100 p-4 whitespace-pre overflow-x-auto min-w-full bg-gray-900">{ data.Output }</pre>
+			</div>
+			if len(data.ParseResult.Choices) > 0 {
+				<!-- Quick choice buttons -->
+				<div class="flex gap-2 p-3 bg-gray-800 border-t border-gray-700">
+					for i := range data.ParseResult.Choices {
+						if i < 4 {
+							<button
+								hx-post={ "/pane/" + data.Pane.URLTarget() + "/send" }
+								hx-vals={ fmt.Sprintf(`{"input": "%d", "noenter": "true"}`, i+1) }
+								hx-swap="none"
+								hx-on::after-request="setTimeout(() => { const c = document.getElementById('output-container'); c.scrollTop = c.scrollHeight; }, 100)"
+								class="flex-1 px-3 py-2 text-sm bg-gray-700 hover:bg-gray-600 text-white rounded"
+							>{ fmt.Sprintf("%d", i+1) }</button>
+						}
+					}
+				</div>
+			}
+			<!-- Input bar -->
+			<form
+				id="input-form"
+				hx-post={ "/pane/" + data.Pane.URLTarget() + "/send" }
+				hx-swap="none"
+				hx-on::after-request="this.reset(); document.getElementById('input-field').style.height = 'auto';"
+				class="flex gap-2 p-3 bg-white border-t items-center"
+			>
+				if data.ParseResult.Mode.String() == "insert" {
+					<span id="mode-indicator" class="text-xs px-2 py-1 bg-green-600 text-white rounded font-medium shadow-sm">INS</span>
+				} else {
+					<span id="mode-indicator" class="text-xs px-2 py-1 bg-blue-600 text-white rounded font-medium shadow-sm">NOR</span>
+				}
+				<textarea
+					id="input-field"
+					name="input"
+					placeholder="Send input... (Shift+Enter for newline)"
+					autocomplete="off"
+					rows="1"
+					class="flex-1 px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+					onkeydown="handleInputKeydown(event)"
+					oninput="autoResize(this)"
+				></textarea>
+				<!-- Stop button -->
+				<button
+					type="button"
+					hx-post={ "/pane/" + data.Pane.URLTarget() + "/send" }
+					hx-vals='{"input": "C-c", "special": "true"}'
+					hx-swap="none"
+					class="p-2 bg-red-500 text-white rounded-lg hover:bg-red-600"
+					title="Stop (Ctrl+C)"
+				>
+					<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+					</svg>
+				</button>
+				<!-- Send button -->
+				<button
+					type="submit"
+					class="p-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600"
+					title="Send"
+				>
+					<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7"></path>
+					</svg>
+				</button>
+			</form>
+		</div>
+		@paneScripts()
+	</body>
+	</html>
+}
+
+// paneScripts contains the JavaScript for the pane page
+templ paneScripts() {
+	<script type="module">
+		import { AnsiUp } from 'https://cdn.jsdelivr.net/npm/ansi_up@6/ansi_up.js';
+
+		const ansiUp = new AnsiUp();
+		ansiUp.escapeHtml = true;  // Ensure HTML is escaped (v6 uses camelCase)
+
+		// Strip ALL background colors - let terminal bg show through
+		// Text colors (green/red for diffs) are preserved
+		function fixBackgrounds(html) {
+			return html.replace(/background-color:\s*[^;]+;?/gi, '');
+		}
+
+		function processOutput(text) {
+			try {
+				const html = ansiUp.ansi_to_html(text);
+				return fixBackgrounds(html);
+			} catch (err) {
+				console.error('ansi_up error:', err);
+				// Fallback: escape HTML and preserve newlines
+				return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+			}
+		}
+
+		document.addEventListener('DOMContentLoaded', function() {
+			const container = document.getElementById('output-container');
+			if (container) {
+				container.scrollTop = container.scrollHeight;
+			}
+			const output = document.getElementById('output');
+			if (output) {
+				output.innerHTML = processOutput(output.textContent);
+			}
+		});
+
+		// Handle SSE messages manually to prevent htmx from setting innerHTML directly
+		// This prevents terminal content with HTML-like text from being rendered as actual HTML
+		document.body.addEventListener('htmx:sseMessage', function(e) {
+			console.debug('SSE message received', e.detail.data?.length || 0, 'bytes');
+			const output = document.getElementById('output');
+			if (!output) return;
+
+			// Get the raw text from SSE (already safe as plain text)
+			let text = e.detail.data;
+
+			// Extract mode from special first line if present
+			const modeMatch = text.match(/^__MODE__:(\w*)\n/);
+			if (modeMatch) {
+				const mode = modeMatch[1];
+				text = text.substring(modeMatch[0].length);
+				updateModeIndicatorDirect(mode);
+			}
+
+			// Process with ansi_up (which has escapeHtml enabled)
+			output.innerHTML = processOutput(text);
+
+			// Auto-scroll to bottom
+			const container = document.getElementById('output-container');
+			if (container) {
+				container.scrollTop = container.scrollHeight;
+			}
+		});
+
+		// Log SSE connection events
+		document.body.addEventListener('htmx:sseOpen', function(e) {
+			console.log('SSE connected');
+		});
+
+		document.body.addEventListener('htmx:sseError', function(e) {
+			console.warn('SSE error', e.detail);
+		});
+
+		// Update mode indicator based on mode string from server
+		function updateModeIndicatorDirect(mode) {
+			const modeEl = document.getElementById('mode-indicator');
+			if (!modeEl) return;
+
+			if (mode === 'insert') {
+				modeEl.textContent = 'INS';
+				modeEl.className = 'text-xs px-2 py-1 bg-green-600 text-white rounded font-medium shadow-sm';
+			} else {
+				modeEl.textContent = 'NOR';
+				modeEl.className = 'text-xs px-2 py-1 bg-blue-600 text-white rounded font-medium shadow-sm';
+			}
+		}
+
+		// Fallback: Update mode indicator by parsing text (for initial page load)
+		function updateModeIndicator(text) {
+			const modeEl = document.getElementById('mode-indicator');
+			if (!modeEl) return;
+
+			// Check last few lines for INSERT mode
+			const lines = text.split('\n').slice(-10).join('\n');
+			const isInsert = lines.includes('-- INSERT --');
+
+			if (isInsert) {
+				modeEl.textContent = 'INS';
+				modeEl.className = 'text-xs px-2 py-1 bg-green-600 text-white rounded font-medium shadow-sm';
+			} else {
+				modeEl.textContent = 'NOR';
+				modeEl.className = 'text-xs px-2 py-1 bg-blue-600 text-white rounded font-medium shadow-sm';
+			}
+		}
+
+		window.toggleMenu = function() {
+			document.getElementById('menu').classList.toggle('hidden');
+		}
+
+		window.scrollToTop = function() {
+			document.getElementById('output-container').scrollTop = 0;
+			document.getElementById('menu').classList.add('hidden');
+		}
+
+		// Handle Enter vs Shift+Enter in input
+		window.handleInputKeydown = function(e) {
+			if (e.key === 'Enter' && !e.shiftKey) {
+				e.preventDefault();
+				document.getElementById('input-form').requestSubmit();
+			}
+		}
+
+		// Auto-resize textarea
+		window.autoResize = function(el) {
+			el.style.height = 'auto';
+			el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+		}
+
+		document.addEventListener('click', function(e) {
+			const menu = document.getElementById('menu');
+			if (!e.target.closest('#menu') && !e.target.closest('[onclick="toggleMenu()"]')) {
+				menu.classList.add('hidden');
+			}
+		});
+	</script>
+	<script src="/static/app.js"></script>
+}
+
+// PaneOutput renders just the pane output (for SSE updates)
+templ PaneOutput(output string) {
+	{ output }
+}

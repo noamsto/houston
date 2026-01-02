@@ -2,9 +2,11 @@
 package server
 
 import (
+	"context"
 	"fmt"
-	"html/template"
+	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -12,13 +14,13 @@ import (
 	"github.com/noams/tmux-dashboard/parser"
 	"github.com/noams/tmux-dashboard/status"
 	"github.com/noams/tmux-dashboard/tmux"
+	"github.com/noams/tmux-dashboard/views"
 )
 
 type Server struct {
-	tmux      *tmux.Client
-	watcher   *status.Watcher
-	templates *template.Template
-	mu        sync.RWMutex
+	tmux    *tmux.Client
+	watcher *status.Watcher
+	mu      sync.RWMutex
 }
 
 type Config struct {
@@ -26,15 +28,9 @@ type Config struct {
 }
 
 func New(cfg Config) (*Server, error) {
-	tmpl, err := template.New("").Funcs(templateFuncs()).ParseGlob("templates/*.html")
-	if err != nil {
-		return nil, err
-	}
-
 	return &Server{
-		tmux:      tmux.NewClient(),
-		watcher:   status.NewWatcher(cfg.StatusDir),
-		templates: tmpl,
+		tmux:    tmux.NewClient(),
+		watcher: status.NewWatcher(cfg.StatusDir),
 	}, nil
 }
 
@@ -56,18 +52,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.templates.ExecuteTemplate(w, "index.html", nil)
-}
-
-type sessionWithStatus struct {
-	Session     tmux.Session
-	Status      status.SessionStatus
-	ParseResult parser.Result
-}
-
-type sessionsData struct {
-	NeedsAttention []sessionWithStatus
-	OtherSessions  []tmux.Session
+	views.IndexPage().Render(r.Context(), w)
 }
 
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
@@ -80,20 +65,26 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := s.buildSessionsData()
-	s.templates.ExecuteTemplate(w, "sessions", data)
+	views.Sessions(data).Render(r.Context(), w)
 }
 
-func (s *Server) buildSessionsData() sessionsData {
+func (s *Server) buildSessionsData() views.SessionsData {
 	sessions, _ := s.tmux.ListSessions()
 	statuses := s.watcher.GetAll()
 
-	var data sessionsData
+	var data views.SessionsData
 
 	for _, sess := range sessions {
 		st, hasStatus := statuses[sess.Name]
 
 		var needsAttention bool
 		var parseResult parser.Result
+
+		// Skip attached sessions - user is already there, no need to alert
+		if sess.Attached {
+			data.OtherSessions = append(data.OtherSessions, sess)
+			continue
+		}
 
 		// Check hook status first (for Claude permission/idle prompts)
 		hookNeedsAttention := hasStatus && st.IsFresh(30*time.Second) && st.Status.NeedsAttention()
@@ -111,9 +102,8 @@ func (s *Server) buildSessionsData() sessionsData {
 		needsAttention = hookNeedsAttention || terminalNeedsAttention
 
 		if needsAttention {
-			data.NeedsAttention = append(data.NeedsAttention, sessionWithStatus{
+			data.NeedsAttention = append(data.NeedsAttention, views.SessionWithStatus{
 				Session:     sess,
-				Status:      st,
 				ParseResult: parseResult,
 			})
 		} else {
@@ -135,8 +125,15 @@ func (s *Server) streamSessions(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
+	// Send initial comment to establish connection
+	fmt.Fprintf(w, ": connected\n\n")
+	flusher.Flush()
+
 	// Send initial data
-	s.sendSessionsEvent(w, flusher)
+	if err := s.sendSessionsEvent(r.Context(), w, flusher); err != nil {
+		slog.Debug("SSE sessions write failed", "error", err)
+		return
+	}
 
 	// Poll and send updates
 	ticker := time.NewTicker(3 * time.Second)
@@ -145,30 +142,50 @@ func (s *Server) streamSessions(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-r.Context().Done():
+			slog.Debug("SSE sessions client disconnected")
 			return
 		case <-ticker.C:
-			s.sendSessionsEvent(w, flusher)
+			if err := s.sendSessionsEvent(r.Context(), w, flusher); err != nil {
+				slog.Debug("SSE sessions write failed", "error", err)
+				return
+			}
 		}
 	}
 }
 
-func (s *Server) sendSessionsEvent(w http.ResponseWriter, flusher http.Flusher) {
+func (s *Server) sendSessionsEvent(ctx context.Context, w http.ResponseWriter, flusher http.Flusher) error {
 	var buf strings.Builder
 	data := s.buildSessionsData()
-	s.templates.ExecuteTemplate(&buf, "sessions", data)
+	views.Sessions(data).Render(ctx, &buf)
 
-	// SSE format: data lines followed by blank line
+	// Build SSE message
+	var msg strings.Builder
 	for _, line := range strings.Split(buf.String(), "\n") {
-		fmt.Fprintf(w, "data: %s\n", line)
+		msg.WriteString("data: ")
+		msg.WriteString(line)
+		msg.WriteString("\n")
 	}
-	fmt.Fprintf(w, "\n")
+	msg.WriteString("\n")
+
+	// Write and check for errors
+	_, err := w.Write([]byte(msg.String()))
+	if err != nil {
+		return err
+	}
 	flusher.Flush()
+	return nil
 }
 
 func parsePaneTarget(path string) (tmux.Pane, error) {
 	// Path format: /pane/session:window.pane or /pane/session:window.pane/send
 	path = strings.TrimPrefix(path, "/pane/")
 	path = strings.TrimSuffix(path, "/send")
+
+	// URL-decode the path (handles %2F -> / in session names)
+	decoded, err := url.PathUnescape(path)
+	if err == nil {
+		path = decoded
+	}
 
 	// Parse session:window.pane
 	var session string
@@ -212,25 +229,76 @@ func (s *Server) handlePane(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	output, err := s.tmux.CapturePane(pane, 500)
+	// Get windows for navigation
+	windows, _ := s.tmux.ListWindows(pane.Session)
+
+	// If no specific window/pane requested, find priority pane (Claude activity)
+	if pane.Window == 0 && pane.Index == 0 {
+		priorityPaneID := status.FindPriorityPane(pane.Session)
+		if priorityPaneID > 0 {
+			if winIdx, paneIdx, err := s.tmux.GetPaneLocation(pane.Session, priorityPaneID); err == nil {
+				pane.Window = winIdx
+				pane.Index = paneIdx
+			}
+		}
+	}
+
+	// Still no window? Use active window
+	if pane.Window == 0 && len(windows) > 0 {
+		for _, w := range windows {
+			if w.Active {
+				pane.Window = w.Index
+				break
+			}
+		}
+		// Fallback to first window
+		if pane.Window == 0 {
+			pane.Window = windows[0].Index
+		}
+	}
+
+	// Get panes for this window
+	panes, _ := s.tmux.ListPanes(pane.Session, pane.Window)
+
+	// If pane.Index is 0 but there are panes, find the active one
+	if pane.Index == 0 && len(panes) > 0 {
+		for _, p := range panes {
+			if p.Active {
+				pane.Index = p.Index
+				break
+			}
+		}
+		// Fallback to first pane
+		if pane.Index == 0 {
+			pane.Index = panes[0].Index
+		}
+	}
+
+	// Now capture output with correct pane target
+	capture, err := s.tmux.CapturePaneWithMode(pane, 500)
 	if err != nil {
 		http.Error(w, "failed to capture pane: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	parseResult := parser.Parse(capture.Output)
 
-	parseResult := parser.Parse(output)
-
-	data := struct {
-		Pane        tmux.Pane
-		Output      string
-		ParseResult parser.Result
-	}{
-		Pane:        pane,
-		Output:      output,
-		ParseResult: parseResult,
+	// Override mode from tmux capture (parser sees filtered output without mode lines)
+	switch capture.Mode {
+	case "insert":
+		parseResult.Mode = parser.ModeInsert
+	case "normal":
+		parseResult.Mode = parser.ModeNormal
 	}
 
-	s.templates.ExecuteTemplate(w, "pane.html", data)
+	data := views.PaneData{
+		Pane:        pane,
+		Output:      capture.Output,
+		ParseResult: parseResult,
+		Windows:     windows,
+		Panes:       panes,
+	}
+
+	views.PanePage(data).Render(r.Context(), w)
 }
 
 func (s *Server) handlePaneSend(w http.ResponseWriter, r *http.Request, pane tmux.Pane) {
@@ -242,25 +310,33 @@ func (s *Server) handlePaneSend(w http.ResponseWriter, r *http.Request, pane tmu
 	r.ParseForm()
 	input := r.FormValue("input")
 	special := r.FormValue("special") == "true"
+	noEnter := r.FormValue("noenter") == "true"
+
+	slog.Info("send keys", "pane", pane.Target(), "input", input, "special", special, "noenter", noEnter)
 
 	var err error
 	if special {
 		err = s.tmux.SendSpecialKey(pane, input)
 	} else {
-		err = s.tmux.SendKeys(pane, input, true)
+		err = s.tmux.SendKeys(pane, input, !noEnter)
 	}
 
 	if err != nil {
+		slog.Error("send keys failed", "error", err)
 		http.Error(w, "failed to send keys: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
+	slog.Debug("send keys success")
 	w.WriteHeader(http.StatusOK)
 }
 
 func (s *Server) streamPane(w http.ResponseWriter, r *http.Request, pane tmux.Pane) {
+	slog.Info("SSE pane stream started", "pane", pane.Target(), "remote", r.RemoteAddr)
+
 	flusher, ok := w.(http.Flusher)
 	if !ok {
+		slog.Error("SSE flusher not supported")
 		http.Error(w, "SSE not supported", http.StatusInternalServerError)
 		return
 	}
@@ -269,7 +345,16 @@ func (s *Server) streamPane(w http.ResponseWriter, r *http.Request, pane tmux.Pa
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
+	// Send initial comment to establish connection
+	if _, err := fmt.Fprintf(w, ": connected\n\n"); err != nil {
+		slog.Error("SSE initial write failed", "error", err)
+		return
+	}
+	flusher.Flush()
+	slog.Info("SSE pane connection established", "pane", pane.Target())
+
 	var lastOutput string
+	updateCount := 0
 
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
@@ -277,20 +362,44 @@ func (s *Server) streamPane(w http.ResponseWriter, r *http.Request, pane tmux.Pa
 	for {
 		select {
 		case <-r.Context().Done():
+			slog.Info("SSE pane client disconnected", "pane", pane.Target(), "updates", updateCount)
 			return
 		case <-ticker.C:
-			output, err := s.tmux.CapturePane(pane, 500)
+			capture, err := s.tmux.CapturePaneWithMode(pane, 500)
 			if err != nil {
+				slog.Warn("SSE capture failed", "pane", pane.Target(), "error", err)
 				continue
 			}
 
-			if output != lastOutput {
-				lastOutput = output
-				for _, line := range strings.Split(output, "\n") {
-					fmt.Fprintf(w, "data: %s\n", line)
+			if capture.Output != lastOutput {
+				lastOutput = capture.Output
+				lines := strings.Split(capture.Output, "\n")
+				updateCount++
+				slog.Info("SSE pane update", "pane", pane.Target(), "lines", len(lines), "bytes", len(capture.Output), "mode", capture.Mode, "update", updateCount)
+
+				// Build the SSE message with mode as first line
+				var buf strings.Builder
+				// Send mode as special first line (will be parsed by client)
+				buf.WriteString("data: __MODE__:")
+				buf.WriteString(capture.Mode)
+				buf.WriteString("\n")
+				for _, line := range lines {
+					// Remove carriage returns that can break SSE
+					line = strings.ReplaceAll(line, "\r", "")
+					buf.WriteString("data: ")
+					buf.WriteString(line)
+					buf.WriteString("\n")
 				}
-				fmt.Fprintf(w, "\n")
+				buf.WriteString("\n")
+
+				// Write and check for errors
+				_, err := w.Write([]byte(buf.String()))
+				if err != nil {
+					slog.Error("SSE pane write failed", "pane", pane.Target(), "error", err)
+					return
+				}
 				flusher.Flush()
+				slog.Debug("SSE pane flush complete", "pane", pane.Target())
 			}
 		}
 	}
