@@ -66,25 +66,33 @@ func Parse(output string) Result {
 		}
 	}
 
-	// Check for multiple choice
-	choiceMatches := choicePattern.FindAllStringSubmatch(text, -1)
-	if len(choiceMatches) >= 2 {
-		var choices []string
-		for _, m := range choiceMatches {
-			choices = append(choices, strings.TrimSpace(m[2]))
-		}
+	// Check for multiple choice - MUST have a question (?) before numbered options
+	// Real Claude Code choices look like:
+	//   ? Do you want to proceed?
+	//   1. Yes
+	//   2. No
+	qMatches := questionPattern.FindAllStringSubmatchIndex(text, -1)
+	if len(qMatches) > 0 {
+		// Get the last question and check if numbered options follow it
+		lastQMatch := qMatches[len(qMatches)-1]
+		textAfterQuestion := text[lastQMatch[1]:]
 
-		// Find the question before choices
-		question := ""
-		if qMatches := questionPattern.FindAllStringSubmatch(text, -1); len(qMatches) > 0 {
-			question = strings.TrimSpace(qMatches[len(qMatches)-1][1])
-		}
+		choiceMatches := choicePattern.FindAllStringSubmatch(textAfterQuestion, -1)
+		if len(choiceMatches) >= 2 {
+			var choices []string
+			for _, m := range choiceMatches {
+				choices = append(choices, strings.TrimSpace(m[2]))
+			}
 
-		return Result{
-			Type:     TypeChoice,
-			Mode:     mode,
-			Question: question,
-			Choices:  choices,
+			// Extract the question text
+			question := strings.TrimSpace(text[lastQMatch[2]:lastQMatch[3]])
+
+			return Result{
+				Type:     TypeChoice,
+				Mode:     mode,
+				Question: question,
+				Choices:  choices,
+			}
 		}
 	}
 

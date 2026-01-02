@@ -110,8 +110,12 @@ func (s *Server) buildSessionsData() views.SessionsData {
 				parseResult.Type == parser.TypeChoice ||
 				parseResult.Type == parser.TypeQuestion
 
-			// Extract last 3 non-empty lines for preview
-			preview := getPreviewLines(output, 3)
+			// Extract preview lines - more for attention states
+			previewLines := 3
+			if windowNeedsAttention {
+				previewLines = 10 // Show more context for choices/questions/errors
+			}
+			preview := getPreviewLines(output, previewLines)
 
 			windowStatus := views.WindowWithStatus{
 				Window:         win,

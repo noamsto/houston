@@ -3,6 +3,7 @@ package views
 import (
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/noams/tmux-dashboard/parser"
@@ -145,10 +146,13 @@ templ IndexPage() {
 				--text-dim: #52525b;
 				--attention: #f97316;
 				--attention-glow: rgba(249, 115, 22, 0.4);
+				--error: #ef4444;
+				--error-glow: rgba(239, 68, 68, 0.4);
 				--working: #22c55e;
 				--working-glow: rgba(34, 197, 94, 0.3);
 				--idle: #3f3f46;
 				--accent: #06b6d4;
+				--accent-dim: rgba(6, 182, 212, 0.15);
 			}
 			* { box-sizing: border-box; margin: 0; padding: 0; }
 			body {
@@ -157,6 +161,15 @@ templ IndexPage() {
 				color: var(--text-primary);
 				min-height: 100vh;
 				min-height: 100dvh;
+			}
+			/* Scan line overlay */
+			body::before {
+				content: '';
+				position: fixed;
+				top: 0; left: 0; right: 0; bottom: 0;
+				background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.03) 2px, rgba(0,0,0,0.03) 4px);
+				pointer-events: none;
+				z-index: 1000;
 			}
 			.header {
 				position: sticky;
@@ -194,6 +207,33 @@ templ IndexPage() {
 				font-size: 14px;
 				font-weight: 500;
 				color: var(--text-secondary);
+			}
+			.status-summary {
+				display: flex;
+				align-items: center;
+				gap: 1rem;
+				font-size: 11px;
+			}
+			.status-count {
+				display: flex;
+				align-items: center;
+				gap: 0.35rem;
+			}
+			.status-dot {
+				width: 8px;
+				height: 8px;
+				border-radius: 50%;
+			}
+			.status-dot.attention {
+				background: var(--attention);
+				box-shadow: 0 0 8px var(--attention-glow);
+			}
+			.status-dot.working {
+				background: var(--working);
+				box-shadow: 0 0 6px var(--working-glow);
+			}
+			.status-dot.idle {
+				background: var(--idle);
 			}
 			.main {
 				max-width: 600px;
@@ -247,6 +287,11 @@ templ IndexPage() {
 				background: var(--attention);
 				box-shadow: 0 0 10px var(--attention-glow);
 				animation: pulse 2s ease-in-out infinite;
+			}
+			.session-indicator.error {
+				background: var(--error);
+				box-shadow: 0 0 10px var(--error-glow);
+				animation: pulse 1.5s ease-in-out infinite;
 			}
 			.session-indicator.working {
 				background: var(--working);
@@ -316,6 +361,11 @@ templ IndexPage() {
 				box-shadow: 0 0 6px var(--attention-glow);
 				animation: pulse 2s ease-in-out infinite;
 			}
+			.window-indicator.error {
+				background: var(--error);
+				box-shadow: 0 0 6px var(--error-glow);
+				animation: pulse 1.5s ease-in-out infinite;
+			}
 			.window-indicator.working { background: var(--working); }
 			.window-indicator.idle { background: var(--idle); }
 			.window-info { flex: 1; min-width: 0; }
@@ -353,6 +403,110 @@ templ IndexPage() {
 				color: var(--text-secondary);
 			}
 			.empty-icon { font-size: 48px; margin-bottom: 1rem; opacity: 0.5; }
+			/* Action bar */
+			.action-bar {
+				position: fixed;
+				bottom: 0;
+				left: 0;
+				right: 0;
+				background: var(--bg-panel);
+				border-top: 1px solid var(--border);
+				padding: 0.75rem;
+				padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));
+				transform: translateY(100%);
+				transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+				z-index: 200;
+			}
+			.action-bar.visible { transform: translateY(0); }
+			.action-bar-content {
+				max-width: 600px;
+				margin: 0 auto;
+			}
+			.action-target {
+				font-size: 11px;
+				color: var(--text-secondary);
+				margin-bottom: 0.5rem;
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+			}
+			.action-close {
+				background: none;
+				border: none;
+				color: var(--text-dim);
+				cursor: pointer;
+				padding: 0.25rem;
+				font-size: 14px;
+			}
+			.action-input-row {
+				display: flex;
+				gap: 0.5rem;
+			}
+			.action-input {
+				flex: 1;
+				background: var(--bg-deep);
+				border: 1px solid var(--border);
+				border-radius: 6px;
+				padding: 0.75rem 1rem;
+				font-family: inherit;
+				font-size: 14px;
+				color: var(--text-primary);
+				outline: none;
+			}
+			.action-input:focus {
+				border-color: var(--accent);
+				box-shadow: 0 0 0 2px var(--accent-dim);
+			}
+			.action-input::placeholder { color: var(--text-dim); }
+			.action-btn {
+				background: var(--accent);
+				border: none;
+				border-radius: 6px;
+				padding: 0 1.25rem;
+				font-family: inherit;
+				font-size: 13px;
+				font-weight: 500;
+				color: var(--bg-deep);
+				cursor: pointer;
+				transition: opacity 0.15s;
+			}
+			.action-btn:active { opacity: 0.8; }
+			.action-btn.stop {
+				background: var(--error);
+				padding: 0 1rem;
+			}
+			.action-btn.view {
+				background: var(--bg-elevated);
+				color: var(--text-primary);
+			}
+			.action-context {
+				margin-bottom: 0.75rem;
+				padding: 0.75rem;
+				background: var(--bg-deep);
+				border-radius: 6px;
+				border-left: 3px solid var(--idle);
+			}
+			.action-context.attention { border-left-color: var(--attention); }
+			.action-context.working { border-left-color: var(--working); }
+			.action-status {
+				font-size: 12px;
+				font-weight: 500;
+				margin-bottom: 0.5rem;
+			}
+			.action-status.attention { color: var(--attention); }
+			.action-status.working { color: var(--working); }
+			.action-preview {
+				font-size: 11px;
+				color: var(--text-secondary);
+				line-height: 1.4;
+				max-height: 12em;
+				overflow-y: auto;
+			}
+			.action-preview-line {
+				white-space: nowrap;
+				overflow: hidden;
+				text-overflow: ellipsis;
+			}
 		</style>
 	</head>
 	<body>
@@ -362,6 +516,7 @@ templ IndexPage() {
 					<div class="logo-icon">MC</div>
 					<span class="logo-text">mission control</span>
 				</div>
+				<div class="status-summary" id="status-summary"></div>
 			</div>
 		</header>
 		<main class="main">
@@ -371,10 +526,30 @@ templ IndexPage() {
 				</div>
 			</div>
 		</main>
+		<!-- Action bar -->
+		<div class="action-bar" id="actionBar">
+			<div class="action-bar-content">
+				<div class="action-target">
+					<span id="actionTarget"></span>
+					<button class="action-close" onclick="closeActionBar()">✕</button>
+				</div>
+				<div class="action-context" id="actionContext">
+					<div class="action-status" id="actionStatus"></div>
+					<div class="action-preview" id="actionPreview"></div>
+				</div>
+				<div class="action-input-row">
+					<input type="text" class="action-input" placeholder="Send input..." id="actionInput"/>
+					<button class="action-btn stop" onclick="sendStop()">⏹</button>
+					<button class="action-btn view" onclick="viewPane()">View</button>
+					<button class="action-btn" onclick="sendInput()">Send</button>
+				</div>
+			</div>
+		</div>
 		<script src="/static/app.js"></script>
 		<script>
 			// Track expanded sessions
 			const expandedSessions = new Set();
+			let selectedTarget = null;
 
 			function toggleSession(header) {
 				const session = header.closest('.session');
@@ -384,7 +559,6 @@ templ IndexPage() {
 				session.classList.toggle('expanded');
 				windows.classList.toggle('hidden');
 
-				// Track state
 				if (session.classList.contains('expanded')) {
 					expandedSessions.add(sessionName);
 				} else {
@@ -392,7 +566,6 @@ templ IndexPage() {
 				}
 			}
 
-			// Restore expanded state after SSE update
 			function restoreExpandedState() {
 				document.querySelectorAll('.session').forEach(session => {
 					const name = session.dataset.session;
@@ -403,17 +576,135 @@ templ IndexPage() {
 				});
 			}
 
+			// Update status summary counts in header
+			function updateStatusSummary() {
+				const container = document.getElementById('sessions');
+				const attention = container.querySelectorAll('.window-indicator.attention').length;
+				const error = container.querySelectorAll('.window-indicator.error').length;
+				const working = container.querySelectorAll('.window-indicator.working').length;
+				const idle = container.querySelectorAll('.window-indicator.idle').length;
+
+				const summary = document.getElementById('status-summary');
+				let html = '';
+				if (attention + error > 0) {
+					html += `<div class="status-count"><div class="status-dot attention"></div><span>${attention + error}</span></div>`;
+				}
+				if (working > 0) {
+					html += `<div class="status-count"><div class="status-dot working"></div><span>${working}</span></div>`;
+				}
+				if (idle > 0) {
+					html += `<div class="status-count"><div class="status-dot idle"></div><span>${idle}</span></div>`;
+				}
+				summary.innerHTML = html;
+			}
+
+			// Action bar functions
+			function selectWindow(el) {
+				const session = el.dataset.session;
+				const windowIdx = parseInt(el.dataset.window);
+				const windowName = el.dataset.name;
+				const status = el.dataset.status;
+				const indicator = el.dataset.indicator;
+				const preview = el.dataset.preview;
+				const question = el.dataset.question;
+				const choices = el.dataset.choices;
+
+				selectedTarget = { session, window: windowIdx };
+				document.getElementById('actionTarget').textContent = `${session}:${windowIdx} ${windowName}`;
+
+				// Update context area
+				const context = document.getElementById('actionContext');
+				const statusEl = document.getElementById('actionStatus');
+				const previewEl = document.getElementById('actionPreview');
+
+				context.className = 'action-context ' + indicator;
+				statusEl.className = 'action-status ' + indicator;
+				statusEl.textContent = status;
+
+				// Show question and choices if available, otherwise preview
+				let html = '';
+				if (question) {
+					html += `<div class="action-preview-line" style="color: var(--attention); margin-bottom: 0.5rem;">${escapeHtml(question)}</div>`;
+				}
+				if (choices) {
+					const choiceList = choices.split('|');
+					choiceList.forEach((choice, i) => {
+						html += `<div class="action-preview-line" style="padding-left: 0.5rem;">${i + 1}. ${escapeHtml(choice)}</div>`;
+					});
+				}
+				// Also show preview for additional context
+				if (preview) {
+					if (html) html += '<div style="margin-top: 0.5rem; border-top: 1px solid var(--border); padding-top: 0.5rem;"></div>';
+					html += preview.split('\n').map(line =>
+						`<div class="action-preview-line">${escapeHtml(line)}</div>`
+					).join('');
+				}
+				if (!html) {
+					html = '<div class="action-preview-line">No output</div>';
+				}
+				previewEl.innerHTML = html;
+
+				document.getElementById('actionBar').classList.add('visible');
+				document.getElementById('actionInput').focus();
+			}
+
+			function escapeHtml(text) {
+				const div = document.createElement('div');
+				div.textContent = text;
+				return div.innerHTML;
+			}
+
+			function closeActionBar() {
+				document.getElementById('actionBar').classList.remove('visible');
+				selectedTarget = null;
+			}
+
+			function sendInput() {
+				if (!selectedTarget) return;
+				const input = document.getElementById('actionInput');
+				const value = input.value;
+				if (!value) return;
+
+				fetch(`/pane/${encodeURIComponent(selectedTarget.session)}:${selectedTarget.window}/send`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+					body: `input=${encodeURIComponent(value)}`
+				});
+				input.value = '';
+			}
+
+			function sendStop() {
+				if (!selectedTarget) return;
+				fetch(`/pane/${encodeURIComponent(selectedTarget.session)}:${selectedTarget.window}/send`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+					body: 'input=C-c&special=true'
+				});
+			}
+
+			function viewPane() {
+				if (!selectedTarget) return;
+				window.location.href = `/pane/${encodeURIComponent(selectedTarget.session)}:${selectedTarget.window}`;
+			}
+
+			// Close action bar on escape
+			document.addEventListener('keydown', (e) => {
+				if (e.key === 'Escape') closeActionBar();
+				if (e.key === 'Enter' && document.activeElement.id === 'actionInput') {
+					e.preventDefault();
+					sendInput();
+				}
+			});
+
 			// Handle SSE manually for flicker-free updates
 			function connectSSE() {
 				const evtSource = new EventSource('/sessions?stream=1');
 				const container = document.getElementById('sessions');
 
 				evtSource.onmessage = function(e) {
-					// Parse incoming HTML
 					const temp = document.createElement('div');
 					temp.innerHTML = e.data;
 
-					// Pre-apply expanded state before morphing
 					temp.querySelectorAll('.session').forEach(session => {
 						const name = session.dataset.session;
 						if (expandedSessions.has(name)) {
@@ -422,10 +713,8 @@ templ IndexPage() {
 						}
 					});
 
-					// Use idiomorph to morph DOM (preserves hover, focus, etc.)
-					Idiomorph.morph(container, temp.innerHTML, {
-						morphStyle: 'innerHTML'
-					});
+					Idiomorph.morph(container, temp.innerHTML, { morphStyle: 'innerHTML' });
+					updateStatusSummary();
 				};
 
 				evtSource.onerror = function() {
@@ -435,7 +724,6 @@ templ IndexPage() {
 				};
 			}
 
-			// Start SSE connection
 			connectSSE();
 		</script>
 	</body>
@@ -498,10 +786,25 @@ templ sessionCardV2(sess SessionWithWindows, expanded bool) {
 	</div>
 }
 
+// escapeJS escapes a string for safe use in JavaScript
+func escapeJS(s string) string {
+	s = strings.ReplaceAll(s, "\\", "\\\\")
+	s = strings.ReplaceAll(s, "'", "\\'")
+	return s
+}
+
 // windowCard renders a single window within a session
 templ windowCard(sessionName string, win WindowWithStatus) {
-	<a
-		href={ templ.SafeURL("/pane/" + urlEncode(sessionName) + ":" + fmt.Sprintf("%d", win.Window.Index)) }
+	<div
+		data-session={ sessionName }
+		data-window={ fmt.Sprintf("%d", win.Window.Index) }
+		data-name={ win.Window.Name }
+		data-status={ getWindowStatusText(win) }
+		data-indicator={ getWindowIndicator(win) }
+		data-preview={ strings.Join(win.Preview, "\n") }
+		data-question={ win.ParseResult.Question }
+		data-choices={ strings.Join(win.ParseResult.Choices, "|") }
+		onclick="selectWindow(this)"
 		class={ "window", templ.KV("attention", win.NeedsAttention) }
 	>
 		<div class={ "window-indicator", getWindowIndicator(win) }></div>
@@ -519,7 +822,7 @@ templ windowCard(sessionName string, win WindowWithStatus) {
 			}
 		</div>
 		<span class="window-arrow">→</span>
-	</a>
+	</div>
 }
 
 // Helper functions for template
