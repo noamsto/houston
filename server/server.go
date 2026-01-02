@@ -71,47 +71,102 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 func (s *Server) buildSessionsData() views.SessionsData {
 	sessions, _ := s.tmux.ListSessions()
 	statuses := s.watcher.GetAll()
+	_ = statuses // TODO: integrate hook status per-window
 
 	var data views.SessionsData
 
 	for _, sess := range sessions {
-		st, hasStatus := statuses[sess.Name]
-
-		var needsAttention bool
-		var parseResult parser.Result
-
-		// Skip attached sessions - user is already there, no need to alert
-		if sess.Attached {
-			data.OtherSessions = append(data.OtherSessions, sess)
+		// Get all windows for this session
+		windows, err := s.tmux.ListWindows(sess.Name)
+		if err != nil || len(windows) == 0 {
 			continue
 		}
 
-		// Check hook status first (for Claude permission/idle prompts)
-		hookNeedsAttention := hasStatus && st.IsFresh(30*time.Second) && st.Status.NeedsAttention()
+		sessionData := views.SessionWithWindows{
+			Session: sess,
+		}
 
-		// Always check terminal for app-level prompts (brainstorming, choices, etc)
-		pane := tmux.Pane{Session: sess.Name, Window: 0, Index: 0}
-		output, _ := s.tmux.CapturePane(pane, 100)
-		parseResult = parser.Parse(output)
+		for _, win := range windows {
+			// Get actual panes for this window
+			panes, _ := s.tmux.ListPanes(sess.Name, win.Index)
 
-		terminalNeedsAttention := parseResult.Type == parser.TypeError ||
-			parseResult.Type == parser.TypeChoice ||
-			parseResult.Type == parser.TypeQuestion
+			// Find pane to check (prefer active, fallback to first)
+			paneIdx := 0
+			if len(panes) > 0 {
+				paneIdx = panes[0].Index
+				for _, p := range panes {
+					if p.Active {
+						paneIdx = p.Index
+						break
+					}
+				}
+			}
 
-		// Either source can trigger attention
-		needsAttention = hookNeedsAttention || terminalNeedsAttention
+			pane := tmux.Pane{Session: sess.Name, Window: win.Index, Index: paneIdx}
+			output, _ := s.tmux.CapturePane(pane, 100)
+			parseResult := parser.Parse(output)
 
-		if needsAttention {
-			data.NeedsAttention = append(data.NeedsAttention, views.SessionWithStatus{
-				Session:     sess,
-				ParseResult: parseResult,
-			})
+			windowNeedsAttention := parseResult.Type == parser.TypeError ||
+				parseResult.Type == parser.TypeChoice ||
+				parseResult.Type == parser.TypeQuestion
+
+			// Extract last 3 non-empty lines for preview
+			preview := getPreviewLines(output, 3)
+
+			windowStatus := views.WindowWithStatus{
+				Window:         win,
+				ParseResult:    parseResult,
+				Preview:        preview,
+				NeedsAttention: windowNeedsAttention,
+			}
+
+			sessionData.Windows = append(sessionData.Windows, windowStatus)
+
+			if windowNeedsAttention {
+				sessionData.AttentionCount++
+			}
+			if parseResult.Type == parser.TypeWorking {
+				sessionData.HasWorking = true
+			}
+		}
+
+		// Categorize session based on its windows' status
+		// Skip attached sessions - user is already there
+		if sess.Attached {
+			data.Idle = append(data.Idle, sessionData)
+		} else if sessionData.AttentionCount > 0 {
+			data.NeedsAttention = append(data.NeedsAttention, sessionData)
+		} else if sessionData.HasWorking {
+			data.Active = append(data.Active, sessionData)
 		} else {
-			data.OtherSessions = append(data.OtherSessions, sess)
+			data.Idle = append(data.Idle, sessionData)
 		}
 	}
 
 	return data
+}
+
+// getPreviewLines extracts the last n non-empty lines from output
+func getPreviewLines(output string, n int) []string {
+	lines := strings.Split(output, "\n")
+	var result []string
+
+	// Work backwards to find non-empty lines
+	for i := len(lines) - 1; i >= 0 && len(result) < n; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line != "" {
+			result = append([]string{line}, result...)
+		}
+	}
+
+	// Truncate long lines
+	for i, line := range result {
+		if len(line) > 60 {
+			result[i] = line[:57] + "..."
+		}
+	}
+
+	return result
 }
 
 func (s *Server) streamSessions(w http.ResponseWriter, r *http.Request) {
@@ -332,7 +387,7 @@ func (s *Server) handlePaneSend(w http.ResponseWriter, r *http.Request, pane tmu
 }
 
 func (s *Server) streamPane(w http.ResponseWriter, r *http.Request, pane tmux.Pane) {
-	slog.Info("SSE pane stream started", "pane", pane.Target(), "remote", r.RemoteAddr)
+	slog.Debug("SSE pane stream started", "pane", pane.Target())
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -351,7 +406,6 @@ func (s *Server) streamPane(w http.ResponseWriter, r *http.Request, pane tmux.Pa
 		return
 	}
 	flusher.Flush()
-	slog.Info("SSE pane connection established", "pane", pane.Target())
 
 	var lastOutput string
 	updateCount := 0
@@ -362,7 +416,7 @@ func (s *Server) streamPane(w http.ResponseWriter, r *http.Request, pane tmux.Pa
 	for {
 		select {
 		case <-r.Context().Done():
-			slog.Info("SSE pane client disconnected", "pane", pane.Target(), "updates", updateCount)
+			slog.Debug("SSE pane disconnected", "pane", pane.Target(), "updates", updateCount)
 			return
 		case <-ticker.C:
 			capture, err := s.tmux.CapturePaneWithMode(pane, 500)
@@ -375,7 +429,7 @@ func (s *Server) streamPane(w http.ResponseWriter, r *http.Request, pane tmux.Pa
 				lastOutput = capture.Output
 				lines := strings.Split(capture.Output, "\n")
 				updateCount++
-				slog.Info("SSE pane update", "pane", pane.Target(), "lines", len(lines), "bytes", len(capture.Output), "mode", capture.Mode, "update", updateCount)
+				slog.Debug("SSE pane update", "pane", pane.Target(), "bytes", len(capture.Output), "mode", capture.Mode)
 
 				// Build the SSE message with mode as first line
 				var buf strings.Builder
@@ -399,7 +453,6 @@ func (s *Server) streamPane(w http.ResponseWriter, r *http.Request, pane tmux.Pa
 					return
 				}
 				flusher.Flush()
-				slog.Debug("SSE pane flush complete", "pane", pane.Target())
 			}
 		}
 	}

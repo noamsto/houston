@@ -10,3 +10,4 @@ tmp/
 
 # Claude Code
 .claude/
+.playwright-mcp/

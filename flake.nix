@@ -32,6 +32,7 @@
             go-tools # staticcheck
             golangci-lint
             air # hot reload
+            templ # type-safe HTML templates
             just
             tmux
           ];

@@ -9,16 +9,33 @@ import (
 	"github.com/noams/tmux-dashboard/tmux"
 )
 
-// SessionWithStatus combines session info with its status
-type SessionWithStatus struct {
-	Session     tmux.Session
-	ParseResult parser.Result
+// WindowWithStatus combines window info with its parse result
+type WindowWithStatus struct {
+	Window         tmux.Window
+	ParseResult    parser.Result
+	Preview        []string // Last 2-3 lines for preview
+	NeedsAttention bool
+}
+
+// SessionWithWindows holds a session and all its windows with status
+type SessionWithWindows struct {
+	Session        tmux.Session
+	Windows        []WindowWithStatus
+	AttentionCount int  // Number of windows needing attention
+	HasWorking     bool // At least one window is working
 }
 
 // SessionsData holds data for the sessions list
 type SessionsData struct {
-	NeedsAttention []SessionWithStatus
-	OtherSessions  []tmux.Session
+	NeedsAttention []SessionWithWindows // Sessions with windows needing attention
+	Active         []SessionWithWindows // Sessions with working windows
+	Idle           []SessionWithWindows // Sessions with all idle windows
+}
+
+// Legacy: keep for backward compatibility during transition
+type SessionWithStatus struct {
+	Session     tmux.Session
+	ParseResult parser.Result
 }
 
 // PaneData holds data for the pane view
@@ -56,142 +73,496 @@ func truncate(s string, n int) string {
 	return s[:n] + "..."
 }
 
-// IndexPage renders the main dashboard page
+// lastLines returns the last n non-empty lines of a string
+func lastLines(s string, n int) []string {
+	lines := []string{}
+	for _, line := range reverseStrings(splitLines(s)) {
+		trimmed := trimLine(line)
+		if trimmed != "" {
+			lines = append([]string{trimmed}, lines...)
+			if len(lines) >= n {
+				break
+			}
+		}
+	}
+	return lines
+}
+
+func splitLines(s string) []string {
+	result := []string{}
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\n' {
+			result = append(result, s[start:i])
+			start = i + 1
+		}
+	}
+	if start < len(s) {
+		result = append(result, s[start:])
+	}
+	return result
+}
+
+func reverseStrings(ss []string) []string {
+	result := make([]string, len(ss))
+	for i, s := range ss {
+		result[len(ss)-1-i] = s
+	}
+	return result
+}
+
+func trimLine(s string) string {
+	// Trim leading/trailing whitespace but keep content
+	start, end := 0, len(s)
+	for start < end && (s[start] == ' ' || s[start] == '\t' || s[start] == '\r') {
+		start++
+	}
+	for end > start && (s[end-1] == ' ' || s[end-1] == '\t' || s[end-1] == '\r') {
+		end--
+	}
+	return s[start:end]
+}
+
+// IndexPage renders the main dashboard page with Mission Control design
 templ IndexPage() {
 	<!DOCTYPE html>
-	<html lang="en" class="h-full">
+	<html lang="en">
 	<head>
 		<meta charset="UTF-8"/>
-		<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
-		<title>tmux-dashboard</title>
-		<script src="https://cdn.tailwindcss.com"></script>
-		<script src="https://unpkg.com/htmx.org@1.9.10"></script>
-		<script src="https://unpkg.com/htmx.org@1.9.10/dist/ext/sse.js"></script>
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no"/>
+		<title>tmux mission control</title>
+		<link rel="preconnect" href="https://fonts.googleapis.com"/>
+		<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
+		<script src="https://unpkg.com/idiomorph@0.3.0/dist/idiomorph.min.js"></script>
 		<style>
-			.terminal { font-family: ui-monospace, monospace; }
-			html, body {
-				height: 100%;
-				overflow-y: auto;
-				-webkit-overflow-scrolling: touch;
+			:root {
+				--bg-deep: #0a0a0b;
+				--bg-panel: #111113;
+				--bg-elevated: #1a1a1d;
+				--border: #2a2a2e;
+				--text-primary: #e4e4e7;
+				--text-secondary: #71717a;
+				--text-dim: #52525b;
+				--attention: #f97316;
+				--attention-glow: rgba(249, 115, 22, 0.4);
+				--working: #22c55e;
+				--working-glow: rgba(34, 197, 94, 0.3);
+				--idle: #3f3f46;
+				--accent: #06b6d4;
 			}
+			* { box-sizing: border-box; margin: 0; padding: 0; }
+			body {
+				font-family: 'IBM Plex Mono', ui-monospace, monospace;
+				background: var(--bg-deep);
+				color: var(--text-primary);
+				min-height: 100vh;
+				min-height: 100dvh;
+			}
+			.header {
+				position: sticky;
+				top: 0;
+				background: var(--bg-deep);
+				border-bottom: 1px solid var(--border);
+				padding: 1rem;
+				z-index: 100;
+			}
+			.header-content {
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+				max-width: 600px;
+				margin: 0 auto;
+			}
+			.logo {
+				display: flex;
+				align-items: center;
+				gap: 0.5rem;
+			}
+			.logo-icon {
+				width: 24px;
+				height: 24px;
+				background: var(--accent);
+				border-radius: 4px;
+				display: flex;
+				align-items: center;
+				justify-content: center;
+				font-size: 10px;
+				font-weight: 600;
+				color: var(--bg-deep);
+			}
+			.logo-text {
+				font-size: 14px;
+				font-weight: 500;
+				color: var(--text-secondary);
+			}
+			.main {
+				max-width: 600px;
+				margin: 0 auto;
+				padding: 0.5rem;
+				padding-bottom: 2rem;
+			}
+			.section-label {
+				font-size: 10px;
+				text-transform: uppercase;
+				letter-spacing: 0.1em;
+				color: var(--text-dim);
+				padding: 1rem 0.5rem 0.5rem;
+				display: flex;
+				align-items: center;
+				gap: 0.5rem;
+			}
+			.section-label::after {
+				content: '';
+				flex: 1;
+				height: 1px;
+				background: var(--border);
+			}
+			.session {
+				background: var(--bg-panel);
+				border: 1px solid var(--border);
+				border-radius: 8px;
+				margin-bottom: 0.5rem;
+				overflow: hidden;
+			}
+			.session.has-attention {
+				border-color: var(--attention);
+				box-shadow: 0 0 0 1px var(--attention-glow);
+			}
+			.session-header {
+				display: flex;
+				align-items: center;
+				padding: 0.875rem 1rem;
+				cursor: pointer;
+				transition: background 0.15s;
+			}
+			.session-header:hover { background: var(--bg-elevated); }
+			.session-indicator {
+				width: 10px;
+				height: 10px;
+				border-radius: 50%;
+				margin-right: 0.75rem;
+				flex-shrink: 0;
+			}
+			.session-indicator.attention {
+				background: var(--attention);
+				box-shadow: 0 0 10px var(--attention-glow);
+				animation: pulse 2s ease-in-out infinite;
+			}
+			.session-indicator.working {
+				background: var(--working);
+				box-shadow: 0 0 8px var(--working-glow);
+			}
+			.session-indicator.idle { background: var(--idle); }
+			@keyframes pulse {
+				0%, 100% { opacity: 1; transform: scale(1); }
+				50% { opacity: 0.6; transform: scale(0.9); }
+			}
+			.session-info { flex: 1; min-width: 0; }
+			.session-name {
+				font-size: 14px;
+				font-weight: 500;
+				color: var(--text-primary);
+				white-space: nowrap;
+				overflow: hidden;
+				text-overflow: ellipsis;
+			}
+			.session-meta {
+				font-size: 11px;
+				color: var(--text-secondary);
+				margin-top: 2px;
+			}
+			.session-badge {
+				font-size: 10px;
+				padding: 0.25rem 0.5rem;
+				border-radius: 4px;
+				background: var(--attention);
+				color: var(--bg-deep);
+				font-weight: 600;
+				margin-left: 0.5rem;
+			}
+			.session-chevron {
+				color: var(--text-dim);
+				transition: transform 0.2s;
+			}
+			.session.expanded .session-chevron { transform: rotate(180deg); }
+			.windows {
+				border-top: 1px solid var(--border);
+				background: var(--bg-deep);
+			}
+			.windows.hidden { display: none; }
+			.window {
+				display: flex;
+				align-items: flex-start;
+				padding: 0.75rem 1rem 0.75rem 2.5rem;
+				border-bottom: 1px solid var(--border);
+				cursor: pointer;
+				transition: background 0.15s;
+				text-decoration: none;
+				color: inherit;
+			}
+			.window:last-child { border-bottom: none; }
+			.window:hover { background: var(--bg-panel); }
+			.window.attention { background: rgba(249, 115, 22, 0.05); }
+			.window-indicator {
+				width: 6px;
+				height: 6px;
+				border-radius: 50%;
+				margin-right: 0.75rem;
+				margin-top: 0.35rem;
+				flex-shrink: 0;
+			}
+			.window-indicator.attention {
+				background: var(--attention);
+				box-shadow: 0 0 6px var(--attention-glow);
+				animation: pulse 2s ease-in-out infinite;
+			}
+			.window-indicator.working { background: var(--working); }
+			.window-indicator.idle { background: var(--idle); }
+			.window-info { flex: 1; min-width: 0; }
+			.window-name { font-size: 13px; color: var(--text-primary); }
+			.window-status {
+				font-size: 11px;
+				color: var(--text-secondary);
+				margin-top: 1px;
+			}
+			.window-status.attention { color: var(--attention); }
+			.window-preview {
+				margin-top: 0.5rem;
+				padding: 0.5rem;
+				background: rgba(0, 0, 0, 0.3);
+				border-radius: 4px;
+				font-size: 11px;
+				line-height: 1.4;
+				max-height: 4.5em;
+				overflow: hidden;
+			}
+			.preview-line {
+				white-space: nowrap;
+				overflow: hidden;
+				text-overflow: ellipsis;
+				color: var(--text-secondary);
+			}
+			.window-arrow {
+				color: var(--text-dim);
+				font-size: 12px;
+				margin-top: 0.25rem;
+			}
+			.empty-state {
+				text-align: center;
+				padding: 4rem 2rem;
+				color: var(--text-secondary);
+			}
+			.empty-icon { font-size: 48px; margin-bottom: 1rem; opacity: 0.5; }
 		</style>
 	</head>
-	<body class="bg-gray-100 h-full overflow-y-auto">
-		<div class="max-w-lg mx-auto p-4 pb-24 min-h-full">
-			<header class="flex items-center justify-between mb-6 sticky top-0 bg-gray-100 py-3 z-10">
-				<h1 class="text-xl font-bold text-gray-800">tmux-dashboard</h1>
-				<button
-					hx-get="/sessions"
-					hx-target="#sessions"
-					hx-swap="innerHTML"
-					class="p-2 rounded-full hover:bg-gray-200"
-				>
-					<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
-					</svg>
-				</button>
-			</header>
-			<div
-				id="sessions"
-				hx-ext="sse"
-				sse-connect="/sessions?stream=1"
-				sse-swap="message"
-				hx-swap="innerHTML"
-			>
-				<div class="text-center py-8 text-gray-500">
-					Loading sessions...
+	<body>
+		<header class="header">
+			<div class="header-content">
+				<div class="logo">
+					<div class="logo-icon">MC</div>
+					<span class="logo-text">mission control</span>
 				</div>
 			</div>
-		</div>
+		</header>
+		<main class="main">
+			<div id="sessions">
+				<div class="empty-state">
+					<p>Loading...</p>
+				</div>
+			</div>
+		</main>
 		<script src="/static/app.js"></script>
 		<script>
-			document.body.addEventListener('htmx:afterSwap', function(e) {
-				if (e.target.id === 'sessions') {
-					htmx.process(e.target);
+			// Track expanded sessions
+			const expandedSessions = new Set();
+
+			function toggleSession(header) {
+				const session = header.closest('.session');
+				const windows = session.querySelector('.windows');
+				const sessionName = session.dataset.session;
+
+				session.classList.toggle('expanded');
+				windows.classList.toggle('hidden');
+
+				// Track state
+				if (session.classList.contains('expanded')) {
+					expandedSessions.add(sessionName);
+				} else {
+					expandedSessions.delete(sessionName);
 				}
-			});
+			}
+
+			// Restore expanded state after SSE update
+			function restoreExpandedState() {
+				document.querySelectorAll('.session').forEach(session => {
+					const name = session.dataset.session;
+					if (expandedSessions.has(name)) {
+						session.classList.add('expanded');
+						session.querySelector('.windows')?.classList.remove('hidden');
+					}
+				});
+			}
+
+			// Handle SSE manually for flicker-free updates
+			function connectSSE() {
+				const evtSource = new EventSource('/sessions?stream=1');
+				const container = document.getElementById('sessions');
+
+				evtSource.onmessage = function(e) {
+					// Parse incoming HTML
+					const temp = document.createElement('div');
+					temp.innerHTML = e.data;
+
+					// Pre-apply expanded state before morphing
+					temp.querySelectorAll('.session').forEach(session => {
+						const name = session.dataset.session;
+						if (expandedSessions.has(name)) {
+							session.classList.add('expanded');
+							session.querySelector('.windows')?.classList.remove('hidden');
+						}
+					});
+
+					// Use idiomorph to morph DOM (preserves hover, focus, etc.)
+					Idiomorph.morph(container, temp.innerHTML, {
+						morphStyle: 'innerHTML'
+					});
+				};
+
+				evtSource.onerror = function() {
+					console.log('SSE connection lost, reconnecting...');
+					evtSource.close();
+					setTimeout(connectSSE, 3000);
+				};
+			}
+
+			// Start SSE connection
+			connectSSE();
 		</script>
 	</body>
 	</html>
 }
 
-// Sessions renders the sessions list (used for SSE updates)
+// Sessions renders the sessions list with window-level detail
 templ Sessions(data SessionsData) {
+	// Needs Attention section
 	if len(data.NeedsAttention) > 0 {
-		<section class="mb-6">
-			<h2 class="text-sm font-semibold text-gray-600 mb-3 uppercase tracking-wide">
-				Needs Attention ({ fmt.Sprintf("%d", len(data.NeedsAttention)) })
-			</h2>
-			for _, item := range data.NeedsAttention {
-				@sessionCard(item)
-			}
-		</section>
+		<div class="section-label">Needs attention</div>
+		for _, sess := range data.NeedsAttention {
+			@sessionCardV2(sess, true)
+		}
 	}
-	if len(data.OtherSessions) > 0 {
-		<section>
-			<h2 class="text-sm font-semibold text-gray-600 mb-3 uppercase tracking-wide">
-				Other Sessions ({ fmt.Sprintf("%d", len(data.OtherSessions)) })
-			</h2>
-			<div class="bg-white rounded-lg shadow divide-y">
-				for _, sess := range data.OtherSessions {
-					<a href={ templ.SafeURL("/pane/" + urlEncode(sess.Name)) } class="flex items-center gap-3 p-3 hover:bg-gray-50">
-						<span class={ "w-2 h-2 rounded-full", templ.KV("bg-green-500", sess.Attached), templ.KV("bg-gray-300", !sess.Attached) }></span>
-						<span class="text-gray-700">{ sess.Name }</span>
-						<span class="text-xs text-gray-400 ml-auto">{ fmt.Sprintf("%d win", sess.Windows) }</span>
-					</a>
-				}
-			</div>
-		</section>
+	// Active section
+	if len(data.Active) > 0 {
+		<div class="section-label">Active</div>
+		for _, sess := range data.Active {
+			@sessionCardV2(sess, false)
+		}
 	}
-	if len(data.NeedsAttention) == 0 && len(data.OtherSessions) == 0 {
-		<div class="text-center py-12 text-gray-500">
-			<p>No tmux sessions running</p>
-			<p class="text-sm mt-2">Start a tmux session to see it here</p>
+	// Idle section
+	if len(data.Idle) > 0 {
+		<div class="section-label">Idle</div>
+		for _, sess := range data.Idle {
+			@sessionCardV2(sess, false)
+		}
+	}
+	// Empty state
+	if len(data.NeedsAttention) == 0 && len(data.Active) == 0 && len(data.Idle) == 0 {
+		<div class="empty-state">
+			<div class="empty-icon">◯</div>
+			<p>No tmux sessions</p>
 		</div>
 	}
 }
 
-// sessionCard renders a single session that needs attention
-templ sessionCard(item SessionWithStatus) {
-	<a href={ templ.SafeURL("/pane/" + urlEncode(item.Session.Name)) } class="block mb-3">
-		<div class="bg-white rounded-lg shadow p-4 border-l-4 border-red-500">
-			<div class="flex items-center gap-2 mb-2">
-				<span class={ "w-3 h-3 rounded-full", templ.KV("bg-red-500", item.ParseResult.Type.String() == "error"), templ.KV("bg-orange-500", item.ParseResult.Type.String() != "error") }></span>
-				<span class="font-medium text-gray-900">{ item.Session.Name }</span>
+// sessionCardV2 renders a session with its windows
+templ sessionCardV2(sess SessionWithWindows, expanded bool) {
+	<div class={ "session", templ.KV("has-attention", sess.AttentionCount > 0), templ.KV("expanded", expanded) } data-session={ sess.Session.Name }>
+		<div class="session-header" onclick="toggleSession(this)">
+			<div class={ "session-indicator", getSessionIndicator(sess) }></div>
+			<div class="session-info">
+				<div class="session-name">{ sess.Session.Name }</div>
+				<div class="session-meta">{ fmt.Sprintf("%d windows", len(sess.Windows)) }</div>
 			</div>
-			<p class="text-sm text-gray-600 mb-2">
-				if item.ParseResult.Type.String() == "error" {
-					Error encountered
-				} else if item.ParseResult.Type.String() == "choice" {
-					Waiting for choice
-				} else if item.ParseResult.Type.String() == "question" {
-					Waiting for input
-				} else {
-					Needs attention
-				}
-			</p>
-			if item.ParseResult.Question != "" {
-				<p class="text-sm text-gray-800 italic">"{ truncate(item.ParseResult.Question, 60) }"</p>
+			if sess.AttentionCount > 0 {
+				<span class="session-badge">{ fmt.Sprintf("%d", sess.AttentionCount) }</span>
 			}
-			if len(item.ParseResult.Choices) > 0 {
-				<div class="flex gap-2 mt-3">
-					for i := range item.ParseResult.Choices {
-						if i < 4 {
-							<button
-								type="button"
-								hx-post={ "/pane/" + urlEncode(item.Session.Name) + "/send" }
-								hx-vals={ fmt.Sprintf(`{"input": "%d", "noenter": "true"}`, i+1) }
-								hx-swap="none"
-								class="px-3 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded"
-								onclick="event.preventDefault(); event.stopPropagation();"
-							>{ fmt.Sprintf("%d", i+1) }</button>
-						}
+			<svg class="session-chevron" width="20" height="20" viewBox="0 0 20 20" fill="none">
+				<path d="M5 7.5L10 12.5L15 7.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path>
+			</svg>
+		</div>
+		<div class={ "windows", templ.KV("hidden", !expanded) }>
+			for _, win := range sess.Windows {
+				@windowCard(sess.Session.Name, win)
+			}
+		</div>
+	</div>
+}
+
+// windowCard renders a single window within a session
+templ windowCard(sessionName string, win WindowWithStatus) {
+	<a
+		href={ templ.SafeURL("/pane/" + urlEncode(sessionName) + ":" + fmt.Sprintf("%d", win.Window.Index)) }
+		class={ "window", templ.KV("attention", win.NeedsAttention) }
+	>
+		<div class={ "window-indicator", getWindowIndicator(win) }></div>
+		<div class="window-info">
+			<div class="window-name">{ fmt.Sprintf("%d: %s", win.Window.Index, win.Window.Name) }</div>
+			<div class={ "window-status", templ.KV("attention", win.NeedsAttention) }>
+				{ getWindowStatusText(win) }
+			</div>
+			if len(win.Preview) > 0 {
+				<div class="window-preview">
+					for _, line := range win.Preview {
+						<div class="preview-line">{ line }</div>
 					}
 				</div>
 			}
-			<p class="text-xs text-gray-400 mt-2">{ timeAgo(item.Session.LastActivity) }</p>
 		</div>
+		<span class="window-arrow">→</span>
 	</a>
+}
+
+// Helper functions for template
+func getSessionIndicator(sess SessionWithWindows) string {
+	if sess.AttentionCount > 0 {
+		return "attention"
+	}
+	if sess.HasWorking {
+		return "working"
+	}
+	return "idle"
+}
+
+func getWindowIndicator(win WindowWithStatus) string {
+	if win.NeedsAttention {
+		return "attention"
+	}
+	if win.ParseResult.Type == parser.TypeWorking {
+		return "working"
+	}
+	return "idle"
+}
+
+func getWindowStatusText(win WindowWithStatus) string {
+	switch win.ParseResult.Type {
+	case parser.TypeError:
+		return "Error"
+	case parser.TypeChoice:
+		return "Waiting for choice..."
+	case parser.TypeQuestion:
+		if win.ParseResult.Question != "" {
+			q := win.ParseResult.Question
+			if len(q) > 40 {
+				q = q[:37] + "..."
+			}
+			return q
+		}
+		return "Waiting for input..."
+	case parser.TypeWorking:
+		return "Working..."
+	default:
+		return "Idle"
+	}
 }
 
 // PanePage renders the pane view
@@ -211,6 +582,16 @@ templ PanePage(data PaneData) {
 				-webkit-user-select: text;
 				user-select: text;
 				cursor: text;
+			}
+			/* Diff highlighting - inline to avoid extra newlines in pre */
+			.diff-add {
+				background-color: rgba(34, 197, 94, 0.25);
+			}
+			.diff-del {
+				background-color: rgba(239, 68, 68, 0.25);
+			}
+			.diff-hunk {
+				background-color: rgba(59, 130, 246, 0.25);
 			}
 		</style>
 	</head>
@@ -365,16 +746,48 @@ templ paneScripts() {
 		const ansiUp = new AnsiUp();
 		ansiUp.escapeHtml = true;  // Ensure HTML is escaped (v6 uses camelCase)
 
-		// Strip ALL background colors - let terminal bg show through
-		// Text colors (green/red for diffs) are preserved
+		// Strip ANSI background colors from ansi_up output
+		// Only target rgb() values (ansi_up uses rgb, not rgba) to avoid stripping CSS code in terminal content
 		function fixBackgrounds(html) {
-			return html.replace(/background-color:\s*[^;]+;?/gi, '');
+			html = html.replace(/background-color:\s*rgb\([^)]+\);?/gi, '');
+			return html;
+		}
+
+		// Add subtle backgrounds for diff lines
+		// Claude Code format: "703 +  code" or "703 -  code" (line number, space, +/-, space, code)
+		function enhanceDiffs(html) {
+			const lines = html.split('\n');
+			return lines.map(line => {
+				const stripped = line.replace(/<[^>]*>/g, ''); // Strip HTML tags to check content
+				// Match Claude Code diff format: line_number +/- code
+				const match = stripped.match(/^\s*\d+\s+([-+])\s/);
+				if (match) {
+					if (match[1] === '+') {
+						return '<span class="diff-add">' + line + '</span>';
+					} else {
+						return '<span class="diff-del">' + line + '</span>';
+					}
+				}
+				// Also match standard diff format (starts with +/- directly)
+				if (stripped.startsWith('+') && !stripped.startsWith('+++')) {
+					return '<span class="diff-add">' + line + '</span>';
+				} else if (stripped.startsWith('-') && !stripped.startsWith('---')) {
+					return '<span class="diff-del">' + line + '</span>';
+				} else if (stripped.startsWith('@@')) {
+					return '<span class="diff-hunk">' + line + '</span>';
+				}
+				return line;
+			}).join('\n');
 		}
 
 		function processOutput(text) {
 			try {
-				const html = ansiUp.ansi_to_html(text);
-				return fixBackgrounds(html);
+				// Normalize line endings and remove carriage returns
+				text = text.replace(/\r\n/g, '\n').replace(/\r/g, '');
+				let html = ansiUp.ansi_to_html(text);
+				html = fixBackgrounds(html);
+				html = enhanceDiffs(html);
+				return html;
 			} catch (err) {
 				console.error('ansi_up error:', err);
 				// Fallback: escape HTML and preserve newlines
@@ -400,6 +813,11 @@ templ paneScripts() {
 			const output = document.getElementById('output');
 			if (!output) return;
 
+			const container = document.getElementById('output-container');
+			// Check if user is at the bottom before updating (with 50px threshold)
+			const wasAtBottom = container &&
+				(container.scrollTop + container.clientHeight >= container.scrollHeight - 50);
+
 			// Get the raw text from SSE (already safe as plain text)
 			let text = e.detail.data;
 
@@ -414,9 +832,8 @@ templ paneScripts() {
 			// Process with ansi_up (which has escapeHtml enabled)
 			output.innerHTML = processOutput(text);
 
-			// Auto-scroll to bottom
-			const container = document.getElementById('output-container');
-			if (container) {
+			// Only auto-scroll if user was already at the bottom
+			if (wasAtBottom && container) {
 				container.scrollTop = container.scrollHeight;
 			}
 		});
