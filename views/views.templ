@@ -13,6 +13,7 @@ import (
 // WindowWithStatus combines window info with its parse result
 type WindowWithStatus struct {
 	Window         tmux.Window
+	Pane           tmux.Pane // The pane being monitored
 	ParseResult    parser.Result
 	Preview        []string // Last 2-3 lines for preview
 	NeedsAttention bool
@@ -186,6 +187,31 @@ templ IndexPage() {
 				max-width: 600px;
 				margin: 0 auto;
 			}
+			.search-bar {
+				padding: 0 1rem 0.75rem;
+				max-width: 600px;
+				margin: 0 auto;
+			}
+			.search-input {
+				width: 100%;
+				background: var(--bg-elevated);
+				border: 1px solid var(--border);
+				border-radius: 8px;
+				padding: 0.5rem 0.75rem 0.5rem 2.25rem;
+				font-family: inherit;
+				font-size: 14px;
+				color: var(--text-primary);
+				outline: none;
+				background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%23555566'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z'/%3E%3C/svg%3E");
+				background-repeat: no-repeat;
+				background-position: 0.625rem center;
+				background-size: 16px;
+			}
+			.search-input:focus {
+				border-color: var(--accent);
+				box-shadow: 0 0 0 2px var(--accent-dim);
+			}
+			.search-input::placeholder { color: var(--text-dim); }
 			.logo {
 				display: flex;
 				align-items: center;
@@ -234,6 +260,24 @@ templ IndexPage() {
 			}
 			.status-dot.idle {
 				background: var(--idle);
+			}
+			.header-right {
+				display: flex;
+				align-items: center;
+				gap: 0.75rem;
+			}
+			.notification-btn {
+				background: none;
+				border: none;
+				font-size: 16px;
+				cursor: pointer;
+				padding: 0.25rem;
+				opacity: 0.6;
+				transition: opacity 0.15s;
+			}
+			.notification-btn:hover { opacity: 1; }
+			.notification-btn.enabled {
+				opacity: 1;
 			}
 			.main {
 				max-width: 600px;
@@ -375,6 +419,8 @@ templ IndexPage() {
 				color: var(--text-secondary);
 				margin-top: 1px;
 			}
+			.window-status.idle { color: var(--text-dim); }
+			.window-status.working { color: var(--working); }
 			.window-status.attention { color: var(--attention); }
 			.window-preview {
 				margin-top: 0.5rem;
@@ -392,10 +438,33 @@ templ IndexPage() {
 				text-overflow: ellipsis;
 				color: var(--text-secondary);
 			}
+			.window-actions {
+				display: flex;
+				flex-direction: column;
+				align-items: center;
+				gap: 0.25rem;
+				flex-shrink: 0;
+			}
+			.window-view-btn {
+				color: var(--text-secondary);
+				text-decoration: none;
+				font-size: 10px;
+				text-transform: uppercase;
+				letter-spacing: 0.5px;
+				padding: 0.2rem 0.5rem;
+				border-radius: 3px;
+				transition: all 0.15s;
+				background: rgba(255, 255, 255, 0.08);
+				border: 1px solid rgba(255, 255, 255, 0.1);
+			}
+			.window-view-btn:hover, .window-view-btn:active {
+				color: #60a5fa;
+				background: rgba(59, 130, 246, 0.2);
+				border-color: rgba(59, 130, 246, 0.3);
+			}
 			.window-arrow {
 				color: var(--text-dim);
 				font-size: 12px;
-				margin-top: 0.25rem;
 			}
 			.empty-state {
 				text-align: center;
@@ -404,6 +473,19 @@ templ IndexPage() {
 			}
 			.empty-icon { font-size: 48px; margin-bottom: 1rem; opacity: 0.5; }
 			/* Action bar */
+			.action-backdrop {
+				position: fixed;
+				inset: 0;
+				background: rgba(0, 0, 0, 0.5);
+				opacity: 0;
+				visibility: hidden;
+				transition: opacity 0.3s, visibility 0.3s;
+				z-index: 190;
+			}
+			.action-backdrop.visible {
+				opacity: 1;
+				visibility: visible;
+			}
 			.action-bar {
 				position: fixed;
 				bottom: 0;
@@ -411,16 +493,15 @@ templ IndexPage() {
 				right: 0;
 				background: var(--bg-panel);
 				border-top: 1px solid var(--border);
-				padding: 0.75rem;
-				padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));
+				padding: 0.5rem;
+				padding-bottom: calc(0.5rem + env(safe-area-inset-bottom));
 				transform: translateY(100%);
 				transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 				z-index: 200;
 			}
 			.action-bar.visible { transform: translateY(0); }
 			.action-bar-content {
-				max-width: 600px;
-				margin: 0 auto;
+				max-width: 100%;
 			}
 			.action-target {
 				font-size: 11px;
@@ -440,14 +521,15 @@ templ IndexPage() {
 			}
 			.action-input-row {
 				display: flex;
-				gap: 0.5rem;
+				gap: 0.375rem;
 			}
 			.action-input {
 				flex: 1;
+				min-width: 0;
 				background: var(--bg-deep);
 				border: 1px solid var(--border);
 				border-radius: 6px;
-				padding: 0.75rem 1rem;
+				padding: 0.5rem 0.75rem;
 				font-family: inherit;
 				font-size: 14px;
 				color: var(--text-primary);
@@ -462,26 +544,32 @@ templ IndexPage() {
 				background: var(--accent);
 				border: none;
 				border-radius: 6px;
-				padding: 0 1.25rem;
+				padding: 0.5rem 0.75rem;
 				font-family: inherit;
 				font-size: 13px;
 				font-weight: 500;
 				color: var(--bg-deep);
 				cursor: pointer;
 				transition: opacity 0.15s;
+				flex-shrink: 0;
+				white-space: nowrap;
 			}
 			.action-btn:active { opacity: 0.8; }
 			.action-btn.stop {
 				background: var(--error);
-				padding: 0 1rem;
+				color: white;
+				padding: 0.5rem;
+				display: flex;
+				align-items: center;
+				justify-content: center;
 			}
 			.action-btn.view {
-				background: var(--bg-elevated);
-				color: var(--text-primary);
+				background: #3b82f6;
+				color: white;
 			}
 			.action-context {
-				margin-bottom: 0.75rem;
-				padding: 0.75rem;
+				margin-bottom: 0.5rem;
+				padding: 0.5rem;
 				background: var(--bg-deep);
 				border-radius: 6px;
 				border-left: 3px solid var(--idle);
@@ -548,7 +636,15 @@ templ IndexPage() {
 					<div class="logo-icon">MC</div>
 					<span class="logo-text">mission control</span>
 				</div>
-				<div class="status-summary" id="status-summary"></div>
+				<div class="header-right">
+					<div class="status-summary" id="status-summary"></div>
+					<button class="notification-btn" id="notificationBtn" onclick="toggleNotifications()" title="Toggle notifications">
+						<span class="notification-icon">🔕</span>
+					</button>
+				</div>
+			</div>
+			<div class="search-bar">
+				<input type="text" class="search-input" id="searchInput" placeholder="Filter sessions..." oninput="filterSessions(this.value)"/>
 			</div>
 		</header>
 		<main class="main">
@@ -558,6 +654,8 @@ templ IndexPage() {
 				</div>
 			</div>
 		</main>
+		<!-- Action bar backdrop -->
+		<div class="action-backdrop" id="actionBackdrop" onclick="closeActionBar()"></div>
 		<!-- Action bar -->
 		<div class="action-bar" id="actionBar">
 			<div class="action-bar-content">
@@ -572,7 +670,11 @@ templ IndexPage() {
 				<div class="action-choices hidden" id="actionChoices"></div>
 				<div class="action-input-row">
 					<input type="text" class="action-input" placeholder="Send input..." id="actionInput"/>
-					<button class="action-btn stop" onclick="sendStop()">⏹</button>
+					<button class="action-btn stop" onclick="sendStop()" title="Stop (Ctrl+C)">
+						<svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+						</svg>
+					</button>
 					<button class="action-btn view" onclick="viewPane()">View</button>
 					<button class="action-btn" onclick="sendInput()">Send</button>
 				</div>
@@ -583,6 +685,38 @@ templ IndexPage() {
 			// Track expanded sessions
 			const expandedSessions = new Set();
 			let selectedTarget = null;
+			let currentFilter = '';
+
+			function filterSessions(query) {
+				currentFilter = query.toLowerCase().trim();
+				const sessions = document.querySelectorAll('#sessions .session');
+
+				sessions.forEach(session => {
+					const sessionName = session.dataset.session?.toLowerCase() || '';
+					const windows = session.querySelectorAll('.window');
+					let hasMatch = false;
+
+					windows.forEach(win => {
+						const windowName = (win.dataset.name || '').toLowerCase();
+						const matches = !currentFilter ||
+							sessionName.includes(currentFilter) ||
+							windowName.includes(currentFilter);
+
+						win.style.display = matches ? '' : 'none';
+						if (matches) hasMatch = true;
+					});
+
+					// Show session if name matches or any window matches
+					const sessionMatches = !currentFilter || sessionName.includes(currentFilter) || hasMatch;
+					session.style.display = sessionMatches ? '' : 'none';
+
+					// Auto-expand if filtering and has matches
+					if (currentFilter && hasMatch) {
+						session.classList.add('expanded');
+						session.querySelector('.windows')?.classList.remove('hidden');
+					}
+				});
+			}
 
 			function toggleSession(header) {
 				const session = header.closest('.session');
@@ -635,6 +769,7 @@ templ IndexPage() {
 			function selectWindow(el) {
 				const session = el.dataset.session;
 				const windowIdx = parseInt(el.dataset.window);
+				const paneIdx = parseInt(el.dataset.pane || '0');
 				const windowName = el.dataset.name;
 				const status = el.dataset.status;
 				const indicator = el.dataset.indicator;
@@ -642,7 +777,7 @@ templ IndexPage() {
 				const question = el.dataset.question;
 				const choices = el.dataset.choices;
 
-				selectedTarget = { session, window: windowIdx };
+				selectedTarget = { session, window: windowIdx, pane: paneIdx };
 				document.getElementById('actionTarget').textContent = `${session}:${windowIdx} ${windowName}`;
 
 				// Update context area
@@ -654,21 +789,25 @@ templ IndexPage() {
 				statusEl.className = 'action-status ' + indicator;
 				statusEl.textContent = status;
 
-				// Show question and choices if available, otherwise preview
+				// Show choices if available, then preview (don't duplicate question - it's in status)
 				let html = '';
-				if (question) {
-					html += `<div class="action-preview-line" style="color: var(--attention); margin-bottom: 0.5rem;">${escapeHtml(question)}</div>`;
-				}
 				if (choices) {
 					const choiceList = choices.split('|');
 					choiceList.forEach((choice, i) => {
 						html += `<div class="action-preview-line" style="padding-left: 0.5rem;">${i + 1}. ${escapeHtml(choice)}</div>`;
 					});
 				}
-				// Also show preview for additional context
+				// Show preview, filtering out lines that match the question/status
 				if (preview) {
 					if (html) html += '<div style="margin-top: 0.5rem; border-top: 1px solid var(--border); padding-top: 0.5rem;"></div>';
-					html += preview.split('\n').map(line =>
+					const previewLines = preview.split('\n').filter(line => {
+						// Skip lines that are the same as status/question to avoid duplication
+						const trimmed = line.trim();
+						if (question && trimmed === question.trim()) return false;
+						if (status && trimmed === status.trim()) return false;
+						return true;
+					});
+					html += previewLines.map(line =>
 						`<div class="action-preview-line">${escapeHtml(line)}</div>`
 					).join('');
 				}
@@ -695,13 +834,14 @@ templ IndexPage() {
 					choicesEl.classList.add('hidden');
 				}
 
+				document.getElementById('actionBackdrop').classList.add('visible');
 				document.getElementById('actionBar').classList.add('visible');
 				document.getElementById('actionInput').focus();
 			}
 
 			function sendChoice(num) {
 				if (!selectedTarget) return;
-				fetch(`/pane/${encodeURIComponent(selectedTarget.session)}:${selectedTarget.window}/send`, {
+				fetch(`/pane/${encodeURIComponent(selectedTarget.session)}:${selectedTarget.window}.${selectedTarget.pane}/send`, {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
 					body: `input=${num}&noenter=true`
@@ -716,6 +856,7 @@ templ IndexPage() {
 			}
 
 			function closeActionBar() {
+				document.getElementById('actionBackdrop').classList.remove('visible');
 				document.getElementById('actionBar').classList.remove('visible');
 				selectedTarget = null;
 			}
@@ -726,7 +867,7 @@ templ IndexPage() {
 				const value = input.value;
 				if (!value) return;
 
-				fetch(`/pane/${encodeURIComponent(selectedTarget.session)}:${selectedTarget.window}/send`, {
+				fetch(`/pane/${encodeURIComponent(selectedTarget.session)}:${selectedTarget.window}.${selectedTarget.pane}/send`, {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
 					body: `input=${encodeURIComponent(value)}`
@@ -736,7 +877,7 @@ templ IndexPage() {
 
 			function sendStop() {
 				if (!selectedTarget) return;
-				fetch(`/pane/${encodeURIComponent(selectedTarget.session)}:${selectedTarget.window}/send`, {
+				fetch(`/pane/${encodeURIComponent(selectedTarget.session)}:${selectedTarget.window}.${selectedTarget.pane}/send`, {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
 					body: 'input=C-c&special=true'
@@ -745,7 +886,7 @@ templ IndexPage() {
 
 			function viewPane() {
 				if (!selectedTarget) return;
-				window.location.href = `/pane/${encodeURIComponent(selectedTarget.session)}:${selectedTarget.window}`;
+				window.location.href = `/pane/${encodeURIComponent(selectedTarget.session)}:${selectedTarget.window}.${selectedTarget.pane}`;
 			}
 
 			// Close action bar on escape
@@ -778,6 +919,10 @@ templ IndexPage() {
 
 					Idiomorph.morph(container, temp.innerHTML, { morphStyle: 'innerHTML' });
 					updateStatusSummary();
+					// Re-apply filter if active
+					if (currentFilter) {
+						filterSessions(currentFilter);
+					}
 				};
 
 				evtSource.onerror = function() {
@@ -788,6 +933,87 @@ templ IndexPage() {
 			}
 
 			connectSSE();
+
+			// Notification support
+			let notificationsEnabled = false;
+			let notifiedPanes = new Set();
+
+			async function toggleNotifications() {
+				const btn = document.getElementById('notificationBtn');
+
+				if (!notificationsEnabled) {
+					// Request permission
+					if (!('Notification' in window)) {
+						alert('Notifications not supported in this browser');
+						return;
+					}
+
+					const permission = await Notification.requestPermission();
+					if (permission === 'granted') {
+						// Register service worker
+						if ('serviceWorker' in navigator) {
+							try {
+								await navigator.serviceWorker.register('/static/sw.js');
+							} catch (e) {
+								console.log('Service worker registration failed:', e);
+							}
+						}
+						notificationsEnabled = true;
+						btn.classList.add('enabled');
+						btn.querySelector('.notification-icon').textContent = '🔔';
+						btn.title = 'Notifications enabled';
+					}
+				} else {
+					notificationsEnabled = false;
+					btn.classList.remove('enabled');
+					btn.querySelector('.notification-icon').textContent = '🔕';
+					btn.title = 'Notifications disabled';
+					notifiedPanes.clear();
+				}
+			}
+
+			function checkAndNotify() {
+				if (!notificationsEnabled) return;
+
+				const attentionWindows = document.querySelectorAll('.window-indicator.attention');
+				attentionWindows.forEach(indicator => {
+					const win = indicator.closest('.window');
+					if (!win) return;
+
+					const paneKey = `${win.dataset.session}:${win.dataset.window}.${win.dataset.pane}`;
+					if (notifiedPanes.has(paneKey)) return;
+
+					notifiedPanes.add(paneKey);
+
+					const title = `${win.dataset.session}:${win.dataset.window}`;
+					const body = win.dataset.status || 'Needs attention';
+
+					new Notification(title, {
+						body: body,
+						icon: '/static/icon.png',
+						tag: paneKey,
+						data: { url: `/pane/${paneKey}` }
+					});
+				});
+
+				// Clean up notified panes that no longer need attention
+				const currentAttention = new Set();
+				attentionWindows.forEach(indicator => {
+					const win = indicator.closest('.window');
+					if (win) {
+						currentAttention.add(`${win.dataset.session}:${win.dataset.window}.${win.dataset.pane}`);
+					}
+				});
+				notifiedPanes = new Set([...notifiedPanes].filter(p => currentAttention.has(p)));
+			}
+
+			// Check for attention-needing panes after SSE updates
+			const originalMorph = Idiomorph.morph;
+			Idiomorph.morph = function(...args) {
+				const result = originalMorph.apply(this, args);
+				setTimeout(checkAndNotify, 100);
+				return result;
+			};
 		</script>
 	</body>
 	</html>
@@ -861,6 +1087,7 @@ templ windowCard(sessionName string, win WindowWithStatus) {
 	<div
 		data-session={ sessionName }
 		data-window={ fmt.Sprintf("%d", win.Window.Index) }
+		data-pane={ fmt.Sprintf("%d", win.Pane.Index) }
 		data-name={ win.Window.Name }
 		data-status={ getWindowStatusText(win) }
 		data-indicator={ getWindowIndicator(win) }
@@ -873,7 +1100,7 @@ templ windowCard(sessionName string, win WindowWithStatus) {
 		<div class={ "window-indicator", getWindowIndicator(win) }></div>
 		<div class="window-info">
 			<div class="window-name">{ fmt.Sprintf("%d: %s", win.Window.Index, win.Window.Name) }</div>
-			<div class={ "window-status", templ.KV("attention", win.NeedsAttention) }>
+			<div class={ "window-status", getWindowIndicator(win) }>
 				{ getWindowStatusText(win) }
 			</div>
 			if len(win.Preview) > 0 {
@@ -884,7 +1111,13 @@ templ windowCard(sessionName string, win WindowWithStatus) {
 				</div>
 			}
 		</div>
-		<span class="window-arrow">→</span>
+		<div class="window-actions">
+			<a href={ templ.SafeURL(fmt.Sprintf("/pane/%s:%d.%d", sessionName, win.Window.Index, win.Pane.Index)) }
+				class="window-view-btn"
+				onclick="event.stopPropagation()"
+				title="Open pane view">view</a>
+			<span class="window-arrow">→</span>
+		</div>
 	</div>
 }
 
@@ -940,87 +1173,299 @@ templ PanePage(data PaneData) {
 	<html lang="en">
 	<head>
 		<meta charset="UTF-8"/>
-		<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"/>
 		<title>{ data.Pane.Session } - houston</title>
-		<script src="https://cdn.tailwindcss.com"></script>
 		<script src="https://unpkg.com/htmx.org@1.9.10"></script>
 		<script src="https://unpkg.com/htmx.org@1.9.10/dist/ext/sse.js"></script>
 		<style>
+			:root {
+				--bg-deep: #0a0a0f;
+				--bg-panel: #12121a;
+				--bg-elevated: #1a1a24;
+				--border: #2a2a3a;
+				--text-primary: #e8e8f0;
+				--text-secondary: #8888a0;
+				--text-dim: #555566;
+				--accent: #00d4aa;
+				--accent-dim: rgba(0, 212, 170, 0.15);
+				--attention: #f97316;
+				--error: #ef4444;
+				--working: #3b82f6;
+				--idle: #6b7280;
+			}
+			* { box-sizing: border-box; margin: 0; padding: 0; }
+			body {
+				font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
+				background: var(--bg-deep);
+				color: var(--text-primary);
+				min-height: 100vh;
+				min-height: 100dvh;
+			}
 			.terminal {
-				font-family: ui-monospace, monospace;
+				font-family: 'SF Mono', ui-monospace, monospace;
+				font-size: 12px;
+				line-height: 1.5;
 				-webkit-user-select: text;
 				user-select: text;
 				cursor: text;
 			}
-			/* Diff highlighting - inline to avoid extra newlines in pre */
-			.diff-add {
-				background-color: rgba(34, 197, 94, 0.25);
+			.diff-add { background-color: rgba(34, 197, 94, 0.25); }
+			.diff-del { background-color: rgba(239, 68, 68, 0.25); }
+			.diff-hunk { background-color: rgba(59, 130, 246, 0.25); }
+			.header {
+				background: var(--bg-panel);
+				border-bottom: 1px solid var(--border);
+				padding: 0.75rem 1rem;
+				display: flex;
+				align-items: center;
+				gap: 0.75rem;
 			}
-			.diff-del {
-				background-color: rgba(239, 68, 68, 0.25);
+			.back-btn {
+				background: none;
+				border: none;
+				color: var(--text-secondary);
+				padding: 0.5rem;
+				margin: -0.5rem;
+				cursor: pointer;
+				border-radius: 6px;
 			}
-			.diff-hunk {
-				background-color: rgba(59, 130, 246, 0.25);
+			.back-btn:hover { background: var(--bg-elevated); color: var(--text-primary); }
+			.header-title {
+				flex: 1;
+				font-weight: 500;
+				font-size: 15px;
+				color: var(--text-primary);
 			}
+			.header-target {
+				font-size: 12px;
+				color: var(--text-secondary);
+				font-family: 'SF Mono', ui-monospace, monospace;
+			}
+			.menu-btn {
+				background: none;
+				border: none;
+				color: var(--text-secondary);
+				padding: 0.5rem;
+				cursor: pointer;
+				border-radius: 6px;
+			}
+			.menu-btn:hover { background: var(--bg-elevated); color: var(--text-primary); }
+			.menu {
+				position: absolute;
+				right: 0;
+				top: 100%;
+				margin-top: 0.5rem;
+				background: var(--bg-elevated);
+				border: 1px solid var(--border);
+				border-radius: 8px;
+				min-width: 160px;
+				z-index: 100;
+				box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+			}
+			.menu.hidden { display: none; }
+			.menu button {
+				width: 100%;
+				text-align: left;
+				padding: 0.625rem 1rem;
+				background: none;
+				border: none;
+				color: var(--text-primary);
+				font-size: 13px;
+				cursor: pointer;
+			}
+			.menu button:hover { background: var(--bg-panel); }
+			.selector {
+				display: flex;
+				gap: 0.5rem;
+				padding: 0.5rem 0.75rem;
+				background: var(--bg-panel);
+				border-bottom: 1px solid var(--border);
+				overflow-x: auto;
+				-webkit-overflow-scrolling: touch;
+			}
+			.selector::-webkit-scrollbar { display: none; }
+			.selector-item {
+				padding: 0.375rem 0.75rem;
+				border-radius: 6px;
+				font-size: 12px;
+				white-space: nowrap;
+				text-decoration: none;
+				background: var(--bg-elevated);
+				color: var(--text-secondary);
+				border: 1px solid transparent;
+				transition: all 0.15s;
+			}
+			.selector-item:hover { color: var(--text-primary); border-color: var(--border); }
+			.selector-item.active {
+				background: var(--accent-dim);
+				color: var(--accent);
+				border-color: var(--accent);
+			}
+			.selector-item.pane-active {
+				background: rgba(59, 130, 246, 0.15);
+				color: var(--working);
+				border-color: var(--working);
+			}
+			.selector-sep {
+				color: var(--text-dim);
+				padding: 0 0.25rem;
+				align-self: center;
+			}
+			.output-container {
+				flex: 1;
+				overflow-y: auto;
+				background: var(--bg-deep);
+				-webkit-overflow-scrolling: touch;
+			}
+			.output {
+				padding: 1rem;
+				color: var(--text-primary);
+				white-space: pre;
+				overflow-x: auto;
+				min-width: 100%;
+			}
+			.choices-bar {
+				display: flex;
+				gap: 0.5rem;
+				padding: 0.75rem;
+				background: var(--bg-panel);
+				border-top: 1px solid var(--border);
+			}
+			.choice-btn {
+				flex: 1;
+				padding: 0.625rem 0.5rem;
+				background: var(--bg-elevated);
+				border: 1px solid var(--border);
+				border-radius: 6px;
+				color: var(--text-primary);
+				font-size: 12px;
+				cursor: pointer;
+				text-align: center;
+				line-height: 1.3;
+				transition: all 0.15s;
+			}
+			.choice-btn:hover {
+				background: var(--accent-dim);
+				border-color: var(--accent);
+			}
+			.choice-num {
+				display: block;
+				font-size: 14px;
+				font-weight: 600;
+				color: var(--accent);
+				margin-bottom: 2px;
+			}
+			.choice-text {
+				display: block;
+				font-size: 11px;
+				color: var(--text-secondary);
+				overflow: hidden;
+				text-overflow: ellipsis;
+				white-space: nowrap;
+			}
+			.input-bar {
+				display: flex;
+				gap: 0.5rem;
+				padding: 0.75rem;
+				padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));
+				background: var(--bg-panel);
+				border-top: 1px solid var(--border);
+				align-items: center;
+			}
+			.mode-badge {
+				font-size: 10px;
+				font-weight: 600;
+				padding: 0.25rem 0.5rem;
+				border-radius: 4px;
+				font-family: 'SF Mono', ui-monospace, monospace;
+			}
+			.mode-badge.insert { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
+			.mode-badge.normal { background: rgba(59, 130, 246, 0.2); color: #3b82f6; }
+			.input-field {
+				flex: 1;
+				background: var(--bg-deep);
+				border: 1px solid var(--border);
+				border-radius: 6px;
+				padding: 0.625rem 0.875rem;
+				font-family: inherit;
+				font-size: 14px;
+				color: var(--text-primary);
+				resize: none;
+				outline: none;
+			}
+			.input-field:focus {
+				border-color: var(--accent);
+				box-shadow: 0 0 0 2px var(--accent-dim);
+			}
+			.input-field::placeholder { color: var(--text-dim); }
+			.action-btn {
+				padding: 0.5rem;
+				border: none;
+				border-radius: 6px;
+				cursor: pointer;
+				display: flex;
+				align-items: center;
+				justify-content: center;
+			}
+			.action-btn.stop { background: var(--error); color: white; }
+			.action-btn.stop:hover { opacity: 0.9; }
+			.action-btn.send { background: var(--accent); color: var(--bg-deep); }
+			.action-btn.send:hover { opacity: 0.9; }
 		</style>
 	</head>
-	<body class="bg-gray-100 min-h-screen">
-		<div class="flex flex-col h-screen max-w-lg mx-auto">
+	<body>
+		<div style="display: flex; flex-direction: column; height: 100vh; height: 100dvh; max-width: 32rem; margin: 0 auto;">
 			<!-- Header -->
-			<header class="flex items-center gap-3 p-4 bg-white border-b">
-				<a href="/" class="p-2 -ml-2 hover:bg-gray-100 rounded">
-					<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+			<header class="header">
+				<a href="/" class="back-btn">
+					<svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path>
 					</svg>
 				</a>
-				<h1 class="font-medium text-gray-900 flex-1">{ data.Pane.Session }</h1>
-				<div class="relative">
-					<button class="p-2 hover:bg-gray-100 rounded" onclick="toggleMenu()">
-						<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+				<div class="header-title">{ data.Pane.Session }</div>
+				<div class="header-target">{ fmt.Sprintf(":%d.%d", data.Pane.Window, data.Pane.Index) }</div>
+				<div style="position: relative;">
+					<button class="menu-btn" onclick="toggleMenu()">
+						<svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z"></path>
 						</svg>
 					</button>
-					<div id="menu" class="hidden absolute right-0 mt-2 w-48 bg-white rounded-lg shadow-lg border z-10">
+					<div id="menu" class="menu hidden">
 						<button
 							hx-post={ "/pane/" + data.Pane.URLTarget() + "/send" }
 							hx-vals='{"input": "C-c", "special": "true"}'
-							class="w-full text-left px-4 py-2 hover:bg-gray-100"
 						>Send Ctrl+C</button>
-						<button
-							onclick="scrollToTop()"
-							class="w-full text-left px-4 py-2 hover:bg-gray-100"
-						>Scroll to top</button>
+						<button onclick="scrollToTop()">Scroll to top</button>
 						<button
 							hx-get={ "/pane/" + data.Pane.URLTarget() }
 							hx-target="#output"
 							hx-swap="innerHTML"
-							class="w-full text-left px-4 py-2 hover:bg-gray-100"
 						>Refresh</button>
 					</div>
 				</div>
 			</header>
 			<!-- Window/Pane selector -->
 			if len(data.Windows) > 1 || len(data.Panes) > 1 {
-				<div class="flex gap-2 p-2 bg-gray-200 border-b text-sm overflow-x-auto">
+				<div class="selector">
 					if len(data.Windows) > 1 {
 						for _, w := range data.Windows {
 							<a
 								href={ templ.SafeURL("/pane/" + urlEncode(data.Pane.Session) + ":" + fmt.Sprintf("%d", w.Index)) }
-								class={ "px-3 py-1 rounded whitespace-nowrap", templ.KV("bg-blue-500 text-white", w.Index == data.Pane.Window), templ.KV("bg-white hover:bg-gray-100", w.Index != data.Pane.Window) }
+								class={ "selector-item", templ.KV("active", w.Index == data.Pane.Window) }
 							>
 								{ fmt.Sprintf("%d: %s", w.Index, w.Name) }
 							</a>
 						}
 					}
 					if len(data.Panes) > 1 {
-						<span class="text-gray-400 px-1">|</span>
+						<span class="selector-sep">|</span>
 						for _, p := range data.Panes {
 							<a
 								href={ templ.SafeURL("/pane/" + urlEncode(data.Pane.Session) + ":" + fmt.Sprintf("%d.%d", data.Pane.Window, p.Index)) }
-								class={ "px-2 py-1 rounded whitespace-nowrap", templ.KV("bg-green-500 text-white", p.Index == data.Pane.Index), templ.KV("bg-white hover:bg-gray-100", p.Index != data.Pane.Index) }
+								class={ "selector-item", templ.KV("pane-active", p.Index == data.Pane.Index) }
 							>
 								{ fmt.Sprintf("P%d", p.Index) }
-								<span class="text-xs opacity-70">{ p.Command }</span>
+								<span style="font-size: 10px; opacity: 0.7; margin-left: 4px;">{ p.Command }</span>
 							</a>
 						}
 					}
@@ -1029,27 +1474,30 @@ templ PanePage(data PaneData) {
 			<!-- Output area -->
 			<div
 				id="output-container"
-				class="flex-1 overflow-y-auto bg-gray-900"
+				class="output-container"
 				hx-ext="sse"
 				sse-connect={ "/pane/" + data.Pane.URLTarget() + "?stream=1" }
 				sse-swap="message"
 				hx-target="#output"
 				hx-swap="none"
 			>
-				<pre id="output" class="terminal text-sm text-gray-100 p-4 whitespace-pre overflow-x-auto min-w-full bg-gray-900">{ data.Output }</pre>
+				<pre id="output" class="terminal output">{ data.Output }</pre>
 			</div>
 			if len(data.ParseResult.Choices) > 0 {
 				<!-- Quick choice buttons -->
-				<div class="flex gap-2 p-3 bg-gray-800 border-t border-gray-700">
-					for i := range data.ParseResult.Choices {
+				<div class="choices-bar">
+					for i, choice := range data.ParseResult.Choices {
 						if i < 4 {
 							<button
+								class="choice-btn"
 								hx-post={ "/pane/" + data.Pane.URLTarget() + "/send" }
 								hx-vals={ fmt.Sprintf(`{"input": "%d", "noenter": "true"}`, i+1) }
 								hx-swap="none"
 								hx-on::after-request="setTimeout(() => { const c = document.getElementById('output-container'); c.scrollTop = c.scrollHeight; }, 100)"
-								class="flex-1 px-3 py-2 text-sm bg-gray-700 hover:bg-gray-600 text-white rounded"
-							>{ fmt.Sprintf("%d", i+1) }</button>
+							>
+								<span class="choice-num">{ fmt.Sprintf("%d", i+1) }</span>
+								<span class="choice-text">{ truncate(choice, 20) }</span>
+							</button>
 						}
 					}
 				</div>
@@ -1057,46 +1505,42 @@ templ PanePage(data PaneData) {
 			<!-- Input bar -->
 			<form
 				id="input-form"
+				class="input-bar"
 				hx-post={ "/pane/" + data.Pane.URLTarget() + "/send" }
 				hx-swap="none"
 				hx-on::after-request="this.reset(); document.getElementById('input-field').style.height = 'auto';"
-				class="flex gap-2 p-3 bg-white border-t items-center"
 			>
 				if data.ParseResult.Mode.String() == "insert" {
-					<span id="mode-indicator" class="text-xs px-2 py-1 bg-green-600 text-white rounded font-medium shadow-sm">INS</span>
+					<span id="mode-indicator" class="mode-badge insert">INS</span>
 				} else {
-					<span id="mode-indicator" class="text-xs px-2 py-1 bg-blue-600 text-white rounded font-medium shadow-sm">NOR</span>
+					<span id="mode-indicator" class="mode-badge normal">NOR</span>
 				}
 				<textarea
 					id="input-field"
 					name="input"
-					placeholder="Send input... (Shift+Enter for newline)"
+					class="input-field"
+					placeholder="Send input..."
 					autocomplete="off"
 					rows="1"
-					class="flex-1 px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
 					onkeydown="handleInputKeydown(event)"
 					oninput="autoResize(this)"
 				></textarea>
 				<!-- Stop button -->
 				<button
 					type="button"
+					class="action-btn stop"
 					hx-post={ "/pane/" + data.Pane.URLTarget() + "/send" }
 					hx-vals='{"input": "C-c", "special": "true"}'
 					hx-swap="none"
-					class="p-2 bg-red-500 text-white rounded-lg hover:bg-red-600"
 					title="Stop (Ctrl+C)"
 				>
-					<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+					<svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
 					</svg>
 				</button>
 				<!-- Send button -->
-				<button
-					type="submit"
-					class="p-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600"
-					title="Send"
-				>
-					<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+				<button type="submit" class="action-btn send" title="Send">
+					<svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7"></path>
 					</svg>
 				</button>

@@ -111,14 +111,15 @@ func (s *Server) buildSessionsData() views.SessionsData {
 				parseResult.Type == parser.TypeQuestion
 
 			// Extract preview lines - more for attention states
-			previewLines := 3
+			previewLines := 15
 			if windowNeedsAttention {
-				previewLines = 10 // Show more context for choices/questions/errors
+				previewLines = 25 // Show more context for choices/questions/errors
 			}
 			preview := getPreviewLines(output, previewLines)
 
 			windowStatus := views.WindowWithStatus{
 				Window:         win,
+				Pane:           pane,
 				ParseResult:    parseResult,
 				Preview:        preview,
 				NeedsAttention: windowNeedsAttention,
@@ -150,17 +151,30 @@ func (s *Server) buildSessionsData() views.SessionsData {
 	return data
 }
 
-// getPreviewLines extracts the last n non-empty lines from output
+// getPreviewLines extracts the last n non-empty lines from output, skipping Claude's status bar
 func getPreviewLines(output string, n int) []string {
 	lines := strings.Split(output, "\n")
 	var result []string
 
-	// Work backwards to find non-empty lines
+	// Work backwards to find non-empty lines, skipping status bar elements
 	for i := len(lines) - 1; i >= 0 && len(result) < n; i-- {
 		line := strings.TrimSpace(lines[i])
-		if line != "" {
-			result = append([]string{line}, result...)
+		if line == "" {
+			continue
 		}
+		// Skip Claude's status bar lines
+		if isStatusBarLine(line) {
+			continue
+		}
+		// Skip prompt line (just ">")
+		if line == ">" {
+			continue
+		}
+		// Skip separator lines (all dashes or box drawing)
+		if isAllSeparator(line) {
+			continue
+		}
+		result = append([]string{line}, result...)
 	}
 
 	// Truncate long lines
@@ -171,6 +185,34 @@ func getPreviewLines(output string, n int) []string {
 	}
 
 	return result
+}
+
+// isStatusBarLine checks if a line is part of Claude's status bar
+func isStatusBarLine(line string) bool {
+	// Claude status bar contains these indicators
+	statusIndicators := []string{
+		"-- INSERT --", "-- NORMAL --", // vim mode
+		"🤖", "📊", "⏱️", "💬",           // Claude stats
+		"❄", "📂",                         // env/path indicators
+		"accept edits",                    // edit acceptance hint
+	}
+	for _, indicator := range statusIndicators {
+		if strings.Contains(line, indicator) {
+			return true
+		}
+	}
+	return false
+}
+
+// isAllSeparator checks if a line is just separator characters
+func isAllSeparator(line string) bool {
+	for _, r := range line {
+		// Allow box drawing chars, dashes, equals
+		if r != '─' && r != '-' && r != '=' && r != '━' && r != '│' && r != '┃' {
+			return false
+		}
+	}
+	return len(line) > 3 // Must be at least a few chars to be a separator
 }
 
 func (s *Server) streamSessions(w http.ResponseWriter, r *http.Request) {
