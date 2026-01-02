@@ -1,4 +1,4 @@
-module github.com/noams/tmux-dashboard
+module github.com/noamsto/houston
 
 go 1.23.0
 

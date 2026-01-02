@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/noams/tmux-dashboard/parser"
-	"github.com/noams/tmux-dashboard/tmux"
+	"github.com/noamsto/houston/parser"
+	"github.com/noamsto/houston/tmux"
 )
 
 // WindowWithStatus combines window info with its parse result
@@ -507,6 +507,38 @@ templ IndexPage() {
 				overflow: hidden;
 				text-overflow: ellipsis;
 			}
+			.action-choices {
+				display: flex;
+				gap: 0.5rem;
+				margin-bottom: 0.75rem;
+			}
+			.action-choices.hidden { display: none; }
+			.choice-btn {
+				flex: 1;
+				padding: 0.625rem 0.5rem;
+				background: var(--bg-elevated);
+				border: 1px solid var(--border);
+				border-radius: 6px;
+				color: var(--text-primary);
+				font-family: inherit;
+				font-size: 12px;
+				cursor: pointer;
+				transition: all 0.15s;
+				text-align: center;
+				line-height: 1.3;
+			}
+			.choice-btn:hover {
+				background: var(--accent-dim);
+				border-color: var(--accent);
+			}
+			.choice-btn:active { transform: scale(0.98); }
+			.choice-num {
+				display: block;
+				font-size: 14px;
+				font-weight: 600;
+				color: var(--accent);
+				margin-bottom: 2px;
+			}
 		</style>
 	</head>
 	<body>
@@ -537,6 +569,7 @@ templ IndexPage() {
 					<div class="action-status" id="actionStatus"></div>
 					<div class="action-preview" id="actionPreview"></div>
 				</div>
+				<div class="action-choices hidden" id="actionChoices"></div>
 				<div class="action-input-row">
 					<input type="text" class="action-input" placeholder="Send input..." id="actionInput"/>
 					<button class="action-btn stop" onclick="sendStop()">⏹</button>
@@ -644,8 +677,36 @@ templ IndexPage() {
 				}
 				previewEl.innerHTML = html;
 
+				// Show choice buttons if choices available
+				const choicesEl = document.getElementById('actionChoices');
+				if (choices) {
+					const choiceList = choices.split('|');
+					let btnHtml = '';
+					choiceList.forEach((choice, i) => {
+						const shortChoice = choice.length > 25 ? choice.substring(0, 22) + '...' : choice;
+						btnHtml += `<button class="choice-btn" onclick="sendChoice(${i + 1})">
+							<span class="choice-num">${i + 1}</span>
+							${escapeHtml(shortChoice)}
+						</button>`;
+					});
+					choicesEl.innerHTML = btnHtml;
+					choicesEl.classList.remove('hidden');
+				} else {
+					choicesEl.classList.add('hidden');
+				}
+
 				document.getElementById('actionBar').classList.add('visible');
 				document.getElementById('actionInput').focus();
+			}
+
+			function sendChoice(num) {
+				if (!selectedTarget) return;
+				fetch(`/pane/${encodeURIComponent(selectedTarget.session)}:${selectedTarget.window}/send`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+					body: `input=${num}&noenter=true`
+				});
+				closeActionBar();
 			}
 
 			function escapeHtml(text) {
@@ -707,9 +768,11 @@ templ IndexPage() {
 
 					temp.querySelectorAll('.session').forEach(session => {
 						const name = session.dataset.session;
-						if (expandedSessions.has(name)) {
+						// Auto-expand sessions that need attention, or were manually expanded
+						if (expandedSessions.has(name) || session.classList.contains('has-attention')) {
 							session.classList.add('expanded');
 							session.querySelector('.windows')?.classList.remove('hidden');
+							expandedSessions.add(name); // Track auto-expanded too
 						}
 					});
 
@@ -862,6 +925,9 @@ func getWindowStatusText(win WindowWithStatus) string {
 		}
 		return "Waiting for input..."
 	case parser.TypeWorking:
+		if win.ParseResult.Activity != "" {
+			return win.ParseResult.Activity + "..."
+		}
 		return "Working..."
 	default:
 		return "Idle"
@@ -875,7 +941,7 @@ templ PanePage(data PaneData) {
 	<head>
 		<meta charset="UTF-8"/>
 		<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-		<title>{ data.Pane.Session } - tmux-dashboard</title>
+		<title>{ data.Pane.Session } - houston</title>
 		<script src="https://cdn.tailwindcss.com"></script>
 		<script src="https://unpkg.com/htmx.org@1.9.10"></script>
 		<script src="https://unpkg.com/htmx.org@1.9.10/dist/ext/sse.js"></script>

@@ -517,7 +517,7 @@
             <div class="session-header" onclick="toggleSession(this)">
                 <div class="session-indicator attention"></div>
                 <div class="session-info">
-                    <div class="session-name">tmux-dashboard</div>
+                    <div class="session-name">houston</div>
                     <div class="session-meta">3 windows</div>
                 </div>
                 <span class="session-badge">2</span>
@@ -526,7 +526,7 @@
                 </svg>
             </div>
             <div class="windows">
-                <div class="window attention" onclick="selectWindow('tmux-dashboard', 1)">
+                <div class="window attention" onclick="selectWindow('houston', 1)">
                     <div class="window-indicator attention"></div>
                     <div class="window-info">
                         <div class="window-name">1: feat/diff-highlight</div>
@@ -538,7 +538,7 @@
                     </div>
                     <span class="window-arrow">→</span>
                 </div>
-                <div class="window attention" onclick="selectWindow('tmux-dashboard', 2)">
+                <div class="window attention" onclick="selectWindow('houston', 2)">
                     <div class="window-indicator attention"></div>
                     <div class="window-info">
                         <div class="window-name">2: fix/sse-reconnect</div>
@@ -551,13 +551,13 @@
                     </div>
                     <span class="window-arrow">→</span>
                 </div>
-                <div class="window" onclick="selectWindow('tmux-dashboard', 3)">
+                <div class="window" onclick="selectWindow('houston', 3)">
                     <div class="window-indicator working"></div>
                     <div class="window-info">
                         <div class="window-name">3: main</div>
                         <div class="window-status">Working on task...</div>
                         <div class="window-preview">
-                            <div class="preview-line dim">● Bash(go build -o tmux-dashboard .)</div>
+                            <div class="preview-line dim">● Bash(go build -o houston .)</div>
                             <div class="preview-line dim">  ⎿ Building...</div>
                         </div>
                     </div>
@@ -629,7 +629,7 @@
     <div class="action-bar" id="actionBar">
         <div class="action-bar-content">
             <div class="action-target">
-                <span id="actionTarget">tmux-dashboard:1</span>
+                <span id="actionTarget">houston:1</span>
                 <button class="action-close" onclick="closeActionBar()">✕</button>
             </div>
             <div class="action-input-row">

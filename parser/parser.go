@@ -38,6 +38,7 @@ type Result struct {
 	Question     string
 	Choices      []string
 	ErrorSnippet string
+	Activity     string // What Claude is currently doing (for TypeWorking)
 }
 
 var (
@@ -46,6 +47,13 @@ var (
 	questionPattern = regexp.MustCompile(`(?m)^(.+\?)\s*$`)
 	errorPattern    = regexp.MustCompile(`(?mi)(error|failed|exception)[:\s]+(.{0,100})`)
 	approvalPattern = regexp.MustCompile(`(?i)(proceed|continue|look right|does this|should i)\?`)
+
+	// Claude Code working/activity patterns
+	workingPatterns = []*regexp.Regexp{
+		regexp.MustCompile(`(?i)[✻⏺●◐◓◑◒]\s*(.+?)\s*[…\.]{2,}`),           // ✻ Thinking..., ● Running...
+		regexp.MustCompile(`(?i)(thinking|reading|writing|running|searching|analyzing)`), // Activity words
+		regexp.MustCompile(`(?i)^\s*[⎿├└│]\s*(.+)`),                         // Tool output indicators
+	}
 )
 
 func Parse(output string) Result {
@@ -120,7 +128,50 @@ func Parse(output string) Result {
 		}
 	}
 
+	// Check for working/activity state (check last few lines for recent activity)
+	recentLines := lastN(lines, 8)
+	activity := detectActivity(recentLines)
+	if activity != "" {
+		return Result{
+			Type:     TypeWorking,
+			Mode:     mode,
+			Activity: activity,
+		}
+	}
+
 	return Result{Type: TypeIdle, Mode: mode}
+}
+
+// detectActivity looks for Claude Code activity indicators
+func detectActivity(lines []string) string {
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := lines[i]
+		// Check for spinner/activity indicators
+		if match := workingPatterns[0].FindStringSubmatch(line); len(match) > 1 {
+			return strings.TrimSpace(match[1])
+		}
+		// Check for tool output lines (shows Claude is running tools)
+		if strings.HasPrefix(strings.TrimSpace(line), "⎿") ||
+			strings.HasPrefix(strings.TrimSpace(line), "├") ||
+			strings.HasPrefix(strings.TrimSpace(line), "│") {
+			// Look for what tool is running
+			for j := i - 1; j >= 0 && j > i-5; j-- {
+				if strings.Contains(lines[j], "Read") {
+					return "Reading file"
+				}
+				if strings.Contains(lines[j], "Write") {
+					return "Writing file"
+				}
+				if strings.Contains(lines[j], "Bash") {
+					return "Running command"
+				}
+				if strings.Contains(lines[j], "Edit") {
+					return "Editing file"
+				}
+			}
+		}
+	}
+	return ""
 }
 
 // detectMode checks for INSERT or NORMAL mode indicators in the output

@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/noams/tmux-dashboard/parser"
-	"github.com/noams/tmux-dashboard/tmux"
+	"github.com/noamsto/houston/parser"
+	"github.com/noamsto/houston/tmux"
 )
 
 // WindowWithStatus combines window info with its parse result
@@ -154,7 +154,7 @@ func IndexPage() templ.Component {
 			templ_7745c5c3_Var1 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<!doctype html><html lang=\"en\"><head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0, user-scalable=no\"><title>tmux mission control</title><link rel=\"preconnect\" href=\"https://fonts.googleapis.com\"><link href=\"https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap\" rel=\"stylesheet\"><script src=\"https://unpkg.com/idiomorph@0.3.0/dist/idiomorph.min.js\"></script><style>\n\t\t\t:root {\n\t\t\t\t--bg-deep: #0a0a0b;\n\t\t\t\t--bg-panel: #111113;\n\t\t\t\t--bg-elevated: #1a1a1d;\n\t\t\t\t--border: #2a2a2e;\n\t\t\t\t--text-primary: #e4e4e7;\n\t\t\t\t--text-secondary: #71717a;\n\t\t\t\t--text-dim: #52525b;\n\t\t\t\t--attention: #f97316;\n\t\t\t\t--attention-glow: rgba(249, 115, 22, 0.4);\n\t\t\t\t--error: #ef4444;\n\t\t\t\t--error-glow: rgba(239, 68, 68, 0.4);\n\t\t\t\t--working: #22c55e;\n\t\t\t\t--working-glow: rgba(34, 197, 94, 0.3);\n\t\t\t\t--idle: #3f3f46;\n\t\t\t\t--accent: #06b6d4;\n\t\t\t\t--accent-dim: rgba(6, 182, 212, 0.15);\n\t\t\t}\n\t\t\t* { box-sizing: border-box; margin: 0; padding: 0; }\n\t\t\tbody {\n\t\t\t\tfont-family: 'IBM Plex Mono', ui-monospace, monospace;\n\t\t\t\tbackground: var(--bg-deep);\n\t\t\t\tcolor: var(--text-primary);\n\t\t\t\tmin-height: 100vh;\n\t\t\t\tmin-height: 100dvh;\n\t\t\t}\n\t\t\t/* Scan line overlay */\n\t\t\tbody::before {\n\t\t\t\tcontent: '';\n\t\t\t\tposition: fixed;\n\t\t\t\ttop: 0; left: 0; right: 0; bottom: 0;\n\t\t\t\tbackground: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.03) 2px, rgba(0,0,0,0.03) 4px);\n\t\t\t\tpointer-events: none;\n\t\t\t\tz-index: 1000;\n\t\t\t}\n\t\t\t.header {\n\t\t\t\tposition: sticky;\n\t\t\t\ttop: 0;\n\t\t\t\tbackground: var(--bg-deep);\n\t\t\t\tborder-bottom: 1px solid var(--border);\n\t\t\t\tpadding: 1rem;\n\t\t\t\tz-index: 100;\n\t\t\t}\n\t\t\t.header-content {\n\t\t\t\tdisplay: flex;\n\t\t\t\talign-items: center;\n\t\t\t\tjustify-content: space-between;\n\t\t\t\tmax-width: 600px;\n\t\t\t\tmargin: 0 auto;\n\t\t\t}\n\t\t\t.logo {\n\t\t\t\tdisplay: flex;\n\t\t\t\talign-items: center;\n\t\t\t\tgap: 0.5rem;\n\t\t\t}\n\t\t\t.logo-icon {\n\t\t\t\twidth: 24px;\n\t\t\t\theight: 24px;\n\t\t\t\tbackground: var(--accent);\n\t\t\t\tborder-radius: 4px;\n\t\t\t\tdisplay: flex;\n\t\t\t\talign-items: center;\n\t\t\t\tjustify-content: center;\n\t\t\t\tfont-size: 10px;\n\t\t\t\tfont-weight: 600;\n\t\t\t\tcolor: var(--bg-deep);\n\t\t\t}\n\t\t\t.logo-text {\n\t\t\t\tfont-size: 14px;\n\t\t\t\tfont-weight: 500;\n\t\t\t\tcolor: var(--text-secondary);\n\t\t\t}\n\t\t\t.status-summary {\n\t\t\t\tdisplay: flex;\n\t\t\t\talign-items: center;\n\t\t\t\tgap: 1rem;\n\t\t\t\tfont-size: 11px;\n\t\t\t}\n\t\t\t.status-count {\n\t\t\t\tdisplay: flex;\n\t\t\t\talign-items: center;\n\t\t\t\tgap: 0.35rem;\n\t\t\t}\n\t\t\t.status-dot {\n\t\t\t\twidth: 8px;\n\t\t\t\theight: 8px;\n\t\t\t\tborder-radius: 50%;\n\t\t\t}\n\t\t\t.status-dot.attention {\n\t\t\t\tbackground: var(--attention);\n\t\t\t\tbox-shadow: 0 0 8px var(--attention-glow);\n\t\t\t}\n\t\t\t.status-dot.working {\n\t\t\t\tbackground: var(--working);\n\t\t\t\tbox-shadow: 0 0 6px var(--working-glow);\n\t\t\t}\n\t\t\t.status-dot.idle {\n\t\t\t\tbackground: var(--idle);\n\t\t\t}\n\t\t\t.main {\n\t\t\t\tmax-width: 600px;\n\t\t\t\tmargin: 0 auto;\n\t\t\t\tpadding: 0.5rem;\n\t\t\t\tpadding-bottom: 2rem;\n\t\t\t}\n\t\t\t.section-label {\n\t\t\t\tfont-size: 10px;\n\t\t\t\ttext-transform: uppercase;\n\t\t\t\tletter-spacing: 0.1em;\n\t\t\t\tcolor: var(--text-dim);\n\t\t\t\tpadding: 1rem 0.5rem 0.5rem;\n\t\t\t\tdisplay: flex;\n\t\t\t\talign-items: center;\n\t\t\t\tgap: 0.5rem;\n\t\t\t}\n\t\t\t.section-label::after {\n\t\t\t\tcontent: '';\n\t\t\t\tflex: 1;\n\t\t\t\theight: 1px;\n\t\t\t\tbackground: var(--border);\n\t\t\t}\n\t\t\t.session {\n\t\t\t\tbackground: var(--bg-panel);\n\t\t\t\tborder: 1px solid var(--border);\n\t\t\t\tborder-radius: 8px;\n\t\t\t\tmargin-bottom: 0.5rem;\n\t\t\t\toverflow: hidden;\n\t\t\t}\n\t\t\t.session.has-attention {\n\t\t\t\tborder-color: var(--attention);\n\t\t\t\tbox-shadow: 0 0 0 1px var(--attention-glow);\n\t\t\t}\n\t\t\t.session-header {\n\t\t\t\tdisplay: flex;\n\t\t\t\talign-items: center;\n\t\t\t\tpadding: 0.875rem 1rem;\n\t\t\t\tcursor: pointer;\n\t\t\t\ttransition: background 0.15s;\n\t\t\t}\n\t\t\t.session-header:hover { background: var(--bg-elevated); }\n\t\t\t.session-indicator {\n\t\t\t\twidth: 10px;\n\t\t\t\theight: 10px;\n\t\t\t\tborder-radius: 50%;\n\t\t\t\tmargin-right: 0.75rem;\n\t\t\t\tflex-shrink: 0;\n\t\t\t}\n\t\t\t.session-indicator.attention {\n\t\t\t\tbackground: var(--attention);\n\t\t\t\tbox-shadow: 0 0 10px var(--attention-glow);\n\t\t\t\tanimation: pulse 2s ease-in-out infinite;\n\t\t\t}\n\t\t\t.session-indicator.error {\n\t\t\t\tbackground: var(--error);\n\t\t\t\tbox-shadow: 0 0 10px var(--error-glow);\n\t\t\t\tanimation: pulse 1.5s ease-in-out infinite;\n\t\t\t}\n\t\t\t.session-indicator.working {\n\t\t\t\tbackground: var(--working);\n\t\t\t\tbox-shadow: 0 0 8px var(--working-glow);\n\t\t\t}\n\t\t\t.session-indicator.idle { background: var(--idle); }\n\t\t\t@keyframes pulse {\n\t\t\t\t0%, 100% { opacity: 1; transform: scale(1); }\n\t\t\t\t50% { opacity: 0.6; transform: scale(0.9); }\n\t\t\t}\n\t\t\t.session-info { flex: 1; min-width: 0; }\n\t\t\t.session-name {\n\t\t\t\tfont-size: 14px;\n\t\t\t\tfont-weight: 500;\n\t\t\t\tcolor: var(--text-primary);\n\t\t\t\twhite-space: nowrap;\n\t\t\t\toverflow: hidden;\n\t\t\t\ttext-overflow: ellipsis;\n\t\t\t}\n\t\t\t.session-meta {\n\t\t\t\tfont-size: 11px;\n\t\t\t\tcolor: var(--text-secondary);\n\t\t\t\tmargin-top: 2px;\n\t\t\t}\n\t\t\t.session-badge {\n\t\t\t\tfont-size: 10px;\n\t\t\t\tpadding: 0.25rem 0.5rem;\n\t\t\t\tborder-radius: 4px;\n\t\t\t\tbackground: var(--attention);\n\t\t\t\tcolor: var(--bg-deep);\n\t\t\t\tfont-weight: 600;\n\t\t\t\tmargin-left: 0.5rem;\n\t\t\t}\n\t\t\t.session-chevron {\n\t\t\t\tcolor: var(--text-dim);\n\t\t\t\ttransition: transform 0.2s;\n\t\t\t}\n\t\t\t.session.expanded .session-chevron { transform: rotate(180deg); }\n\t\t\t.windows {\n\t\t\t\tborder-top: 1px solid var(--border);\n\t\t\t\tbackground: var(--bg-deep);\n\t\t\t}\n\t\t\t.windows.hidden { display: none; }\n\t\t\t.window {\n\t\t\t\tdisplay: flex;\n\t\t\t\talign-items: flex-start;\n\t\t\t\tpadding: 0.75rem 1rem 0.75rem 2.5rem;\n\t\t\t\tborder-bottom: 1px solid var(--border);\n\t\t\t\tcursor: pointer;\n\t\t\t\ttransition: background 0.15s;\n\t\t\t\ttext-decoration: none;\n\t\t\t\tcolor: inherit;\n\t\t\t}\n\t\t\t.window:last-child { border-bottom: none; }\n\t\t\t.window:hover { background: var(--bg-panel); }\n\t\t\t.window.attention { background: rgba(249, 115, 22, 0.05); }\n\t\t\t.window-indicator {\n\t\t\t\twidth: 6px;\n\t\t\t\theight: 6px;\n\t\t\t\tborder-radius: 50%;\n\t\t\t\tmargin-right: 0.75rem;\n\t\t\t\tmargin-top: 0.35rem;\n\t\t\t\tflex-shrink: 0;\n\t\t\t}\n\t\t\t.window-indicator.attention {\n\t\t\t\tbackground: var(--attention);\n\t\t\t\tbox-shadow: 0 0 6px var(--attention-glow);\n\t\t\t\tanimation: pulse 2s ease-in-out infinite;\n\t\t\t}\n\t\t\t.window-indicator.error {\n\t\t\t\tbackground: var(--error);\n\t\t\t\tbox-shadow: 0 0 6px var(--error-glow);\n\t\t\t\tanimation: pulse 1.5s ease-in-out infinite;\n\t\t\t}\n\t\t\t.window-indicator.working { background: var(--working); }\n\t\t\t.window-indicator.idle { background: var(--idle); }\n\t\t\t.window-info { flex: 1; min-width: 0; }\n\t\t\t.window-name { font-size: 13px; color: var(--text-primary); }\n\t\t\t.window-status {\n\t\t\t\tfont-size: 11px;\n\t\t\t\tcolor: var(--text-secondary);\n\t\t\t\tmargin-top: 1px;\n\t\t\t}\n\t\t\t.window-status.attention { color: var(--attention); }\n\t\t\t.window-preview {\n\t\t\t\tmargin-top: 0.5rem;\n\t\t\t\tpadding: 0.5rem;\n\t\t\t\tbackground: rgba(0, 0, 0, 0.3);\n\t\t\t\tborder-radius: 4px;\n\t\t\t\tfont-size: 11px;\n\t\t\t\tline-height: 1.4;\n\t\t\t\tmax-height: 4.5em;\n\t\t\t\toverflow: hidden;\n\t\t\t}\n\t\t\t.preview-line {\n\t\t\t\twhite-space: nowrap;\n\t\t\t\toverflow: hidden;\n\t\t\t\ttext-overflow: ellipsis;\n\t\t\t\tcolor: var(--text-secondary);\n\t\t\t}\n\t\t\t.window-arrow {\n\t\t\t\tcolor: var(--text-dim);\n\t\t\t\tfont-size: 12px;\n\t\t\t\tmargin-top: 0.25rem;\n\t\t\t}\n\t\t\t.empty-state {\n\t\t\t\ttext-align: center;\n\t\t\t\tpadding: 4rem 2rem;\n\t\t\t\tcolor: var(--text-secondary);\n\t\t\t}\n\t\t\t.empty-icon { font-size: 48px; margin-bottom: 1rem; opacity: 0.5; }\n\t\t\t/* Action bar */\n\t\t\t.action-bar {\n\t\t\t\tposition: fixed;\n\t\t\t\tbottom: 0;\n\t\t\t\tleft: 0;\n\t\t\t\tright: 0;\n\t\t\t\tbackground: var(--bg-panel);\n\t\t\t\tborder-top: 1px solid var(--border);\n\t\t\t\tpadding: 0.75rem;\n\t\t\t\tpadding-bottom: calc(0.75rem + env(safe-area-inset-bottom));\n\t\t\t\ttransform: translateY(100%);\n\t\t\t\ttransition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);\n\t\t\t\tz-index: 200;\n\t\t\t}\n\t\t\t.action-bar.visible { transform: translateY(0); }\n\t\t\t.action-bar-content {\n\t\t\t\tmax-width: 600px;\n\t\t\t\tmargin: 0 auto;\n\t\t\t}\n\t\t\t.action-target {\n\t\t\t\tfont-size: 11px;\n\t\t\t\tcolor: var(--text-secondary);\n\t\t\t\tmargin-bottom: 0.5rem;\n\t\t\t\tdisplay: flex;\n\t\t\t\talign-items: center;\n\t\t\t\tjustify-content: space-between;\n\t\t\t}\n\t\t\t.action-close {\n\t\t\t\tbackground: none;\n\t\t\t\tborder: none;\n\t\t\t\tcolor: var(--text-dim);\n\t\t\t\tcursor: pointer;\n\t\t\t\tpadding: 0.25rem;\n\t\t\t\tfont-size: 14px;\n\t\t\t}\n\t\t\t.action-input-row {\n\t\t\t\tdisplay: flex;\n\t\t\t\tgap: 0.5rem;\n\t\t\t}\n\t\t\t.action-input {\n\t\t\t\tflex: 1;\n\t\t\t\tbackground: var(--bg-deep);\n\t\t\t\tborder: 1px solid var(--border);\n\t\t\t\tborder-radius: 6px;\n\t\t\t\tpadding: 0.75rem 1rem;\n\t\t\t\tfont-family: inherit;\n\t\t\t\tfont-size: 14px;\n\t\t\t\tcolor: var(--text-primary);\n\t\t\t\toutline: none;\n\t\t\t}\n\t\t\t.action-input:focus {\n\t\t\t\tborder-color: var(--accent);\n\t\t\t\tbox-shadow: 0 0 0 2px var(--accent-dim);\n\t\t\t}\n\t\t\t.action-input::placeholder { color: var(--text-dim); }\n\t\t\t.action-btn {\n\t\t\t\tbackground: var(--accent);\n\t\t\t\tborder: none;\n\t\t\t\tborder-radius: 6px;\n\t\t\t\tpadding: 0 1.25rem;\n\t\t\t\tfont-family: inherit;\n\t\t\t\tfont-size: 13px;\n\t\t\t\tfont-weight: 500;\n\t\t\t\tcolor: var(--bg-deep);\n\t\t\t\tcursor: pointer;\n\t\t\t\ttransition: opacity 0.15s;\n\t\t\t}\n\t\t\t.action-btn:active { opacity: 0.8; }\n\t\t\t.action-btn.stop {\n\t\t\t\tbackground: var(--error);\n\t\t\t\tpadding: 0 1rem;\n\t\t\t}\n\t\t\t.action-btn.view {\n\t\t\t\tbackground: var(--bg-elevated);\n\t\t\t\tcolor: var(--text-primary);\n\t\t\t}\n\t\t\t.action-context {\n\t\t\t\tmargin-bottom: 0.75rem;\n\t\t\t\tpadding: 0.75rem;\n\t\t\t\tbackground: var(--bg-deep);\n\t\t\t\tborder-radius: 6px;\n\t\t\t\tborder-left: 3px solid var(--idle);\n\t\t\t}\n\t\t\t.action-context.attention { border-left-color: var(--attention); }\n\t\t\t.action-context.working { border-left-color: var(--working); }\n\t\t\t.action-status {\n\t\t\t\tfont-size: 12px;\n\t\t\t\tfont-weight: 500;\n\t\t\t\tmargin-bottom: 0.5rem;\n\t\t\t}\n\t\t\t.action-status.attention { color: var(--attention); }\n\t\t\t.action-status.working { color: var(--working); }\n\t\t\t.action-preview {\n\t\t\t\tfont-size: 11px;\n\t\t\t\tcolor: var(--text-secondary);\n\t\t\t\tline-height: 1.4;\n\t\t\t\tmax-height: 12em;\n\t\t\t\toverflow-y: auto;\n\t\t\t}\n\t\t\t.action-preview-line {\n\t\t\t\twhite-space: nowrap;\n\t\t\t\toverflow: hidden;\n\t\t\t\ttext-overflow: ellipsis;\n\t\t\t}\n\t\t</style></head><body><header class=\"header\"><div class=\"header-content\"><div class=\"logo\"><div class=\"logo-icon\">MC</div><span class=\"logo-text\">mission control</span></div><div class=\"status-summary\" id=\"status-summary\"></div></div></header><main class=\"main\"><div id=\"sessions\"><div class=\"empty-state\"><p>Loading...</p></div></div></main><!-- Action bar --><div class=\"action-bar\" id=\"actionBar\"><div class=\"action-bar-content\"><div class=\"action-target\"><span id=\"actionTarget\"></span> <button class=\"action-close\" onclick=\"closeActionBar()\">✕</button></div><div class=\"action-context\" id=\"actionContext\"><div class=\"action-status\" id=\"actionStatus\"></div><div class=\"action-preview\" id=\"actionPreview\"></div></div><div class=\"action-input-row\"><input type=\"text\" class=\"action-input\" placeholder=\"Send input...\" id=\"actionInput\"> <button class=\"action-btn stop\" onclick=\"sendStop()\">⏹</button> <button class=\"action-btn view\" onclick=\"viewPane()\">View</button> <button class=\"action-btn\" onclick=\"sendInput()\">Send</button></div></div></div><script src=\"/static/app.js\"></script><script>\n\t\t\t// Track expanded sessions\n\t\t\tconst expandedSessions = new Set();\n\t\t\tlet selectedTarget = null;\n\n\t\t\tfunction toggleSession(header) {\n\t\t\t\tconst session = header.closest('.session');\n\t\t\t\tconst windows = session.querySelector('.windows');\n\t\t\t\tconst sessionName = session.dataset.session;\n\n\t\t\t\tsession.classList.toggle('expanded');\n\t\t\t\twindows.classList.toggle('hidden');\n\n\t\t\t\tif (session.classList.contains('expanded')) {\n\t\t\t\t\texpandedSessions.add(sessionName);\n\t\t\t\t} else {\n\t\t\t\t\texpandedSessions.delete(sessionName);\n\t\t\t\t}\n\t\t\t}\n\n\t\t\tfunction restoreExpandedState() {\n\t\t\t\tdocument.querySelectorAll('.session').forEach(session => {\n\t\t\t\t\tconst name = session.dataset.session;\n\t\t\t\t\tif (expandedSessions.has(name)) {\n\t\t\t\t\t\tsession.classList.add('expanded');\n\t\t\t\t\t\tsession.querySelector('.windows')?.classList.remove('hidden');\n\t\t\t\t\t}\n\t\t\t\t});\n\t\t\t}\n\n\t\t\t// Update status summary counts in header\n\t\t\tfunction updateStatusSummary() {\n\t\t\t\tconst container = document.getElementById('sessions');\n\t\t\t\tconst attention = container.querySelectorAll('.window-indicator.attention').length;\n\t\t\t\tconst error = container.querySelectorAll('.window-indicator.error').length;\n\t\t\t\tconst working = container.querySelectorAll('.window-indicator.working').length;\n\t\t\t\tconst idle = container.querySelectorAll('.window-indicator.idle').length;\n\n\t\t\t\tconst summary = document.getElementById('status-summary');\n\t\t\t\tlet html = '';\n\t\t\t\tif (attention + error > 0) {\n\t\t\t\t\thtml += `<div class=\"status-count\"><div class=\"status-dot attention\"></div><span>${attention + error}</span></div>`;\n\t\t\t\t}\n\t\t\t\tif (working > 0) {\n\t\t\t\t\thtml += `<div class=\"status-count\"><div class=\"status-dot working\"></div><span>${working}</span></div>`;\n\t\t\t\t}\n\t\t\t\tif (idle > 0) {\n\t\t\t\t\thtml += `<div class=\"status-count\"><div class=\"status-dot idle\"></div><span>${idle}</span></div>`;\n\t\t\t\t}\n\t\t\t\tsummary.innerHTML = html;\n\t\t\t}\n\n\t\t\t// Action bar functions\n\t\t\tfunction selectWindow(el) {\n\t\t\t\tconst session = el.dataset.session;\n\t\t\t\tconst windowIdx = parseInt(el.dataset.window);\n\t\t\t\tconst windowName = el.dataset.name;\n\t\t\t\tconst status = el.dataset.status;\n\t\t\t\tconst indicator = el.dataset.indicator;\n\t\t\t\tconst preview = el.dataset.preview;\n\t\t\t\tconst question = el.dataset.question;\n\t\t\t\tconst choices = el.dataset.choices;\n\n\t\t\t\tselectedTarget = { session, window: windowIdx };\n\t\t\t\tdocument.getElementById('actionTarget').textContent = `${session}:${windowIdx} ${windowName}`;\n\n\t\t\t\t// Update context area\n\t\t\t\tconst context = document.getElementById('actionContext');\n\t\t\t\tconst statusEl = document.getElementById('actionStatus');\n\t\t\t\tconst previewEl = document.getElementById('actionPreview');\n\n\t\t\t\tcontext.className = 'action-context ' + indicator;\n\t\t\t\tstatusEl.className = 'action-status ' + indicator;\n\t\t\t\tstatusEl.textContent = status;\n\n\t\t\t\t// Show question and choices if available, otherwise preview\n\t\t\t\tlet html = '';\n\t\t\t\tif (question) {\n\t\t\t\t\thtml += `<div class=\"action-preview-line\" style=\"color: var(--attention); margin-bottom: 0.5rem;\">${escapeHtml(question)}</div>`;\n\t\t\t\t}\n\t\t\t\tif (choices) {\n\t\t\t\t\tconst choiceList = choices.split('|');\n\t\t\t\t\tchoiceList.forEach((choice, i) => {\n\t\t\t\t\t\thtml += `<div class=\"action-preview-line\" style=\"padding-left: 0.5rem;\">${i + 1}. ${escapeHtml(choice)}</div>`;\n\t\t\t\t\t});\n\t\t\t\t}\n\t\t\t\t// Also show preview for additional context\n\t\t\t\tif (preview) {\n\t\t\t\t\tif (html) html += '<div style=\"margin-top: 0.5rem; border-top: 1px solid var(--border); padding-top: 0.5rem;\"></div>';\n\t\t\t\t\thtml += preview.split('\\n').map(line =>\n\t\t\t\t\t\t`<div class=\"action-preview-line\">${escapeHtml(line)}</div>`\n\t\t\t\t\t).join('');\n\t\t\t\t}\n\t\t\t\tif (!html) {\n\t\t\t\t\thtml = '<div class=\"action-preview-line\">No output</div>';\n\t\t\t\t}\n\t\t\t\tpreviewEl.innerHTML = html;\n\n\t\t\t\tdocument.getElementById('actionBar').classList.add('visible');\n\t\t\t\tdocument.getElementById('actionInput').focus();\n\t\t\t}\n\n\t\t\tfunction escapeHtml(text) {\n\t\t\t\tconst div = document.createElement('div');\n\t\t\t\tdiv.textContent = text;\n\t\t\t\treturn div.innerHTML;\n\t\t\t}\n\n\t\t\tfunction closeActionBar() {\n\t\t\t\tdocument.getElementById('actionBar').classList.remove('visible');\n\t\t\t\tselectedTarget = null;\n\t\t\t}\n\n\t\t\tfunction sendInput() {\n\t\t\t\tif (!selectedTarget) return;\n\t\t\t\tconst input = document.getElementById('actionInput');\n\t\t\t\tconst value = input.value;\n\t\t\t\tif (!value) return;\n\n\t\t\t\tfetch(`/pane/${encodeURIComponent(selectedTarget.session)}:${selectedTarget.window}/send`, {\n\t\t\t\t\tmethod: 'POST',\n\t\t\t\t\theaders: { 'Content-Type': 'application/x-www-form-urlencoded' },\n\t\t\t\t\tbody: `input=${encodeURIComponent(value)}`\n\t\t\t\t});\n\t\t\t\tinput.value = '';\n\t\t\t}\n\n\t\t\tfunction sendStop() {\n\t\t\t\tif (!selectedTarget) return;\n\t\t\t\tfetch(`/pane/${encodeURIComponent(selectedTarget.session)}:${selectedTarget.window}/send`, {\n\t\t\t\t\tmethod: 'POST',\n\t\t\t\t\theaders: { 'Content-Type': 'application/x-www-form-urlencoded' },\n\t\t\t\t\tbody: 'input=C-c&special=true'\n\t\t\t\t});\n\t\t\t}\n\n\t\t\tfunction viewPane() {\n\t\t\t\tif (!selectedTarget) return;\n\t\t\t\twindow.location.href = `/pane/${encodeURIComponent(selectedTarget.session)}:${selectedTarget.window}`;\n\t\t\t}\n\n\t\t\t// Close action bar on escape\n\t\t\tdocument.addEventListener('keydown', (e) => {\n\t\t\t\tif (e.key === 'Escape') closeActionBar();\n\t\t\t\tif (e.key === 'Enter' && document.activeElement.id === 'actionInput') {\n\t\t\t\t\te.preventDefault();\n\t\t\t\t\tsendInput();\n\t\t\t\t}\n\t\t\t});\n\n\t\t\t// Handle SSE manually for flicker-free updates\n\t\t\tfunction connectSSE() {\n\t\t\t\tconst evtSource = new EventSource('/sessions?stream=1');\n\t\t\t\tconst container = document.getElementById('sessions');\n\n\t\t\t\tevtSource.onmessage = function(e) {\n\t\t\t\t\tconst temp = document.createElement('div');\n\t\t\t\t\ttemp.innerHTML = e.data;\n\n\t\t\t\t\ttemp.querySelectorAll('.session').forEach(session => {\n\t\t\t\t\t\tconst name = session.dataset.session;\n\t\t\t\t\t\tif (expandedSessions.has(name)) {\n\t\t\t\t\t\t\tsession.classList.add('expanded');\n\t\t\t\t\t\t\tsession.querySelector('.windows')?.classList.remove('hidden');\n\t\t\t\t\t\t}\n\t\t\t\t\t});\n\n\t\t\t\t\tIdiomorph.morph(container, temp.innerHTML, { morphStyle: 'innerHTML' });\n\t\t\t\t\tupdateStatusSummary();\n\t\t\t\t};\n\n\t\t\t\tevtSource.onerror = function() {\n\t\t\t\t\tconsole.log('SSE connection lost, reconnecting...');\n\t\t\t\t\tevtSource.close();\n\t\t\t\t\tsetTimeout(connectSSE, 3000);\n\t\t\t\t};\n\t\t\t}\n\n\t\t\tconnectSSE();\n\t\t</script></body></html>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<!doctype html><html lang=\"en\"><head><meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0, user-scalable=no\"><title>tmux mission control</title><link rel=\"preconnect\" href=\"https://fonts.googleapis.com\"><link href=\"https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap\" rel=\"stylesheet\"><script src=\"https://unpkg.com/idiomorph@0.3.0/dist/idiomorph.min.js\"></script><style>\n\t\t\t:root {\n\t\t\t\t--bg-deep: #0a0a0b;\n\t\t\t\t--bg-panel: #111113;\n\t\t\t\t--bg-elevated: #1a1a1d;\n\t\t\t\t--border: #2a2a2e;\n\t\t\t\t--text-primary: #e4e4e7;\n\t\t\t\t--text-secondary: #71717a;\n\t\t\t\t--text-dim: #52525b;\n\t\t\t\t--attention: #f97316;\n\t\t\t\t--attention-glow: rgba(249, 115, 22, 0.4);\n\t\t\t\t--error: #ef4444;\n\t\t\t\t--error-glow: rgba(239, 68, 68, 0.4);\n\t\t\t\t--working: #22c55e;\n\t\t\t\t--working-glow: rgba(34, 197, 94, 0.3);\n\t\t\t\t--idle: #3f3f46;\n\t\t\t\t--accent: #06b6d4;\n\t\t\t\t--accent-dim: rgba(6, 182, 212, 0.15);\n\t\t\t}\n\t\t\t* { box-sizing: border-box; margin: 0; padding: 0; }\n\t\t\tbody {\n\t\t\t\tfont-family: 'IBM Plex Mono', ui-monospace, monospace;\n\t\t\t\tbackground: var(--bg-deep);\n\t\t\t\tcolor: var(--text-primary);\n\t\t\t\tmin-height: 100vh;\n\t\t\t\tmin-height: 100dvh;\n\t\t\t}\n\t\t\t/* Scan line overlay */\n\t\t\tbody::before {\n\t\t\t\tcontent: '';\n\t\t\t\tposition: fixed;\n\t\t\t\ttop: 0; left: 0; right: 0; bottom: 0;\n\t\t\t\tbackground: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.03) 2px, rgba(0,0,0,0.03) 4px);\n\t\t\t\tpointer-events: none;\n\t\t\t\tz-index: 1000;\n\t\t\t}\n\t\t\t.header {\n\t\t\t\tposition: sticky;\n\t\t\t\ttop: 0;\n\t\t\t\tbackground: var(--bg-deep);\n\t\t\t\tborder-bottom: 1px solid var(--border);\n\t\t\t\tpadding: 1rem;\n\t\t\t\tz-index: 100;\n\t\t\t}\n\t\t\t.header-content {\n\t\t\t\tdisplay: flex;\n\t\t\t\talign-items: center;\n\t\t\t\tjustify-content: space-between;\n\t\t\t\tmax-width: 600px;\n\t\t\t\tmargin: 0 auto;\n\t\t\t}\n\t\t\t.logo {\n\t\t\t\tdisplay: flex;\n\t\t\t\talign-items: center;\n\t\t\t\tgap: 0.5rem;\n\t\t\t}\n\t\t\t.logo-icon {\n\t\t\t\twidth: 24px;\n\t\t\t\theight: 24px;\n\t\t\t\tbackground: var(--accent);\n\t\t\t\tborder-radius: 4px;\n\t\t\t\tdisplay: flex;\n\t\t\t\talign-items: center;\n\t\t\t\tjustify-content: center;\n\t\t\t\tfont-size: 10px;\n\t\t\t\tfont-weight: 600;\n\t\t\t\tcolor: var(--bg-deep);\n\t\t\t}\n\t\t\t.logo-text {\n\t\t\t\tfont-size: 14px;\n\t\t\t\tfont-weight: 500;\n\t\t\t\tcolor: var(--text-secondary);\n\t\t\t}\n\t\t\t.status-summary {\n\t\t\t\tdisplay: flex;\n\t\t\t\talign-items: center;\n\t\t\t\tgap: 1rem;\n\t\t\t\tfont-size: 11px;\n\t\t\t}\n\t\t\t.status-count {\n\t\t\t\tdisplay: flex;\n\t\t\t\talign-items: center;\n\t\t\t\tgap: 0.35rem;\n\t\t\t}\n\t\t\t.status-dot {\n\t\t\t\twidth: 8px;\n\t\t\t\theight: 8px;\n\t\t\t\tborder-radius: 50%;\n\t\t\t}\n\t\t\t.status-dot.attention {\n\t\t\t\tbackground: var(--attention);\n\t\t\t\tbox-shadow: 0 0 8px var(--attention-glow);\n\t\t\t}\n\t\t\t.status-dot.working {\n\t\t\t\tbackground: var(--working);\n\t\t\t\tbox-shadow: 0 0 6px var(--working-glow);\n\t\t\t}\n\t\t\t.status-dot.idle {\n\t\t\t\tbackground: var(--idle);\n\t\t\t}\n\t\t\t.main {\n\t\t\t\tmax-width: 600px;\n\t\t\t\tmargin: 0 auto;\n\t\t\t\tpadding: 0.5rem;\n\t\t\t\tpadding-bottom: 2rem;\n\t\t\t}\n\t\t\t.section-label {\n\t\t\t\tfont-size: 10px;\n\t\t\t\ttext-transform: uppercase;\n\t\t\t\tletter-spacing: 0.1em;\n\t\t\t\tcolor: var(--text-dim);\n\t\t\t\tpadding: 1rem 0.5rem 0.5rem;\n\t\t\t\tdisplay: flex;\n\t\t\t\talign-items: center;\n\t\t\t\tgap: 0.5rem;\n\t\t\t}\n\t\t\t.section-label::after {\n\t\t\t\tcontent: '';\n\t\t\t\tflex: 1;\n\t\t\t\theight: 1px;\n\t\t\t\tbackground: var(--border);\n\t\t\t}\n\t\t\t.session {\n\t\t\t\tbackground: var(--bg-panel);\n\t\t\t\tborder: 1px solid var(--border);\n\t\t\t\tborder-radius: 8px;\n\t\t\t\tmargin-bottom: 0.5rem;\n\t\t\t\toverflow: hidden;\n\t\t\t}\n\t\t\t.session.has-attention {\n\t\t\t\tborder-color: var(--attention);\n\t\t\t\tbox-shadow: 0 0 0 1px var(--attention-glow);\n\t\t\t}\n\t\t\t.session-header {\n\t\t\t\tdisplay: flex;\n\t\t\t\talign-items: center;\n\t\t\t\tpadding: 0.875rem 1rem;\n\t\t\t\tcursor: pointer;\n\t\t\t\ttransition: background 0.15s;\n\t\t\t}\n\t\t\t.session-header:hover { background: var(--bg-elevated); }\n\t\t\t.session-indicator {\n\t\t\t\twidth: 10px;\n\t\t\t\theight: 10px;\n\t\t\t\tborder-radius: 50%;\n\t\t\t\tmargin-right: 0.75rem;\n\t\t\t\tflex-shrink: 0;\n\t\t\t}\n\t\t\t.session-indicator.attention {\n\t\t\t\tbackground: var(--attention);\n\t\t\t\tbox-shadow: 0 0 10px var(--attention-glow);\n\t\t\t\tanimation: pulse 2s ease-in-out infinite;\n\t\t\t}\n\t\t\t.session-indicator.error {\n\t\t\t\tbackground: var(--error);\n\t\t\t\tbox-shadow: 0 0 10px var(--error-glow);\n\t\t\t\tanimation: pulse 1.5s ease-in-out infinite;\n\t\t\t}\n\t\t\t.session-indicator.working {\n\t\t\t\tbackground: var(--working);\n\t\t\t\tbox-shadow: 0 0 8px var(--working-glow);\n\t\t\t}\n\t\t\t.session-indicator.idle { background: var(--idle); }\n\t\t\t@keyframes pulse {\n\t\t\t\t0%, 100% { opacity: 1; transform: scale(1); }\n\t\t\t\t50% { opacity: 0.6; transform: scale(0.9); }\n\t\t\t}\n\t\t\t.session-info { flex: 1; min-width: 0; }\n\t\t\t.session-name {\n\t\t\t\tfont-size: 14px;\n\t\t\t\tfont-weight: 500;\n\t\t\t\tcolor: var(--text-primary);\n\t\t\t\twhite-space: nowrap;\n\t\t\t\toverflow: hidden;\n\t\t\t\ttext-overflow: ellipsis;\n\t\t\t}\n\t\t\t.session-meta {\n\t\t\t\tfont-size: 11px;\n\t\t\t\tcolor: var(--text-secondary);\n\t\t\t\tmargin-top: 2px;\n\t\t\t}\n\t\t\t.session-badge {\n\t\t\t\tfont-size: 10px;\n\t\t\t\tpadding: 0.25rem 0.5rem;\n\t\t\t\tborder-radius: 4px;\n\t\t\t\tbackground: var(--attention);\n\t\t\t\tcolor: var(--bg-deep);\n\t\t\t\tfont-weight: 600;\n\t\t\t\tmargin-left: 0.5rem;\n\t\t\t}\n\t\t\t.session-chevron {\n\t\t\t\tcolor: var(--text-dim);\n\t\t\t\ttransition: transform 0.2s;\n\t\t\t}\n\t\t\t.session.expanded .session-chevron { transform: rotate(180deg); }\n\t\t\t.windows {\n\t\t\t\tborder-top: 1px solid var(--border);\n\t\t\t\tbackground: var(--bg-deep);\n\t\t\t}\n\t\t\t.windows.hidden { display: none; }\n\t\t\t.window {\n\t\t\t\tdisplay: flex;\n\t\t\t\talign-items: flex-start;\n\t\t\t\tpadding: 0.75rem 1rem 0.75rem 2.5rem;\n\t\t\t\tborder-bottom: 1px solid var(--border);\n\t\t\t\tcursor: pointer;\n\t\t\t\ttransition: background 0.15s;\n\t\t\t\ttext-decoration: none;\n\t\t\t\tcolor: inherit;\n\t\t\t}\n\t\t\t.window:last-child { border-bottom: none; }\n\t\t\t.window:hover { background: var(--bg-panel); }\n\t\t\t.window.attention { background: rgba(249, 115, 22, 0.05); }\n\t\t\t.window-indicator {\n\t\t\t\twidth: 6px;\n\t\t\t\theight: 6px;\n\t\t\t\tborder-radius: 50%;\n\t\t\t\tmargin-right: 0.75rem;\n\t\t\t\tmargin-top: 0.35rem;\n\t\t\t\tflex-shrink: 0;\n\t\t\t}\n\t\t\t.window-indicator.attention {\n\t\t\t\tbackground: var(--attention);\n\t\t\t\tbox-shadow: 0 0 6px var(--attention-glow);\n\t\t\t\tanimation: pulse 2s ease-in-out infinite;\n\t\t\t}\n\t\t\t.window-indicator.error {\n\t\t\t\tbackground: var(--error);\n\t\t\t\tbox-shadow: 0 0 6px var(--error-glow);\n\t\t\t\tanimation: pulse 1.5s ease-in-out infinite;\n\t\t\t}\n\t\t\t.window-indicator.working { background: var(--working); }\n\t\t\t.window-indicator.idle { background: var(--idle); }\n\t\t\t.window-info { flex: 1; min-width: 0; }\n\t\t\t.window-name { font-size: 13px; color: var(--text-primary); }\n\t\t\t.window-status {\n\t\t\t\tfont-size: 11px;\n\t\t\t\tcolor: var(--text-secondary);\n\t\t\t\tmargin-top: 1px;\n\t\t\t}\n\t\t\t.window-status.attention { color: var(--attention); }\n\t\t\t.window-preview {\n\t\t\t\tmargin-top: 0.5rem;\n\t\t\t\tpadding: 0.5rem;\n\t\t\t\tbackground: rgba(0, 0, 0, 0.3);\n\t\t\t\tborder-radius: 4px;\n\t\t\t\tfont-size: 11px;\n\t\t\t\tline-height: 1.4;\n\t\t\t\tmax-height: 4.5em;\n\t\t\t\toverflow: hidden;\n\t\t\t}\n\t\t\t.preview-line {\n\t\t\t\twhite-space: nowrap;\n\t\t\t\toverflow: hidden;\n\t\t\t\ttext-overflow: ellipsis;\n\t\t\t\tcolor: var(--text-secondary);\n\t\t\t}\n\t\t\t.window-arrow {\n\t\t\t\tcolor: var(--text-dim);\n\t\t\t\tfont-size: 12px;\n\t\t\t\tmargin-top: 0.25rem;\n\t\t\t}\n\t\t\t.empty-state {\n\t\t\t\ttext-align: center;\n\t\t\t\tpadding: 4rem 2rem;\n\t\t\t\tcolor: var(--text-secondary);\n\t\t\t}\n\t\t\t.empty-icon { font-size: 48px; margin-bottom: 1rem; opacity: 0.5; }\n\t\t\t/* Action bar */\n\t\t\t.action-bar {\n\t\t\t\tposition: fixed;\n\t\t\t\tbottom: 0;\n\t\t\t\tleft: 0;\n\t\t\t\tright: 0;\n\t\t\t\tbackground: var(--bg-panel);\n\t\t\t\tborder-top: 1px solid var(--border);\n\t\t\t\tpadding: 0.75rem;\n\t\t\t\tpadding-bottom: calc(0.75rem + env(safe-area-inset-bottom));\n\t\t\t\ttransform: translateY(100%);\n\t\t\t\ttransition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);\n\t\t\t\tz-index: 200;\n\t\t\t}\n\t\t\t.action-bar.visible { transform: translateY(0); }\n\t\t\t.action-bar-content {\n\t\t\t\tmax-width: 600px;\n\t\t\t\tmargin: 0 auto;\n\t\t\t}\n\t\t\t.action-target {\n\t\t\t\tfont-size: 11px;\n\t\t\t\tcolor: var(--text-secondary);\n\t\t\t\tmargin-bottom: 0.5rem;\n\t\t\t\tdisplay: flex;\n\t\t\t\talign-items: center;\n\t\t\t\tjustify-content: space-between;\n\t\t\t}\n\t\t\t.action-close {\n\t\t\t\tbackground: none;\n\t\t\t\tborder: none;\n\t\t\t\tcolor: var(--text-dim);\n\t\t\t\tcursor: pointer;\n\t\t\t\tpadding: 0.25rem;\n\t\t\t\tfont-size: 14px;\n\t\t\t}\n\t\t\t.action-input-row {\n\t\t\t\tdisplay: flex;\n\t\t\t\tgap: 0.5rem;\n\t\t\t}\n\t\t\t.action-input {\n\t\t\t\tflex: 1;\n\t\t\t\tbackground: var(--bg-deep);\n\t\t\t\tborder: 1px solid var(--border);\n\t\t\t\tborder-radius: 6px;\n\t\t\t\tpadding: 0.75rem 1rem;\n\t\t\t\tfont-family: inherit;\n\t\t\t\tfont-size: 14px;\n\t\t\t\tcolor: var(--text-primary);\n\t\t\t\toutline: none;\n\t\t\t}\n\t\t\t.action-input:focus {\n\t\t\t\tborder-color: var(--accent);\n\t\t\t\tbox-shadow: 0 0 0 2px var(--accent-dim);\n\t\t\t}\n\t\t\t.action-input::placeholder { color: var(--text-dim); }\n\t\t\t.action-btn {\n\t\t\t\tbackground: var(--accent);\n\t\t\t\tborder: none;\n\t\t\t\tborder-radius: 6px;\n\t\t\t\tpadding: 0 1.25rem;\n\t\t\t\tfont-family: inherit;\n\t\t\t\tfont-size: 13px;\n\t\t\t\tfont-weight: 500;\n\t\t\t\tcolor: var(--bg-deep);\n\t\t\t\tcursor: pointer;\n\t\t\t\ttransition: opacity 0.15s;\n\t\t\t}\n\t\t\t.action-btn:active { opacity: 0.8; }\n\t\t\t.action-btn.stop {\n\t\t\t\tbackground: var(--error);\n\t\t\t\tpadding: 0 1rem;\n\t\t\t}\n\t\t\t.action-btn.view {\n\t\t\t\tbackground: var(--bg-elevated);\n\t\t\t\tcolor: var(--text-primary);\n\t\t\t}\n\t\t\t.action-context {\n\t\t\t\tmargin-bottom: 0.75rem;\n\t\t\t\tpadding: 0.75rem;\n\t\t\t\tbackground: var(--bg-deep);\n\t\t\t\tborder-radius: 6px;\n\t\t\t\tborder-left: 3px solid var(--idle);\n\t\t\t}\n\t\t\t.action-context.attention { border-left-color: var(--attention); }\n\t\t\t.action-context.working { border-left-color: var(--working); }\n\t\t\t.action-status {\n\t\t\t\tfont-size: 12px;\n\t\t\t\tfont-weight: 500;\n\t\t\t\tmargin-bottom: 0.5rem;\n\t\t\t}\n\t\t\t.action-status.attention { color: var(--attention); }\n\t\t\t.action-status.working { color: var(--working); }\n\t\t\t.action-preview {\n\t\t\t\tfont-size: 11px;\n\t\t\t\tcolor: var(--text-secondary);\n\t\t\t\tline-height: 1.4;\n\t\t\t\tmax-height: 12em;\n\t\t\t\toverflow-y: auto;\n\t\t\t}\n\t\t\t.action-preview-line {\n\t\t\t\twhite-space: nowrap;\n\t\t\t\toverflow: hidden;\n\t\t\t\ttext-overflow: ellipsis;\n\t\t\t}\n\t\t\t.action-choices {\n\t\t\t\tdisplay: flex;\n\t\t\t\tgap: 0.5rem;\n\t\t\t\tmargin-bottom: 0.75rem;\n\t\t\t}\n\t\t\t.action-choices.hidden { display: none; }\n\t\t\t.choice-btn {\n\t\t\t\tflex: 1;\n\t\t\t\tpadding: 0.625rem 0.5rem;\n\t\t\t\tbackground: var(--bg-elevated);\n\t\t\t\tborder: 1px solid var(--border);\n\t\t\t\tborder-radius: 6px;\n\t\t\t\tcolor: var(--text-primary);\n\t\t\t\tfont-family: inherit;\n\t\t\t\tfont-size: 12px;\n\t\t\t\tcursor: pointer;\n\t\t\t\ttransition: all 0.15s;\n\t\t\t\ttext-align: center;\n\t\t\t\tline-height: 1.3;\n\t\t\t}\n\t\t\t.choice-btn:hover {\n\t\t\t\tbackground: var(--accent-dim);\n\t\t\t\tborder-color: var(--accent);\n\t\t\t}\n\t\t\t.choice-btn:active { transform: scale(0.98); }\n\t\t\t.choice-num {\n\t\t\t\tdisplay: block;\n\t\t\t\tfont-size: 14px;\n\t\t\t\tfont-weight: 600;\n\t\t\t\tcolor: var(--accent);\n\t\t\t\tmargin-bottom: 2px;\n\t\t\t}\n\t\t</style></head><body><header class=\"header\"><div class=\"header-content\"><div class=\"logo\"><div class=\"logo-icon\">MC</div><span class=\"logo-text\">mission control</span></div><div class=\"status-summary\" id=\"status-summary\"></div></div></header><main class=\"main\"><div id=\"sessions\"><div class=\"empty-state\"><p>Loading...</p></div></div></main><!-- Action bar --><div class=\"action-bar\" id=\"actionBar\"><div class=\"action-bar-content\"><div class=\"action-target\"><span id=\"actionTarget\"></span> <button class=\"action-close\" onclick=\"closeActionBar()\">✕</button></div><div class=\"action-context\" id=\"actionContext\"><div class=\"action-status\" id=\"actionStatus\"></div><div class=\"action-preview\" id=\"actionPreview\"></div></div><div class=\"action-choices hidden\" id=\"actionChoices\"></div><div class=\"action-input-row\"><input type=\"text\" class=\"action-input\" placeholder=\"Send input...\" id=\"actionInput\"> <button class=\"action-btn stop\" onclick=\"sendStop()\">⏹</button> <button class=\"action-btn view\" onclick=\"viewPane()\">View</button> <button class=\"action-btn\" onclick=\"sendInput()\">Send</button></div></div></div><script src=\"/static/app.js\"></script><script>\n\t\t\t// Track expanded sessions\n\t\t\tconst expandedSessions = new Set();\n\t\t\tlet selectedTarget = null;\n\n\t\t\tfunction toggleSession(header) {\n\t\t\t\tconst session = header.closest('.session');\n\t\t\t\tconst windows = session.querySelector('.windows');\n\t\t\t\tconst sessionName = session.dataset.session;\n\n\t\t\t\tsession.classList.toggle('expanded');\n\t\t\t\twindows.classList.toggle('hidden');\n\n\t\t\t\tif (session.classList.contains('expanded')) {\n\t\t\t\t\texpandedSessions.add(sessionName);\n\t\t\t\t} else {\n\t\t\t\t\texpandedSessions.delete(sessionName);\n\t\t\t\t}\n\t\t\t}\n\n\t\t\tfunction restoreExpandedState() {\n\t\t\t\tdocument.querySelectorAll('.session').forEach(session => {\n\t\t\t\t\tconst name = session.dataset.session;\n\t\t\t\t\tif (expandedSessions.has(name)) {\n\t\t\t\t\t\tsession.classList.add('expanded');\n\t\t\t\t\t\tsession.querySelector('.windows')?.classList.remove('hidden');\n\t\t\t\t\t}\n\t\t\t\t});\n\t\t\t}\n\n\t\t\t// Update status summary counts in header\n\t\t\tfunction updateStatusSummary() {\n\t\t\t\tconst container = document.getElementById('sessions');\n\t\t\t\tconst attention = container.querySelectorAll('.window-indicator.attention').length;\n\t\t\t\tconst error = container.querySelectorAll('.window-indicator.error').length;\n\t\t\t\tconst working = container.querySelectorAll('.window-indicator.working').length;\n\t\t\t\tconst idle = container.querySelectorAll('.window-indicator.idle').length;\n\n\t\t\t\tconst summary = document.getElementById('status-summary');\n\t\t\t\tlet html = '';\n\t\t\t\tif (attention + error > 0) {\n\t\t\t\t\thtml += `<div class=\"status-count\"><div class=\"status-dot attention\"></div><span>${attention + error}</span></div>`;\n\t\t\t\t}\n\t\t\t\tif (working > 0) {\n\t\t\t\t\thtml += `<div class=\"status-count\"><div class=\"status-dot working\"></div><span>${working}</span></div>`;\n\t\t\t\t}\n\t\t\t\tif (idle > 0) {\n\t\t\t\t\thtml += `<div class=\"status-count\"><div class=\"status-dot idle\"></div><span>${idle}</span></div>`;\n\t\t\t\t}\n\t\t\t\tsummary.innerHTML = html;\n\t\t\t}\n\n\t\t\t// Action bar functions\n\t\t\tfunction selectWindow(el) {\n\t\t\t\tconst session = el.dataset.session;\n\t\t\t\tconst windowIdx = parseInt(el.dataset.window);\n\t\t\t\tconst windowName = el.dataset.name;\n\t\t\t\tconst status = el.dataset.status;\n\t\t\t\tconst indicator = el.dataset.indicator;\n\t\t\t\tconst preview = el.dataset.preview;\n\t\t\t\tconst question = el.dataset.question;\n\t\t\t\tconst choices = el.dataset.choices;\n\n\t\t\t\tselectedTarget = { session, window: windowIdx };\n\t\t\t\tdocument.getElementById('actionTarget').textContent = `${session}:${windowIdx} ${windowName}`;\n\n\t\t\t\t// Update context area\n\t\t\t\tconst context = document.getElementById('actionContext');\n\t\t\t\tconst statusEl = document.getElementById('actionStatus');\n\t\t\t\tconst previewEl = document.getElementById('actionPreview');\n\n\t\t\t\tcontext.className = 'action-context ' + indicator;\n\t\t\t\tstatusEl.className = 'action-status ' + indicator;\n\t\t\t\tstatusEl.textContent = status;\n\n\t\t\t\t// Show question and choices if available, otherwise preview\n\t\t\t\tlet html = '';\n\t\t\t\tif (question) {\n\t\t\t\t\thtml += `<div class=\"action-preview-line\" style=\"color: var(--attention); margin-bottom: 0.5rem;\">${escapeHtml(question)}</div>`;\n\t\t\t\t}\n\t\t\t\tif (choices) {\n\t\t\t\t\tconst choiceList = choices.split('|');\n\t\t\t\t\tchoiceList.forEach((choice, i) => {\n\t\t\t\t\t\thtml += `<div class=\"action-preview-line\" style=\"padding-left: 0.5rem;\">${i + 1}. ${escapeHtml(choice)}</div>`;\n\t\t\t\t\t});\n\t\t\t\t}\n\t\t\t\t// Also show preview for additional context\n\t\t\t\tif (preview) {\n\t\t\t\t\tif (html) html += '<div style=\"margin-top: 0.5rem; border-top: 1px solid var(--border); padding-top: 0.5rem;\"></div>';\n\t\t\t\t\thtml += preview.split('\\n').map(line =>\n\t\t\t\t\t\t`<div class=\"action-preview-line\">${escapeHtml(line)}</div>`\n\t\t\t\t\t).join('');\n\t\t\t\t}\n\t\t\t\tif (!html) {\n\t\t\t\t\thtml = '<div class=\"action-preview-line\">No output</div>';\n\t\t\t\t}\n\t\t\t\tpreviewEl.innerHTML = html;\n\n\t\t\t\t// Show choice buttons if choices available\n\t\t\t\tconst choicesEl = document.getElementById('actionChoices');\n\t\t\t\tif (choices) {\n\t\t\t\t\tconst choiceList = choices.split('|');\n\t\t\t\t\tlet btnHtml = '';\n\t\t\t\t\tchoiceList.forEach((choice, i) => {\n\t\t\t\t\t\tconst shortChoice = choice.length > 25 ? choice.substring(0, 22) + '...' : choice;\n\t\t\t\t\t\tbtnHtml += `<button class=\"choice-btn\" onclick=\"sendChoice(${i + 1})\">\n\t\t\t\t\t\t\t<span class=\"choice-num\">${i + 1}</span>\n\t\t\t\t\t\t\t${escapeHtml(shortChoice)}\n\t\t\t\t\t\t</button>`;\n\t\t\t\t\t});\n\t\t\t\t\tchoicesEl.innerHTML = btnHtml;\n\t\t\t\t\tchoicesEl.classList.remove('hidden');\n\t\t\t\t} else {\n\t\t\t\t\tchoicesEl.classList.add('hidden');\n\t\t\t\t}\n\n\t\t\t\tdocument.getElementById('actionBar').classList.add('visible');\n\t\t\t\tdocument.getElementById('actionInput').focus();\n\t\t\t}\n\n\t\t\tfunction sendChoice(num) {\n\t\t\t\tif (!selectedTarget) return;\n\t\t\t\tfetch(`/pane/${encodeURIComponent(selectedTarget.session)}:${selectedTarget.window}/send`, {\n\t\t\t\t\tmethod: 'POST',\n\t\t\t\t\theaders: { 'Content-Type': 'application/x-www-form-urlencoded' },\n\t\t\t\t\tbody: `input=${num}&noenter=true`\n\t\t\t\t});\n\t\t\t\tcloseActionBar();\n\t\t\t}\n\n\t\t\tfunction escapeHtml(text) {\n\t\t\t\tconst div = document.createElement('div');\n\t\t\t\tdiv.textContent = text;\n\t\t\t\treturn div.innerHTML;\n\t\t\t}\n\n\t\t\tfunction closeActionBar() {\n\t\t\t\tdocument.getElementById('actionBar').classList.remove('visible');\n\t\t\t\tselectedTarget = null;\n\t\t\t}\n\n\t\t\tfunction sendInput() {\n\t\t\t\tif (!selectedTarget) return;\n\t\t\t\tconst input = document.getElementById('actionInput');\n\t\t\t\tconst value = input.value;\n\t\t\t\tif (!value) return;\n\n\t\t\t\tfetch(`/pane/${encodeURIComponent(selectedTarget.session)}:${selectedTarget.window}/send`, {\n\t\t\t\t\tmethod: 'POST',\n\t\t\t\t\theaders: { 'Content-Type': 'application/x-www-form-urlencoded' },\n\t\t\t\t\tbody: `input=${encodeURIComponent(value)}`\n\t\t\t\t});\n\t\t\t\tinput.value = '';\n\t\t\t}\n\n\t\t\tfunction sendStop() {\n\t\t\t\tif (!selectedTarget) return;\n\t\t\t\tfetch(`/pane/${encodeURIComponent(selectedTarget.session)}:${selectedTarget.window}/send`, {\n\t\t\t\t\tmethod: 'POST',\n\t\t\t\t\theaders: { 'Content-Type': 'application/x-www-form-urlencoded' },\n\t\t\t\t\tbody: 'input=C-c&special=true'\n\t\t\t\t});\n\t\t\t}\n\n\t\t\tfunction viewPane() {\n\t\t\t\tif (!selectedTarget) return;\n\t\t\t\twindow.location.href = `/pane/${encodeURIComponent(selectedTarget.session)}:${selectedTarget.window}`;\n\t\t\t}\n\n\t\t\t// Close action bar on escape\n\t\t\tdocument.addEventListener('keydown', (e) => {\n\t\t\t\tif (e.key === 'Escape') closeActionBar();\n\t\t\t\tif (e.key === 'Enter' && document.activeElement.id === 'actionInput') {\n\t\t\t\t\te.preventDefault();\n\t\t\t\t\tsendInput();\n\t\t\t\t}\n\t\t\t});\n\n\t\t\t// Handle SSE manually for flicker-free updates\n\t\t\tfunction connectSSE() {\n\t\t\t\tconst evtSource = new EventSource('/sessions?stream=1');\n\t\t\t\tconst container = document.getElementById('sessions');\n\n\t\t\t\tevtSource.onmessage = function(e) {\n\t\t\t\t\tconst temp = document.createElement('div');\n\t\t\t\t\ttemp.innerHTML = e.data;\n\n\t\t\t\t\ttemp.querySelectorAll('.session').forEach(session => {\n\t\t\t\t\t\tconst name = session.dataset.session;\n\t\t\t\t\t\t// Auto-expand sessions that need attention, or were manually expanded\n\t\t\t\t\t\tif (expandedSessions.has(name) || session.classList.contains('has-attention')) {\n\t\t\t\t\t\t\tsession.classList.add('expanded');\n\t\t\t\t\t\t\tsession.querySelector('.windows')?.classList.remove('hidden');\n\t\t\t\t\t\t\texpandedSessions.add(name); // Track auto-expanded too\n\t\t\t\t\t\t}\n\t\t\t\t\t});\n\n\t\t\t\t\tIdiomorph.morph(container, temp.innerHTML, { morphStyle: 'innerHTML' });\n\t\t\t\t\tupdateStatusSummary();\n\t\t\t\t};\n\n\t\t\t\tevtSource.onerror = function() {\n\t\t\t\t\tconsole.log('SSE connection lost, reconnecting...');\n\t\t\t\t\tevtSource.close();\n\t\t\t\t\tsetTimeout(connectSSE, 3000);\n\t\t\t\t};\n\t\t\t}\n\n\t\t\tconnectSSE();\n\t\t</script></body></html>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -277,7 +277,7 @@ func sessionCardV2(sess SessionWithWindows, expanded bool) templ.Component {
 		var templ_7745c5c3_Var6 string
 		templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.JoinStringErrs(sess.Session.Name)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 767, Col: 142}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 830, Col: 142}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var6))
 		if templ_7745c5c3_Err != nil {
@@ -312,7 +312,7 @@ func sessionCardV2(sess SessionWithWindows, expanded bool) templ.Component {
 		var templ_7745c5c3_Var9 string
 		templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.JoinStringErrs(sess.Session.Name)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 771, Col: 49}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 834, Col: 49}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var9))
 		if templ_7745c5c3_Err != nil {
@@ -325,7 +325,7 @@ func sessionCardV2(sess SessionWithWindows, expanded bool) templ.Component {
 		var templ_7745c5c3_Var10 string
 		templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("%d windows", len(sess.Windows)))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 772, Col: 76}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 835, Col: 76}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var10))
 		if templ_7745c5c3_Err != nil {
@@ -343,7 +343,7 @@ func sessionCardV2(sess SessionWithWindows, expanded bool) templ.Component {
 			var templ_7745c5c3_Var11 string
 			templ_7745c5c3_Var11, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("%d", sess.AttentionCount))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 775, Col: 72}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 838, Col: 72}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var11))
 			if templ_7745c5c3_Err != nil {
@@ -435,7 +435,7 @@ func windowCard(sessionName string, win WindowWithStatus) templ.Component {
 		var templ_7745c5c3_Var16 string
 		templ_7745c5c3_Var16, templ_7745c5c3_Err = templ.JoinStringErrs(sessionName)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 799, Col: 28}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 862, Col: 28}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var16))
 		if templ_7745c5c3_Err != nil {
@@ -448,7 +448,7 @@ func windowCard(sessionName string, win WindowWithStatus) templ.Component {
 		var templ_7745c5c3_Var17 string
 		templ_7745c5c3_Var17, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("%d", win.Window.Index))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 800, Col: 51}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 863, Col: 51}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var17))
 		if templ_7745c5c3_Err != nil {
@@ -461,7 +461,7 @@ func windowCard(sessionName string, win WindowWithStatus) templ.Component {
 		var templ_7745c5c3_Var18 string
 		templ_7745c5c3_Var18, templ_7745c5c3_Err = templ.JoinStringErrs(win.Window.Name)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 801, Col: 29}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 864, Col: 29}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var18))
 		if templ_7745c5c3_Err != nil {
@@ -474,7 +474,7 @@ func windowCard(sessionName string, win WindowWithStatus) templ.Component {
 		var templ_7745c5c3_Var19 string
 		templ_7745c5c3_Var19, templ_7745c5c3_Err = templ.JoinStringErrs(getWindowStatusText(win))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 802, Col: 40}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 865, Col: 40}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var19))
 		if templ_7745c5c3_Err != nil {
@@ -487,7 +487,7 @@ func windowCard(sessionName string, win WindowWithStatus) templ.Component {
 		var templ_7745c5c3_Var20 string
 		templ_7745c5c3_Var20, templ_7745c5c3_Err = templ.JoinStringErrs(getWindowIndicator(win))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 803, Col: 42}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 866, Col: 42}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var20))
 		if templ_7745c5c3_Err != nil {
@@ -500,7 +500,7 @@ func windowCard(sessionName string, win WindowWithStatus) templ.Component {
 		var templ_7745c5c3_Var21 string
 		templ_7745c5c3_Var21, templ_7745c5c3_Err = templ.JoinStringErrs(strings.Join(win.Preview, "\n"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 804, Col: 48}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 867, Col: 48}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var21))
 		if templ_7745c5c3_Err != nil {
@@ -513,7 +513,7 @@ func windowCard(sessionName string, win WindowWithStatus) templ.Component {
 		var templ_7745c5c3_Var22 string
 		templ_7745c5c3_Var22, templ_7745c5c3_Err = templ.JoinStringErrs(win.ParseResult.Question)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 805, Col: 42}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 868, Col: 42}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var22))
 		if templ_7745c5c3_Err != nil {
@@ -526,7 +526,7 @@ func windowCard(sessionName string, win WindowWithStatus) templ.Component {
 		var templ_7745c5c3_Var23 string
 		templ_7745c5c3_Var23, templ_7745c5c3_Err = templ.JoinStringErrs(strings.Join(win.ParseResult.Choices, "|"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 806, Col: 59}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 869, Col: 59}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var23))
 		if templ_7745c5c3_Err != nil {
@@ -574,7 +574,7 @@ func windowCard(sessionName string, win WindowWithStatus) templ.Component {
 		var templ_7745c5c3_Var27 string
 		templ_7745c5c3_Var27, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("%d: %s", win.Window.Index, win.Window.Name))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 812, Col: 86}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 875, Col: 86}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var27))
 		if templ_7745c5c3_Err != nil {
@@ -609,7 +609,7 @@ func windowCard(sessionName string, win WindowWithStatus) templ.Component {
 		var templ_7745c5c3_Var30 string
 		templ_7745c5c3_Var30, templ_7745c5c3_Err = templ.JoinStringErrs(getWindowStatusText(win))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 814, Col: 30}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 877, Col: 30}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var30))
 		if templ_7745c5c3_Err != nil {
@@ -632,7 +632,7 @@ func windowCard(sessionName string, win WindowWithStatus) templ.Component {
 				var templ_7745c5c3_Var31 string
 				templ_7745c5c3_Var31, templ_7745c5c3_Err = templ.JoinStringErrs(line)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 819, Col: 38}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 882, Col: 38}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var31))
 				if templ_7745c5c3_Err != nil {
@@ -693,6 +693,9 @@ func getWindowStatusText(win WindowWithStatus) string {
 		}
 		return "Waiting for input..."
 	case parser.TypeWorking:
+		if win.ParseResult.Activity != "" {
+			return win.ParseResult.Activity + "..."
+		}
 		return "Working..."
 	default:
 		return "Idle"
@@ -728,20 +731,20 @@ func PanePage(data PaneData) templ.Component {
 		var templ_7745c5c3_Var33 string
 		templ_7745c5c3_Var33, templ_7745c5c3_Err = templ.JoinStringErrs(data.Pane.Session)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 878, Col: 28}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 944, Col: 28}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var33))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 41, " - tmux-dashboard</title><script src=\"https://cdn.tailwindcss.com\"></script><script src=\"https://unpkg.com/htmx.org@1.9.10\"></script><script src=\"https://unpkg.com/htmx.org@1.9.10/dist/ext/sse.js\"></script><style>\n\t\t\t.terminal {\n\t\t\t\tfont-family: ui-monospace, monospace;\n\t\t\t\t-webkit-user-select: text;\n\t\t\t\tuser-select: text;\n\t\t\t\tcursor: text;\n\t\t\t}\n\t\t\t/* Diff highlighting - inline to avoid extra newlines in pre */\n\t\t\t.diff-add {\n\t\t\t\tbackground-color: rgba(34, 197, 94, 0.25);\n\t\t\t}\n\t\t\t.diff-del {\n\t\t\t\tbackground-color: rgba(239, 68, 68, 0.25);\n\t\t\t}\n\t\t\t.diff-hunk {\n\t\t\t\tbackground-color: rgba(59, 130, 246, 0.25);\n\t\t\t}\n\t\t</style></head><body class=\"bg-gray-100 min-h-screen\"><div class=\"flex flex-col h-screen max-w-lg mx-auto\"><!-- Header --><header class=\"flex items-center gap-3 p-4 bg-white border-b\"><a href=\"/\" class=\"p-2 -ml-2 hover:bg-gray-100 rounded\"><svg class=\"w-5 h-5\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M15 19l-7-7 7-7\"></path></svg></a><h1 class=\"font-medium text-gray-900 flex-1\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 41, " - houston</title><script src=\"https://cdn.tailwindcss.com\"></script><script src=\"https://unpkg.com/htmx.org@1.9.10\"></script><script src=\"https://unpkg.com/htmx.org@1.9.10/dist/ext/sse.js\"></script><style>\n\t\t\t.terminal {\n\t\t\t\tfont-family: ui-monospace, monospace;\n\t\t\t\t-webkit-user-select: text;\n\t\t\t\tuser-select: text;\n\t\t\t\tcursor: text;\n\t\t\t}\n\t\t\t/* Diff highlighting - inline to avoid extra newlines in pre */\n\t\t\t.diff-add {\n\t\t\t\tbackground-color: rgba(34, 197, 94, 0.25);\n\t\t\t}\n\t\t\t.diff-del {\n\t\t\t\tbackground-color: rgba(239, 68, 68, 0.25);\n\t\t\t}\n\t\t\t.diff-hunk {\n\t\t\t\tbackground-color: rgba(59, 130, 246, 0.25);\n\t\t\t}\n\t\t</style></head><body class=\"bg-gray-100 min-h-screen\"><div class=\"flex flex-col h-screen max-w-lg mx-auto\"><!-- Header --><header class=\"flex items-center gap-3 p-4 bg-white border-b\"><a href=\"/\" class=\"p-2 -ml-2 hover:bg-gray-100 rounded\"><svg class=\"w-5 h-5\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M15 19l-7-7 7-7\"></path></svg></a><h1 class=\"font-medium text-gray-900 flex-1\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var34 string
 		templ_7745c5c3_Var34, templ_7745c5c3_Err = templ.JoinStringErrs(data.Pane.Session)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 910, Col: 68}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 976, Col: 68}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var34))
 		if templ_7745c5c3_Err != nil {
@@ -754,7 +757,7 @@ func PanePage(data PaneData) templ.Component {
 		var templ_7745c5c3_Var35 string
 		templ_7745c5c3_Var35, templ_7745c5c3_Err = templ.JoinStringErrs("/pane/" + data.Pane.URLTarget() + "/send")
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 919, Col: 59}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 985, Col: 59}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var35))
 		if templ_7745c5c3_Err != nil {
@@ -767,7 +770,7 @@ func PanePage(data PaneData) templ.Component {
 		var templ_7745c5c3_Var36 string
 		templ_7745c5c3_Var36, templ_7745c5c3_Err = templ.JoinStringErrs("/pane/" + data.Pane.URLTarget())
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 928, Col: 48}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 994, Col: 48}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var36))
 		if templ_7745c5c3_Err != nil {
@@ -796,7 +799,7 @@ func PanePage(data PaneData) templ.Component {
 					var templ_7745c5c3_Var38 templ.SafeURL
 					templ_7745c5c3_Var38, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/pane/" + urlEncode(data.Pane.Session) + ":" + fmt.Sprintf("%d", w.Index)))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 942, Col: 104}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 1008, Col: 104}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var38))
 					if templ_7745c5c3_Err != nil {
@@ -822,7 +825,7 @@ func PanePage(data PaneData) templ.Component {
 					var templ_7745c5c3_Var40 string
 					templ_7745c5c3_Var40, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("%d: %s", w.Index, w.Name))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 945, Col: 48}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 1011, Col: 48}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var40))
 					if templ_7745c5c3_Err != nil {
@@ -852,7 +855,7 @@ func PanePage(data PaneData) templ.Component {
 					var templ_7745c5c3_Var42 templ.SafeURL
 					templ_7745c5c3_Var42, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/pane/" + urlEncode(data.Pane.Session) + ":" + fmt.Sprintf("%d.%d", data.Pane.Window, p.Index)))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 953, Col: 125}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 1019, Col: 125}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var42))
 					if templ_7745c5c3_Err != nil {
@@ -878,7 +881,7 @@ func PanePage(data PaneData) templ.Component {
 					var templ_7745c5c3_Var44 string
 					templ_7745c5c3_Var44, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("P%d", p.Index))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 956, Col: 37}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 1022, Col: 37}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var44))
 					if templ_7745c5c3_Err != nil {
@@ -891,7 +894,7 @@ func PanePage(data PaneData) templ.Component {
 					var templ_7745c5c3_Var45 string
 					templ_7745c5c3_Var45, templ_7745c5c3_Err = templ.JoinStringErrs(p.Command)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 957, Col: 52}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 1023, Col: 52}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var45))
 					if templ_7745c5c3_Err != nil {
@@ -915,7 +918,7 @@ func PanePage(data PaneData) templ.Component {
 		var templ_7745c5c3_Var46 string
 		templ_7745c5c3_Var46, templ_7745c5c3_Err = templ.JoinStringErrs("/pane/" + data.Pane.URLTarget() + "?stream=1")
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 968, Col: 64}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 1034, Col: 64}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var46))
 		if templ_7745c5c3_Err != nil {
@@ -928,7 +931,7 @@ func PanePage(data PaneData) templ.Component {
 		var templ_7745c5c3_Var47 string
 		templ_7745c5c3_Var47, templ_7745c5c3_Err = templ.JoinStringErrs(data.Output)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 973, Col: 131}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 1039, Col: 131}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var47))
 		if templ_7745c5c3_Err != nil {
@@ -952,7 +955,7 @@ func PanePage(data PaneData) templ.Component {
 					var templ_7745c5c3_Var48 string
 					templ_7745c5c3_Var48, templ_7745c5c3_Err = templ.JoinStringErrs("/pane/" + data.Pane.URLTarget() + "/send")
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 981, Col: 60}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 1047, Col: 60}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var48))
 					if templ_7745c5c3_Err != nil {
@@ -965,7 +968,7 @@ func PanePage(data PaneData) templ.Component {
 					var templ_7745c5c3_Var49 string
 					templ_7745c5c3_Var49, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf(`{"input": "%d", "noenter": "true"}`, i+1))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 982, Col: 72}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 1048, Col: 72}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var49))
 					if templ_7745c5c3_Err != nil {
@@ -978,7 +981,7 @@ func PanePage(data PaneData) templ.Component {
 					var templ_7745c5c3_Var50 string
 					templ_7745c5c3_Var50, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("%d", i+1))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 986, Col: 32}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 1052, Col: 32}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var50))
 					if templ_7745c5c3_Err != nil {
@@ -1002,7 +1005,7 @@ func PanePage(data PaneData) templ.Component {
 		var templ_7745c5c3_Var51 string
 		templ_7745c5c3_Var51, templ_7745c5c3_Err = templ.JoinStringErrs("/pane/" + data.Pane.URLTarget() + "/send")
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 994, Col: 56}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 1060, Col: 56}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var51))
 		if templ_7745c5c3_Err != nil {
@@ -1030,7 +1033,7 @@ func PanePage(data PaneData) templ.Component {
 		var templ_7745c5c3_Var52 string
 		templ_7745c5c3_Var52, templ_7745c5c3_Err = templ.JoinStringErrs("/pane/" + data.Pane.URLTarget() + "/send")
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 1017, Col: 57}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 1083, Col: 57}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var52))
 		if templ_7745c5c3_Err != nil {
@@ -1107,7 +1110,7 @@ func PaneOutput(output string) templ.Component {
 		var templ_7745c5c3_Var55 string
 		templ_7745c5c3_Var55, templ_7745c5c3_Err = templ.JoinStringErrs(output)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 1220, Col: 9}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/views.templ`, Line: 1286, Col: 9}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var55))
 		if templ_7745c5c3_Err != nil {

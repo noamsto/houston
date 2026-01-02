@@ -11,10 +11,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/noams/tmux-dashboard/parser"
-	"github.com/noams/tmux-dashboard/status"
-	"github.com/noams/tmux-dashboard/tmux"
-	"github.com/noams/tmux-dashboard/views"
+	"github.com/noamsto/houston/parser"
+	"github.com/noamsto/houston/status"
+	"github.com/noamsto/houston/tmux"
+	"github.com/noamsto/houston/views"
 )
 
 type Server struct {

@@ -9,7 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/noams/tmux-dashboard/server"
+	"github.com/noamsto/houston/server"
 )
 
 func main() {
@@ -29,7 +29,7 @@ func main() {
 
 	if *statusDir == "" {
 		home, _ := os.UserHomeDir()
-		*statusDir = filepath.Join(home, ".local", "state", "tmux-dashboard")
+		*statusDir = filepath.Join(home, ".local", "state", "houston")
 	}
 
 	srv, err := server.New(server.Config{
@@ -39,7 +39,7 @@ func main() {
 		log.Fatalf("failed to create server: %v", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "tmux-dashboard starting on http://%s\n", *addr)
+	fmt.Fprintf(os.Stderr, "houston starting on http://%s\n", *addr)
 	fmt.Fprintf(os.Stderr, "status directory: %s\n", *statusDir)
 
 	if err := http.ListenAndServe(*addr, srv.Handler()); err != nil {
