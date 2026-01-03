@@ -3,10 +3,12 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -127,9 +129,11 @@ func (s *Server) buildSessionsData() views.SessionsData {
 			output, _ := s.tmux.CapturePane(pane, 100)
 			parseResult := parser.Parse(output)
 
-			windowNeedsAttention := parseResult.Type == parser.TypeError ||
+			// Only mark as needing attention if it's a Claude Code window
+			isClaudeWindow := tmux.LooksLikeClaudeOutput(output)
+			windowNeedsAttention := isClaudeWindow && (parseResult.Type == parser.TypeError ||
 				parseResult.Type == parser.TypeChoice ||
-				parseResult.Type == parser.TypeQuestion
+				parseResult.Type == parser.TypeQuestion)
 
 			// Extract preview lines - more for attention states
 			previewLines := 15
@@ -153,16 +157,27 @@ func (s *Server) buildSessionsData() views.SessionsData {
 			if windowNeedsAttention {
 				sessionData.AttentionCount++
 			}
-			if parseResult.Type == parser.TypeWorking {
+			// Check if window is actively working using smarter heuristics
+			cmd := ""
+			if activePaneInfo != nil {
+				cmd = activePaneInfo.Command
+			}
+			if isWindowActive(cmd, win.LastActivity, isClaudeWindow, parseResult) {
 				sessionData.HasWorking = true
 			}
 		}
 
-		// Categorize session based on its windows' status
-		// Skip attached sessions - user is already there
-		if sess.Attached {
-			data.Idle = append(data.Idle, sessionData)
-		} else if sessionData.AttentionCount > 0 {
+		// Sort windows by activity: attention first, then working, then idle
+		sort.SliceStable(sessionData.Windows, func(i, j int) bool {
+			wi, wj := sessionData.Windows[i], sessionData.Windows[j]
+			// Priority: attention > working > idle
+			scoreI := windowActivityScore(wi)
+			scoreJ := windowActivityScore(wj)
+			return scoreI > scoreJ
+		})
+
+		// Categorize session based on its windows' actual status
+		if sessionData.AttentionCount > 0 {
 			data.NeedsAttention = append(data.NeedsAttention, sessionData)
 		} else if sessionData.HasWorking {
 			data.Active = append(data.Active, sessionData)
@@ -225,6 +240,158 @@ func isStatusBarLine(line string) bool {
 		}
 	}
 	return false
+}
+
+// windowActivityScore returns a score for sorting windows by activity
+// Higher score = more important (should appear first)
+func windowActivityScore(win views.WindowWithStatus) int {
+	if win.NeedsAttention {
+		return 4 // Highest priority - needs user attention
+	}
+	if win.ParseResult.Type == parser.TypeWorking {
+		return 3 // Claude actively working
+	}
+	// Check process type for non-Claude windows
+	procType := classifyProcess(win.Process)
+	switch procType {
+	case ProcessServer:
+		return 2 // Servers running
+	case ProcessUnknown:
+		// Unknown process with recent activity
+		if time.Since(win.Window.LastActivity) < 30*time.Second {
+			return 2 // Recent activity
+		}
+		return 1
+	default:
+		return 1 // Shell or interactive - idle
+	}
+}
+
+// ProcessType categorizes what kind of process is running
+type ProcessType int
+
+const (
+	ProcessShell       ProcessType = iota // bash, zsh, fish - idle prompt
+	ProcessInteractive                    // vim, less, htop - waiting for user input
+	ProcessServer                         // servers, daemons - running in background
+	ProcessUnknown                        // other processes
+)
+
+// classifyProcess determines what type of process is running
+func classifyProcess(cmd string) ProcessType {
+	cmd = strings.ToLower(cmd)
+
+	// Shells - always idle
+	shells := []string{"bash", "zsh", "fish", "sh", "dash", "ksh", "tcsh", "csh"}
+	for _, s := range shells {
+		if cmd == s {
+			return ProcessShell
+		}
+	}
+
+	// Interactive tools - waiting for user input, effectively idle
+	interactive := []string{
+		"vim", "nvim", "vi", "nano", "emacs", "pico", "micro", // editors
+		"less", "more", "most", "man", "info", // pagers
+		"htop", "top", "btop", "atop", "glances", // monitors
+		"lazygit", "lazydocker", "tig", "gitui", // git TUIs
+		"ranger", "mc", "nnn", "lf", "yazi", // file managers
+		"tmux", "screen", // multiplexers (nested)
+		"fzf", "sk", // fuzzy finders
+	}
+	for _, i := range interactive {
+		if cmd == i {
+			return ProcessInteractive
+		}
+	}
+
+	// Known server/daemon processes
+	servers := []string{
+		"node", "deno", "bun", // JS runtimes
+		"nginx", "apache", "caddy", "httpd", // web servers
+		"postgres", "mysql", "redis", "mongo", "sqlite", // databases
+		"docker", "podman", "containerd", // containers
+	}
+	for _, s := range servers {
+		if cmd == s {
+			return ProcessServer
+		}
+	}
+
+	return ProcessUnknown
+}
+
+// isWindowActive determines if a window is actively working based on:
+// - Process type (shells/interactive are idle)
+// - Recent activity (output in last N seconds)
+// - For Claude windows, use the parser
+func isWindowActive(cmd string, lastActivity time.Time, isClaudeWindow bool, parseResult parser.Result) bool {
+	// Claude windows use their own detection
+	if isClaudeWindow {
+		return parseResult.Type == parser.TypeWorking
+	}
+
+	procType := classifyProcess(cmd)
+
+	switch procType {
+	case ProcessShell:
+		// Shells are always idle
+		return false
+	case ProcessInteractive:
+		// Interactive tools are waiting for user - idle
+		return false
+	case ProcessServer:
+		// Servers are always "active" (running useful background work)
+		return true
+	default:
+		// Unknown process - check for recent activity
+		// If there was output in the last 30 seconds, consider it active
+		return time.Since(lastActivity) < 30*time.Second
+	}
+}
+
+// ClaudeMode represents a detected Claude Code mode indicator
+type ClaudeMode struct {
+	Icon  string `json:"icon"`  // "⏵⏵", "⏸", etc.
+	Label string `json:"label"` // "accept edits", "plan mode", etc.
+	State string `json:"state"` // "on" or "off"
+}
+
+// detectClaudeMode finds the current Claude Code mode from output
+// Looks for patterns like: "⏵⏵ accept edits on (shift+tab...)" or "⏸ plan mode on"
+func detectClaudeMode(output string) ClaudeMode {
+	lines := strings.Split(output, "\n")
+	start := len(lines) - 15 // Check more lines (status bar can vary)
+	if start < 0 {
+		start = 0
+	}
+
+	// Known mode icons (ordered by priority - check more specific first)
+	modeIcons := []string{"⏵⏵", "⏸"}
+
+	for i := len(lines) - 1; i >= start; i-- {
+		line := lines[i]
+		for _, icon := range modeIcons {
+			if idx := strings.Index(line, icon); idx >= 0 {
+				rest := strings.TrimSpace(line[idx+len(icon):])
+				// Look for "label on" or "label off" pattern
+				// The pattern may have more text after (e.g., "(shift+tab to cycle)")
+				if strings.Contains(rest, " on") {
+					// Extract label: everything before " on"
+					onIdx := strings.Index(rest, " on")
+					label := strings.TrimSpace(rest[:onIdx])
+					return ClaudeMode{Icon: icon, Label: label, State: "on"}
+				}
+				if strings.Contains(rest, " off") {
+					// Extract label: everything before " off"
+					offIdx := strings.Index(rest, " off")
+					label := strings.TrimSpace(rest[:offIdx])
+					return ClaudeMode{Icon: icon, Label: label, State: "off"}
+				}
+			}
+		}
+	}
+	return ClaudeMode{} // Empty = not detected
 }
 
 // isAllSeparator checks if a line is just separator characters
@@ -301,9 +468,12 @@ func (s *Server) sendSessionsEvent(ctx context.Context, w http.ResponseWriter, f
 }
 
 func parsePaneTarget(path string) (tmux.Pane, error) {
-	// Path format: /pane/session:window.pane or /pane/session:window.pane/send
+	// Path format: /pane/session:window.pane or /pane/session:window.pane/action
 	path = strings.TrimPrefix(path, "/pane/")
 	path = strings.TrimSuffix(path, "/send")
+	path = strings.TrimSuffix(path, "/kill")
+	path = strings.TrimSuffix(path, "/respawn")
+	path = strings.TrimSuffix(path, "/kill-window")
 
 	// URL-decode the path (handles %2F -> / in session names)
 	decoded, err := url.PathUnescape(path)
@@ -344,6 +514,24 @@ func (s *Server) handlePane(w http.ResponseWriter, r *http.Request) {
 	// Handle send action
 	if strings.HasSuffix(r.URL.Path, "/send") {
 		s.handlePaneSend(w, r, pane)
+		return
+	}
+
+	// Handle kill pane action
+	if strings.HasSuffix(r.URL.Path, "/kill") {
+		s.handlePaneKill(w, r, pane)
+		return
+	}
+
+	// Handle respawn pane action
+	if strings.HasSuffix(r.URL.Path, "/respawn") {
+		s.handlePaneRespawn(w, r, pane)
+		return
+	}
+
+	// Handle kill window action
+	if strings.HasSuffix(r.URL.Path, "/kill-window") {
+		s.handleWindowKill(w, r, pane)
 		return
 	}
 
@@ -455,6 +643,60 @@ func (s *Server) handlePaneSend(w http.ResponseWriter, r *http.Request, pane tmu
 	w.WriteHeader(http.StatusOK)
 }
 
+func (s *Server) handlePaneKill(w http.ResponseWriter, r *http.Request, pane tmux.Pane) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	slog.Info("kill pane", "pane", pane.Target())
+
+	if err := s.tmux.KillPane(pane); err != nil {
+		slog.Error("kill pane failed", "error", err)
+		http.Error(w, "failed to kill pane: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Redirect back to session or home
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (s *Server) handlePaneRespawn(w http.ResponseWriter, r *http.Request, pane tmux.Pane) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	slog.Info("respawn pane", "pane", pane.Target())
+
+	if err := s.tmux.RespawnPane(pane); err != nil {
+		slog.Error("respawn pane failed", "error", err)
+		http.Error(w, "failed to respawn pane: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	slog.Debug("respawn pane success")
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) handleWindowKill(w http.ResponseWriter, r *http.Request, pane tmux.Pane) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	slog.Info("kill window", "session", pane.Session, "window", pane.Window)
+
+	if err := s.tmux.KillWindow(pane.Session, pane.Window); err != nil {
+		slog.Error("kill window failed", "error", err)
+		http.Error(w, "failed to kill window: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Redirect back to home
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
 func (s *Server) streamPane(w http.ResponseWriter, r *http.Request, pane tmux.Pane) {
 	slog.Debug("SSE pane stream started", "pane", pane.Target())
 
@@ -498,13 +740,28 @@ func (s *Server) streamPane(w http.ResponseWriter, r *http.Request, pane tmux.Pa
 				lastOutput = capture.Output
 				lines := strings.Split(capture.Output, "\n")
 				updateCount++
-				slog.Debug("SSE pane update", "pane", pane.Target(), "bytes", len(capture.Output), "mode", capture.Mode)
 
-				// Build the SSE message with mode as first line
+				// Parse output for choices
+				parseResult := parser.Parse(capture.Output)
+				slog.Debug("SSE pane update", "pane", pane.Target(), "bytes", len(capture.Output), "mode", capture.Mode, "choices", len(parseResult.Choices))
+
+				// Detect Claude mode indicator from output
+				claudeMode := detectClaudeMode(capture.Output)
+				claudeModeJSON, _ := json.Marshal(claudeMode)
+
+				// Build the SSE message with metadata as first lines
 				var buf strings.Builder
 				// Send mode as special first line (will be parsed by client)
 				buf.WriteString("data: __MODE__:")
 				buf.WriteString(capture.Mode)
+				buf.WriteString("\n")
+				// Send choices as special second line
+				buf.WriteString("data: __CHOICES__:")
+				buf.WriteString(strings.Join(parseResult.Choices, "|"))
+				buf.WriteString("\n")
+				// Send Claude mode state as JSON
+				buf.WriteString("data: __CLAUDEMODE__:")
+				buf.Write(claudeModeJSON)
 				buf.WriteString("\n")
 				for _, line := range lines {
 					// Remove carriage returns that can break SSE

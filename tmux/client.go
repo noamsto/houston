@@ -18,10 +18,11 @@ type Session struct {
 }
 
 type Window struct {
-	Index  int
-	Name   string
-	Active bool
-	Panes  int
+	Index        int
+	Name         string
+	Active       bool
+	Panes        int
+	LastActivity time.Time // window_activity timestamp
 }
 
 type Pane struct {
@@ -35,6 +36,7 @@ type PaneInfo struct {
 	Active  bool
 	Command string
 	Path    string // pane_current_path
+	Title   string // pane_title (can be set with nerd fonts)
 }
 
 func (p Pane) Target() string {
@@ -110,7 +112,7 @@ func (c *Client) ListSessions() ([]Session, error) {
 
 func (c *Client) ListWindows(session string) ([]Window, error) {
 	cmd := exec.Command(c.tmuxPath, "list-windows", "-t", session, "-F",
-		"#{window_index}|#{window_name}|#{window_active}|#{window_panes}")
+		"#{window_index}|#{window_name}|#{window_active}|#{window_panes}|#{window_activity}")
 
 	out, err := cmd.Output()
 	if err != nil {
@@ -123,17 +125,23 @@ func (c *Client) ListWindows(session string) ([]Window, error) {
 			continue
 		}
 		parts := strings.Split(line, "|")
-		if len(parts) != 4 {
+		if len(parts) < 4 {
 			continue
 		}
 		idx, _ := strconv.Atoi(parts[0])
 		active := parts[2] == "1"
 		panes, _ := strconv.Atoi(parts[3])
+		var lastActivity time.Time
+		if len(parts) >= 5 {
+			activityTs, _ := strconv.ParseInt(parts[4], 10, 64)
+			lastActivity = time.Unix(activityTs, 0)
+		}
 		windows = append(windows, Window{
-			Index:  idx,
-			Name:   parts[1],
-			Active: active,
-			Panes:  panes,
+			Index:        idx,
+			Name:         parts[1],
+			Active:       active,
+			Panes:        panes,
+			LastActivity: lastActivity,
 		})
 	}
 
@@ -143,7 +151,7 @@ func (c *Client) ListWindows(session string) ([]Window, error) {
 func (c *Client) ListPanes(session string, window int) ([]PaneInfo, error) {
 	target := fmt.Sprintf("%s:%d", session, window)
 	cmd := exec.Command(c.tmuxPath, "list-panes", "-t", target, "-F",
-		"#{pane_index}|#{pane_active}|#{pane_current_command}|#{pane_current_path}")
+		"#{pane_index}|#{pane_active}|#{pane_current_command}|#{pane_current_path}|#{pane_title}")
 
 	out, err := cmd.Output()
 	if err != nil {
@@ -165,11 +173,16 @@ func (c *Client) ListPanes(session string, window int) ([]PaneInfo, error) {
 		if len(parts) >= 4 {
 			path = parts[3]
 		}
+		title := ""
+		if len(parts) >= 5 {
+			title = parts[4]
+		}
 		panes = append(panes, PaneInfo{
 			Index:   idx,
 			Active:  active,
 			Command: parts[2],
 			Path:    path,
+			Title:   title,
 		})
 	}
 
@@ -227,7 +240,13 @@ func detectModeFromOutput(output string) string {
 
 // filterStatusBar removes Claude Code status bar lines from output.
 // The status bar includes horizontal lines, mode indicators, and context info.
+// Only filters if output looks like Claude Code (has characteristic markers).
 func filterStatusBar(output string) string {
+	// Only filter if this looks like Claude Code output
+	if !LooksLikeClaudeOutput(output) {
+		return output
+	}
+
 	lines := strings.Split(output, "\n")
 	var filtered []string
 
@@ -239,6 +258,44 @@ func filterStatusBar(output string) string {
 	}
 
 	return strings.Join(filtered, "\n")
+}
+
+// LooksLikeClaudeOutput checks if output appears to be from Claude Code
+func LooksLikeClaudeOutput(output string) bool {
+	// Claude Code has characteristic status bar elements
+	claudeMarkers := []string{
+		"-- INSERT --",
+		"-- NORMAL --",
+		"🤖",  // Model indicator
+		"📊",  // Stats
+		"💬",  // Messages
+	}
+	for _, marker := range claudeMarkers {
+		if strings.Contains(output, marker) {
+			return true
+		}
+	}
+
+	// Also check for Claude conversation patterns
+	// These appear in the output itself, not just status bar
+	conversationMarkers := []string{
+		"Claude:",           // Claude's responses
+		"Human:",            // User messages in transcript
+		">>>",               // Claude Code prompt
+		"Do you want to",    // Common Claude question pattern
+		"Would you like",    // Common Claude question pattern
+		"(Recommended)",     // Choice recommendation
+		"[Y/n]",             // Yes/no prompt
+		"[y/N]",             // Yes/no prompt
+		"Select an option",  // Choice prompt
+	}
+	for _, marker := range conversationMarkers {
+		if strings.Contains(output, marker) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func isStatusBarLine(line string) bool {
@@ -324,6 +381,26 @@ func (c *Client) GetPaneLocation(session string, paneID int) (int, int, error) {
 	}
 
 	return 0, 0, fmt.Errorf("pane %%%d not found", paneID)
+}
+
+// KillPane closes a pane
+func (c *Client) KillPane(p Pane) error {
+	cmd := exec.Command(c.tmuxPath, "kill-pane", "-t", p.Target())
+	return cmd.Run()
+}
+
+// RespawnPane kills the current process and respawns the pane
+func (c *Client) RespawnPane(p Pane) error {
+	// -k flag kills the current process first
+	cmd := exec.Command(c.tmuxPath, "respawn-pane", "-k", "-t", p.Target())
+	return cmd.Run()
+}
+
+// KillWindow closes a window
+func (c *Client) KillWindow(session string, window int) error {
+	target := fmt.Sprintf("%s:%d", session, window)
+	cmd := exec.Command(c.tmuxPath, "kill-window", "-t", target)
+	return cmd.Run()
 }
 
 // Worktree represents a git worktree with its path and branch

@@ -138,6 +138,8 @@ templ IndexPage() {
 		<title>mission control</title>
 		<link rel="preconnect" href="https://fonts.googleapis.com"/>
 		<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
+		<!-- Nerd Font for terminal icons -->
+		<link href="https://cdn.jsdelivr.net/gh/mshaugh/nerdfont-webfonts@v3.3.0/build/symbols-nerd-font-mono.css" rel="stylesheet"/>
 		<script src="https://unpkg.com/idiomorph@0.3.0/dist/idiomorph.min.js"></script>
 		<style>
 			:root {
@@ -146,21 +148,36 @@ templ IndexPage() {
 				--bg-elevated: #1a1a1d;
 				--border: #2a2a2e;
 				--text-primary: #e4e4e7;
-				--text-secondary: #71717a;
-				--text-dim: #52525b;
+				--text-secondary: #a1a1aa;
+				--text-dim: #71717a;
+				--text-preview: #9ca3af;
 				--attention: #f97316;
-				--attention-glow: rgba(249, 115, 22, 0.4);
-				--error: #ef4444;
-				--error-glow: rgba(239, 68, 68, 0.4);
-				--working: #22c55e;
-				--working-glow: rgba(34, 197, 94, 0.3);
-				--idle: #3f3f46;
-				--accent: #06b6d4;
-				--accent-dim: rgba(6, 182, 212, 0.15);
+			}
+			[data-theme="light"] {
+				--bg-deep: #f4f4f5;
+				--bg-panel: #ffffff;
+				--bg-elevated: #e4e4e7;
+				--border: #d4d4d8;
+				--text-primary: #18181b;
+				--text-secondary: #52525b;
+				--text-dim: #71717a;
+				--text-preview: #4b5563;
+				--attention: #ea580c;
+				--attention-glow: rgba(234, 88, 12, 0.25);
+				--error: #dc2626;
+				--error-glow: rgba(220, 38, 38, 0.25);
+				--working: #16a34a;
+				--working-glow: rgba(22, 163, 74, 0.2);
+				--idle: #a1a1aa;
+				--accent: #0891b2;
+				--accent-dim: rgba(8, 145, 178, 0.12);
+			}
+			[data-theme="light"] body::before {
+				background: none; /* Disable scan lines in light mode */
 			}
 			* { box-sizing: border-box; margin: 0; padding: 0; }
 			body {
-				font-family: 'IBM Plex Mono', ui-monospace, monospace;
+				font-family: 'IBM Plex Mono', 'Symbols Nerd Font Mono', ui-monospace, monospace;
 				background: var(--bg-deep);
 				color: var(--text-primary);
 				min-height: 100vh;
@@ -285,6 +302,42 @@ templ IndexPage() {
 			}
 			.notification-btn .bell-off { stroke: var(--text-dim); }
 			.notification-btn .bell-on { stroke: var(--working); }
+			.theme-toggle {
+				background: none;
+				border: none;
+				cursor: pointer;
+				padding: 0.25rem;
+				display: flex;
+				align-items: center;
+				position: relative;
+				width: 20px;
+				height: 20px;
+			}
+			.theme-toggle svg {
+				width: 18px;
+				height: 18px;
+				position: absolute;
+				transition: transform 0.3s ease, opacity 0.3s ease;
+			}
+			.theme-toggle .sun-icon {
+				stroke: var(--text-dim);
+				opacity: 0;
+				transform: rotate(-90deg) scale(0.5);
+			}
+			.theme-toggle .moon-icon {
+				stroke: var(--text-dim);
+				opacity: 1;
+				transform: rotate(0deg) scale(1);
+			}
+			.theme-toggle:hover svg { stroke: var(--text-primary); }
+			[data-theme="light"] .theme-toggle .sun-icon {
+				opacity: 1;
+				transform: rotate(0deg) scale(1);
+			}
+			[data-theme="light"] .theme-toggle .moon-icon {
+				opacity: 0;
+				transform: rotate(90deg) scale(0.5);
+			}
 			.main {
 				max-width: 600px;
 				margin: 0 auto;
@@ -375,6 +428,23 @@ templ IndexPage() {
 				font-weight: 600;
 				margin-left: 0.5rem;
 			}
+			.dismiss-btn {
+				background: var(--bg-elevated);
+				border: 1px solid var(--border);
+				color: var(--text-secondary);
+				padding: 0.375rem 0.625rem;
+				margin-left: 0.5rem;
+				cursor: pointer;
+				font-size: 11px;
+				font-weight: 500;
+				border-radius: 6px;
+				transition: all 0.15s;
+			}
+			.dismiss-btn:hover {
+				background: rgba(249, 115, 22, 0.15);
+				border-color: var(--attention);
+				color: var(--attention);
+			}
 			.session-chevron {
 				color: var(--text-dim);
 				transition: transform 0.2s;
@@ -430,19 +500,20 @@ templ IndexPage() {
 			.window-status.attention { color: var(--attention); }
 			.window-preview {
 				margin-top: 0.5rem;
-				padding: 0.5rem;
-				background: rgba(0, 0, 0, 0.3);
+				padding: 0.5rem 0.625rem;
+				background: rgba(0, 0, 0, 0.4);
 				border-radius: 4px;
 				font-size: 11px;
-				line-height: 1.4;
+				line-height: 1.5;
 				max-height: 4.5em;
 				overflow: hidden;
+				border-left: 2px solid var(--border);
 			}
 			.preview-line {
 				white-space: nowrap;
 				overflow: hidden;
 				text-overflow: ellipsis;
-				color: var(--text-secondary);
+				color: var(--text-preview);
 			}
 			.window-actions {
 				display: flex;
@@ -452,21 +523,21 @@ templ IndexPage() {
 				flex-shrink: 0;
 			}
 			.window-view-btn {
-				color: var(--text-secondary);
+				color: var(--accent);
 				text-decoration: none;
-				font-size: 10px;
+				font-size: 11px;
+				font-weight: 500;
 				text-transform: uppercase;
 				letter-spacing: 0.5px;
-				padding: 0.2rem 0.5rem;
-				border-radius: 3px;
+				padding: 0.375rem 0.75rem;
+				border-radius: 6px;
 				transition: all 0.15s;
-				background: rgba(255, 255, 255, 0.08);
-				border: 1px solid rgba(255, 255, 255, 0.1);
+				background: var(--accent-dim);
+				border: 1px solid var(--accent);
 			}
 			.window-view-btn:hover, .window-view-btn:active {
-				color: #60a5fa;
-				background: rgba(59, 130, 246, 0.2);
-				border-color: rgba(59, 130, 246, 0.3);
+				background: var(--accent);
+				color: var(--bg-deep);
 			}
 			.window-arrow {
 				color: var(--text-dim);
@@ -537,7 +608,7 @@ templ IndexPage() {
 				border-radius: 6px;
 				padding: 0.5rem 0.75rem;
 				font-family: inherit;
-				font-size: 14px;
+				font-size: 16px; /* Prevents iOS zoom on focus */
 				color: var(--text-primary);
 				outline: none;
 			}
@@ -633,6 +704,147 @@ templ IndexPage() {
 				color: var(--accent);
 				margin-bottom: 2px;
 			}
+
+			/* Sessions grid - mobile first (single column) */
+			.sessions-grid {
+				display: flex;
+				flex-direction: column;
+				gap: 0.5rem;
+			}
+			.empty-state {
+				grid-column: 1 / -1;
+			}
+
+			/* ============================================
+			   DESKTOP RESPONSIVE STYLES
+			   ============================================ */
+
+			/* Tablet breakpoint */
+			@media (min-width: 768px) {
+				.header-content {
+					max-width: 720px;
+				}
+				.search-bar {
+					max-width: 720px;
+				}
+				.main {
+					max-width: 720px;
+					padding: 1rem;
+				}
+				.session-header {
+					padding: 1rem 1.25rem;
+				}
+				.window {
+					padding: 0.875rem 1.25rem 0.875rem 2.75rem;
+				}
+				.window-preview {
+					max-height: 6em;
+				}
+			}
+
+			/* Desktop breakpoint */
+			@media (min-width: 1024px) {
+				.header-content {
+					max-width: 1200px;
+				}
+				.search-bar {
+					max-width: 1200px;
+				}
+				.main {
+					max-width: 1200px;
+					padding: 1.5rem 2rem;
+				}
+				/* Grid layout for sessions on desktop */
+				.sessions-grid {
+					display: grid;
+					grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+					gap: 1rem;
+				}
+				.session {
+					margin-bottom: 0;
+				}
+				.section-label {
+					grid-column: 1 / -1;
+					padding: 0.5rem 0;
+				}
+				/* Larger window previews */
+				.window-preview {
+					max-height: 8em;
+					font-size: 12px;
+				}
+				.window-info {
+					min-width: 200px;
+				}
+				/* Desktop action bar as side panel */
+				.action-bar {
+					position: fixed;
+					bottom: auto;
+					top: 50%;
+					right: 1.5rem;
+					left: auto;
+					transform: translateX(120%) translateY(-50%);
+					width: 400px;
+					max-width: calc(100vw - 3rem);
+					border-radius: 12px;
+					border: 1px solid var(--border);
+					box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+					padding: 1rem;
+					padding-bottom: 1rem;
+				}
+				.action-bar.visible {
+					transform: translateX(0) translateY(-50%);
+				}
+				.action-backdrop {
+					background: rgba(0, 0, 0, 0.3);
+				}
+				.action-context {
+					max-height: 300px;
+					overflow-y: auto;
+				}
+				.action-preview {
+					max-height: 200px;
+				}
+			}
+
+			/* Wide desktop */
+			@media (min-width: 1400px) {
+				.header-content,
+				.search-bar,
+				.main {
+					max-width: 1400px;
+				}
+				.sessions-grid {
+					grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+				}
+				.action-bar {
+					width: 450px;
+				}
+			}
+
+			.action-btn-secondary {
+				flex: 1;
+				background: var(--bg-elevated);
+				border: 1px solid var(--border);
+				border-radius: 6px;
+				padding: 0.5rem 0.75rem;
+				font-family: inherit;
+				font-size: 11px;
+				color: var(--text-secondary);
+				cursor: pointer;
+				transition: all 0.15s;
+			}
+			.action-btn-secondary:hover {
+				background: var(--bg-panel);
+				color: var(--text-primary);
+			}
+			.action-btn-secondary.danger {
+				color: var(--error);
+				border-color: rgba(239, 68, 68, 0.3);
+			}
+			.action-btn-secondary.danger:hover {
+				background: rgba(239, 68, 68, 0.15);
+				border-color: var(--error);
+			}
 		</style>
 	</head>
 	<body>
@@ -653,6 +865,22 @@ templ IndexPage() {
 						<svg class="bell-on" style="display:none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
 							<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
 							<path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+						</svg>
+					</button>
+					<button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">
+						<svg class="sun-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+							<circle cx="12" cy="12" r="5"></circle>
+							<line x1="12" y1="1" x2="12" y2="3"></line>
+							<line x1="12" y1="21" x2="12" y2="23"></line>
+							<line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+							<line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+							<line x1="1" y1="12" x2="3" y2="12"></line>
+							<line x1="21" y1="12" x2="23" y2="12"></line>
+							<line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+							<line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+						</svg>
+						<svg class="moon-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+							<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
 						</svg>
 					</button>
 				</div>
@@ -683,7 +911,7 @@ templ IndexPage() {
 				</div>
 				<div class="action-choices hidden" id="actionChoices"></div>
 				<div class="action-input-row">
-					<input type="text" class="action-input" placeholder="Send input..." id="actionInput"/>
+					<input type="text" class="action-input" placeholder="Send input..." id="actionInput" autocapitalize="off" autocorrect="off" spellcheck="false"/>
 					<button class="action-btn stop" onclick="sendStop()" title="Stop (Ctrl+C)">
 						<svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
@@ -691,6 +919,11 @@ templ IndexPage() {
 					</button>
 					<button class="action-btn view" onclick="viewPane()">View</button>
 					<button class="action-btn" onclick="sendInput()">Send</button>
+				</div>
+				<div class="action-extra-row" style="display: flex; gap: 0.375rem; margin-top: 0.5rem;">
+					<button class="action-btn-secondary" onclick="respawnPane()" title="Respawn pane">Respawn</button>
+					<button class="action-btn-secondary danger" onclick="closePane()" title="Close pane">Close pane</button>
+					<button class="action-btn-secondary danger" onclick="closeWindow()" title="Close window">Close window</button>
 				</div>
 			</div>
 		</div>
@@ -700,6 +933,87 @@ templ IndexPage() {
 			const expandedSessions = new Set();
 			let selectedTarget = null;
 			let currentFilter = '';
+
+			// Dismissed sessions (stored in localStorage)
+			const DISMISSED_KEY = 'houston-dismissed-sessions';
+			let dismissedSessions = new Map(); // session -> timestamp
+
+			function loadDismissed() {
+				try {
+					const stored = localStorage.getItem(DISMISSED_KEY);
+					if (stored) {
+						dismissedSessions = new Map(JSON.parse(stored));
+					}
+				} catch (e) {
+					console.warn('Failed to load dismissed sessions:', e);
+				}
+			}
+
+			function saveDismissed() {
+				try {
+					localStorage.setItem(DISMISSED_KEY, JSON.stringify([...dismissedSessions]));
+				} catch (e) {
+					console.warn('Failed to save dismissed sessions:', e);
+				}
+			}
+
+			function dismissSession(sessionName) {
+				dismissedSessions.set(sessionName, Date.now());
+				saveDismissed();
+				applyDismissals();
+			}
+
+			function undismissSession(sessionName) {
+				dismissedSessions.delete(sessionName);
+				saveDismissed();
+			}
+
+			function applyDismissals() {
+				// Move dismissed sessions from attention to idle visually
+				document.querySelectorAll('.session.has-attention').forEach(session => {
+					const name = session.dataset.session;
+					if (dismissedSessions.has(name)) {
+						session.classList.add('dismissed');
+						session.classList.remove('has-attention');
+						// Update indicator to idle
+						const indicator = session.querySelector('.session-indicator');
+						if (indicator) {
+							indicator.className = 'session-indicator idle';
+						}
+						// Hide badge and dismiss button
+						const badge = session.querySelector('.session-badge');
+						const dismissBtn = session.querySelector('.dismiss-btn');
+						if (badge) badge.style.display = 'none';
+						if (dismissBtn) dismissBtn.style.display = 'none';
+					}
+				});
+
+				// Clear dismissals for sessions no longer needing attention
+				// (they'll naturally be in idle/active sections)
+				const attentionSessions = new Set();
+				document.querySelectorAll('.session.has-attention, .session[data-was-attention="true"]').forEach(s => {
+					attentionSessions.add(s.dataset.session);
+				});
+				for (const [name] of dismissedSessions) {
+					if (!attentionSessions.has(name)) {
+						dismissedSessions.delete(name);
+					}
+				}
+				saveDismissed();
+			}
+
+			// Load dismissed on page load
+			loadDismissed();
+
+			// Event delegation for dismiss buttons
+			document.addEventListener('click', function(e) {
+				const dismissBtn = e.target.closest('[data-dismiss-session]');
+				if (dismissBtn) {
+					e.stopPropagation();
+					const sessionName = dismissBtn.dataset.dismissSession;
+					dismissSession(sessionName);
+				}
+			});
 
 			function filterSessions(query) {
 				currentFilter = query.toLowerCase().trim();
@@ -915,6 +1229,33 @@ templ IndexPage() {
 				window.location.href = `/pane/${encodeURIComponent(selectedTarget.session)}:${selectedTarget.window}.${selectedTarget.pane}`;
 			}
 
+			function respawnPane() {
+				if (!selectedTarget) return;
+				if (!confirm('Respawn this pane? This will kill the current process.')) return;
+				fetch(`/pane/${encodeURIComponent(selectedTarget.session)}:${selectedTarget.window}.${selectedTarget.pane}/respawn`, {
+					method: 'POST'
+				});
+				closeActionBar();
+			}
+
+			function closePane() {
+				if (!selectedTarget) return;
+				if (!confirm('Close this pane?')) return;
+				fetch(`/pane/${encodeURIComponent(selectedTarget.session)}:${selectedTarget.window}.${selectedTarget.pane}/kill`, {
+					method: 'POST'
+				});
+				closeActionBar();
+			}
+
+			function closeWindow() {
+				if (!selectedTarget) return;
+				if (!confirm('Close entire window? This will close all panes in this window.')) return;
+				fetch(`/pane/${encodeURIComponent(selectedTarget.session)}:${selectedTarget.window}.${selectedTarget.pane}/kill-window`, {
+					method: 'POST'
+				});
+				closeActionBar();
+			}
+
 			// Close action bar on escape
 			document.addEventListener('keydown', (e) => {
 				if (e.key === 'Escape') closeActionBar();
@@ -945,6 +1286,8 @@ templ IndexPage() {
 
 					Idiomorph.morph(container, temp.innerHTML, { morphStyle: 'innerHTML' });
 					updateStatusSummary();
+					// Apply dismissals after morph
+					applyDismissals();
 					// Re-apply filter if active
 					if (currentFilter) {
 						filterSessions(currentFilter);
@@ -961,6 +1304,30 @@ templ IndexPage() {
 			}
 
 			connectSSE();
+
+			// Theme support
+			function initTheme() {
+				const saved = localStorage.getItem('houston-theme');
+				if (saved === 'light') {
+					document.documentElement.setAttribute('data-theme', 'light');
+				} else if (saved === 'dark') {
+					document.documentElement.removeAttribute('data-theme');
+				} else if (window.matchMedia('(prefers-color-scheme: light)').matches) {
+					document.documentElement.setAttribute('data-theme', 'light');
+				}
+			}
+			initTheme();
+
+			function toggleTheme() {
+				const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+				if (isLight) {
+					document.documentElement.removeAttribute('data-theme');
+					localStorage.setItem('houston-theme', 'dark');
+				} else {
+					document.documentElement.setAttribute('data-theme', 'light');
+					localStorage.setItem('houston-theme', 'light');
+				}
+			}
 
 			// Notification support
 			let notificationsEnabled = false;
@@ -1051,34 +1418,36 @@ templ IndexPage() {
 
 // Sessions renders the sessions list with window-level detail
 templ Sessions(data SessionsData) {
-	// Needs Attention section
-	if len(data.NeedsAttention) > 0 {
-		<div class="section-label">Needs attention</div>
-		for _, sess := range data.NeedsAttention {
-			@sessionCardV2(sess, true)
+	<div class="sessions-grid">
+		// Needs Attention section
+		if len(data.NeedsAttention) > 0 {
+			<div class="section-label">Needs attention</div>
+			for _, sess := range data.NeedsAttention {
+				@sessionCardV2(sess, true)
+			}
 		}
-	}
-	// Active section
-	if len(data.Active) > 0 {
-		<div class="section-label">Active</div>
-		for _, sess := range data.Active {
-			@sessionCardV2(sess, false)
+		// Active section
+		if len(data.Active) > 0 {
+			<div class="section-label">Active</div>
+			for _, sess := range data.Active {
+				@sessionCardV2(sess, false)
+			}
 		}
-	}
-	// Idle section
-	if len(data.Idle) > 0 {
-		<div class="section-label">Idle</div>
-		for _, sess := range data.Idle {
-			@sessionCardV2(sess, false)
+		// Idle section
+		if len(data.Idle) > 0 {
+			<div class="section-label">Idle</div>
+			for _, sess := range data.Idle {
+				@sessionCardV2(sess, false)
+			}
 		}
-	}
-	// Empty state
-	if len(data.NeedsAttention) == 0 && len(data.Active) == 0 && len(data.Idle) == 0 {
-		<div class="empty-state">
-			<div class="empty-icon">◯</div>
-			<p>No tmux sessions</p>
-		</div>
-	}
+		// Empty state
+		if len(data.NeedsAttention) == 0 && len(data.Active) == 0 && len(data.Idle) == 0 {
+			<div class="empty-state">
+				<div class="empty-icon">◯</div>
+				<p>No tmux sessions</p>
+			</div>
+		}
+	</div>
 }
 
 // sessionCardV2 renders a session with its windows
@@ -1092,6 +1461,7 @@ templ sessionCardV2(sess SessionWithWindows, expanded bool) {
 			</div>
 			if sess.AttentionCount > 0 {
 				<span class="session-badge">{ fmt.Sprintf("%d", sess.AttentionCount) }</span>
+				<button class="dismiss-btn" data-dismiss-session={ sess.Session.Name } title="Dismiss">✕</button>
 			}
 			<svg class="session-chevron" width="20" height="20" viewBox="0 0 20 20" fill="none">
 				<path d="M5 7.5L10 12.5L15 7.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path>
@@ -1103,13 +1473,6 @@ templ sessionCardV2(sess SessionWithWindows, expanded bool) {
 			}
 		</div>
 	</div>
-}
-
-// escapeJS escapes a string for safe use in JavaScript
-func escapeJS(s string) string {
-	s = strings.ReplaceAll(s, "\\", "\\\\")
-	s = strings.ReplaceAll(s, "'", "\\'")
-	return s
 }
 
 // windowCard renders a single window within a session
@@ -1211,14 +1574,33 @@ func getWindowDisplayName(win WindowWithStatus) string {
 	return win.Window.Name
 }
 
+// getPaneDisplayName returns the display name for a pane
+// Uses title if set (supports nerd fonts), falls back to index + command
+func getPaneDisplayName(p tmux.PaneInfo) string {
+	if p.Title != "" && p.Title != p.Command {
+		return p.Title
+	}
+	return fmt.Sprintf("P%d", p.Index)
+}
+
+// getPaneSubtitle returns the subtitle for a pane (command if title is used)
+func getPaneSubtitle(p tmux.PaneInfo) string {
+	if p.Title != "" && p.Title != p.Command {
+		return p.Command
+	}
+	return p.Command
+}
+
 // PanePage renders the pane view
 templ PanePage(data PaneData) {
 	<!DOCTYPE html>
 	<html lang="en">
 	<head>
 		<meta charset="UTF-8"/>
-		<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"/>
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"/>
 		<title>{ data.Pane.Session } - houston</title>
+		<!-- Nerd Font for terminal icons -->
+		<link href="https://cdn.jsdelivr.net/gh/mshaugh/nerdfont-webfonts@v3.3.0/build/symbols-nerd-font-mono.css" rel="stylesheet"/>
 		<script src="https://unpkg.com/htmx.org@1.9.10"></script>
 		<script src="https://unpkg.com/htmx.org@1.9.10/dist/ext/sse.js"></script>
 		<style>
@@ -1237,6 +1619,21 @@ templ PanePage(data PaneData) {
 				--working: #3b82f6;
 				--idle: #6b7280;
 			}
+			[data-theme="light"] {
+				--bg-deep: #f4f4f5;
+				--bg-panel: #ffffff;
+				--bg-elevated: #e4e4e7;
+				--border: #d4d4d8;
+				--text-primary: #18181b;
+				--text-secondary: #52525b;
+				--text-dim: #a1a1aa;
+				--accent: #0891b2;
+				--accent-dim: rgba(8, 145, 178, 0.12);
+				--attention: #ea580c;
+				--error: #dc2626;
+				--working: #2563eb;
+				--idle: #a1a1aa;
+			}
 			* { box-sizing: border-box; margin: 0; padding: 0; }
 			body {
 				font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
@@ -1246,7 +1643,7 @@ templ PanePage(data PaneData) {
 				min-height: 100dvh;
 			}
 			.terminal {
-				font-family: 'SF Mono', ui-monospace, monospace;
+				font-family: 'SF Mono', 'Symbols Nerd Font Mono', ui-monospace, monospace;
 				font-size: 12px;
 				line-height: 1.5;
 				-webkit-user-select: text;
@@ -1260,6 +1657,8 @@ templ PanePage(data PaneData) {
 				background: var(--bg-panel);
 				border-bottom: 1px solid var(--border);
 				padding: 0.75rem 1rem;
+				padding-left: calc(1rem + env(safe-area-inset-left));
+				padding-right: calc(1rem + env(safe-area-inset-right));
 				display: flex;
 				align-items: center;
 				gap: 0.75rem;
@@ -1322,6 +1721,8 @@ templ PanePage(data PaneData) {
 				display: flex;
 				gap: 0.5rem;
 				padding: 0.5rem 0.75rem;
+				padding-left: calc(0.75rem + env(safe-area-inset-left));
+				padding-right: calc(0.75rem + env(safe-area-inset-right));
 				background: var(--bg-panel);
 				border-bottom: 1px solid var(--border);
 				overflow-x: auto;
@@ -1332,6 +1733,7 @@ templ PanePage(data PaneData) {
 				padding: 0.375rem 0.75rem;
 				border-radius: 6px;
 				font-size: 12px;
+				font-family: 'SF Mono', 'Symbols Nerd Font Mono', ui-monospace, monospace;
 				white-space: nowrap;
 				text-decoration: none;
 				background: var(--bg-elevated);
@@ -1375,6 +1777,9 @@ templ PanePage(data PaneData) {
 				background: var(--bg-panel);
 				border-top: 1px solid var(--border);
 			}
+			.choices-bar.hidden {
+				display: none;
+			}
 			.choice-btn {
 				flex: 1;
 				padding: 0.625rem 0.5rem;
@@ -1407,7 +1812,65 @@ templ PanePage(data PaneData) {
 				text-overflow: ellipsis;
 				white-space: nowrap;
 			}
+			.pending-input-bar {
+				display: flex;
+				align-items: center;
+				gap: 0.5rem;
+				padding: 0.5rem 0.75rem;
+				background: var(--bg-elevated);
+				border-top: 1px solid var(--border);
+				border-bottom: 1px solid var(--border);
+				font-size: 12px;
+			}
+			.pending-input-bar.hidden { display: none; }
+			.pending-label {
+				color: var(--text-dim);
+				flex-shrink: 0;
+			}
+			.pending-text {
+				flex: 1;
+				color: var(--text-primary);
+				font-family: 'SF Mono', 'Symbols Nerd Font Mono', ui-monospace, monospace;
+				white-space: nowrap;
+				overflow: hidden;
+				text-overflow: ellipsis;
+				background: var(--bg-deep);
+				padding: 0.25rem 0.5rem;
+				border-radius: 4px;
+				border: 1px solid var(--border);
+			}
+			.pending-edit-btn, .pending-clear-btn {
+				padding: 0.25rem 0.625rem;
+				border-radius: 4px;
+				font-size: 11px;
+				font-weight: 500;
+				cursor: pointer;
+				transition: all 0.15s;
+				border: 1px solid var(--border);
+			}
+			.pending-edit-btn {
+				background: var(--accent-dim);
+				color: var(--accent);
+				border-color: var(--accent);
+			}
+			.pending-edit-btn:hover {
+				background: var(--accent);
+				color: var(--bg-deep);
+			}
+			.pending-clear-btn {
+				background: var(--bg-panel);
+				color: var(--text-secondary);
+			}
+			.pending-clear-btn:hover {
+				background: rgba(239, 68, 68, 0.15);
+				color: var(--error);
+				border-color: var(--error);
+			}
 			.input-bar {
+				position: fixed;
+				bottom: 0;
+				left: env(safe-area-inset-left);
+				right: env(safe-area-inset-right);
 				display: flex;
 				gap: 0.5rem;
 				padding: 0.75rem;
@@ -1415,6 +1878,12 @@ templ PanePage(data PaneData) {
 				background: var(--bg-panel);
 				border-top: 1px solid var(--border);
 				align-items: center;
+				z-index: 100;
+			}
+			/* Spacer to prevent content from being hidden behind fixed input bar */
+			.input-bar-spacer {
+				height: calc(3.5rem + env(safe-area-inset-bottom));
+				flex-shrink: 0;
 			}
 			.mode-badge {
 				font-size: 10px;
@@ -1425,6 +1894,37 @@ templ PanePage(data PaneData) {
 			}
 			.mode-badge.insert { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
 			.mode-badge.normal { background: rgba(59, 130, 246, 0.2); color: #3b82f6; }
+			.autoaccept-toggle {
+				display: flex;
+				align-items: center;
+				gap: 0.25rem;
+				padding: 0.25rem 0.5rem;
+				border-radius: 4px;
+				font-size: 11px;
+				font-weight: 500;
+				background: var(--bg-elevated);
+				border: 1px solid var(--border);
+				color: var(--text-dim);
+				cursor: pointer;
+				transition: all 0.15s;
+				flex-shrink: 0;
+			}
+			.autoaccept-toggle:hover {
+				background: var(--bg-panel);
+				border-color: var(--text-dim);
+			}
+			.autoaccept-toggle.on {
+				background: rgba(34, 197, 94, 0.15);
+				border-color: #22c55e;
+				color: #22c55e;
+			}
+			.autoaccept-toggle.off {
+				background: rgba(239, 68, 68, 0.1);
+				border-color: var(--border);
+				color: var(--text-secondary);
+			}
+			.autoaccept-icon { font-size: 10px; }
+			.autoaccept-state { font-size: 10px; text-transform: uppercase; }
 			.input-field {
 				flex: 1;
 				background: var(--bg-deep);
@@ -1432,7 +1932,7 @@ templ PanePage(data PaneData) {
 				border-radius: 6px;
 				padding: 0.625rem 0.875rem;
 				font-family: inherit;
-				font-size: 14px;
+				font-size: 16px; /* Prevents iOS zoom on focus */
 				color: var(--text-primary);
 				resize: none;
 				outline: none;
@@ -1455,10 +1955,117 @@ templ PanePage(data PaneData) {
 			.action-btn.stop:hover { opacity: 0.9; }
 			.action-btn.send { background: var(--accent); color: var(--bg-deep); }
 			.action-btn.send:hover { opacity: 0.9; }
+
+			/* Pane layout container */
+			.pane-layout {
+				display: flex;
+				flex-direction: column;
+				height: 100vh;
+				height: 100dvh;
+				max-width: 32rem;
+				margin: 0 auto;
+			}
+
+			/* ============================================
+			   PANE PAGE DESKTOP RESPONSIVE STYLES
+			   ============================================ */
+
+			/* Tablet breakpoint */
+			@media (min-width: 768px) {
+				.pane-layout {
+					max-width: 900px;
+				}
+				.terminal {
+					font-size: 13px;
+				}
+				.output {
+					padding: 1.5rem;
+				}
+				.header {
+					padding: 1rem 1.5rem;
+				}
+				.selector {
+					padding: 0.75rem 1.5rem;
+					gap: 0.75rem;
+				}
+				.selector-item {
+					padding: 0.5rem 1rem;
+					font-size: 13px;
+				}
+				.input-bar {
+					padding: 1rem 1.5rem;
+					gap: 0.75rem;
+				}
+				.input-field {
+					font-size: 14px;
+					padding: 0.75rem 1rem;
+				}
+				.choices-bar {
+					padding: 1rem 1.5rem;
+					gap: 0.75rem;
+				}
+				.choice-btn {
+					padding: 0.75rem;
+				}
+			}
+
+			/* Desktop breakpoint */
+			@media (min-width: 1024px) {
+				.pane-layout {
+					max-width: 1100px;
+					margin: 0 auto;
+					height: 100vh;
+					height: 100dvh;
+					display: flex;
+					flex-direction: column;
+				}
+				.terminal {
+					font-size: 14px;
+					line-height: 1.6;
+				}
+				.output {
+					padding: 2rem;
+				}
+				.header {
+					padding: 1rem 2rem;
+				}
+				.selector {
+					padding: 1rem 2rem;
+					flex-wrap: wrap;
+				}
+				.input-bar {
+					position: relative;
+					padding: 1rem 2rem;
+					border-top: 1px solid var(--border);
+					border-radius: 0;
+				}
+				.input-bar-spacer {
+					display: none;
+				}
+				.input-field {
+					max-width: 600px;
+				}
+				.menu {
+					min-width: 200px;
+				}
+			}
+
+			/* Wide desktop */
+			@media (min-width: 1400px) {
+				.pane-layout {
+					max-width: 1400px;
+				}
+				.terminal {
+					font-size: 14px;
+				}
+				.output {
+					padding: 2rem 3rem;
+				}
+			}
 		</style>
 	</head>
 	<body>
-		<div style="display: flex; flex-direction: column; height: 100vh; height: 100dvh; max-width: 32rem; margin: 0 auto;">
+		<div class="pane-layout">
 			<!-- Header -->
 			<header class="header">
 				<a href="/" class="back-btn">
@@ -1485,14 +2092,28 @@ templ PanePage(data PaneData) {
 							hx-target="#output"
 							hx-swap="innerHTML"
 						>Refresh</button>
+						<button
+							hx-post={ "/pane/" + data.Pane.URLTarget() + "/respawn" }
+							hx-swap="none"
+							hx-confirm="Respawn this pane? This will kill the current process."
+						>Respawn pane</button>
+						<button
+							hx-post={ "/pane/" + data.Pane.URLTarget() + "/kill" }
+							hx-confirm="Close this pane?"
+							style="color: var(--error);"
+						>Close pane</button>
+						<button
+							hx-post={ "/pane/" + data.Pane.URLTarget() + "/kill-window" }
+							hx-confirm="Close entire window? This will close all panes in this window."
+							style="color: var(--error);"
+						>Close window</button>
 					</div>
 				</div>
 			</header>
 			<!-- Window/Pane selector -->
-			if len(data.Windows) > 1 || len(data.Panes) > 1 {
-				<div class="selector">
-					if len(data.Windows) > 1 {
-						for _, w := range data.Windows {
+			<div class="selector">
+				if len(data.Windows) > 0 {
+					for _, w := range data.Windows {
 							<a
 								href={ templ.SafeURL("/pane/" + urlEncode(data.Pane.Session) + ":" + fmt.Sprintf("%d", w.Index)) }
 								class={ "selector-item", templ.KV("active", w.Index == data.Pane.Window) }
@@ -1501,20 +2122,19 @@ templ PanePage(data PaneData) {
 							</a>
 						}
 					}
-					if len(data.Panes) > 1 {
-						<span class="selector-sep">|</span>
-						for _, p := range data.Panes {
-							<a
-								href={ templ.SafeURL("/pane/" + urlEncode(data.Pane.Session) + ":" + fmt.Sprintf("%d.%d", data.Pane.Window, p.Index)) }
-								class={ "selector-item", templ.KV("pane-active", p.Index == data.Pane.Index) }
-							>
-								{ fmt.Sprintf("P%d", p.Index) }
-								<span style="font-size: 10px; opacity: 0.7; margin-left: 4px;">{ p.Command }</span>
-							</a>
-						}
+				if len(data.Panes) > 1 {
+					<span class="selector-sep">|</span>
+					for _, p := range data.Panes {
+						<a
+							href={ templ.SafeURL("/pane/" + urlEncode(data.Pane.Session) + ":" + fmt.Sprintf("%d.%d", data.Pane.Window, p.Index)) }
+							class={ "selector-item", templ.KV("pane-active", p.Index == data.Pane.Index) }
+						>
+							{ getPaneDisplayName(p) }
+							<span style="font-size: 10px; opacity: 0.7; margin-left: 4px;">{ getPaneSubtitle(p) }</span>
+						</a>
 					}
-				</div>
-			}
+				}
+			</div>
 			<!-- Output area -->
 			<div
 				id="output-container"
@@ -1524,28 +2144,34 @@ templ PanePage(data PaneData) {
 				sse-swap="message"
 				hx-target="#output"
 				hx-swap="none"
+				onclick="handleOutputClick(event)"
 			>
 				<pre id="output" class="terminal output">{ data.Output }</pre>
 			</div>
-			if len(data.ParseResult.Choices) > 0 {
-				<!-- Quick choice buttons -->
-				<div class="choices-bar">
-					for i, choice := range data.ParseResult.Choices {
-						if i < 4 {
-							<button
-								class="choice-btn"
-								hx-post={ "/pane/" + data.Pane.URLTarget() + "/send" }
-								hx-vals={ fmt.Sprintf(`{"input": "%d", "noenter": "true"}`, i+1) }
-								hx-swap="none"
-								hx-on::after-request="setTimeout(() => { const c = document.getElementById('output-container'); c.scrollTop = c.scrollHeight; }, 100)"
-							>
-								<span class="choice-num">{ fmt.Sprintf("%d", i+1) }</span>
-								<span class="choice-text">{ truncate(choice, 20) }</span>
-							</button>
-						}
+			<!-- Prompt input indicator (shown when Claude has pending input) -->
+			<div id="pending-input-bar" class="pending-input-bar hidden">
+				<span class="pending-label">Pending input:</span>
+				<span id="pending-input-text" class="pending-text"></span>
+				<button class="pending-edit-btn" onclick="editPendingInput()">Edit</button>
+				<button class="pending-clear-btn" onclick="clearPendingInput()">Clear</button>
+			</div>
+			<!-- Quick choice buttons (dynamically updated via SSE) -->
+			<div id="choices-bar" class={ "choices-bar", templ.KV("hidden", len(data.ParseResult.Choices) == 0) } data-pane-target={ data.Pane.URLTarget() }>
+				for i, choice := range data.ParseResult.Choices {
+					if i < 4 {
+						<button
+							class="choice-btn"
+							data-choice={ fmt.Sprintf("%d", i+1) }
+							onclick="sendChoice(this.dataset.choice)"
+						>
+							<span class="choice-num">{ fmt.Sprintf("%d", i+1) }</span>
+							<span class="choice-text">{ truncate(choice, 20) }</span>
+						</button>
 					}
-				</div>
-			}
+				}
+			</div>
+			<!-- Spacer for fixed input bar -->
+			<div class="input-bar-spacer"></div>
 			<!-- Input bar -->
 			<form
 				id="input-form"
@@ -1559,12 +2185,26 @@ templ PanePage(data PaneData) {
 				} else {
 					<span id="mode-indicator" class="mode-badge normal">NOR</span>
 				}
+				<!-- Auto-accept edits toggle -->
+				<button
+					type="button"
+					id="autoaccept-toggle"
+					class="autoaccept-toggle"
+					onclick="toggleAutoAccept()"
+					title="Toggle auto-accept edits (Shift+Tab)"
+				>
+					<span class="autoaccept-icon">⏵⏵</span>
+					<span id="autoaccept-state" class="autoaccept-state">--</span>
+				</button>
 				<textarea
 					id="input-field"
 					name="input"
 					class="input-field"
 					placeholder="Send input..."
 					autocomplete="off"
+					autocapitalize="off"
+					autocorrect="off"
+					spellcheck="false"
 					rows="1"
 					onkeydown="handleInputKeydown(event)"
 					oninput="autoResize(this)"
@@ -1597,6 +2237,17 @@ templ PanePage(data PaneData) {
 
 // paneScripts contains the JavaScript for the pane page
 templ paneScripts() {
+	<script>
+		// Theme support - must run synchronously before render
+		(function() {
+			const saved = localStorage.getItem('houston-theme');
+			if (saved === 'light') {
+				document.documentElement.setAttribute('data-theme', 'light');
+			} else if (!saved && window.matchMedia('(prefers-color-scheme: light)').matches) {
+				document.documentElement.setAttribute('data-theme', 'light');
+			}
+		})();
+	</script>
 	<script type="module">
 		import { AnsiUp } from 'https://cdn.jsdelivr.net/npm/ansi_up@6/ansi_up.js';
 
@@ -1659,7 +2310,10 @@ templ paneScripts() {
 			}
 			const output = document.getElementById('output');
 			if (output) {
-				output.innerHTML = processOutput(output.textContent);
+				const text = output.textContent;
+				output.innerHTML = processOutput(text);
+				// Check for pending input on initial load
+				updatePendingInput(text);
 			}
 		});
 
@@ -1686,14 +2340,80 @@ templ paneScripts() {
 				updateModeIndicatorDirect(mode);
 			}
 
+			// Extract choices from special line if present
+			const choicesMatch = text.match(/^__CHOICES__:([^\n]*)\n/);
+			if (choicesMatch) {
+				const choicesStr = choicesMatch[1];
+				text = text.substring(choicesMatch[0].length);
+				updateChoices(choicesStr ? choicesStr.split('|') : []);
+			}
+
+			// Extract Claude mode state if present (JSON)
+			const claudeModeMatch = text.match(/^__CLAUDEMODE__:([^\n]*)\n/);
+			if (claudeModeMatch) {
+				text = text.substring(claudeModeMatch[0].length);
+				try {
+					const modeData = JSON.parse(claudeModeMatch[1] || '{}');
+					updateClaudeMode(modeData);
+				} catch (e) {
+					console.warn('Failed to parse Claude mode:', e);
+				}
+			}
+
 			// Process with ansi_up (which has escapeHtml enabled)
 			output.innerHTML = processOutput(text);
+
+			// Update pending input bar
+			updatePendingInput(text);
 
 			// Only auto-scroll if user was already at the bottom
 			if (wasAtBottom && container) {
 				container.scrollTop = container.scrollHeight;
 			}
 		});
+
+		// Update choices bar dynamically
+		function updateChoices(choices) {
+			const bar = document.getElementById('choices-bar');
+			if (!bar) return;
+
+			if (!choices || choices.length === 0 || (choices.length === 1 && choices[0] === '')) {
+				bar.classList.add('hidden');
+				bar.innerHTML = '';
+				return;
+			}
+
+			bar.classList.remove('hidden');
+			let html = '';
+			choices.slice(0, 4).forEach((choice, i) => {
+				const num = i + 1;
+				const shortChoice = choice.length > 20 ? choice.substring(0, 17) + '...' : choice;
+				html += `<button class="choice-btn" data-choice="${num}" onclick="sendChoice('${num}')">
+					<span class="choice-num">${num}</span>
+					<span class="choice-text">${escapeHtml(shortChoice)}</span>
+				</button>`;
+			});
+			bar.innerHTML = html;
+		}
+
+		function escapeHtml(text) {
+			const div = document.createElement('div');
+			div.textContent = text;
+			return div.innerHTML;
+		}
+
+		// Send choice to pane
+		window.sendChoice = function(num) {
+			const bar = document.getElementById('choices-bar');
+			if (!bar) return;
+			const target = bar.dataset.paneTarget;
+			if (!target) return;
+			fetch(`/pane/${target}/send`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+				body: `input=${num}&noenter=true`
+			});
+		}
 
 		// Log SSE connection events
 		document.body.addEventListener('htmx:sseOpen', function(e) {
@@ -1745,12 +2465,203 @@ templ paneScripts() {
 			document.getElementById('menu').classList.add('hidden');
 		}
 
-		// Handle Enter vs Shift+Enter in input
+		// Click on prompt pattern to focus input field
+		// Detects: ─────── separator lines and > prompt lines
+		window.handleOutputClick = function(e) {
+			// Don't interfere with text selection
+			if (window.getSelection().toString()) return;
+
+			// Get the text at click position
+			let clickedLine = '';
+
+			// Try to get the line that was clicked
+			if (document.caretRangeFromPoint) {
+				const range = document.caretRangeFromPoint(e.clientX, e.clientY);
+				if (range && range.startContainer) {
+					const text = range.startContainer.textContent || '';
+					// Get the line containing the click position
+					const lines = text.split('\n');
+					let pos = 0;
+					for (const line of lines) {
+						if (pos + line.length >= range.startOffset) {
+							clickedLine = line;
+							break;
+						}
+						pos += line.length + 1;
+					}
+				}
+			}
+
+			// Check if clicked line is a prompt pattern
+			const isPromptLine = (
+				clickedLine.match(/^\s*>{1,3}\s*/) ||            // > or >>> (with optional text)
+				clickedLine.match(/^[─━\-]{5,}/)                 // Separator line (────)
+			);
+
+			if (isPromptLine) {
+				document.getElementById('input-field').focus();
+			}
+		}
+
+		// Extract pending input from Claude's prompt line(s)
+		// Claude Code shows: ">" or ">>>" followed by user's typed text
+		// Multi-line input shows continuation lines after the first prompt
+		function extractPendingInput(text) {
+			const lines = text.split('\n');
+			const pendingLines = [];
+			let foundPrompt = false;
+
+			// Scan from bottom up to find prompt area
+			for (let i = lines.length - 1; i >= Math.max(0, lines.length - 20); i--) {
+				const line = lines[i];
+
+				// Match prompt line: > or >>> with optional text
+				const promptMatch = line.match(/^\s*(>{1,3})\s*(.*)$/);
+
+				if (promptMatch) {
+					foundPrompt = true;
+					const content = promptMatch[2];
+					if (content) {
+						pendingLines.unshift(content); // Add to front (we're going backwards)
+					}
+				} else if (foundPrompt) {
+					// We found prompts but this line doesn't have one
+					const trimmed = line.trim();
+					// Stop if we hit a separator, empty line, or status bar content
+					if (!trimmed || trimmed.match(/^[─━\-]{5,}/) ||
+						trimmed.includes('-- INSERT --') || trimmed.includes('-- NORMAL --')) {
+						break;
+					}
+					// Check if this might be a continuation line (no prompt, just content)
+					// Claude wraps long input, so continuation lines are possible
+					// But stop if we hit obvious non-prompt content
+					if (trimmed.startsWith('│') || trimmed.startsWith('⎿') ||
+						trimmed.startsWith('●') || trimmed.startsWith('✻')) {
+						break;
+					}
+					// This could be wrapped input text, add it
+					pendingLines.unshift(trimmed);
+				}
+			}
+
+			if (pendingLines.length === 0) {
+				return foundPrompt ? '' : null; // Empty prompt vs no prompt
+			}
+
+			return pendingLines.join('\n');
+		}
+
+		// Update pending input bar based on output
+		function updatePendingInput(text) {
+			const pendingBar = document.getElementById('pending-input-bar');
+			const pendingText = document.getElementById('pending-input-text');
+			if (!pendingBar || !pendingText) return;
+
+			const pending = extractPendingInput(text);
+			if (pending && pending.length > 0) {
+				// Show first line + indicator if multi-line
+				const lines = pending.split('\n');
+				let display = lines[0];
+				if (lines.length > 1) {
+					display += ` (+${lines.length - 1} more)`;
+				}
+				pendingText.textContent = display;
+				pendingText.title = pending; // Full text on hover
+				pendingBar.classList.remove('hidden');
+			} else {
+				pendingBar.classList.add('hidden');
+			}
+		}
+
+		// Edit pending input - copy to input field for editing
+		window.editPendingInput = function() {
+			const pendingText = document.getElementById('pending-input-text');
+			const inputField = document.getElementById('input-field');
+			if (!pendingText || !inputField) return;
+
+			const text = pendingText.textContent;
+			if (text) {
+				inputField.value = text;
+				inputField.focus();
+				autoResize(inputField);
+				// Clear the existing input in Claude (send Ctrl+U to clear line)
+				const bar = document.getElementById('choices-bar');
+				const target = bar?.dataset.paneTarget;
+				if (target) {
+					fetch(`/pane/${target}/send`, {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+						body: 'input=C-u&special=true'
+					});
+				}
+			}
+		}
+
+		// Clear pending input in Claude
+		window.clearPendingInput = function() {
+			const bar = document.getElementById('choices-bar');
+			const target = bar?.dataset.paneTarget;
+			if (target) {
+				// Send Ctrl+U to clear the line
+				fetch(`/pane/${target}/send`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+					body: 'input=C-u&special=true'
+				});
+			}
+		}
+
+		// Toggle auto-accept edits (sends Shift+Tab)
+		window.toggleAutoAccept = function() {
+			const bar = document.getElementById('choices-bar');
+			const target = bar?.dataset.paneTarget;
+			console.log('toggleAutoAccept called, target:', target);
+			if (target) {
+				fetch(`/pane/${target}/send`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+					body: 'input=BTab&special=true'
+				}).then(r => console.log('toggle response:', r.status));
+			} else {
+				console.warn('No pane target found for toggle');
+			}
+		}
+
+		// Update Claude mode indicator (dynamic - shows whatever mode is active)
+		function updateClaudeMode(mode) {
+			const toggle = document.getElementById('autoaccept-toggle');
+			const iconEl = toggle?.querySelector('.autoaccept-icon');
+			const stateEl = document.getElementById('autoaccept-state');
+			if (!toggle || !stateEl || !iconEl) return;
+
+			toggle.classList.remove('on', 'off');
+			if (mode.state === 'on') {
+				toggle.classList.add('on');
+				iconEl.textContent = mode.icon || '⏵⏵';
+				stateEl.textContent = 'on';
+				toggle.title = `${mode.label || 'Mode'} on (Shift+Tab to cycle)`;
+			} else if (mode.state === 'off') {
+				toggle.classList.add('off');
+				iconEl.textContent = mode.icon || '⏵⏵';
+				stateEl.textContent = 'off';
+				toggle.title = `${mode.label || 'Mode'} off (Shift+Tab to cycle)`;
+			} else {
+				// No mode detected
+				iconEl.textContent = '⏵⏵';
+				stateEl.textContent = '--';
+				toggle.title = 'Toggle mode (Shift+Tab)';
+			}
+		}
+
+		// Allow Enter to create newlines (for iOS compatibility)
+		// Only submit via Send button
 		window.handleInputKeydown = function(e) {
-			if (e.key === 'Enter' && !e.shiftKey) {
+			// Cmd/Ctrl+Enter to send (for desktop users who want keyboard shortcut)
+			if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
 				e.preventDefault();
 				document.getElementById('input-form').requestSubmit();
 			}
+			// Regular Enter creates newline (default behavior for textarea)
 		}
 
 		// Auto-resize textarea
