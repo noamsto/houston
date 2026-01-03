@@ -34,6 +34,7 @@ type PaneInfo struct {
 	Index   int
 	Active  bool
 	Command string
+	Path    string // pane_current_path
 }
 
 func (p Pane) Target() string {
@@ -142,7 +143,7 @@ func (c *Client) ListWindows(session string) ([]Window, error) {
 func (c *Client) ListPanes(session string, window int) ([]PaneInfo, error) {
 	target := fmt.Sprintf("%s:%d", session, window)
 	cmd := exec.Command(c.tmuxPath, "list-panes", "-t", target, "-F",
-		"#{pane_index}|#{pane_active}|#{pane_current_command}")
+		"#{pane_index}|#{pane_active}|#{pane_current_command}|#{pane_current_path}")
 
 	out, err := cmd.Output()
 	if err != nil {
@@ -155,15 +156,20 @@ func (c *Client) ListPanes(session string, window int) ([]PaneInfo, error) {
 			continue
 		}
 		parts := strings.Split(line, "|")
-		if len(parts) != 3 {
+		if len(parts) < 3 {
 			continue
 		}
 		idx, _ := strconv.Atoi(parts[0])
 		active := parts[1] == "1"
+		path := ""
+		if len(parts) >= 4 {
+			path = parts[3]
+		}
 		panes = append(panes, PaneInfo{
 			Index:   idx,
 			Active:  active,
 			Command: parts[2],
+			Path:    path,
 		})
 	}
 
@@ -318,4 +324,71 @@ func (c *Client) GetPaneLocation(session string, paneID int) (int, int, error) {
 	}
 
 	return 0, 0, fmt.Errorf("pane %%%d not found", paneID)
+}
+
+// Worktree represents a git worktree with its path and branch
+type Worktree struct {
+	Path   string
+	Branch string
+}
+
+// GetWorktrees returns all git worktrees for a repository.
+// The path should be any directory within the git repo.
+// Returns a map of absolute path -> branch name.
+func GetWorktrees(path string) (map[string]string, error) {
+	if path == "" {
+		return nil, nil
+	}
+
+	cmd := exec.Command("git", "-C", path, "worktree", "list", "--porcelain")
+	out, err := cmd.Output()
+	if err != nil {
+		// Not a git repo or no worktrees
+		return nil, nil
+	}
+
+	result := make(map[string]string)
+	var currentPath string
+
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.HasPrefix(line, "worktree ") {
+			currentPath = strings.TrimPrefix(line, "worktree ")
+		} else if strings.HasPrefix(line, "branch ") {
+			branch := strings.TrimPrefix(line, "branch refs/heads/")
+			if currentPath != "" {
+				result[currentPath] = branch
+			}
+		}
+	}
+
+	return result, nil
+}
+
+// GetBranchForPath returns the git branch for a specific path.
+// First tries worktree matching, then falls back to git branch command.
+func GetBranchForPath(path string, worktrees map[string]string) string {
+	if path == "" {
+		return ""
+	}
+
+	// Try exact match first
+	if branch, ok := worktrees[path]; ok {
+		return branch
+	}
+
+	// Try to find if path is under a worktree
+	for wtPath, branch := range worktrees {
+		if strings.HasPrefix(path, wtPath+"/") || path == wtPath {
+			return branch
+		}
+	}
+
+	// Fallback: run git branch --show-current
+	cmd := exec.Command("git", "-C", path, "branch", "--show-current")
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+
+	return strings.TrimSpace(string(out))
 }

@@ -86,20 +86,40 @@ func (s *Server) buildSessionsData() views.SessionsData {
 			Session: sess,
 		}
 
+		// Get worktrees once per session (using first window's pane path)
+		var worktrees map[string]string
+		var worktreesLoaded bool
+
 		for _, win := range windows {
 			// Get actual panes for this window
 			panes, _ := s.tmux.ListPanes(sess.Name, win.Index)
 
 			// Find pane to check (prefer active, fallback to first)
+			var activePaneInfo *tmux.PaneInfo
 			paneIdx := 0
 			if len(panes) > 0 {
+				activePaneInfo = &panes[0]
 				paneIdx = panes[0].Index
-				for _, p := range panes {
+				for i, p := range panes {
 					if p.Active {
+						activePaneInfo = &panes[i]
 						paneIdx = p.Index
 						break
 					}
 				}
+			}
+
+			// Load worktrees on first window (lazy load)
+			if !worktreesLoaded && activePaneInfo != nil && activePaneInfo.Path != "" {
+				worktrees, _ = tmux.GetWorktrees(activePaneInfo.Path)
+				worktreesLoaded = true
+			}
+
+			// Get branch for this window's pane
+			var branch, process string
+			if activePaneInfo != nil {
+				process = activePaneInfo.Command
+				branch = tmux.GetBranchForPath(activePaneInfo.Path, worktrees)
 			}
 
 			pane := tmux.Pane{Session: sess.Name, Window: win.Index, Index: paneIdx}
@@ -123,6 +143,8 @@ func (s *Server) buildSessionsData() views.SessionsData {
 				ParseResult:    parseResult,
 				Preview:        preview,
 				NeedsAttention: windowNeedsAttention,
+				Branch:         branch,
+				Process:        process,
 			}
 
 			sessionData.Windows = append(sessionData.Windows, windowStatus)
