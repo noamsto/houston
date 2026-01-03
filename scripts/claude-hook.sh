@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Claude Code hook script for tmux-dashboard
+# Claude Code hook script for houston
 # Writes structured status to JSON files for dashboard monitoring
 #
 # Install: Add to ~/.claude/settings.json:
@@ -15,7 +15,7 @@
 
 set -euo pipefail
 
-STATUS_DIR="${TMUX_DASHBOARD_STATUS_DIR:-$HOME/.local/state/tmux-dashboard}"
+STATUS_DIR="${HOUSTON_STATUS_DIR:-$HOME/.local/state/houston}"
 mkdir -p "$STATUS_DIR"
 
 # Get tmux session name (escape slashes for filename)

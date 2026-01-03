@@ -1,6 +1,6 @@
-# tmux-dashboard
+# houston
 
-A mobile-friendly web dashboard for monitoring and controlling tmux sessions remotely. Built for checking on AI agents and sending them instructions from your phone.
+Mission control for Claude Code agents in tmux. A mobile-friendly web dashboard for monitoring and controlling tmux sessions remotely. Built for checking on AI agents and sending them instructions from your phone.
 
 ## Project Goals
 
@@ -98,7 +98,7 @@ A mobile-friendly web dashboard for monitoring and controlling tmux sessions rem
 
 ```
 ┌─────────────────────────────┐
-│  tmux-dashboard        [☰]  │  <- Header with menu
+│  houston              [☰]  │  <- Header with menu
 ├─────────────────────────────┤
 │ ┌─────────────────────────┐ │
 │ │ 🟢 main                 │ │  <- Session cards
@@ -226,7 +226,7 @@ Rely on network-level security:
 }:
 
 buildGoModule rec {
-  pname = "tmux-dashboard";
+  pname = "houston";
   version = "0.1.0";
 
   src = ./.;
@@ -234,8 +234,8 @@ buildGoModule rec {
   vendorHash = "sha256-AAAA...";  # Update after go mod tidy
 
   meta = with lib; {
-    description = "Mobile-friendly web dashboard for tmux";
-    homepage = "https://github.com/USER/tmux-dashboard";
+    description = "Mission control for Claude Code agents in tmux";
+    homepage = "https://github.com/noamsto/houston";
     license = licenses.mit;
     maintainers = [];
   };
@@ -250,10 +250,10 @@ buildGoModule rec {
 with lib;
 
 let
-  cfg = config.services.tmux-dashboard;
+  cfg = config.services.houston;
 in {
-  options.services.tmux-dashboard = {
-    enable = mkEnableOption "tmux-dashboard web interface";
+  options.services.houston = {
+    enable = mkEnableOption "houston web interface";
 
     port = mkOption {
       type = types.port;
@@ -275,13 +275,13 @@ in {
   };
 
   config = mkIf cfg.enable {
-    systemd.user.services.tmux-dashboard = {
-      description = "tmux dashboard web server";
+    systemd.user.services.houston = {
+      description = "houston web server";
       wantedBy = [ "default.target" ];
       after = [ "network.target" ];
 
       serviceConfig = {
-        ExecStart = "${pkgs.tmux-dashboard}/bin/tmux-dashboard -addr ${cfg.address}:${toString cfg.port}";
+        ExecStart = "${pkgs.houston}/bin/houston -addr ${cfg.address}:${toString cfg.port}";
         Restart = "on-failure";
       };
     };
@@ -292,7 +292,7 @@ in {
 ## Project Structure
 
 ```
-tmux-dashboard/
+houston/
 ├── main.go              # Entry point, CLI flags
 ├── server.go            # HTTP server setup, routes
 ├── tmux.go              # tmux command wrappers
@@ -323,7 +323,7 @@ nix develop
 go run . -addr localhost:8080
 
 # Build
-go build -o tmux-dashboard .
+go build -o houston .
 
 # Test tmux commands
 tmux list-sessions
@@ -333,12 +333,12 @@ tmux list-sessions
 
 ```go
 // go.mod
-module github.com/USER/tmux-dashboard
+module github.com/noamsto/houston
 
-go 1.22
+go 1.23
 
 require (
-    github.com/gorilla/websocket v1.5.1  // WebSocket support
+    github.com/a-h/templ  // Type-safe HTML templates
 )
 ```
 

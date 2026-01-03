@@ -1,14 +1,14 @@
-// tmux-dashboard client-side JS
+// houston client-side JS
 document.addEventListener('DOMContentLoaded', function() {
-    console.log('tmux-dashboard loaded');
+    console.log('houston loaded');
 
     // Update page title with attention count
     function updateTitle() {
         const needsAttention = document.querySelectorAll('[class*="border-red-500"]').length;
         if (needsAttention > 0) {
-            document.title = `(${needsAttention}) tmux-dashboard`;
+            document.title = `(${needsAttention}) houston`;
         } else {
-            document.title = 'tmux-dashboard';
+            document.title = 'houston';
         }
     }
 

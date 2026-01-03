@@ -1,4 +1,4 @@
-# tmux-dashboard justfile
+# houston justfile
 
 # Generate templ files
 generate:
@@ -6,18 +6,18 @@ generate:
 
 # Build the binary
 build: generate
-    go build -o tmux-dashboard .
+    go build -o houston .
 
 # Build and run the server
 run: build
-    ./tmux-dashboard
+    ./houston
 
 # Run with hot reload (air), finds available port
 dev:
     #!/usr/bin/env bash
     for port in 8080 8081 8082 8083 8084 8085; do
         if ! nc -z localhost $port 2>/dev/null; then
-            export TMUX_DASHBOARD_PORT=$port
+            export HOUSTON_PORT=$port
             exec air
         fi
     done
@@ -37,7 +37,7 @@ run-dev:
 
 # Remove build artifacts
 clean:
-    rm -f tmux-dashboard
+    rm -f houston
 
 # Run all tests
 test:

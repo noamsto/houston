@@ -1,5 +1,5 @@
 {
-  description = "Mobile-friendly web dashboard for tmux sessions";
+  description = "houston - mission control for Claude Code agents in tmux";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -12,14 +12,14 @@
 
       perSystem = { pkgs, ... }: {
         packages.default = pkgs.buildGoModule {
-          pname = "tmux-dashboard";
+          pname = "houston";
           version = "0.1.0";
           src = ./.;
           vendorHash = null; # Update after adding dependencies
 
           meta = with pkgs.lib; {
-            description = "Mobile-friendly web dashboard for tmux";
-            homepage = "https://github.com/noams/tmux-dashboard";
+            description = "Mission control for Claude Code agents in tmux";
+            homepage = "https://github.com/noamsto/houston";
             license = licenses.mit;
           };
         };
@@ -38,7 +38,7 @@
           ];
 
           shellHook = ''
-            echo "tmux-dashboard dev shell"
+            echo "houston dev shell"
           '';
         };
       };
