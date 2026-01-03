@@ -116,11 +116,12 @@ func (s *Server) buildSessionsData() views.SessionsData {
 			}
 
 			// Get branch for this window's pane
-			var branch, process string
+			var branch string
 			if activePaneInfo != nil {
-				process = activePaneInfo.Command
 				branch = tmux.GetBranchForPath(activePaneInfo.Path, worktrees)
 			}
+			// Use window name for process (includes nerd font icons from tmux plugin)
+			process := win.Name
 
 			pane := tmux.Pane{Session: sess.Name, Window: win.Index, Index: paneIdx}
 			output, _ := s.tmux.CapturePane(pane, 100)
