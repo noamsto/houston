@@ -2462,8 +2462,13 @@ templ paneScripts() {
 				// Normalize line endings and remove carriage returns
 				text = text.replace(/\r\n/g, '\n').replace(/\r/g, '');
 				let html = ansiUp.ansi_to_html(text);
-				html = fixBackgrounds(html);
-				html = enhanceDiffs(html);
+				// Debug: log a sample of converted HTML to check colors
+				if (text.includes('✻') || text.includes('●')) {
+					const sample = html.substring(0, 500);
+					console.log('ANSI conversion sample:', sample);
+				}
+				// Removed fixBackgrounds() - preserve Claude's colors
+				// Removed enhanceDiffs() - Claude Code provides its own diff colors via ANSI
 				html = highlightUserInput(html);
 				return html;
 			} catch (err) {
@@ -2881,37 +2886,27 @@ templ paneScripts() {
 		function updateStatusLine(statusLine) {
 			const section = document.getElementById('status-section');
 			const leftEl = document.getElementById('status-line-left');
-			const rightEl = document.getElementById('status-line-right');
-			if (!leftEl || !rightEl) return;
+			if (!leftEl) return;
 
-			// Strip mode indicators from the end
-			let cleaned = statusLine;
-			cleaned = cleaned.replace(/\s+--\s+INSERT\s+--.*$/, '');
-			cleaned = cleaned.replace(/\s+⏵⏵\s+accept edits.*$/, '');
-			cleaned = cleaned.replace(/\s+⏸\s+plan mode.*$/, '');
+			// Convert ANSI to HTML to preserve all colors
+			let html = ansiUp.ansi_to_html(statusLine);
 
-			// Split at the 🤖 emoji (model info starts)
-			const splitIndex = cleaned.indexOf('🤖');
-			let leftPart = '';
-			let rightPart = '';
+			// Fix dark 8-bit ANSI colors that are hard to see on dark backgrounds
+			// Replace ansi_up's dark palette with brighter equivalents
+			html = html.replace(/rgb\(0,0,187\)/g, 'rgb(137,180,250)');      // Dark blue → light blue
+			html = html.replace(/rgb\(0,187,0\)/g, 'rgb(166,227,161)');      // Dark green → light green
+			html = html.replace(/rgb\(187,0,187\)/g, 'rgb(243,139,168)');    // Dark magenta → light magenta
+			html = html.replace(/rgb\(187,0,0\)/g, 'rgb(243,139,168)');      // Dark red → light red
+			html = html.replace(/rgb\(187,187,0\)/g, 'rgb(249,226,175)');    // Dark yellow → light yellow
+			html = html.replace(/rgb\(0,187,187\)/g, 'rgb(137,220,235)');    // Dark cyan → light cyan
 
-			if (splitIndex !== -1) {
-				leftPart = cleaned.substring(0, splitIndex).trim();
-				rightPart = cleaned.substring(splitIndex).trim();
+			// Strip mode indicators from the HTML
+			html = html.replace(/--\s+INSERT\s+--.*$/, '');
+			html = html.replace(/⏵⏵\s+accept edits.*$/, '');
+			html = html.replace(/⏸\s+plan mode.*$/, '');
 
-				// Remove everything after "%" in right part
-				const percentIndex = rightPart.indexOf('%');
-				if (percentIndex !== -1) {
-					rightPart = rightPart.substring(0, percentIndex + 1).trim();
-				}
-			} else {
-				// No split point found, show all as left
-				leftPart = cleaned.trim();
-			}
-
-			// Display status line parts (ANSI codes preserved)
-			leftEl.textContent = leftPart;
-			rightEl.textContent = rightPart;
+			// Display full status line
+			leftEl.innerHTML = html;
 
 			// Auto-show if status exists and user hasn't hidden it
 			if (statusLine && statusLine.trim() !== '') {

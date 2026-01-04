@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -357,6 +358,15 @@ type ClaudeMode struct {
 	Icon  string `json:"icon"`  // "⏵⏵", "⏸", etc.
 	Label string `json:"label"` // "accept edits", "plan mode", etc.
 	State string `json:"state"` // "on" or "off"
+}
+
+// ANSI escape sequence regex pattern
+var ansiEscapeRegex = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
+
+// stripAnsiCodes removes ANSI escape sequences from text
+// This is needed for parsing patterns that expect plain text
+func stripAnsiCodes(text string) string {
+	return ansiEscapeRegex.ReplaceAllString(text, "")
 }
 
 // detectClaudeMode finds the current Claude Code mode from status line
@@ -737,7 +747,9 @@ func (s *Server) streamPane(w http.ResponseWriter, r *http.Request, pane tmux.Pa
 
 
 				// Parse output for choices using simple parser
-				parseResult := parser.Parse(capture.Output)
+				// Strip ANSI codes before parsing to avoid breaking regex patterns
+				strippedOutput := stripAnsiCodes(capture.Output)
+				parseResult := parser.Parse(strippedOutput)
 				slog.Debug("SSE pane update", "pane", pane.Target(), "bytes", len(capture.Output), "mode", capture.Mode, "choices", len(parseResult.Choices), "statusChanged", statusChanged, "modeChanged", modeChanged)
 
 				// Build the SSE message with metadata as first lines

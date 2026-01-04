@@ -228,6 +228,7 @@ func (c *Client) CapturePaneWithMode(p Pane, lines int) (CaptureResult, error) {
 	cmd := exec.Command(c.tmuxPath, "capture-pane",
 		"-t", p.Target(),
 		"-p",
+		"-e", // Include ANSI escape sequences (colors)
 		"-S", fmt.Sprintf("-%d", lines))
 
 	out, err := cmd.Output()
