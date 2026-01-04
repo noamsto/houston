@@ -912,7 +912,7 @@ templ IndexPage() {
 				<div class="action-choices hidden" id="actionChoices"></div>
 				<div class="action-input-row">
 					<input type="text" class="action-input" placeholder="Send input..." id="actionInput" autocapitalize="off" autocorrect="off" spellcheck="false"/>
-					<button class="action-btn stop" onclick="sendStop()" title="Stop (Ctrl+C)">
+					<button class="action-btn stop" onclick="sendStop()" title="Stop (Escape)">
 						<svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
 						</svg>
@@ -1220,7 +1220,7 @@ templ IndexPage() {
 				fetch(`/pane/${encodeURIComponent(selectedTarget.session)}:${selectedTarget.window}.${selectedTarget.pane}/send`, {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-					body: 'input=C-c&special=true'
+					body: 'input=Escape&special=true'
 				});
 			}
 
@@ -1538,7 +1538,15 @@ func getWindowIndicator(win WindowWithStatus) string {
 func getWindowStatusText(win WindowWithStatus) string {
 	switch win.ParseResult.Type {
 	case parser.TypeError:
-		return "Error"
+		// Show error snippet if available, otherwise just indicate there was an error
+		if win.ParseResult.ErrorSnippet != "" {
+			snippet := win.ParseResult.ErrorSnippet
+			if len(snippet) > 50 {
+				snippet = snippet[:47] + "..."
+			}
+			return snippet
+		}
+		return ""
 	case parser.TypeChoice:
 		return "Waiting for choice..."
 	case parser.TypeQuestion:
@@ -1561,16 +1569,9 @@ func getWindowStatusText(win WindowWithStatus) string {
 }
 
 // getWindowDisplayName returns the display name for a window
-// Uses branch name if available, falls back to window name
+// Now window_name contains the branch (set by tmux_nerd)
 func getWindowDisplayName(win WindowWithStatus) string {
-	if win.Branch != "" {
-		// Show branch with process
-		if win.Process != "" {
-			return win.Branch + " • " + win.Process
-		}
-		return win.Branch
-	}
-	// Fallback to window name (which is usually the process from tmux)
+	// Window.Name now contains the branch name
 	return win.Window.Name
 }
 
@@ -1683,6 +1684,31 @@ templ PanePage(data PaneData) {
 				font-size: 12px;
 				color: var(--text-secondary);
 				font-family: 'SF Mono', ui-monospace, monospace;
+			}
+			.window-dropdown {
+				background: var(--bg-elevated);
+				color: var(--text-primary);
+				border: 1.5px solid var(--border);
+				border-radius: 6px;
+				padding: 0.375rem 0.75rem;
+				font-size: 13px;
+				font-family: 'SF Mono', 'Symbols Nerd Font Mono', ui-monospace, monospace;
+				cursor: pointer;
+				max-width: 250px;
+				font-weight: 500;
+			}
+			.window-dropdown:hover {
+				border-color: var(--accent);
+				background: var(--bg-panel);
+			}
+			.window-dropdown:focus {
+				outline: 2px solid var(--accent);
+				outline-offset: 1px;
+			}
+			.header-window {
+				font-size: 13px;
+				color: var(--text-secondary);
+				font-family: 'SF Mono', 'Symbols Nerd Font Mono', ui-monospace, monospace;
 			}
 			.menu-btn {
 				background: none;
@@ -1838,6 +1864,67 @@ templ PanePage(data PaneData) {
 				padding: 0.25rem 0.5rem;
 				border-radius: 4px;
 				border: 1px solid var(--border);
+			}
+			.status-section {
+				background: var(--bg-panel);
+				border-top: 1px solid var(--border);
+				border-bottom: 1px solid var(--border);
+				padding: 0;
+				max-height: 0;
+				overflow: hidden;
+				transition: max-height 0.2s ease-out, padding 0.2s ease-out;
+			}
+			.status-section.visible {
+				max-height: 80px;
+				padding: 0.5rem 1rem;
+			}
+			.status-line-container {
+				display: flex;
+				justify-content: space-between;
+				align-items: center;
+				width: 100%;
+				font-family: 'IBM Plex Mono', monospace;
+				font-size: 11px;
+				color: var(--text-secondary);
+				gap: 1rem;
+			}
+			.status-line-left {
+				white-space: pre;
+				flex-shrink: 0;
+			}
+			.status-line-right {
+				white-space: pre;
+				flex-shrink: 0;
+				margin-left: auto;
+			}
+			.mode-pill {
+				padding: 0.125rem 0.5rem;
+				border-radius: 3px;
+				font-size: 9px;
+				font-weight: 600;
+				letter-spacing: 0.02em;
+				text-transform: uppercase;
+				border: none;
+				cursor: pointer;
+				transition: opacity 0.15s;
+			}
+			.mode-pill:hover { opacity: 0.8; }
+			.mode-pill.hidden { display: none; }
+			.mode-pill.insert { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
+			.mode-pill.accept { background: rgba(59, 130, 246, 0.2); color: #3b82f6; }
+			.mode-pill.plan { background: rgba(168, 85, 247, 0.2); color: #a855f7; }
+			.status-toggle-btn {
+				background: none;
+				border: 1px solid var(--border);
+				color: var(--text-secondary);
+				cursor: pointer;
+				padding: 0.25rem 0.5rem;
+				border-radius: 4px;
+				font-size: 10px;
+				margin-left: auto;
+			}
+			.status-toggle-btn:hover {
+				background: var(--bg-elevated);
 			}
 			.pending-edit-btn, .pending-clear-btn {
 				padding: 0.25rem 0.625rem;
@@ -2042,9 +2129,6 @@ templ PanePage(data PaneData) {
 				.input-bar-spacer {
 					display: none;
 				}
-				.input-field {
-					max-width: 600px;
-				}
 				.menu {
 					min-width: 200px;
 				}
@@ -2074,6 +2158,20 @@ templ PanePage(data PaneData) {
 					</svg>
 				</a>
 				<div class="header-title">{ data.Pane.Session }</div>
+				if len(data.Windows) > 1 {
+					<select class="window-dropdown" onchange="window.location.href=this.value">
+						for _, w := range data.Windows {
+							<option
+								value={ templ.SafeURL("/pane/" + urlEncode(data.Pane.Session) + ":" + fmt.Sprintf("%d", w.Index)) }
+								selected?={ w.Index == data.Pane.Window }
+							>
+								{ fmt.Sprintf("%d: %s", w.Index, w.Branch) }
+							</option>
+						}
+					</select>
+				} else if len(data.Windows) == 1 {
+					<div class="header-window">{ fmt.Sprintf("%d: %s", data.Windows[0].Index, data.Windows[0].Branch) }</div>
+				}
 				<div class="header-target">{ fmt.Sprintf(":%d.%d", data.Pane.Window, data.Pane.Index) }</div>
 				<div style="position: relative;">
 					<button class="menu-btn" onclick="toggleMenu()">
@@ -2110,20 +2208,9 @@ templ PanePage(data PaneData) {
 					</div>
 				</div>
 			</header>
-			<!-- Window/Pane selector -->
-			<div class="selector">
-				if len(data.Windows) > 0 {
-					for _, w := range data.Windows {
-							<a
-								href={ templ.SafeURL("/pane/" + urlEncode(data.Pane.Session) + ":" + fmt.Sprintf("%d", w.Index)) }
-								class={ "selector-item", templ.KV("active", w.Index == data.Pane.Window) }
-							>
-								{ fmt.Sprintf("%d: %s", w.Index, w.Name) }
-							</a>
-						}
-					}
-				if len(data.Panes) > 1 {
-					<span class="selector-sep">|</span>
+			<!-- Pane selector -->
+			if len(data.Panes) > 0 {
+				<div class="selector">
 					for _, p := range data.Panes {
 						<a
 							href={ templ.SafeURL("/pane/" + urlEncode(data.Pane.Session) + ":" + fmt.Sprintf("%d.%d", data.Pane.Window, p.Index)) }
@@ -2133,12 +2220,13 @@ templ PanePage(data PaneData) {
 							<span style="font-size: 10px; opacity: 0.7; margin-left: 4px;">{ getPaneSubtitle(p) }</span>
 						</a>
 					}
-				}
-			</div>
+				</div>
+			}
 			<!-- Output area -->
 			<div
 				id="output-container"
 				class="output-container"
+				data-pane-target={ data.Pane.URLTarget() }
 				hx-ext="sse"
 				sse-connect={ "/pane/" + data.Pane.URLTarget() + "?stream=1" }
 				sse-swap="message"
@@ -2147,6 +2235,23 @@ templ PanePage(data PaneData) {
 				onclick="handleOutputClick(event)"
 			>
 				<pre id="output" class="terminal output">{ data.Output }</pre>
+			</div>
+			<!-- Claude Status Section (collapsible) -->
+			<div id="status-section" class="status-section">
+				<div style="display: flex; align-items: center; gap: 0.5rem; justify-content: space-between;">
+					<div class="status-line-container">
+						<div id="status-line-left" class="status-line-left"></div>
+						<div id="status-line-right" class="status-line-right"></div>
+					</div>
+					<button
+						type="button"
+						class="status-toggle-btn"
+						onclick="toggleStatusSection()"
+						title="Toggle status"
+					>
+						Hide
+					</button>
+				</div>
 			</div>
 			<!-- Prompt input indicator (shown when Claude has pending input) -->
 			<div id="pending-input-bar" class="pending-input-bar hidden">
@@ -2158,16 +2263,14 @@ templ PanePage(data PaneData) {
 			<!-- Quick choice buttons (dynamically updated via SSE) -->
 			<div id="choices-bar" class={ "choices-bar", templ.KV("hidden", len(data.ParseResult.Choices) == 0) } data-pane-target={ data.Pane.URLTarget() }>
 				for i, choice := range data.ParseResult.Choices {
-					if i < 4 {
-						<button
-							class="choice-btn"
-							data-choice={ fmt.Sprintf("%d", i+1) }
-							onclick="sendChoice(this.dataset.choice)"
-						>
-							<span class="choice-num">{ fmt.Sprintf("%d", i+1) }</span>
-							<span class="choice-text">{ truncate(choice, 20) }</span>
-						</button>
-					}
+					<button
+						class="choice-btn"
+						data-choice={ fmt.Sprintf("%d", i+1) }
+						onclick="sendChoice(this.dataset.choice)"
+					>
+						<span class="choice-num">{ fmt.Sprintf("%d", i+1) }</span>
+						<span class="choice-text">{ truncate(choice, 20) }</span>
+					</button>
 				}
 			</div>
 			<!-- Spacer for fixed input bar -->
@@ -2196,6 +2299,21 @@ templ PanePage(data PaneData) {
 					<span class="autoaccept-icon">⏵⏵</span>
 					<span id="autoaccept-state" class="autoaccept-state">--</span>
 				</button>
+				<!-- Mode pills -->
+				<button
+					type="button"
+					id="accept-indicator"
+					class="mode-pill accept hidden"
+					onclick="cycleClaudeMode()"
+					title="Click to cycle Claude modes (Shift+Tab)"
+				>ACCEPT</button>
+				<button
+					type="button"
+					id="plan-indicator"
+					class="mode-pill plan hidden"
+					onclick="cycleClaudeMode()"
+					title="Click to cycle Claude modes (Shift+Tab)"
+				>PLAN</button>
 				<textarea
 					id="input-field"
 					name="input"
@@ -2214,9 +2332,9 @@ templ PanePage(data PaneData) {
 					type="button"
 					class="action-btn stop"
 					hx-post={ "/pane/" + data.Pane.URLTarget() + "/send" }
-					hx-vals='{"input": "C-c", "special": "true"}'
+					hx-vals='{"input": "Escape", "special": "true"}'
 					hx-swap="none"
-					title="Stop (Ctrl+C)"
+					title="Stop (Escape)"
 				>
 					<svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
@@ -2332,12 +2450,16 @@ templ paneScripts() {
 			// Get the raw text from SSE (already safe as plain text)
 			let text = e.detail.data;
 
+			// Track current mode and Claude mode for status indicators
+			let currentMode = '';
+			let claudeModeData = {};
+
 			// Extract mode from special first line if present
 			const modeMatch = text.match(/^__MODE__:(\w*)\n/);
 			if (modeMatch) {
-				const mode = modeMatch[1];
+				currentMode = modeMatch[1];
 				text = text.substring(modeMatch[0].length);
-				updateModeIndicatorDirect(mode);
+				updateModeIndicatorDirect(currentMode);
 			}
 
 			// Extract choices from special line if present
@@ -2353,12 +2475,22 @@ templ paneScripts() {
 			if (claudeModeMatch) {
 				text = text.substring(claudeModeMatch[0].length);
 				try {
-					const modeData = JSON.parse(claudeModeMatch[1] || '{}');
-					updateClaudeMode(modeData);
+					claudeModeData = JSON.parse(claudeModeMatch[1] || '{}');
+					updateClaudeMode(claudeModeData);
 				} catch (e) {
 					console.warn('Failed to parse Claude mode:', e);
 				}
 			}
+
+			// Extract status line with ANSI colors
+			const statusLineMatch = text.match(/^__STATUSLINE__:([^\n]*)\n/);
+			if (statusLineMatch) {
+				text = text.substring(statusLineMatch[0].length);
+				updateStatusLine(statusLineMatch[1]);
+			}
+
+			// Update mode indicators (combines mode + claudeMode state)
+			updateModeIndicators(currentMode, claudeModeData);
 
 			// Process with ansi_up (which has escapeHtml enabled)
 			output.innerHTML = processOutput(text);
@@ -2385,7 +2517,7 @@ templ paneScripts() {
 
 			bar.classList.remove('hidden');
 			let html = '';
-			choices.slice(0, 4).forEach((choice, i) => {
+			choices.forEach((choice, i) => {
 				const num = i + 1;
 				const shortChoice = choice.length > 20 ? choice.substring(0, 17) + '...' : choice;
 				html += `<button class="choice-btn" data-choice="${num}" onclick="sendChoice('${num}')">
@@ -2652,6 +2784,115 @@ templ paneScripts() {
 				toggle.title = 'Toggle mode (Shift+Tab)';
 			}
 		}
+
+		// Toggle status section visibility
+		window.toggleStatusSection = function() {
+			const section = document.getElementById('status-section');
+			const btn = section?.querySelector('.status-toggle-btn');
+			const isVisible = section?.classList.contains('visible');
+
+			if (isVisible) {
+				section.classList.remove('visible');
+				btn.textContent = 'Show';
+				localStorage.setItem('statusSectionVisible', 'false');
+			} else {
+				section.classList.add('visible');
+				btn.textContent = 'Hide';
+				localStorage.setItem('statusSectionVisible', 'true');
+			}
+		}
+
+		// Update status line from SSE
+		function updateStatusLine(statusLine) {
+			const section = document.getElementById('status-section');
+			const leftEl = document.getElementById('status-line-left');
+			const rightEl = document.getElementById('status-line-right');
+			if (!leftEl || !rightEl) return;
+
+			// Strip mode indicators from the end
+			let cleaned = statusLine;
+			cleaned = cleaned.replace(/\s+--\s+INSERT\s+--.*$/, '');
+			cleaned = cleaned.replace(/\s+⏵⏵\s+accept edits.*$/, '');
+			cleaned = cleaned.replace(/\s+⏸\s+plan mode.*$/, '');
+
+			// Split at the 🤖 emoji (model info starts)
+			const splitIndex = cleaned.indexOf('🤖');
+			let leftPart = '';
+			let rightPart = '';
+
+			if (splitIndex !== -1) {
+				leftPart = cleaned.substring(0, splitIndex).trim();
+				rightPart = cleaned.substring(splitIndex).trim();
+
+				// Remove everything after "%" in right part
+				const percentIndex = rightPart.indexOf('%');
+				if (percentIndex !== -1) {
+					rightPart = rightPart.substring(0, percentIndex + 1).trim();
+				}
+			} else {
+				// No split point found, show all as left
+				leftPart = cleaned.trim();
+			}
+
+			// Display status line parts (ANSI codes preserved)
+			leftEl.textContent = leftPart;
+			rightEl.textContent = rightPart;
+
+			// Auto-show if status exists and user hasn't hidden it
+			if (statusLine && statusLine.trim() !== '') {
+				const shouldShow = localStorage.getItem('statusSectionVisible') !== 'false';
+				if (shouldShow) {
+					section.classList.add('visible');
+					section.querySelector('.status-toggle-btn').textContent = 'Hide';
+				}
+			} else {
+				section.classList.remove('visible');
+			}
+		}
+
+		// Update mode indicators based on current state
+		function updateModeIndicators(mode, claudeMode) {
+			const acceptEl = document.getElementById('accept-indicator');
+			const planEl = document.getElementById('plan-indicator');
+
+			// Accept edits indicator
+			if (claudeMode.label === 'accept edits' && claudeMode.state === 'on') {
+				acceptEl?.classList.remove('hidden');
+			} else {
+				acceptEl?.classList.add('hidden');
+			}
+
+			// Plan mode indicator
+			if (claudeMode.label === 'plan mode' && claudeMode.state === 'on') {
+				planEl?.classList.remove('hidden');
+			} else {
+				planEl?.classList.add('hidden');
+			}
+		}
+
+		// Cycle Claude modes by sending Shift+Tab to tmux
+		window.cycleClaudeMode = function() {
+			const paneTarget = document.getElementById('output-container')?.getAttribute('data-pane-target');
+			if (!paneTarget) return;
+
+			fetch(`/pane/${paneTarget}/send`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+				body: 'input=S-Tab&special=true'
+			}).then(response => {
+				if (!response.ok) console.error('Failed to cycle Claude mode');
+			});
+		}
+
+		// Restore visibility on page load
+		document.addEventListener('DOMContentLoaded', function() {
+			const shouldShow = localStorage.getItem('statusSectionVisible') !== 'false';
+			if (shouldShow) {
+				document.getElementById('status-section')?.classList.add('visible');
+				const btn = document.querySelector('#status-section .status-toggle-btn');
+				if (btn) btn.textContent = 'Hide';
+			}
+		});
 
 		// Allow Enter to create newlines (for iOS compatibility)
 		// Only submit via Send button

@@ -165,6 +165,42 @@ func (p *MessageParser) GetLastMessages(n int) []Message {
 	return p.state.Messages[len(p.state.Messages)-n:]
 }
 
+// ToLegacyResult converts ConversationState to old parser.Result format
+// This bridges the gap during migration from old parser to MessageParser
+func (s *ConversationState) ToLegacyResult() Result {
+	// Determine ResultType from ConversationState
+	resultType := TypeIdle
+
+	// Check for error first (highest priority)
+	if s.HasError {
+		resultType = TypeError
+	} else if len(s.Choices) >= 2 {
+		// Has choices - this is a multiple choice question
+		resultType = TypeChoice
+	} else if s.Question != "" {
+		// Has a question but not multiple choice
+		resultType = TypeQuestion
+	} else if s.CurrentState == StateThinking ||
+	          s.CurrentState == StateResponding ||
+	          s.CurrentState == StateRunningTool {
+		// Agent is actively working
+		resultType = TypeWorking
+	}
+
+	// Determine Mode - default to unknown
+	// We don't track vim mode in ConversationState, will be set separately
+	mode := ModeUnknown
+
+	return Result{
+		Type:         resultType,
+		Mode:         mode,
+		Question:     s.Question,
+		Choices:      s.Choices,
+		ErrorSnippet: s.ErrorSnippet,
+		Activity:     s.LastActivity,
+	}
+}
+
 // stripColors removes ANSI escape codes from a line
 func (p *MessageParser) stripColors(s string) string {
 	if !p.config.PreserveColors {

@@ -43,11 +43,13 @@ type Result struct {
 
 var (
 	// Match choice lines: allow cursor chars (❯, >, -, *) before the number
-	choicePattern   = regexp.MustCompile(`(?m)^\s*[❯>\-\*]?\s*([1-4])[.)\]]\s+(.+)$`)
+	// Changed from [1-4] to [0-9]+ to support any number of choices (including tool permissions)
+	choicePattern   = regexp.MustCompile(`(?m)^\s*[❯>\-\*]?\s*([0-9]+)[.)\]]\s+(.+)$`)
 	questionPattern = regexp.MustCompile(`(?m)^(.+\?)\s*$`)
 	// Error patterns - look for actual error messages, not just code containing "error"
-	// Must have error/failed at start of line or after certain prefixes
-	errorPattern = regexp.MustCompile(`(?mi)^[^a-z]*(?:error|failed|fatal|panic)[:\s]+(.{0,100})`)
+	// Requires colon after error keyword to avoid matching code/comments
+	// Matches: "Error: message" or "error: message" but not "// handle error" or "errorCount"
+	errorPattern = regexp.MustCompile(`(?mi)^(?:error|failed|fatal|panic):\s+(.+)`)
 	approvalPattern = regexp.MustCompile(`(?i)(proceed|continue|look right|does this|should i)\?`)
 
 	// Claude Code working/activity patterns

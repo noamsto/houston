@@ -23,6 +23,8 @@ type Window struct {
 	Active       bool
 	Panes        int
 	LastActivity time.Time // window_activity timestamp
+	Path         string    // pane_current_path from active pane
+	Branch       string    // git branch name derived from Path
 }
 
 type Pane struct {
@@ -112,7 +114,7 @@ func (c *Client) ListSessions() ([]Session, error) {
 
 func (c *Client) ListWindows(session string) ([]Window, error) {
 	cmd := exec.Command(c.tmuxPath, "list-windows", "-t", session, "-F",
-		"#{window_index}|#{window_name}|#{window_active}|#{window_panes}|#{window_activity}")
+		"#{window_index}|#{window_name}|#{window_active}|#{window_panes}|#{window_activity}|#{pane_current_path}")
 
 	out, err := cmd.Output()
 	if err != nil {
@@ -120,12 +122,14 @@ func (c *Client) ListWindows(session string) ([]Window, error) {
 	}
 
 	var windows []Window
+	var firstPath string // Use first window path to get worktrees
+
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		if line == "" {
 			continue
 		}
 		parts := strings.Split(line, "|")
-		if len(parts) < 4 {
+		if len(parts) < 6 {
 			continue
 		}
 		idx, _ := strconv.Atoi(parts[0])
@@ -136,13 +140,29 @@ func (c *Client) ListWindows(session string) ([]Window, error) {
 			activityTs, _ := strconv.ParseInt(parts[4], 10, 64)
 			lastActivity = time.Unix(activityTs, 0)
 		}
+		path := ""
+		if len(parts) >= 6 {
+			path = parts[5]
+			if firstPath == "" {
+				firstPath = path
+			}
+		}
 		windows = append(windows, Window{
 			Index:        idx,
 			Name:         parts[1],
 			Active:       active,
 			Panes:        panes,
 			LastActivity: lastActivity,
+			Path:         path,
 		})
+	}
+
+	// Get worktrees and populate branch names
+	if firstPath != "" {
+		worktrees, _ := GetWorktrees(firstPath)
+		for i := range windows {
+			windows[i].Branch = GetBranchForPath(windows[i].Path, worktrees)
+		}
 	}
 
 	return windows, nil
@@ -191,8 +211,9 @@ func (c *Client) ListPanes(session string, window int) ([]PaneInfo, error) {
 
 // CaptureResult holds the captured pane output and detected mode
 type CaptureResult struct {
-	Output string
-	Mode   string // "insert", "normal", or ""
+	Output     string
+	Mode       string // "insert", "normal", or ""
+	StatusLine string // Full status line with ANSI colors intact
 }
 
 func (c *Client) CapturePane(p Pane, lines int) (string, error) {
@@ -216,9 +237,14 @@ func (c *Client) CapturePaneWithMode(p Pane, lines int) (CaptureResult, error) {
 
 	raw := string(out)
 	mode := detectModeFromOutput(raw)
+	statusLine := extractStatusLine(raw)
 	filtered := filterStatusBar(raw)
 
-	return CaptureResult{Output: filtered, Mode: mode}, nil
+	return CaptureResult{
+		Output:     filtered,
+		Mode:       mode,
+		StatusLine: statusLine,
+	}, nil
 }
 
 // detectModeFromOutput checks for INSERT mode in the last few lines of output.
@@ -236,6 +262,73 @@ func detectModeFromOutput(output string) string {
 		return "insert"
 	}
 	return "normal"
+}
+
+// extractStatusLine finds Claude's status bar line with ANSI colors intact.
+// Returns the full status line including ANSI escape sequences for frontend display.
+func extractStatusLine(output string) string {
+	lines := strings.Split(output, "\n")
+
+	// Check last 20 lines for status bar (separator might be further up)
+	start := len(lines) - 20
+	if start < 0 {
+		start = 0
+	}
+
+	// Strategy: Find the LAST horizontal separator (after user input block)
+	// and return first non-empty line after it
+	// Structure:
+	//   ───── (separator 1)
+	//   > user input line 1
+	//     user input line 2 (indented continuation - multiline)
+	//     (blank lines)
+	//   ───── (separator 2) <- we want the LAST one
+	//   (blank lines)
+	//   status line <- this is what we return
+	//   -- INSERT --
+	//
+	// By finding the LAST separator, we automatically skip over all user input
+	// regardless of how many lines it spans
+
+	lastSeparatorIdx := -1
+
+	// Find the last separator in the bottom section
+	for i := start; i < len(lines); i++ {
+		trimmed := strings.TrimSpace(lines[i])
+
+		// Check if this is a horizontal separator line
+		// Line may have ANSI codes, so just check for sufficient dashes
+		dashCount := strings.Count(trimmed, "─")
+		isSeparator := dashCount >= 20
+
+		if isSeparator {
+			lastSeparatorIdx = i
+		}
+	}
+
+	// If we found a separator, get the first non-empty line after it
+	if lastSeparatorIdx >= 0 {
+		for j := lastSeparatorIdx + 1; j < len(lines); j++ {
+			line := lines[j]
+			trimmed := strings.TrimSpace(line)
+
+			// Skip empty lines
+			if trimmed == "" {
+				continue
+			}
+
+			// Skip mode indicator line (we want status, not mode)
+			// Mode line can be just "-- INSERT --" or "-- INSERT -- ⏸ plan mode on..."
+			if strings.HasPrefix(trimmed, "-- INSERT --") {
+				continue
+			}
+
+			// This is our status line - return with ANSI intact but trim whitespace
+			return strings.TrimSpace(line)
+		}
+	}
+
+	return ""
 }
 
 // filterStatusBar removes Claude Code status bar lines from output.

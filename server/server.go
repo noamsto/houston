@@ -127,7 +127,12 @@ func (s *Server) buildSessionsData() views.SessionsData {
 
 			pane := tmux.Pane{Session: sess.Name, Window: win.Index, Index: paneIdx}
 			output, _ := s.tmux.CapturePane(pane, 100)
-			parseResult := parser.Parse(output)
+
+			// Use MessageParser for detection
+			msgParser := parser.NewClaudeCodeParser()
+			msgParser.ProcessBuffer(output)
+			state := msgParser.GetState()
+			parseResult := state.ToLegacyResult()
 
 			// Only mark as needing attention if it's a Claude Code window
 			isClaudeWindow := tmux.LooksLikeClaudeOutput(output)
@@ -592,7 +597,12 @@ func (s *Server) handlePane(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to capture pane: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	parseResult := parser.Parse(capture.Output)
+
+	// Use MessageParser for detection
+	msgParser := parser.NewClaudeCodeParser()
+	msgParser.ProcessBuffer(capture.Output)
+	state := msgParser.GetState()
+	parseResult := state.ToLegacyResult()
 
 	// Override mode from tmux capture (parser sees filtered output without mode lines)
 	switch capture.Mode {
@@ -741,8 +751,11 @@ func (s *Server) streamPane(w http.ResponseWriter, r *http.Request, pane tmux.Pa
 				lines := strings.Split(capture.Output, "\n")
 				updateCount++
 
-				// Parse output for choices
-				parseResult := parser.Parse(capture.Output)
+				// Parse output for choices using MessageParser
+				msgParser := parser.NewClaudeCodeParser()
+				msgParser.ProcessBuffer(capture.Output)
+				state := msgParser.GetState()
+				parseResult := state.ToLegacyResult()
 				slog.Debug("SSE pane update", "pane", pane.Target(), "bytes", len(capture.Output), "mode", capture.Mode, "choices", len(parseResult.Choices))
 
 				// Detect Claude mode indicator from output
@@ -752,6 +765,7 @@ func (s *Server) streamPane(w http.ResponseWriter, r *http.Request, pane tmux.Pa
 				// Build the SSE message with metadata as first lines
 				var buf strings.Builder
 				// Send mode as special first line (will be parsed by client)
+				slog.Debug("SSE mode", "pane", pane.Target(), "mode", capture.Mode)
 				buf.WriteString("data: __MODE__:")
 				buf.WriteString(capture.Mode)
 				buf.WriteString("\n")
@@ -762,6 +776,13 @@ func (s *Server) streamPane(w http.ResponseWriter, r *http.Request, pane tmux.Pa
 				// Send Claude mode state as JSON
 				buf.WriteString("data: __CLAUDEMODE__:")
 				buf.Write(claudeModeJSON)
+				buf.WriteString("\n")
+				// Send status line with ANSI colors
+				if capture.StatusLine != "" {
+					slog.Debug("SSE status line", "pane", pane.Target(), "status", capture.StatusLine, "len", len(capture.StatusLine))
+				}
+				buf.WriteString("data: __STATUSLINE__:")
+				buf.WriteString(capture.StatusLine)
 				buf.WriteString("\n")
 				for _, line := range lines {
 					// Remove carriage returns that can break SSE
