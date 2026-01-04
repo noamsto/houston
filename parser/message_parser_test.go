@@ -288,6 +288,124 @@ func TestMessageParser_MultilineMessages(t *testing.T) {
 	}
 }
 
+func TestMessageParser_ChoicesOnlyFromAgent(t *testing.T) {
+	parser := NewClaudeCodeParser()
+
+	// Scenario: User types a numbered list, agent responds
+	output := `
+> What should I do today?
+1. Fix the bug
+2. Write tests
+3. Deploy code
+
+● I can help you with those tasks! Which one would you like to start with?
+1. Start with the bug fix
+2. Begin writing tests
+`
+
+	parser.ProcessBuffer(output)
+	state := parser.GetState()
+
+	// Should detect choices from AGENT only, not from user
+	if len(state.Choices) != 2 {
+		t.Errorf("expected 2 choices from agent, got %d: %v", len(state.Choices), state.Choices)
+	}
+
+	// Choices should be from agent's message
+	if len(state.Choices) > 0 {
+		if state.Choices[0] != "Start with the bug fix" {
+			t.Errorf("expected first choice 'Start with the bug fix', got %q", state.Choices[0])
+		}
+		if len(state.Choices) > 1 && state.Choices[1] != "Begin writing tests" {
+			t.Errorf("expected second choice 'Begin writing tests', got %q", state.Choices[1])
+		}
+	}
+
+	// Question should be from agent, not user
+	if !strings.Contains(state.Question, "Which one would you like to start with") {
+		t.Errorf("expected agent's question, got: %q", state.Question)
+	}
+}
+
+func TestMessageParser_NoChoicesFromUserList(t *testing.T) {
+	parser := NewClaudeCodeParser()
+
+	// Scenario: User types a numbered list, agent responds but doesn't ask for a choice
+	output := `
+> Here are my tasks:
+1. Fix the bug
+2. Write tests
+3. Deploy code
+
+● I see you have a clear plan. Let me know when you're ready to start!
+`
+
+	parser.ProcessBuffer(output)
+	state := parser.GetState()
+
+	// Should NOT detect choices (agent didn't provide numbered options)
+	if len(state.Choices) != 0 {
+		t.Errorf("expected no choices, got %d: %v", len(state.Choices), state.Choices)
+	}
+}
+
+func TestMessageParser_ChoiceFormats(t *testing.T) {
+	tests := []struct {
+		name     string
+		output   string
+		expected int
+	}{
+		{
+			name: "dot format",
+			output: `
+● Which option?
+1. Option A
+2. Option B
+`,
+			expected: 2,
+		},
+		{
+			name: "paren format",
+			output: `
+● Which option?
+1) Option A
+2) Option B
+`,
+			expected: 2,
+		},
+		{
+			name: "bracket format",
+			output: `
+● Which option?
+1] Option A
+2] Option B
+`,
+			expected: 2,
+		},
+		{
+			name: "mixed formats (should still work)",
+			output: `
+● Which option?
+1. Option A
+2) Option B
+`,
+			expected: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parser := NewClaudeCodeParser()
+			parser.ProcessBuffer(tt.output)
+			state := parser.GetState()
+
+			if len(state.Choices) != tt.expected {
+				t.Errorf("expected %d choices, got %d: %v", tt.expected, len(state.Choices), state.Choices)
+			}
+		})
+	}
+}
+
 func BenchmarkMessageParser_ProcessBuffer(b *testing.B) {
 	parser := NewClaudeCodeParser()
 

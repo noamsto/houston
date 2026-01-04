@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 	"time"
@@ -82,6 +83,12 @@ type ConversationState struct {
 	CurrentState StateType
 	LastActivity string
 	LastUpdate   time.Time
+
+	// UI state for frontend
+	Question     string   // Current question from agent
+	Choices      []string // Current choices from agent (for numbered buttons)
+	HasError     bool     // Whether agent reported an error
+	ErrorSnippet string   // Error message if any
 }
 
 // MessageParser parses agent output into structured messages
@@ -238,6 +245,141 @@ func (p *MessageParser) detectMessages() {
 
 		p.seenMessages[i] = true
 	}
+
+	// After parsing all messages, detect UI state (choices, questions, errors)
+	p.detectUIState()
+}
+
+// detectUIState extracts UI-relevant state from AGENT messages only
+// This prevents false positives from user input containing numbers or questions
+func (p *MessageParser) detectUIState() {
+	// Reset UI state
+	p.state.Question = ""
+	p.state.Choices = []string{}
+	p.state.HasError = false
+	p.state.ErrorSnippet = ""
+
+	// Scan buffer forwards for agent sections (marked by ●)
+	// Numbered choices appear as continuation lines after agent message with question
+	var agentSections []string
+	var currentSection []string
+	inAgentSection := false
+
+	for i := 0; i < len(p.buffer); i++ {
+		rawLine := p.buffer[i]
+		cleanLine := strings.TrimSpace(p.stripColors(rawLine))
+
+		if cleanLine == "" {
+			continue
+		}
+
+		// Start of agent section
+		if strings.HasPrefix(cleanLine, p.config.AgentPrefix) {
+			if inAgentSection && len(currentSection) > 0 {
+				// Save previous section
+				agentSections = append(agentSections, strings.Join(currentSection, "\n"))
+			}
+			currentSection = []string{strings.TrimSpace(strings.TrimPrefix(cleanLine, p.config.AgentPrefix))}
+			inAgentSection = true
+			continue
+		}
+
+		// User message or tool marks end of agent section
+		if strings.HasPrefix(cleanLine, p.config.UserPrefix) || p.isToolOutput(cleanLine) {
+			if inAgentSection && len(currentSection) > 0 {
+				agentSections = append(agentSections, strings.Join(currentSection, "\n"))
+				currentSection = []string{}
+			}
+			inAgentSection = false
+			continue
+		}
+
+		// Continuation line (indented or following agent message)
+		if inAgentSection {
+			currentSection = append(currentSection, cleanLine)
+		}
+	}
+
+	// Don't forget the last section
+	if inAgentSection && len(currentSection) > 0 {
+		agentSections = append(agentSections, strings.Join(currentSection, "\n"))
+	}
+
+	// Keep only last 3 agent sections (most recent)
+	if len(agentSections) > 3 {
+		agentSections = agentSections[len(agentSections)-3:]
+	}
+
+	// Look for choices in agent sections
+	for _, section := range agentSections {
+		// Check for question and numbered list in same section
+		if !strings.Contains(section, "?") {
+			continue
+		}
+
+		lines := strings.Split(section, "\n")
+		var choices []string
+		var questionLine string
+
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+
+			// Check if this is a numbered choice
+			if matched, choiceText := p.isNumberedChoice(line, len(choices)+1); matched {
+				choices = append(choices, choiceText)
+			} else if strings.HasSuffix(line, "?") {
+				questionLine = line
+			}
+		}
+
+		// Valid if we have a question and at least 2 choices
+		if questionLine != "" && len(choices) >= 2 {
+			p.state.Question = questionLine
+			p.state.Choices = choices
+			break
+		}
+	}
+
+	// Check for errors in recent agent sections
+	for _, section := range agentSections {
+		if strings.Contains(strings.ToLower(section), "error") ||
+			strings.Contains(strings.ToLower(section), "failed") ||
+			strings.Contains(strings.ToLower(section), "fatal") {
+			p.state.HasError = true
+			p.state.ErrorSnippet = section
+			if len(p.state.ErrorSnippet) > 100 {
+				p.state.ErrorSnippet = p.state.ErrorSnippet[:97] + "..."
+			}
+			break
+		}
+	}
+}
+
+// isNumberedChoice checks if content looks like "N. text" or "N) text"
+// Returns (matched, choiceText)
+func (p *MessageParser) isNumberedChoice(content string, expectedNum int) (bool, string) {
+	// Try "N. " format
+	prefix1 := fmt.Sprintf("%d. ", expectedNum)
+	if strings.HasPrefix(content, prefix1) {
+		return true, strings.TrimSpace(content[len(prefix1):])
+	}
+
+	// Try "N) " format
+	prefix2 := fmt.Sprintf("%d) ", expectedNum)
+	if strings.HasPrefix(content, prefix2) {
+		return true, strings.TrimSpace(content[len(prefix2):])
+	}
+
+	// Try "N] " format
+	prefix3 := fmt.Sprintf("%d] ", expectedNum)
+	if strings.HasPrefix(content, prefix3) {
+		return true, strings.TrimSpace(content[len(prefix3):])
+	}
+
+	return false, ""
 }
 
 // isToolCall checks if a line with AgentPrefix is a tool call
