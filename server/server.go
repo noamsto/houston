@@ -359,40 +359,26 @@ type ClaudeMode struct {
 	State string `json:"state"` // "on" or "off"
 }
 
-// detectClaudeMode finds the current Claude Code mode from output
+// detectClaudeMode finds the current Claude Code mode from status line
 // Looks for patterns like: "⏵⏵ accept edits on (shift+tab...)" or "⏸ plan mode on"
-func detectClaudeMode(output string) ClaudeMode {
-	lines := strings.Split(output, "\n")
-	start := len(lines) - 15 // Check more lines (status bar can vary)
-	if start < 0 {
-		start = 0
+// Input is the extracted status line (after separator), which may span multiple lines if wrapped
+func detectClaudeMode(statusLine string) ClaudeMode {
+	// Check for "accept edits on" first (most common)
+	if strings.Contains(statusLine, "accept edits on") {
+		return ClaudeMode{Icon: "⏵⏵", Label: "accept edits", State: "on"}
+	}
+	if strings.Contains(statusLine, "accept edits off") {
+		return ClaudeMode{Icon: "⏵⏵", Label: "accept edits", State: "off"}
 	}
 
-	// Known mode icons (ordered by priority - check more specific first)
-	modeIcons := []string{"⏵⏵", "⏸"}
-
-	for i := len(lines) - 1; i >= start; i-- {
-		line := lines[i]
-		for _, icon := range modeIcons {
-			if idx := strings.Index(line, icon); idx >= 0 {
-				rest := strings.TrimSpace(line[idx+len(icon):])
-				// Look for "label on" or "label off" pattern
-				// The pattern may have more text after (e.g., "(shift+tab to cycle)")
-				if strings.Contains(rest, " on") {
-					// Extract label: everything before " on"
-					onIdx := strings.Index(rest, " on")
-					label := strings.TrimSpace(rest[:onIdx])
-					return ClaudeMode{Icon: icon, Label: label, State: "on"}
-				}
-				if strings.Contains(rest, " off") {
-					// Extract label: everything before " off"
-					offIdx := strings.Index(rest, " off")
-					label := strings.TrimSpace(rest[:offIdx])
-					return ClaudeMode{Icon: icon, Label: label, State: "off"}
-				}
-			}
-		}
+	// Check for "plan mode on"
+	if strings.Contains(statusLine, "plan mode on") {
+		return ClaudeMode{Icon: "⏸", Label: "plan mode", State: "on"}
 	}
+	if strings.Contains(statusLine, "plan mode off") {
+		return ClaudeMode{Icon: "⏸", Label: "plan mode", State: "off"}
+	}
+
 	return ClaudeMode{} // Empty = not detected
 }
 
@@ -715,6 +701,8 @@ func (s *Server) streamPane(w http.ResponseWriter, r *http.Request, pane tmux.Pa
 	flusher.Flush()
 
 	var lastOutput string
+	var lastStatusLine string
+	var lastClaudeModeJSON string
 	updateCount := 0
 
 	ticker := time.NewTicker(1 * time.Second)
@@ -732,18 +720,25 @@ func (s *Server) streamPane(w http.ResponseWriter, r *http.Request, pane tmux.Pa
 				continue
 			}
 
-			if capture.Output != lastOutput {
+			// Detect Claude mode indicator from status line
+			claudeMode := detectClaudeMode(capture.StatusLine)
+			claudeModeJSON, _ := json.Marshal(claudeMode)
+			claudeModeJSONStr := string(claudeModeJSON)
+
+			// Send update if output, status line, or mode changed
+			statusChanged := capture.StatusLine != lastStatusLine
+			modeChanged := claudeModeJSONStr != lastClaudeModeJSON
+			if capture.Output != lastOutput || statusChanged || modeChanged {
 				lastOutput = capture.Output
+				lastStatusLine = capture.StatusLine
+				lastClaudeModeJSON = claudeModeJSONStr
 				lines := strings.Split(capture.Output, "\n")
 				updateCount++
 
 
 				// Parse output for choices using simple parser
 				parseResult := parser.Parse(capture.Output)
-				slog.Debug("SSE pane update", "pane", pane.Target(), "bytes", len(capture.Output), "mode", capture.Mode, "choices", len(parseResult.Choices))
-				// Detect Claude mode indicator from output
-				claudeMode := detectClaudeMode(capture.Output)
-				claudeModeJSON, _ := json.Marshal(claudeMode)
+				slog.Debug("SSE pane update", "pane", pane.Target(), "bytes", len(capture.Output), "mode", capture.Mode, "choices", len(parseResult.Choices), "statusChanged", statusChanged, "modeChanged", modeChanged)
 
 				// Build the SSE message with metadata as first lines
 				var buf strings.Builder

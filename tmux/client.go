@@ -306,8 +306,13 @@ func extractStatusLine(output string) string {
 		}
 	}
 
-	// If we found a separator, get the first non-empty line after it
+	// If we found a separator, collect all non-empty lines after it
+	// Claude Code shows TWO status lines:
+	// Line 1: "❄ impure 📂 ~/path  🤖 Sonnet 4.5 | 📊 151k/200k"
+	// Line 2 (INSERT mode): "-- INSERT -- ⏵⏵ accept edits on (shift+tab to cycle)"
+	// Line 2 (NORMAL mode): "⏵⏵ accept edits on (shift+tab to cycle)"
 	if lastSeparatorIdx >= 0 {
+		var statusLines []string
 		for j := lastSeparatorIdx + 1; j < len(lines); j++ {
 			line := lines[j]
 			trimmed := strings.TrimSpace(line)
@@ -317,15 +322,11 @@ func extractStatusLine(output string) string {
 				continue
 			}
 
-			// Skip mode indicator line (we want status, not mode)
-			// Mode line can be just "-- INSERT --" or "-- INSERT -- ⏸ plan mode on..."
-			if strings.HasPrefix(trimmed, "-- INSERT --") {
-				continue
-			}
-
-			// This is our status line - return with ANSI intact but trim whitespace
-			return strings.TrimSpace(line)
+			statusLines = append(statusLines, strings.TrimSpace(line))
 		}
+
+		// Return all status lines joined with newline
+		return strings.Join(statusLines, "\n")
 	}
 
 	return ""

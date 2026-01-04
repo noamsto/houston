@@ -1922,8 +1922,8 @@ templ PanePage(data PaneData) {
 			.mode-pill:hover { opacity: 0.8; }
 			.mode-pill.hidden { display: none; }
 			.mode-pill.insert { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
-			.mode-pill.accept { background: rgba(59, 130, 246, 0.2); color: #3b82f6; }
-			.mode-pill.plan { background: rgba(168, 85, 247, 0.2); color: #a855f7; }
+			.mode-pill.accept { background: rgba(168, 85, 247, 0.2); color: #a855f7; }
+			.mode-pill.plan { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
 			.status-toggle-btn {
 				background: none;
 				border: 1px solid var(--border);
@@ -2136,8 +2136,9 @@ templ PanePage(data PaneData) {
 					border-top: 1px solid var(--border);
 					border-radius: 0;
 				}
+				/* Adjust spacer height for desktop padding */
 				.input-bar-spacer {
-					display: none;
+					height: 5rem;
 				}
 				.menu {
 					min-width: 200px;
@@ -2277,7 +2278,6 @@ templ PanePage(data PaneData) {
 						class="choice-btn"
 						data-choice={ fmt.Sprintf("%d", i+1) }
 						data-choice-text={ choice }
-						onclick="sendChoice(this.dataset.choice, this.dataset.choiceText)"
 					>
 						<span class="choice-num">{ fmt.Sprintf("%d", i+1) }</span>
 						<span class="choice-text">{ truncate(choice, 20) }</span>
@@ -2572,7 +2572,8 @@ templ paneScripts() {
 			choices.forEach((choice, i) => {
 				const num = i + 1;
 				const shortChoice = choice.length > 20 ? choice.substring(0, 17) + '...' : choice;
-				html += `<button class="choice-btn" data-choice="${num}" data-choice-text="${escapeHtml(choice)}" onclick="sendChoice('${num}', '${escapeHtml(choice)}')">
+				// No inline onclick - handled by event delegation below
+				html += `<button class="choice-btn" data-choice="${num}" data-choice-text="${escapeHtml(choice)}">
 					<span class="choice-num">${num}</span>
 					<span class="choice-text">${escapeHtml(shortChoice)}</span>
 				</button>`;
@@ -2608,6 +2609,19 @@ templ paneScripts() {
 				}, 100);
 			}
 		}
+
+		// Event delegation for choice buttons (avoids HTML entity escaping issues in onclick)
+		document.addEventListener('click', function(e) {
+			const choiceBtn = e.target.closest('.choice-btn');
+			if (choiceBtn) {
+				e.stopPropagation();
+				const num = choiceBtn.dataset.choice;
+				const text = choiceBtn.dataset.choiceText;
+				if (num) {
+					sendChoice(num, text);
+				}
+			}
+		});
 
 		// Log SSE connection events
 		document.body.addEventListener('htmx:sseOpen', function(e) {
@@ -2813,7 +2827,7 @@ templ paneScripts() {
 				fetch(`/pane/${target}/send`, {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-					body: 'input=S-Tab&special=true'
+					body: 'input=BTab&special=true'
 				}).then(r => console.log('toggle response:', r.status));
 			} else {
 				console.warn('No pane target found for toggle');
@@ -2939,7 +2953,7 @@ templ paneScripts() {
 			fetch(`/pane/${paneTarget}/send`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-				body: 'input=S-Tab&special=true'
+				body: 'input=BTab&special=true'
 			}).then(response => {
 				if (!response.ok) console.error('Failed to cycle Claude mode');
 			});
