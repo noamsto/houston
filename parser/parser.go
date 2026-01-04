@@ -63,21 +63,12 @@ var (
 
 func Parse(output string) Result {
 	lines := strings.Split(output, "\n")
-	lastLines := lastN(lines, 30)
+	// Look at last 50 lines to capture edit prompts with diffs
+	lastLines := lastN(lines, 50)
 	text := strings.Join(lastLines, "\n")
 
 	// Detect mode from last few lines
 	mode := detectMode(lastN(lines, 5))
-
-	// Check for errors only in the last 5 lines (recent errors only)
-	recentText := strings.Join(lastN(lines, 5), "\n")
-	if matches := errorPattern.FindStringSubmatch(recentText); len(matches) > 0 {
-		return Result{
-			Type:         TypeError,
-			Mode:         mode,
-			ErrorSnippet: strings.TrimSpace(matches[0]),
-		}
-	}
 
 	// Check for multiple choice - MUST have a question (?) before numbered options
 	// Real Claude Code choices look like:
@@ -108,6 +99,7 @@ func Parse(output string) Result {
 			}
 		}
 	}
+
 
 	// Check for approval/confirmation question
 	if approvalPattern.MatchString(text) {
@@ -154,6 +146,19 @@ func Parse(output string) Result {
 func detectActivity(lines []string) string {
 	for i := len(lines) - 1; i >= 0; i-- {
 		line := lines[i]
+
+		// Check mode line for activity indicators (these appear at the very end)
+		// Examples: "-- INSERT -- ⏵⏵ accept edits on" or "-- INSERT -- ⏸ plan mode on"
+		if strings.Contains(line, "-- INSERT --") || strings.Contains(line, "-- NORMAL --") {
+			if strings.Contains(line, "⏵⏵ accept edits") || strings.Contains(line, "accept edits") {
+				return "Edits pending"
+			}
+			if strings.Contains(line, "⏸ plan mode") || strings.Contains(line, "plan mode") {
+				return "Planning"
+			}
+			// Mode line found but no activity indicators - continue checking other lines
+			continue
+		}
 
 		// Check for main spinner activity (✻ Thinking..., ✻ Sussing..., etc.)
 		if match := spinnerPattern.FindStringSubmatch(line); len(match) > 1 {

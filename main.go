@@ -13,7 +13,7 @@ import (
 )
 
 func main() {
-	addr := flag.String("addr", "127.0.0.1:8080", "HTTP listen address")
+	addr := flag.String("addr", "127.0.0.1:9090", "HTTP listen address")
 	statusDir := flag.String("status-dir", "", "Directory for hook status files")
 	debug := flag.Bool("debug", false, "Enable debug logging")
 	flag.Parse()

@@ -128,11 +128,8 @@ func (s *Server) buildSessionsData() views.SessionsData {
 			pane := tmux.Pane{Session: sess.Name, Window: win.Index, Index: paneIdx}
 			output, _ := s.tmux.CapturePane(pane, 100)
 
-			// Use MessageParser for detection
-			msgParser := parser.NewClaudeCodeParser()
-			msgParser.ProcessBuffer(output)
-			state := msgParser.GetState()
-			parseResult := state.ToLegacyResult()
+			// Use simple parser (MessageParser doesn't detect unstructured prompts)
+			parseResult := parser.Parse(output)
 
 			// Only mark as needing attention if it's a Claude Code window
 			isClaudeWindow := tmux.LooksLikeClaudeOutput(output)
@@ -598,19 +595,8 @@ func (s *Server) handlePane(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Use MessageParser for detection
-	msgParser := parser.NewClaudeCodeParser()
-	msgParser.ProcessBuffer(capture.Output)
-	state := msgParser.GetState()
-	parseResult := state.ToLegacyResult()
-
-	// Override mode from tmux capture (parser sees filtered output without mode lines)
-	switch capture.Mode {
-	case "insert":
-		parseResult.Mode = parser.ModeInsert
-	case "normal":
-		parseResult.Mode = parser.ModeNormal
-	}
+	// Use simple parser (MessageParser doesn't detect unstructured prompts)
+	parseResult := parser.Parse(capture.Output)
 
 	data := views.PaneData{
 		Pane:        pane,
@@ -751,13 +737,10 @@ func (s *Server) streamPane(w http.ResponseWriter, r *http.Request, pane tmux.Pa
 				lines := strings.Split(capture.Output, "\n")
 				updateCount++
 
-				// Parse output for choices using MessageParser
-				msgParser := parser.NewClaudeCodeParser()
-				msgParser.ProcessBuffer(capture.Output)
-				state := msgParser.GetState()
-				parseResult := state.ToLegacyResult()
-				slog.Debug("SSE pane update", "pane", pane.Target(), "bytes", len(capture.Output), "mode", capture.Mode, "choices", len(parseResult.Choices))
 
+				// Parse output for choices using simple parser
+				parseResult := parser.Parse(capture.Output)
+				slog.Debug("SSE pane update", "pane", pane.Target(), "bytes", len(capture.Output), "mode", capture.Mode, "choices", len(parseResult.Choices))
 				// Detect Claude mode indicator from output
 				claudeMode := detectClaudeMode(capture.Output)
 				claudeModeJSON, _ := json.Marshal(claudeMode)

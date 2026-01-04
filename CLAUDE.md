@@ -205,9 +205,9 @@ document.getElementById('voice-btn').onclick = () => recognition.start();
 **Initial approach: No built-in auth**
 
 Rely on network-level security:
-1. Bind to localhost only (`127.0.0.1:8080`)
+1. Bind to localhost only (`127.0.0.1:9090`)
 2. Access via Tailscale (recommended)
-3. Or SSH tunnel: `ssh -L 8080:localhost:8080 host`
+3. Or SSH tunnel: `ssh -L 9090:localhost:9090 host`
 
 **Future auth options:**
 - Basic auth with password
@@ -257,7 +257,7 @@ in {
 
     port = mkOption {
       type = types.port;
-      default = 8080;
+      default = 9090;
       description = "Port to listen on";
     };
 
@@ -319,8 +319,11 @@ houston/
 # Enter dev shell
 nix develop
 
-# Run with hot reload
-go run . -addr localhost:8080
+# Run with hot reload (uses just dev to auto-find port 9090-9095)
+just dev
+
+# Or run manually on specific port
+go run . -addr localhost:9090
 
 # Build
 go build -o houston .
