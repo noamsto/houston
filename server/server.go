@@ -687,21 +687,27 @@ func (s *Server) handlePaneSendWithImage(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
-	// Write image to temp file
-	tmpFile, err := os.CreateTemp("", fmt.Sprintf("houston-*.%s", getFileExtension(req.Image.Name)))
+	// Write image to temp file with original filename preserved
+	// Use timestamp prefix to ensure uniqueness
+	tmpPath := fmt.Sprintf("/tmp/houston-%d-%s", time.Now().UnixNano(), req.Image.Name)
+	tmpFile, err := os.Create(tmpPath)
 	if err != nil {
 		slog.Error("failed to create temp file", "error", err)
 		http.Error(w, "failed to save image", http.StatusInternalServerError)
 		return
 	}
-	defer os.Remove(tmpFile.Name()) // Clean up after sending
 
 	if _, err := tmpFile.Write(imageData); err != nil {
 		slog.Error("failed to write image", "error", err)
+		tmpFile.Close()
+		os.Remove(tmpFile.Name()) // Clean up on error
 		http.Error(w, "failed to save image", http.StatusInternalServerError)
 		return
 	}
 	tmpFile.Close()
+
+	// Note: We don't clean up temp file after sending
+	// It remains in /tmp for user to reference and will be cleaned by OS
 
 	// Send image path and text to Claude Code
 	// Format: type the image path + newline + text + Enter
@@ -750,15 +756,15 @@ func (s *Server) handlePaneSendWithImages(w http.ResponseWriter, r *http.Request
 
 	// Process all images and create temp files
 	var tmpFiles []string
-	var cleanupFiles []string
+	var cleanupOnError []string
 
 	for i, img := range req.Images {
 		// Decode base64 image
 		imageData, err := base64.StdEncoding.DecodeString(img.Data)
 		if err != nil {
 			slog.Error("failed to decode base64 image", "error", err, "index", i)
-			// Clean up any files created so far
-			for _, f := range cleanupFiles {
+			// Clean up any files created so far on error
+			for _, f := range cleanupOnError {
 				os.Remove(f)
 			}
 			http.Error(w, fmt.Sprintf("invalid image data at index %d", i), http.StatusBadRequest)
@@ -771,8 +777,8 @@ func (s *Server) handlePaneSendWithImages(w http.ResponseWriter, r *http.Request
 		tmpFile, err := os.Create(tmpPath)
 		if err != nil {
 			slog.Error("failed to create temp file", "error", err, "index", i)
-			// Clean up any files created so far
-			for _, f := range cleanupFiles {
+			// Clean up any files created so far on error
+			for _, f := range cleanupOnError {
 				os.Remove(f)
 			}
 			http.Error(w, "failed to save image", http.StatusInternalServerError)
@@ -783,8 +789,8 @@ func (s *Server) handlePaneSendWithImages(w http.ResponseWriter, r *http.Request
 			slog.Error("failed to write image", "error", err, "index", i)
 			tmpFile.Close()
 			os.Remove(tmpFile.Name())
-			// Clean up any files created so far
-			for _, f := range cleanupFiles {
+			// Clean up any files created so far on error
+			for _, f := range cleanupOnError {
 				os.Remove(f)
 			}
 			http.Error(w, "failed to save image", http.StatusInternalServerError)
@@ -793,15 +799,11 @@ func (s *Server) handlePaneSendWithImages(w http.ResponseWriter, r *http.Request
 		tmpFile.Close()
 
 		tmpFiles = append(tmpFiles, tmpFile.Name())
-		cleanupFiles = append(cleanupFiles, tmpFile.Name())
+		cleanupOnError = append(cleanupOnError, tmpFile.Name())
 	}
 
-	// Clean up temp files after sending
-	defer func() {
-		for _, f := range cleanupFiles {
-			os.Remove(f)
-		}
-	}()
+	// Note: We don't clean up temp files after sending
+	// They remain in /tmp for user to reference and will be cleaned by OS
 
 	// Send all image paths and text to Claude Code
 	// Format: image1\nimage2\nimage3\ntext + Enter

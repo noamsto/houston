@@ -1791,33 +1791,6 @@ templ PanePage(data PaneData) {
 				-moz-osx-font-smoothing: grayscale;
 				text-rendering: optimizeLegibility;
 			}
-			.diff-add {
-				background-color: rgba(34, 197, 94, 0.2);
-				display: block;
-				margin: 0;
-				padding: 0 8px;
-				line-height: 1.5;
-				width: 100%;
-				box-sizing: border-box;
-			}
-			.diff-del {
-				background-color: rgba(239, 68, 68, 0.2);
-				display: block;
-				margin: 0;
-				padding: 0 8px;
-				line-height: 1.5;
-				width: 100%;
-				box-sizing: border-box;
-			}
-			.diff-hunk {
-				background-color: rgba(59, 130, 246, 0.2);
-				display: block;
-				margin: 0;
-				padding: 0 8px;
-				line-height: 1.5;
-				width: 100%;
-				box-sizing: border-box;
-			}
 			.user-input {
 				background-color: rgba(59, 130, 246, 0.08);
 				display: block;
@@ -2729,25 +2702,6 @@ templ paneScripts() {
 			}).join('\n');
 		}
 
-		// Add backgrounds to diff lines (after ansi_up processing)
-		// Wraps entire lines in divs with background colors
-		function addDiffBackgrounds(html) {
-			const lines = html.split('\n');
-			return lines.map(line => {
-				// Check if line starts with + or - (git diff format)
-				const plainText = line.replace(/<[^>]*>/g, ''); // Strip HTML to check
-
-				if (plainText.trim().startsWith('+') && !plainText.trim().startsWith('+++')) {
-					return '<div class="diff-add">' + line + '</div>';
-				} else if (plainText.trim().startsWith('-') && !plainText.trim().startsWith('---')) {
-					return '<div class="diff-del">' + line + '</div>';
-				} else if (plainText.trim().startsWith('@@')) {
-					return '<div class="diff-hunk">' + line + '</div>';
-				}
-				return line;
-			}).join('\n');
-		}
-
 		function processOutput(text) {
 			try {
 				// Normalize line endings and remove carriage returns
@@ -2755,8 +2709,6 @@ templ paneScripts() {
 				let html = ansiUp.ansi_to_html(text);
 				// Brighten dark ANSI colors for better visibility
 				html = brightenAnsiColors(html);
-				// Add diff backgrounds at line level (not span level)
-				html = addDiffBackgrounds(html);
 				html = highlightUserInput(html);
 				return html;
 			} catch (err) {
@@ -3371,6 +3323,21 @@ templ paneScripts() {
 			const paneTarget = this.getAttribute('data-pane-target');
 
 			if (!paneTarget) return;
+
+			// Check if there's pending input that needs to be cleared first
+			const pendingInputBar = document.getElementById('pending-input-bar');
+			const hasPendingInput = pendingInputBar && !pendingInputBar.classList.contains('hidden');
+
+			// If there's pending input, send Ctrl+C first to clear it
+			if (hasPendingInput) {
+				await fetch(`/pane/${paneTarget}/send`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+					body: 'input=C-c&special=true'
+				});
+				// Wait a brief moment for the clear to take effect
+				await new Promise(resolve => setTimeout(resolve, 100));
+			}
 
 			let response;
 
