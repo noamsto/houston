@@ -141,6 +141,39 @@ templ IndexPage() {
 		<!-- Nerd Font for terminal icons -->
 		<link href="https://cdn.jsdelivr.net/gh/mshaugh/nerdfont-webfonts@v3.3.0/build/symbols-nerd-font-mono.css" rel="stylesheet"/>
 		<script src="https://unpkg.com/idiomorph@0.3.0/dist/idiomorph.min.js"></script>
+		<script type="module">
+			import { AnsiUp } from 'https://cdn.jsdelivr.net/npm/ansi_up@6/ansi_up.js';
+			const ansiUp = new AnsiUp();
+			ansiUp.escapeHtml = true;
+
+			// Brightens dark 8-bit ANSI colors for visibility on dark backgrounds
+			function brightenAnsiColors(html) {
+				// Standard ANSI colors (0-7) - brighten significantly
+				html = html.replace(/rgb\(0,0,187\)/g, 'rgb(137,180,250)');      // Dark blue → light blue
+				html = html.replace(/rgb\(0,187,0\)/g, 'rgb(166,227,161)');      // Dark green → light green
+				html = html.replace(/rgb\(187,0,187\)/g, 'rgb(243,139,168)');    // Dark magenta → light magenta
+				html = html.replace(/rgb\(187,0,0\)/g, 'rgb(252,165,165)');      // Dark red → light red
+				html = html.replace(/rgb\(187,187,0\)/g, 'rgb(253,224,71)');     // Dark yellow → bright yellow
+				html = html.replace(/rgb\(0,187,187\)/g, 'rgb(137,220,235)');    // Dark cyan → light cyan
+
+				// Bright ANSI colors (8-15) - also improve contrast
+				html = html.replace(/rgb\(85,85,85\)/g, 'rgb(163,163,163)');     // Bright black (gray) → lighter gray
+				html = html.replace(/rgb\(255,85,85\)/g, 'rgb(252,165,165)');    // Bright red → softer red
+				html = html.replace(/rgb\(85,255,85\)/g, 'rgb(134,239,172)');    // Bright green → softer green
+				html = html.replace(/rgb\(255,255,85\)/g, 'rgb(253,224,71)');    // Bright yellow → softer yellow
+				html = html.replace(/rgb\(85,85,255\)/g, 'rgb(147,197,253)');    // Bright blue → softer blue
+				html = html.replace(/rgb\(255,85,255\)/g, 'rgb(244,114,182)');   // Bright magenta → softer magenta
+				html = html.replace(/rgb\(85,255,255\)/g, 'rgb(165,243,252)');   // Bright cyan → softer cyan
+
+				return html;
+			}
+
+			// Convert ANSI to HTML with brightening
+			window.ansiToHtml = function(text) {
+				let html = ansiUp.ansi_to_html(text);
+				return brightenAnsiColors(html);
+			};
+		</script>
 		<style>
 			:root {
 				--bg-deep: #0a0a0b;
@@ -168,6 +201,8 @@ templ IndexPage() {
 				--error-glow: rgba(220, 38, 38, 0.25);
 				--working: #16a34a;
 				--working-glow: rgba(22, 163, 74, 0.2);
+				--done: #10b981;
+				--done-glow: rgba(16, 185, 129, 0.2);
 				--idle: #a1a1aa;
 				--accent: #0891b2;
 				--accent-dim: rgba(8, 145, 178, 0.12);
@@ -486,7 +521,8 @@ templ IndexPage() {
 				box-shadow: 0 0 6px var(--error-glow);
 				animation: pulse 1.5s ease-in-out infinite;
 			}
-			.window-indicator.working { background: var(--working); }
+			.window-indicator.working { background: var(--working); box-shadow: 0 0 4px var(--working-glow); }
+			.window-indicator.done { background: var(--done); box-shadow: 0 0 4px var(--done-glow); }
 			.window-indicator.idle { background: var(--idle); }
 			.window-info { flex: 1; min-width: 0; }
 			.window-name { font-size: 13px; color: var(--text-primary); }
@@ -497,6 +533,7 @@ templ IndexPage() {
 			}
 			.window-status.idle { color: var(--text-dim); }
 			.window-status.working { color: var(--working); }
+			.window-status.done { color: var(--done); }
 			.window-status.attention { color: var(--attention); }
 			.window-preview {
 				margin-top: 0.5rem;
@@ -938,6 +975,10 @@ templ IndexPage() {
 			const DISMISSED_KEY = 'houston-dismissed-sessions';
 			let dismissedSessions = new Map(); // session -> timestamp
 
+			// Track "done" state timestamps for auto-transition to idle
+			const doneTimestamps = new Map(); // "session:window:pane" -> timestamp
+			const DONE_TIMEOUT = 60000; // 60 seconds
+
 			function loadDismissed() {
 				try {
 					const stored = localStorage.getItem(DISMISSED_KEY);
@@ -1093,6 +1134,78 @@ templ IndexPage() {
 				summary.innerHTML = html;
 			}
 
+			// Process activity text to convert ANSI codes to HTML with color brightening
+			function processActivityText() {
+				// Process window status text (activity line)
+				document.querySelectorAll('.window-status').forEach(el => {
+					const text = el.textContent;
+					// Only process if text contains ANSI escape codes
+					if (text && text.includes('\x1b[')) {
+						el.innerHTML = window.ansiToHtml(text);
+					}
+				});
+
+				// Process preview lines (terminal output snippets)
+				document.querySelectorAll('.preview-line').forEach(el => {
+					const text = el.textContent;
+					if (text && text.includes('\x1b[')) {
+						el.innerHTML = window.ansiToHtml(text);
+					}
+				});
+			}
+
+			// Track and transition "done" states to "idle" after timeout
+			function trackDoneStates() {
+				const now = Date.now();
+				document.querySelectorAll('.window-indicator.done').forEach(indicator => {
+					const windowEl = indicator.closest('.window');
+					if (!windowEl) return;
+
+					const key = `${windowEl.dataset.session}:${windowEl.dataset.window}:${windowEl.dataset.pane}`;
+
+					// Record timestamp for newly done windows
+					if (!doneTimestamps.has(key)) {
+						doneTimestamps.set(key, now);
+					}
+
+					// Check if timeout has passed
+					const timestamp = doneTimestamps.get(key);
+					if (now - timestamp >= DONE_TIMEOUT) {
+						// Transition to idle
+						indicator.classList.remove('done');
+						indicator.classList.add('idle');
+
+						const statusEl = windowEl.querySelector('.window-status');
+						if (statusEl) {
+							statusEl.classList.remove('done');
+							statusEl.classList.add('idle');
+							statusEl.textContent = 'Idle';
+						}
+
+						// Remove from tracking
+						doneTimestamps.delete(key);
+					}
+				});
+
+				// Clean up timestamps for windows that are no longer in done state
+				const currentDoneKeys = new Set();
+				document.querySelectorAll('.window-indicator.done').forEach(indicator => {
+					const windowEl = indicator.closest('.window');
+					if (windowEl) {
+						const key = `${windowEl.dataset.session}:${windowEl.dataset.window}:${windowEl.dataset.pane}`;
+						currentDoneKeys.add(key);
+					}
+				});
+				for (const key of doneTimestamps.keys()) {
+					if (!currentDoneKeys.has(key)) {
+						doneTimestamps.delete(key);
+					}
+				}
+			}
+
+			// Check for done → idle transitions periodically
+			setInterval(trackDoneStates, 5000); // Check every 5 seconds
+
 			// Action bar functions
 			function selectWindow(el) {
 				const session = el.dataset.session;
@@ -1135,9 +1248,11 @@ templ IndexPage() {
 						if (status && trimmed === status.trim()) return false;
 						return true;
 					});
-					html += previewLines.map(line =>
-						`<div class="action-preview-line">${escapeHtml(line)}</div>`
-					).join('');
+					html += previewLines.map(line => {
+						// Convert ANSI codes if present, otherwise escape HTML
+						const processed = line.includes('\x1b[') ? window.ansiToHtml(line) : escapeHtml(line);
+						return `<div class="action-preview-line">${processed}</div>`;
+					}).join('');
 				}
 				if (!html) {
 					html = '<div class="action-preview-line">No output</div>';
@@ -1286,6 +1401,10 @@ templ IndexPage() {
 
 					Idiomorph.morph(container, temp.innerHTML, { morphStyle: 'innerHTML' });
 					updateStatusSummary();
+					// Process activity text for ANSI colors
+					processActivityText();
+					// Track done states for auto-transition to idle
+					trackDoneStates();
 					// Apply dismissals after morph
 					applyDismissals();
 					// Re-apply filter if active
@@ -1304,6 +1423,10 @@ templ IndexPage() {
 			}
 
 			connectSSE();
+			// Process activity text on initial load
+			processActivityText();
+			// Track done states on initial load
+			trackDoneStates();
 
 			// Theme support
 			function initTheme() {
@@ -1532,6 +1655,9 @@ func getWindowIndicator(win WindowWithStatus) string {
 	if win.ParseResult.Type == parser.TypeWorking {
 		return "working"
 	}
+	if win.ParseResult.Type == parser.TypeDone {
+		return "done"
+	}
 	return "idle"
 }
 
@@ -1563,6 +1689,11 @@ func getWindowStatusText(win WindowWithStatus) string {
 			return win.ParseResult.Activity + "..."
 		}
 		return "Working..."
+	case parser.TypeDone:
+		if win.ParseResult.Activity != "" {
+			return win.ParseResult.Activity
+		}
+		return "Done"
 	default:
 		return "Idle"
 	}
@@ -1599,6 +1730,7 @@ templ PanePage(data PaneData) {
 	<head>
 		<meta charset="UTF-8"/>
 		<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"/>
+		<link rel="icon" type="image/svg+xml" href="/static/favicon.svg"/>
 		<title>{ data.Pane.Session } - houston</title>
 		<!-- Nerd Font for terminal icons -->
 		<link href="https://cdn.jsdelivr.net/gh/mshaugh/nerdfont-webfonts@v3.3.0/build/symbols-nerd-font-mono.css" rel="stylesheet"/>
@@ -1618,6 +1750,7 @@ templ PanePage(data PaneData) {
 				--attention: #f97316;
 				--error: #ef4444;
 				--working: #3b82f6;
+				--done: #10b981;
 				--idle: #6b7280;
 			}
 			[data-theme="light"] {
@@ -1633,6 +1766,7 @@ templ PanePage(data PaneData) {
 				--attention: #ea580c;
 				--error: #dc2626;
 				--working: #2563eb;
+				--done: #059669;
 				--idle: #a1a1aa;
 			}
 			* { box-sizing: border-box; margin: 0; padding: 0; }
@@ -1657,10 +1791,39 @@ templ PanePage(data PaneData) {
 				-moz-osx-font-smoothing: grayscale;
 				text-rendering: optimizeLegibility;
 			}
-			.diff-add { background-color: rgba(34, 197, 94, 0.25); }
-			.diff-del { background-color: rgba(239, 68, 68, 0.25); }
-			.diff-hunk { background-color: rgba(59, 130, 246, 0.25); }
-			.user-input { background-color: rgba(59, 130, 246, 0.08); }
+			.diff-add {
+				background-color: rgba(34, 197, 94, 0.2);
+				display: block;
+				margin: 0;
+				padding: 0 8px;
+				line-height: 1.5;
+				width: 100%;
+				box-sizing: border-box;
+			}
+			.diff-del {
+				background-color: rgba(239, 68, 68, 0.2);
+				display: block;
+				margin: 0;
+				padding: 0 8px;
+				line-height: 1.5;
+				width: 100%;
+				box-sizing: border-box;
+			}
+			.diff-hunk {
+				background-color: rgba(59, 130, 246, 0.2);
+				display: block;
+				margin: 0;
+				padding: 0 8px;
+				line-height: 1.5;
+				width: 100%;
+				box-sizing: border-box;
+			}
+			.user-input {
+				background-color: rgba(59, 130, 246, 0.08);
+				display: block;
+				margin: 0;
+				padding: 0;
+			}
 			.header {
 				background: var(--bg-panel);
 				border-bottom: 1px solid var(--border);
@@ -1898,15 +2061,21 @@ templ PanePage(data PaneData) {
 				font-size: 11px;
 				color: var(--text-secondary);
 				gap: 1rem;
+				overflow-x: auto;
+				-webkit-overflow-scrolling: touch;
 			}
 			.status-line-left {
-				white-space: pre;
-				flex-shrink: 0;
+				white-space: nowrap;
+				flex-shrink: 1;
+				overflow: hidden;
+				text-overflow: ellipsis;
 			}
 			.status-line-right {
-				white-space: pre;
-				flex-shrink: 0;
+				white-space: nowrap;
+				flex-shrink: 1;
 				margin-left: auto;
+				overflow: hidden;
+				text-overflow: ellipsis;
 			}
 			.mode-pill {
 				padding: 0.125rem 0.5rem;
@@ -1918,6 +2087,7 @@ templ PanePage(data PaneData) {
 				border: none;
 				cursor: pointer;
 				transition: opacity 0.15s;
+				flex-shrink: 0;
 			}
 			.mode-pill:hover { opacity: 0.8; }
 			.mode-pill.hidden { display: none; }
@@ -1965,22 +2135,79 @@ templ PanePage(data PaneData) {
 				border-color: var(--error);
 			}
 			.input-bar {
-				position: fixed;
-				bottom: 0;
-				left: env(safe-area-inset-left);
-				right: env(safe-area-inset-right);
 				display: flex;
+				flex-direction: column;
 				gap: 0.5rem;
 				padding: 0.75rem;
 				padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));
 				background: var(--bg-panel);
 				border-top: 1px solid var(--border);
+			}
+			.input-bar-row {
+				display: flex;
+				gap: 0.5rem;
 				align-items: center;
+			}
+			.attachments-area {
+				display: flex;
+				flex-wrap: wrap;
+				gap: 0.5rem;
+				padding: 0.5rem;
+				background: var(--bg-elevated);
+				border-radius: 6px;
+				margin-bottom: 0.5rem;
+			}
+			.attachments-area.hidden { display: none; }
+			.attachment-pill {
+				display: flex;
+				align-items: center;
+				gap: 0.5rem;
+				padding: 0.375rem 0.625rem;
+				background: var(--accent-dim);
+				border: 1px solid var(--accent);
+				border-radius: 4px;
+				font-size: 12px;
+				color: var(--text-primary);
+			}
+			.attachment-name {
+				color: var(--accent);
+				font-weight: 500;
+				max-width: 200px;
+				overflow: hidden;
+				text-overflow: ellipsis;
+				white-space: nowrap;
+			}
+			.attachment-remove {
+				background: none;
+				border: none;
+				color: var(--text-secondary);
+				cursor: pointer;
+				padding: 0;
+				display: flex;
+				align-items: center;
+				justify-content: center;
+				width: 16px;
+				height: 16px;
+				border-radius: 50%;
+				transition: all 0.15s;
+			}
+			.attachment-remove:hover {
+				background: var(--error);
+				color: white;
+			}
+			/* Fixed bottom container for all bottom bars */
+			.bottom-bars-container {
+				position: fixed;
+				bottom: 0;
+				left: env(safe-area-inset-left);
+				right: env(safe-area-inset-right);
+				display: flex;
+				flex-direction: column;
 				z-index: 100;
 			}
-			/* Spacer to prevent content from being hidden behind fixed input bar */
+			/* Spacer to prevent content from being hidden behind fixed bottom bars */
 			.input-bar-spacer {
-				height: calc(3.5rem + env(safe-area-inset-bottom));
+				height: calc(12rem + env(safe-area-inset-bottom));
 				flex-shrink: 0;
 			}
 			.mode-badge {
@@ -1989,6 +2216,7 @@ templ PanePage(data PaneData) {
 				padding: 0.25rem 0.5rem;
 				border-radius: 4px;
 				font-family: 'SF Mono', ui-monospace, monospace;
+				flex-shrink: 0;
 			}
 			.mode-badge.insert { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
 			.mode-badge.normal { background: rgba(59, 130, 246, 0.2); color: #3b82f6; }
@@ -2025,6 +2253,7 @@ templ PanePage(data PaneData) {
 			.autoaccept-state { font-size: 10px; text-transform: uppercase; }
 			.input-field {
 				flex: 1;
+				min-width: 120px; /* Ensure input doesn't get too small */
 				background: var(--bg-deep);
 				border: 1px solid var(--border);
 				border-radius: 6px;
@@ -2138,7 +2367,7 @@ templ PanePage(data PaneData) {
 				}
 				/* Adjust spacer height for desktop padding */
 				.input-bar-spacer {
-					height: 5rem;
+					height: 10rem;
 				}
 				.menu {
 					min-width: 200px;
@@ -2247,117 +2476,138 @@ templ PanePage(data PaneData) {
 			>
 				<pre id="output" class="terminal output">{ data.Output }</pre>
 			</div>
-			<!-- Claude Status Section (collapsible) -->
-			<div id="status-section" class="status-section">
-				<div style="display: flex; align-items: center; gap: 0.5rem; justify-content: space-between;">
-					<div class="status-line-container">
-						<div id="status-line-left" class="status-line-left"></div>
-						<div id="status-line-right" class="status-line-right"></div>
-					</div>
-					<button
-						type="button"
-						class="status-toggle-btn"
-						onclick="toggleStatusSection()"
-						title="Toggle status"
-					>
-						Hide
-					</button>
-				</div>
-			</div>
-			<!-- Prompt input indicator (shown when Claude has pending input) -->
-			<div id="pending-input-bar" class="pending-input-bar hidden">
-				<span class="pending-label">Pending input:</span>
-				<span id="pending-input-text" class="pending-text"></span>
-				<button class="pending-edit-btn" onclick="editPendingInput()">Edit</button>
-				<button class="pending-clear-btn" onclick="clearPendingInput()">Clear</button>
-			</div>
-			<!-- Quick choice buttons (dynamically updated via SSE) -->
-			<div id="choices-bar" class={ "choices-bar", templ.KV("hidden", len(data.ParseResult.Choices) == 0) } data-pane-target={ data.Pane.URLTarget() }>
-				for i, choice := range data.ParseResult.Choices {
-					<button
-						class="choice-btn"
-						data-choice={ fmt.Sprintf("%d", i+1) }
-						data-choice-text={ choice }
-					>
-						<span class="choice-num">{ fmt.Sprintf("%d", i+1) }</span>
-						<span class="choice-text">{ truncate(choice, 20) }</span>
-					</button>
-				}
-			</div>
-			<!-- Spacer for fixed input bar -->
+			<!-- Spacer for fixed bottom bars -->
 			<div class="input-bar-spacer"></div>
-			<!-- Input bar -->
+			<!-- Fixed bottom bars container -->
+			<div class="bottom-bars-container">
+				<!-- Claude Status Section (collapsible) -->
+				<div id="status-section" class="status-section">
+					<div style="display: flex; align-items: center; gap: 0.5rem; justify-content: space-between;">
+						<div class="status-line-container">
+							<div id="status-line-left" class="status-line-left"></div>
+							<div id="status-line-right" class="status-line-right"></div>
+						</div>
+						<button
+							type="button"
+							class="status-toggle-btn"
+							onclick="toggleStatusSection()"
+							title="Toggle status"
+						>
+							Hide
+						</button>
+					</div>
+				</div>
+				<!-- Prompt input indicator (shown when Claude has pending input) -->
+				<div id="pending-input-bar" class="pending-input-bar hidden">
+					<span class="pending-label">Pending input:</span>
+					<span id="pending-input-text" class="pending-text"></span>
+					<button class="pending-edit-btn" onclick="editPendingInput()">Edit</button>
+					<button class="pending-clear-btn" onclick="clearPendingInput()">Clear</button>
+				</div>
+				<!-- Quick choice buttons (dynamically updated via SSE) -->
+				<div id="choices-bar" class={ "choices-bar", templ.KV("hidden", len(data.ParseResult.Choices) == 0) } data-pane-target={ data.Pane.URLTarget() }>
+					for i, choice := range data.ParseResult.Choices {
+						<button
+							class="choice-btn"
+							data-choice={ fmt.Sprintf("%d", i+1) }
+							data-choice-text={ choice }
+						>
+							<span class="choice-num">{ fmt.Sprintf("%d", i+1) }</span>
+							<span class="choice-text">{ truncate(choice, 20) }</span>
+						</button>
+					}
+				</div>
+				<!-- Input bar -->
 			<form
 				id="input-form"
 				class="input-bar"
-				hx-post={ "/pane/" + data.Pane.URLTarget() + "/send" }
-				hx-swap="none"
-				hx-on::after-request="this.reset(); document.getElementById('input-field').style.height = 'auto';"
+				data-pane-target={ data.Pane.URLTarget() }
 			>
-				if data.ParseResult.Mode.String() == "insert" {
-					<span id="mode-indicator" class="mode-badge insert">INS</span>
-				} else {
-					<span id="mode-indicator" class="mode-badge normal">NOR</span>
-				}
-				<!-- Auto-accept edits toggle -->
-				<button
-					type="button"
-					id="autoaccept-toggle"
-					class="autoaccept-toggle"
-					onclick="toggleAutoAccept()"
-					title="Toggle auto-accept edits (Shift+Tab)"
-				>
-					<span class="autoaccept-icon">⏵⏵</span>
-					<span id="autoaccept-state" class="autoaccept-state">--</span>
-				</button>
-				<!-- Mode pills -->
-				<button
-					type="button"
-					id="accept-indicator"
-					class="mode-pill accept hidden"
-					onclick="cycleClaudeMode()"
-					title="Click to cycle Claude modes (Shift+Tab)"
-				>ACCEPT</button>
-				<button
-					type="button"
-					id="plan-indicator"
-					class="mode-pill plan hidden"
-					onclick="cycleClaudeMode()"
-					title="Click to cycle Claude modes (Shift+Tab)"
-				>PLAN</button>
-				<textarea
-					id="input-field"
-					name="input"
-					class="input-field"
-					placeholder="Send input..."
-					autocomplete="off"
-					autocapitalize="off"
-					autocorrect="off"
-					spellcheck="false"
-					rows="1"
-					onkeydown="handleInputKeydown(event)"
-					oninput="autoResize(this)"
-				></textarea>
-				<!-- Stop button -->
-				<button
-					type="button"
-					class="action-btn stop"
-					hx-post={ "/pane/" + data.Pane.URLTarget() + "/send" }
-					hx-vals='{"input": "Escape", "special": "true"}'
-					hx-swap="none"
-					title="Stop (Escape)"
-				>
-					<svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
-					</svg>
-				</button>
-				<!-- Send button -->
-				<button type="submit" class="action-btn send" title="Send">
-					<svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7"></path>
-					</svg>
-				</button>
+				<!-- Top row: badges and indicators -->
+				<div class="input-bar-row">
+					if data.ParseResult.Mode.String() == "insert" {
+						<span id="mode-indicator" class="mode-badge insert">INS</span>
+					} else {
+						<span id="mode-indicator" class="mode-badge normal">NOR</span>
+					}
+					<!-- Auto-accept edits toggle -->
+					<button
+						type="button"
+						id="autoaccept-toggle"
+						class="autoaccept-toggle"
+						onclick="toggleAutoAccept()"
+						title="Toggle auto-accept edits (Shift+Tab)"
+					>
+						<span class="autoaccept-icon">⏵⏵</span>
+						<span id="autoaccept-state" class="autoaccept-state">--</span>
+					</button>
+					<!-- Mode pills -->
+					<button
+						type="button"
+						id="accept-indicator"
+						class="mode-pill accept hidden"
+						onclick="cycleClaudeMode()"
+						title="Click to cycle Claude modes (Shift+Tab)"
+					>ACCEPT</button>
+					<button
+						type="button"
+						id="plan-indicator"
+						class="mode-pill plan hidden"
+						onclick="cycleClaudeMode()"
+						title="Click to cycle Claude modes (Shift+Tab)"
+					>PLAN</button>
+				</div>
+				<!-- Image attachments area -->
+				<div id="attachments-area" class="attachments-area hidden"></div>
+				<!-- Bottom row: input field and buttons -->
+				<div class="input-bar-row">
+					<textarea
+						id="input-field"
+						name="input"
+						class="input-field"
+						placeholder="Send input..."
+						autocomplete="off"
+						autocapitalize="off"
+						autocorrect="off"
+						spellcheck="false"
+						rows="1"
+						onkeydown="handleInputKeydown(event)"
+						oninput="autoResize(this)"
+					></textarea>
+					<!-- Attach image button -->
+					<input type="file" id="image-input" accept="image/*" multiple style="display: none;" onchange="handleImageSelect(event)"/>
+					<button
+						type="button"
+						class="action-btn attach"
+						onclick="document.getElementById('image-input').click()"
+						title="Attach image"
+					>
+						<svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"></path>
+						</svg>
+					</button>
+					<!-- Stop button -->
+					<button
+						type="button"
+						class="action-btn stop"
+						hx-post={ "/pane/" + data.Pane.URLTarget() + "/send" }
+						hx-vals='{"input": "Escape", "special": "true"}'
+						hx-swap="none"
+						title="Stop (Escape)"
+					>
+						<svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+						</svg>
+					</button>
+					<!-- Send button -->
+					<button type="submit" class="action-btn send" title="Send">
+						<svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7"></path>
+						</svg>
+					</button>
+				</div>
 			</form>
+			</div>
 		</div>
 		@paneScripts()
 	</body>
@@ -2387,6 +2637,28 @@ templ paneScripts() {
 		// Only target rgb() values (ansi_up uses rgb, not rgba) to avoid stripping CSS code in terminal content
 		function fixBackgrounds(html) {
 			html = html.replace(/background-color:\s*rgb\([^)]+\);?/gi, '');
+			return html;
+		}
+
+		// Brightens dark 8-bit ANSI colors for visibility on dark backgrounds
+		function brightenAnsiColors(html) {
+			// Standard ANSI colors (0-7) - brighten significantly
+			html = html.replace(/rgb\(0,0,187\)/g, 'rgb(137,180,250)');      // Dark blue → light blue
+			html = html.replace(/rgb\(0,187,0\)/g, 'rgb(166,227,161)');      // Dark green → light green
+			html = html.replace(/rgb\(187,0,187\)/g, 'rgb(243,139,168)');    // Dark magenta → light magenta
+			html = html.replace(/rgb\(187,0,0\)/g, 'rgb(252,165,165)');      // Dark red → light red
+			html = html.replace(/rgb\(187,187,0\)/g, 'rgb(253,224,71)');     // Dark yellow → bright yellow
+			html = html.replace(/rgb\(0,187,187\)/g, 'rgb(137,220,235)');    // Dark cyan → light cyan
+
+			// Bright ANSI colors (8-15) - also improve contrast
+			html = html.replace(/rgb\(85,85,85\)/g, 'rgb(163,163,163)');     // Bright black (gray) → lighter gray
+			html = html.replace(/rgb\(255,85,85\)/g, 'rgb(252,165,165)');    // Bright red → softer red
+			html = html.replace(/rgb\(85,255,85\)/g, 'rgb(134,239,172)');    // Bright green → softer green
+			html = html.replace(/rgb\(255,255,85\)/g, 'rgb(253,224,71)');    // Bright yellow → softer yellow
+			html = html.replace(/rgb\(85,85,255\)/g, 'rgb(147,197,253)');    // Bright blue → softer blue
+			html = html.replace(/rgb\(255,85,255\)/g, 'rgb(244,114,182)');   // Bright magenta → softer magenta
+			html = html.replace(/rgb\(85,255,255\)/g, 'rgb(165,243,252)');   // Bright cyan → softer cyan
+
 			return html;
 		}
 
@@ -2457,18 +2729,34 @@ templ paneScripts() {
 			}).join('\n');
 		}
 
+		// Add backgrounds to diff lines (after ansi_up processing)
+		// Wraps entire lines in divs with background colors
+		function addDiffBackgrounds(html) {
+			const lines = html.split('\n');
+			return lines.map(line => {
+				// Check if line starts with + or - (git diff format)
+				const plainText = line.replace(/<[^>]*>/g, ''); // Strip HTML to check
+
+				if (plainText.trim().startsWith('+') && !plainText.trim().startsWith('+++')) {
+					return '<div class="diff-add">' + line + '</div>';
+				} else if (plainText.trim().startsWith('-') && !plainText.trim().startsWith('---')) {
+					return '<div class="diff-del">' + line + '</div>';
+				} else if (plainText.trim().startsWith('@@')) {
+					return '<div class="diff-hunk">' + line + '</div>';
+				}
+				return line;
+			}).join('\n');
+		}
+
 		function processOutput(text) {
 			try {
 				// Normalize line endings and remove carriage returns
 				text = text.replace(/\r\n/g, '\n').replace(/\r/g, '');
 				let html = ansiUp.ansi_to_html(text);
-				// Debug: log a sample of converted HTML to check colors
-				if (text.includes('✻') || text.includes('●')) {
-					const sample = html.substring(0, 500);
-					console.log('ANSI conversion sample:', sample);
-				}
-				// Removed fixBackgrounds() - preserve Claude's colors
-				// Removed enhanceDiffs() - Claude Code provides its own diff colors via ANSI
+				// Brighten dark ANSI colors for better visibility
+				html = brightenAnsiColors(html);
+				// Add diff backgrounds at line level (not span level)
+				html = addDiffBackgrounds(html);
 				html = highlightUserInput(html);
 				return html;
 			} catch (err) {
@@ -2716,6 +3004,11 @@ templ paneScripts() {
 			}
 		}
 
+		// Strip ANSI escape codes from text
+		function stripAnsi(text) {
+			return text.replace(/\x1b\[[0-9;]*m/g, '');
+		}
+
 		// Extract pending input from Claude's prompt line(s)
 		// Claude Code shows: ">" or ">>>" followed by user's typed text
 		// Multi-line input shows continuation lines after the first prompt
@@ -2729,21 +3022,28 @@ templ paneScripts() {
 				const line = lines[i];
 
 				// Match prompt line: > or >>> with optional text
-				const promptMatch = line.match(/^\s*(>{1,3})\s*(.*)$/);
+				// Allow ANSI escape codes before the prompt (e.g., \u001b[0m>)
+				const promptMatch = line.match(/^(?:\x1b\[[0-9;]*m)*\s*(>{1,3})\s*(.*)$/);
 
 				if (promptMatch) {
 					foundPrompt = true;
-					const content = promptMatch[2];
+					let content = stripAnsi(promptMatch[2]); // Strip ANSI codes from content
+					// Remove pasted text indicators like "[Pasted text #1 +10 lines]"
+					content = content.replace(/\[Pasted text #\d+ \+\d+.*?\]/g, '').trim();
 					if (content) {
 						pendingLines.unshift(content); // Add to front (we're going backwards)
 					}
 				} else if (foundPrompt) {
 					// We found prompts but this line doesn't have one
-					const trimmed = line.trim();
+					let trimmed = stripAnsi(line.trim());
 					// Stop if we hit a separator, empty line, or status bar content
 					if (!trimmed || trimmed.match(/^[─━\-]{5,}/) ||
 						trimmed.includes('-- INSERT --') || trimmed.includes('-- NORMAL --')) {
 						break;
+					}
+					// Skip pasted text indicator lines
+					if (trimmed.match(/^\[Pasted text #\d+/)) {
+						continue;
 					}
 					// Check if this might be a continuation line (no prompt, just content)
 					// Claude wraps long input, so continuation lines are possible
@@ -2792,11 +3092,16 @@ templ paneScripts() {
 			const inputField = document.getElementById('input-field');
 			if (!pendingText || !inputField) return;
 
-			const text = pendingText.textContent;
-			if (text) {
-				inputField.value = text;
+			// Get full text from title attribute (textContent may be truncated)
+			const fullText = pendingText.title || pendingText.textContent;
+			if (fullText) {
+				// Only fill input field if it's empty (don't overwrite user input)
+				if (inputField.value.trim() === '') {
+					inputField.value = fullText;
+					autoResize(inputField);
+				}
 				inputField.focus();
-				autoResize(inputField);
+
 				// Clear the existing input in Claude (send Ctrl+U to clear line)
 				const bar = document.getElementById('choices-bar');
 				const target = bar?.dataset.paneTarget;
@@ -2964,6 +3269,140 @@ templ paneScripts() {
 			}
 		});
 
+		// Handle multiple image attachments
+		let selectedImages = [];
+
+		function updateAttachmentsUI() {
+			const attachmentsArea = document.getElementById('attachments-area');
+			if (!attachmentsArea) return;
+
+			if (selectedImages.length === 0) {
+				attachmentsArea.classList.add('hidden');
+				attachmentsArea.innerHTML = '';
+			} else {
+				attachmentsArea.classList.remove('hidden');
+				attachmentsArea.innerHTML = selectedImages.map((img, index) => `
+					<div class="attachment-pill">
+						<span class="attachment-name" title="${img.name}">📎 ${img.name}</span>
+						<button type="button" class="attachment-remove" onclick="removeAttachment(${index})" title="Remove">
+							<svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M6 18L18 6M6 6l12 12"></path>
+							</svg>
+						</button>
+					</div>
+				`).join('');
+			}
+		}
+
+		window.removeAttachment = function(index) {
+			selectedImages.splice(index, 1);
+			updateAttachmentsUI();
+		};
+
+		window.handleImageSelect = function(event) {
+			const files = event.target.files;
+			if (!files || files.length === 0) return;
+
+			// Process all selected files
+			Array.from(files).forEach(file => {
+				const reader = new FileReader();
+				reader.onload = function(e) {
+					selectedImages.push({
+						name: file.name,
+						type: file.type,
+						data: e.target.result.split(',')[1] // base64 data without prefix
+					});
+					updateAttachmentsUI();
+				};
+				reader.readAsDataURL(file);
+			});
+
+			// Clear file input to allow selecting the same file again
+			event.target.value = '';
+		};
+
+		// Handle image paste
+		document.addEventListener('DOMContentLoaded', function() {
+			const inputField = document.getElementById('input-field');
+			if (inputField) {
+				inputField.addEventListener('paste', function(e) {
+					const items = e.clipboardData?.items;
+					if (!items) return;
+
+					// Look for images in clipboard
+					let foundImage = false;
+					for (let i = 0; i < items.length; i++) {
+						if (items[i].type.indexOf('image') !== -1) {
+							if (!foundImage) {
+								e.preventDefault(); // Prevent default paste behavior for images
+								foundImage = true;
+							}
+
+							const blob = items[i].getAsFile();
+							if (!blob) continue;
+
+							// Generate filename with timestamp
+							const ext = blob.type.split('/')[1] || 'png';
+							const filename = `pasted-image-${Date.now()}.${ext}`;
+
+							// Convert to base64
+							const reader = new FileReader();
+							reader.onload = function(event) {
+								selectedImages.push({
+									name: filename,
+									type: blob.type,
+									data: event.target.result.split(',')[1] // base64 data without prefix
+								});
+								updateAttachmentsUI();
+							};
+							reader.readAsDataURL(blob);
+						}
+					}
+				});
+			}
+		});
+
+		// Handle all form submissions (with or without images)
+		document.getElementById('input-form')?.addEventListener('submit', async function(e) {
+			e.preventDefault();
+
+			const inputField = document.getElementById('input-field');
+			const text = inputField.value.trim();
+			const paneTarget = this.getAttribute('data-pane-target');
+
+			if (!paneTarget) return;
+
+			let response;
+
+			if (selectedImages.length > 0) {
+				// Send with images
+				response = await fetch(`/pane/${paneTarget}/send-with-images`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({
+						text: text,
+						images: selectedImages
+					})
+				});
+			} else {
+				// Send text only
+				const formData = new FormData();
+				formData.append('text', text);
+				response = await fetch(`/pane/${paneTarget}/send`, {
+					method: 'POST',
+					body: formData
+				});
+			}
+
+			if (response.ok) {
+				// Clear form and images
+				inputField.value = '';
+				inputField.style.height = 'auto';
+				selectedImages = [];
+				updateAttachmentsUI();
+			}
+		});
+
 		// Allow Enter to create newlines (for iOS compatibility)
 		// Only submit via Send button
 		window.handleInputKeydown = function(e) {
@@ -2971,6 +3410,14 @@ templ paneScripts() {
 			if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
 				e.preventDefault();
 				document.getElementById('input-form').requestSubmit();
+			}
+			// Ctrl+Shift+X to clear all attached images
+			if (e.key === 'X' && e.ctrlKey && e.shiftKey) {
+				e.preventDefault();
+				if (selectedImages.length > 0) {
+					selectedImages = [];
+					updateAttachmentsUI();
+				}
 			}
 			// Regular Enter creates newline (default behavior for textarea)
 		}

@@ -3,11 +3,13 @@ package server
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -509,6 +511,18 @@ func (s *Server) handlePane(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Handle send with multiple images action
+	if strings.HasSuffix(r.URL.Path, "/send-with-images") {
+		s.handlePaneSendWithImages(w, r, pane)
+		return
+	}
+
+	// Handle send with image action (legacy, single image)
+	if strings.HasSuffix(r.URL.Path, "/send-with-image") {
+		s.handlePaneSendWithImage(w, r, pane)
+		return
+	}
+
 	// Handle send action
 	if strings.HasSuffix(r.URL.Path, "/send") {
 		s.handlePaneSend(w, r, pane)
@@ -632,6 +646,179 @@ func (s *Server) handlePaneSend(w http.ResponseWriter, r *http.Request, pane tmu
 	}
 
 	slog.Debug("send keys success")
+	w.WriteHeader(http.StatusOK)
+}
+
+// getFileExtension extracts the file extension from a filename
+func getFileExtension(filename string) string {
+	parts := strings.Split(filename, ".")
+	if len(parts) > 1 {
+		return parts[len(parts)-1]
+	}
+	return "jpg" // default to jpg if no extension found
+}
+
+func (s *Server) handlePaneSendWithImage(w http.ResponseWriter, r *http.Request, pane tmux.Pane) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Text  string `json:"text"`
+		Image struct {
+			Name string `json:"name"`
+			Type string `json:"type"`
+			Data string `json:"data"` // base64 encoded
+		} `json:"image"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		slog.Error("failed to decode image request", "error", err)
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Decode base64 image
+	imageData, err := base64.StdEncoding.DecodeString(req.Image.Data)
+	if err != nil {
+		slog.Error("failed to decode base64 image", "error", err)
+		http.Error(w, "invalid image data", http.StatusBadRequest)
+		return
+	}
+
+	// Write image to temp file
+	tmpFile, err := os.CreateTemp("", fmt.Sprintf("houston-*.%s", getFileExtension(req.Image.Name)))
+	if err != nil {
+		slog.Error("failed to create temp file", "error", err)
+		http.Error(w, "failed to save image", http.StatusInternalServerError)
+		return
+	}
+	defer os.Remove(tmpFile.Name()) // Clean up after sending
+
+	if _, err := tmpFile.Write(imageData); err != nil {
+		slog.Error("failed to write image", "error", err)
+		http.Error(w, "failed to save image", http.StatusInternalServerError)
+		return
+	}
+	tmpFile.Close()
+
+	// Send image path and text to Claude Code
+	// Format: type the image path + newline + text + Enter
+	message := tmpFile.Name()
+	if req.Text != "" {
+		message = fmt.Sprintf("%s\n%s", tmpFile.Name(), req.Text)
+	}
+
+	slog.Info("send image with text", "pane", pane.Target(), "image", tmpFile.Name(), "text", req.Text)
+
+	if err := s.tmux.SendKeys(pane, message, true); err != nil {
+		slog.Error("failed to send image", "error", err)
+		http.Error(w, "failed to send: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	slog.Debug("send image success")
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) handlePaneSendWithImages(w http.ResponseWriter, r *http.Request, pane tmux.Pane) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Text   string `json:"text"`
+		Images []struct {
+			Name string `json:"name"`
+			Type string `json:"type"`
+			Data string `json:"data"` // base64 encoded
+		} `json:"images"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		slog.Error("failed to decode images request", "error", err)
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.Images) == 0 {
+		http.Error(w, "no images provided", http.StatusBadRequest)
+		return
+	}
+
+	// Process all images and create temp files
+	var tmpFiles []string
+	var cleanupFiles []string
+
+	for i, img := range req.Images {
+		// Decode base64 image
+		imageData, err := base64.StdEncoding.DecodeString(img.Data)
+		if err != nil {
+			slog.Error("failed to decode base64 image", "error", err, "index", i)
+			// Clean up any files created so far
+			for _, f := range cleanupFiles {
+				os.Remove(f)
+			}
+			http.Error(w, fmt.Sprintf("invalid image data at index %d", i), http.StatusBadRequest)
+			return
+		}
+
+		// Write image to temp file with original filename preserved
+		// Use timestamp prefix to ensure uniqueness
+		tmpPath := fmt.Sprintf("/tmp/houston-%d-%s", time.Now().UnixNano(), img.Name)
+		tmpFile, err := os.Create(tmpPath)
+		if err != nil {
+			slog.Error("failed to create temp file", "error", err, "index", i)
+			// Clean up any files created so far
+			for _, f := range cleanupFiles {
+				os.Remove(f)
+			}
+			http.Error(w, "failed to save image", http.StatusInternalServerError)
+			return
+		}
+
+		if _, err := tmpFile.Write(imageData); err != nil {
+			slog.Error("failed to write image", "error", err, "index", i)
+			tmpFile.Close()
+			os.Remove(tmpFile.Name())
+			// Clean up any files created so far
+			for _, f := range cleanupFiles {
+				os.Remove(f)
+			}
+			http.Error(w, "failed to save image", http.StatusInternalServerError)
+			return
+		}
+		tmpFile.Close()
+
+		tmpFiles = append(tmpFiles, tmpFile.Name())
+		cleanupFiles = append(cleanupFiles, tmpFile.Name())
+	}
+
+	// Clean up temp files after sending
+	defer func() {
+		for _, f := range cleanupFiles {
+			os.Remove(f)
+		}
+	}()
+
+	// Send all image paths and text to Claude Code
+	// Format: image1\nimage2\nimage3\ntext + Enter
+	message := strings.Join(tmpFiles, "\n")
+	if req.Text != "" {
+		message = fmt.Sprintf("%s\n%s", message, req.Text)
+	}
+
+	slog.Info("send images with text", "pane", pane.Target(), "count", len(tmpFiles), "text", req.Text)
+
+	if err := s.tmux.SendKeys(pane, message, true); err != nil {
+		slog.Error("failed to send images", "error", err)
+		http.Error(w, "failed to send: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	slog.Debug("send images success", "count", len(tmpFiles))
 	w.WriteHeader(http.StatusOK)
 }
 

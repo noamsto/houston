@@ -11,13 +11,14 @@ type ResultType int
 const (
 	TypeIdle ResultType = iota
 	TypeWorking
+	TypeDone
 	TypeQuestion
 	TypeChoice
 	TypeError
 )
 
 func (t ResultType) String() string {
-	return [...]string{"idle", "working", "question", "choice", "error"}[t]
+	return [...]string{"idle", "working", "done", "question", "choice", "error"}[t]
 }
 
 type Mode int
@@ -54,7 +55,8 @@ var (
 
 	// Claude Code working/activity patterns
 	// Main spinner pattern - Claude uses ✻ followed by activity description and timing info
-	spinnerPattern = regexp.MustCompile(`[✻⏺●◐◓◑◒]\s*([^…\n]+?)(?:…|\.{2,})`)
+	// Matches: "● Working..." or "● Done." or "● Done!"
+	spinnerPattern = regexp.MustCompile(`[✻⏺●◐◓◑◒]\s*([^…\n\.!]+?)(?:…|\.+|!)`)
 	// Tool running indicator - "Running..." or "Running PreToolUse hook..."
 	toolRunningPattern = regexp.MustCompile(`(?i)⎿\s*(Running[^…]*(?:…|\.{2,}))`)
 	// Tool output lines (shows Claude completed/running a tool)
@@ -132,6 +134,17 @@ func Parse(output string) Result {
 	activityLines := lastN(lines, 15)
 	activity := detectActivity(activityLines)
 	if activity != "" {
+		// Check if this is a completion message (done state)
+		activityLower := strings.ToLower(activity)
+		if strings.HasPrefix(activityLower, "done") ||
+			strings.HasPrefix(activityLower, "completed") ||
+			strings.HasPrefix(activityLower, "finished") {
+			return Result{
+				Type:     TypeDone,
+				Mode:     mode,
+				Activity: activity,
+			}
+		}
 		return Result{
 			Type:     TypeWorking,
 			Mode:     mode,
@@ -166,6 +179,13 @@ func detectActivity(lines []string) string {
 			// Clean up parenthetical timing info if present
 			if idx := strings.Index(activity, "("); idx > 0 {
 				activity = strings.TrimSpace(activity[:idx])
+			}
+			// Check for completion indicators - return as "done" state
+			activityLower := strings.ToLower(activity)
+			if strings.HasPrefix(activityLower, "done") ||
+				strings.HasPrefix(activityLower, "completed") ||
+				strings.HasPrefix(activityLower, "finished") {
+				return activity // Will be detected as TypeDone below
 			}
 			return activity
 		}
