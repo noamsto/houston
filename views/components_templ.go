@@ -580,22 +580,16 @@ func getWindowStatusText(win WindowWithStatus) string {
 	case parser.TypeError:
 		// Show error snippet if available, otherwise just indicate there was an error
 		if win.ParseResult.ErrorSnippet != "" {
-			snippet := win.ParseResult.ErrorSnippet
-			if len(snippet) > 50 {
-				snippet = snippet[:47] + "..."
-			}
-			return snippet
+			// Use UTF-8 safe truncate helper
+			return truncate(win.ParseResult.ErrorSnippet, 50)
 		}
 		return ""
 	case parser.TypeChoice:
 		return "Waiting for choice..."
 	case parser.TypeQuestion:
 		if win.ParseResult.Question != "" {
-			q := win.ParseResult.Question
-			if len(q) > 40 {
-				q = q[:37] + "..."
-			}
-			return q
+			// Use UTF-8 safe truncate helper
+			return truncate(win.ParseResult.Question, 40)
 		}
 		return "Waiting for input..."
 	case parser.TypeWorking:
@@ -662,7 +656,7 @@ func PaneOutput(output string) templ.Component {
 		var templ_7745c5c3_Var35 string
 		templ_7745c5c3_Var35, templ_7745c5c3_Err = templ.JoinStringErrs(output)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/components.templ`, Line: 198, Col: 9}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/components.templ`, Line: 192, Col: 9}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var35))
 		if templ_7745c5c3_Err != nil {

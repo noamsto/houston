@@ -136,22 +136,16 @@ func getWindowStatusText(win WindowWithStatus) string {
 	case parser.TypeError:
 		// Show error snippet if available, otherwise just indicate there was an error
 		if win.ParseResult.ErrorSnippet != "" {
-			snippet := win.ParseResult.ErrorSnippet
-			if len(snippet) > 50 {
-				snippet = snippet[:47] + "..."
-			}
-			return snippet
+			// Use UTF-8 safe truncate helper
+			return truncate(win.ParseResult.ErrorSnippet, 50)
 		}
 		return ""
 	case parser.TypeChoice:
 		return "Waiting for choice..."
 	case parser.TypeQuestion:
 		if win.ParseResult.Question != "" {
-			q := win.ParseResult.Question
-			if len(q) > 40 {
-				q = q[:37] + "..."
-			}
-			return q
+			// Use UTF-8 safe truncate helper
+			return truncate(win.ParseResult.Question, 40)
 		}
 		return "Waiting for input..."
 	case parser.TypeWorking:

@@ -1,38 +1,53 @@
 package views
 
+// sharedAnsiUtilities contains common ANSI processing functions used across pages
+templ sharedAnsiUtilities() {
+	<script type="module">
+		// Shared ANSI color mapping for brightening dark colors
+		// Makes dark 8-bit ANSI colors more visible on dark backgrounds
+		const ANSI_COLOR_BRIGHTENING_MAP = {
+			// Standard ANSI colors (0-7) - brighten significantly
+			'rgb(0,0,187)': 'rgb(137,180,250)',      // Dark blue → light blue
+			'rgb(0,187,0)': 'rgb(166,227,161)',      // Dark green → light green
+			'rgb(187,0,187)': 'rgb(243,139,168)',    // Dark magenta → light magenta
+			'rgb(187,0,0)': 'rgb(252,165,165)',      // Dark red → light red
+			'rgb(187,187,0)': 'rgb(253,224,71)',     // Dark yellow → bright yellow
+			'rgb(0,187,187)': 'rgb(137,220,235)',    // Dark cyan → light cyan
+			// Bright ANSI colors (8-15) - improve contrast
+			'rgb(85,85,85)': 'rgb(163,163,163)',     // Bright black (gray) → lighter gray
+			'rgb(255,85,85)': 'rgb(252,165,165)',    // Bright red → softer red
+			'rgb(85,255,85)': 'rgb(134,239,172)',    // Bright green → softer green
+			'rgb(255,255,85)': 'rgb(253,224,71)',    // Bright yellow → softer yellow
+			'rgb(85,85,255)': 'rgb(147,197,253)',    // Bright blue → softer blue
+			'rgb(255,85,255)': 'rgb(244,114,182)',   // Bright magenta → softer magenta
+			'rgb(85,255,255)': 'rgb(165,243,252)'    // Bright cyan → softer cyan
+		};
+
+		// Shared function to brighten ANSI colors
+		window.brightenAnsiColors = function(html) {
+			let result = html;
+			for (const [dark, light] of Object.entries(ANSI_COLOR_BRIGHTENING_MAP)) {
+				// Escape special regex characters in color values
+				const escaped = dark.replace(/[()]/g, '\\$&');
+				result = result.replace(new RegExp(escaped, 'g'), light);
+			}
+			return result;
+		};
+	</script>
+}
+
 // indexPageInlineScript contains the inline JavaScript for IndexPage (AnsiUp setup)
 templ indexPageInlineScript() {
+	@sharedAnsiUtilities()
 	<script type="module">
 			import { AnsiUp } from 'https://cdn.jsdelivr.net/npm/ansi_up@6/ansi_up.js';
 			const ansiUp = new AnsiUp();
 			ansiUp.escapeHtml = true;
 
-			// Brightens dark 8-bit ANSI colors for visibility on dark backgrounds
-			function brightenAnsiColors(html) {
-				// Standard ANSI colors (0-7) - brighten significantly
-				html = html.replace(/rgb\(0,0,187\)/g, 'rgb(137,180,250)');      // Dark blue → light blue
-				html = html.replace(/rgb\(0,187,0\)/g, 'rgb(166,227,161)');      // Dark green → light green
-				html = html.replace(/rgb\(187,0,187\)/g, 'rgb(243,139,168)');    // Dark magenta → light magenta
-				html = html.replace(/rgb\(187,0,0\)/g, 'rgb(252,165,165)');      // Dark red → light red
-				html = html.replace(/rgb\(187,187,0\)/g, 'rgb(253,224,71)');     // Dark yellow → bright yellow
-				html = html.replace(/rgb\(0,187,187\)/g, 'rgb(137,220,235)');    // Dark cyan → light cyan
-
-				// Bright ANSI colors (8-15) - also improve contrast
-				html = html.replace(/rgb\(85,85,85\)/g, 'rgb(163,163,163)');     // Bright black (gray) → lighter gray
-				html = html.replace(/rgb\(255,85,85\)/g, 'rgb(252,165,165)');    // Bright red → softer red
-				html = html.replace(/rgb\(85,255,85\)/g, 'rgb(134,239,172)');    // Bright green → softer green
-				html = html.replace(/rgb\(255,255,85\)/g, 'rgb(253,224,71)');    // Bright yellow → softer yellow
-				html = html.replace(/rgb\(85,85,255\)/g, 'rgb(147,197,253)');    // Bright blue → softer blue
-				html = html.replace(/rgb\(255,85,255\)/g, 'rgb(244,114,182)');   // Bright magenta → softer magenta
-				html = html.replace(/rgb\(85,255,255\)/g, 'rgb(165,243,252)');   // Bright cyan → softer cyan
-
-				return html;
-			}
-
-			// Convert ANSI to HTML with brightening
+			// Convert ANSI to HTML with brightening (uses shared brightenAnsiColors)
 			window.ansiToHtml = function(text) {
 				let html = ansiUp.ansi_to_html(text);
-				return brightenAnsiColors(html);
+				return window.brightenAnsiColors(html);
 			};
 	</script>
 }
@@ -49,6 +64,7 @@ templ paneScripts() {
 			}
 		})();
 	</script>
+	@sharedAnsiUtilities()
 	<script type="module">
 		import { AnsiUp } from 'https://cdn.jsdelivr.net/npm/ansi_up@6/ansi_up.js';
 
@@ -59,28 +75,6 @@ templ paneScripts() {
 		// Only target rgb() values (ansi_up uses rgb, not rgba) to avoid stripping CSS code in terminal content
 		function fixBackgrounds(html) {
 			html = html.replace(/background-color:\s*rgb\([^)]+\);?/gi, '');
-			return html;
-		}
-
-		// Brightens dark 8-bit ANSI colors for visibility on dark backgrounds
-		function brightenAnsiColors(html) {
-			// Standard ANSI colors (0-7) - brighten significantly
-			html = html.replace(/rgb\(0,0,187\)/g, 'rgb(137,180,250)');      // Dark blue → light blue
-			html = html.replace(/rgb\(0,187,0\)/g, 'rgb(166,227,161)');      // Dark green → light green
-			html = html.replace(/rgb\(187,0,187\)/g, 'rgb(243,139,168)');    // Dark magenta → light magenta
-			html = html.replace(/rgb\(187,0,0\)/g, 'rgb(252,165,165)');      // Dark red → light red
-			html = html.replace(/rgb\(187,187,0\)/g, 'rgb(253,224,71)');     // Dark yellow → bright yellow
-			html = html.replace(/rgb\(0,187,187\)/g, 'rgb(137,220,235)');    // Dark cyan → light cyan
-
-			// Bright ANSI colors (8-15) - also improve contrast
-			html = html.replace(/rgb\(85,85,85\)/g, 'rgb(163,163,163)');     // Bright black (gray) → lighter gray
-			html = html.replace(/rgb\(255,85,85\)/g, 'rgb(252,165,165)');    // Bright red → softer red
-			html = html.replace(/rgb\(85,255,85\)/g, 'rgb(134,239,172)');    // Bright green → softer green
-			html = html.replace(/rgb\(255,255,85\)/g, 'rgb(253,224,71)');    // Bright yellow → softer yellow
-			html = html.replace(/rgb\(85,85,255\)/g, 'rgb(147,197,253)');    // Bright blue → softer blue
-			html = html.replace(/rgb\(255,85,255\)/g, 'rgb(244,114,182)');   // Bright magenta → softer magenta
-			html = html.replace(/rgb\(85,255,255\)/g, 'rgb(165,243,252)');   // Bright cyan → softer cyan
-
 			return html;
 		}
 
@@ -156,8 +150,8 @@ templ paneScripts() {
 				// Normalize line endings and remove carriage returns
 				text = text.replace(/\r\n/g, '\n').replace(/\r/g, '');
 				let html = ansiUp.ansi_to_html(text);
-				// Brighten dark ANSI colors for better visibility
-				html = brightenAnsiColors(html);
+				// Brighten dark ANSI colors for better visibility (uses shared function)
+				html = window.brightenAnsiColors(html);
 				html = highlightUserInput(html);
 				return html;
 			} catch (err) {
@@ -772,6 +766,19 @@ templ paneScripts() {
 			const paneTarget = this.getAttribute('data-pane-target');
 
 			if (!paneTarget) return;
+
+			// Input validation
+			const MAX_INPUT_LENGTH = 100000; // 100KB limit for input text
+			if (text.length > MAX_INPUT_LENGTH) {
+				console.error('Input too long:', text.length, 'characters (max:', MAX_INPUT_LENGTH, ')');
+				alert(`Input is too long (${text.length} characters). Maximum is ${MAX_INPUT_LENGTH} characters.`);
+				return;
+			}
+
+			// Skip submission if input is empty (unless there are images attached)
+			if (text.length === 0 && selectedImages.length === 0) {
+				return;
+			}
 
 			// Check if there's pending input that needs to be cleared first
 			const pendingInputBar = document.getElementById('pending-input-bar');

@@ -3,7 +3,9 @@ package views
 import (
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Helper functions
@@ -27,10 +29,16 @@ func timeAgo(t time.Time) string {
 }
 
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	// Use rune count instead of byte length to handle UTF-8 properly
+	if utf8.RuneCountInString(s) <= n {
 		return s
 	}
-	return s[:n] + "..."
+	// Convert to runes, truncate, and add ellipsis
+	runes := []rune(s)
+	if n < 3 {
+		return string(runes[:n])
+	}
+	return string(runes[:n-3]) + "..."
 }
 
 // lastLines returns the last n non-empty lines of a string
@@ -49,18 +57,7 @@ func lastLines(s string, n int) []string {
 }
 
 func splitLines(s string) []string {
-	result := []string{}
-	start := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\n' {
-			result = append(result, s[start:i])
-			start = i + 1
-		}
-	}
-	if start < len(s) {
-		result = append(result, s[start:])
-	}
-	return result
+	return strings.Split(s, "\n")
 }
 
 func reverseStrings(ss []string) []string {
@@ -72,13 +69,6 @@ func reverseStrings(ss []string) []string {
 }
 
 func trimLine(s string) string {
-	// Trim leading/trailing whitespace but keep content
-	start, end := 0, len(s)
-	for start < end && (s[start] == ' ' || s[start] == '\t' || s[start] == '\r') {
-		start++
-	}
-	for end > start && (s[end-1] == ' ' || s[end-1] == '\t' || s[end-1] == '\r') {
-		end--
-	}
-	return s[start:end]
+	// Use stdlib TrimSpace which handles all Unicode whitespace
+	return strings.TrimSpace(s)
 }
