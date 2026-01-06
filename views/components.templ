@@ -1,0 +1,199 @@
+package views
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/noamsto/houston/parser"
+	"github.com/noamsto/houston/tmux"
+)
+
+// Sessions renders the sessions list with window-level detail
+templ Sessions(data SessionsData) {
+	<div class="sessions-grid">
+		// Needs Attention section
+		if len(data.NeedsAttention) > 0 {
+			<div class="section-label">Needs attention</div>
+			for _, sess := range data.NeedsAttention {
+				@sessionCardV2(sess, true)
+			}
+		}
+		// Active section
+		if len(data.Active) > 0 {
+			<div class="section-label">Active</div>
+			for _, sess := range data.Active {
+				@sessionCardV2(sess, false)
+			}
+		}
+		// Idle section
+		if len(data.Idle) > 0 {
+			<div class="section-label">Idle</div>
+			for _, sess := range data.Idle {
+				@sessionCardV2(sess, false)
+			}
+		}
+		// Empty state
+		if len(data.NeedsAttention) == 0 && len(data.Active) == 0 && len(data.Idle) == 0 {
+			<div class="empty-state">
+				<div class="empty-icon">◯</div>
+				<p>No tmux sessions</p>
+			</div>
+		}
+	</div>
+}
+
+// sessionCardV2 renders a session with its windows
+templ sessionCardV2(sess SessionWithWindows, expanded bool) {
+	<div class={ "session", templ.KV("has-attention", sess.AttentionCount > 0), templ.KV("expanded", expanded) } data-session={ sess.Session.Name }>
+		<div class="session-header" onclick="toggleSession(this)">
+			<div class={ "session-indicator", getSessionIndicator(sess) }></div>
+			<div class="session-info">
+				<div class="session-name">{ sess.Session.Name }</div>
+				<div class="session-meta">{ fmt.Sprintf("%d windows", len(sess.Windows)) }</div>
+			</div>
+			if sess.AttentionCount > 0 {
+				<span class="session-badge">{ fmt.Sprintf("%d", sess.AttentionCount) }</span>
+				<button class="dismiss-btn" data-dismiss-session={ sess.Session.Name } title="Dismiss">✕</button>
+			}
+			<svg class="session-chevron" width="20" height="20" viewBox="0 0 20 20" fill="none">
+				<path d="M5 7.5L10 12.5L15 7.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path>
+			</svg>
+		</div>
+		<div class={ "windows", templ.KV("hidden", !expanded) }>
+			for _, win := range sess.Windows {
+				@windowCard(sess.Session.Name, win)
+			}
+		</div>
+	</div>
+}
+
+// windowCard renders a single window within a session
+templ windowCard(sessionName string, win WindowWithStatus) {
+	<div
+		data-session={ sessionName }
+		data-window={ fmt.Sprintf("%d", win.Window.Index) }
+		data-pane={ fmt.Sprintf("%d", win.Pane.Index) }
+		data-name={ win.Window.Name }
+		data-status={ getWindowStatusText(win) }
+		data-indicator={ getWindowIndicator(win) }
+		data-preview={ strings.Join(win.Preview, "\n") }
+		data-question={ win.ParseResult.Question }
+		data-choices={ strings.Join(win.ParseResult.Choices, "|") }
+		onclick="selectWindow(this)"
+		class={ "window", templ.KV("attention", win.NeedsAttention) }
+	>
+		<div class={ "window-indicator", getWindowIndicator(win) }></div>
+		<div class="window-info">
+			<div class="window-name">{ fmt.Sprintf("%d: %s", win.Window.Index, getWindowDisplayName(win)) }</div>
+			<div class={ "window-status", getWindowIndicator(win) }>
+				{ getWindowStatusText(win) }
+			</div>
+			if len(win.Preview) > 0 {
+				<div class="window-preview">
+					for _, line := range win.Preview {
+						<div class="preview-line">{ line }</div>
+					}
+				</div>
+			}
+		</div>
+		<div class="window-actions">
+			<a href={ templ.SafeURL(fmt.Sprintf("/pane/%s:%d.%d", sessionName, win.Window.Index, win.Pane.Index)) }
+				class="window-view-btn"
+				onclick="event.stopPropagation()"
+				title="Open pane view">view</a>
+			<span class="window-arrow">→</span>
+		</div>
+	</div>
+}
+
+// Helper functions for template
+
+func getSessionIndicator(sess SessionWithWindows) string {
+	if sess.AttentionCount > 0 {
+		return "attention"
+	}
+	if sess.HasWorking {
+		return "working"
+	}
+	return "idle"
+}
+
+func getWindowIndicator(win WindowWithStatus) string {
+	if win.NeedsAttention {
+		return "attention"
+	}
+	if win.ParseResult.Type == parser.TypeWorking {
+		return "working"
+	}
+	if win.ParseResult.Type == parser.TypeDone {
+		return "done"
+	}
+	return "idle"
+}
+
+func getWindowStatusText(win WindowWithStatus) string {
+	switch win.ParseResult.Type {
+	case parser.TypeError:
+		// Show error snippet if available, otherwise just indicate there was an error
+		if win.ParseResult.ErrorSnippet != "" {
+			snippet := win.ParseResult.ErrorSnippet
+			if len(snippet) > 50 {
+				snippet = snippet[:47] + "..."
+			}
+			return snippet
+		}
+		return ""
+	case parser.TypeChoice:
+		return "Waiting for choice..."
+	case parser.TypeQuestion:
+		if win.ParseResult.Question != "" {
+			q := win.ParseResult.Question
+			if len(q) > 40 {
+				q = q[:37] + "..."
+			}
+			return q
+		}
+		return "Waiting for input..."
+	case parser.TypeWorking:
+		if win.ParseResult.Activity != "" {
+			return win.ParseResult.Activity + "..."
+		}
+		return "Working..."
+	case parser.TypeDone:
+		if win.ParseResult.Activity != "" {
+			return win.ParseResult.Activity
+		}
+		return "Done"
+	default:
+		return "Idle"
+	}
+}
+
+// getWindowDisplayName returns the display name for a window
+// Now window_name contains the branch (set by tmux_nerd)
+func getWindowDisplayName(win WindowWithStatus) string {
+	// Window.Name now contains the branch name
+	return win.Window.Name
+}
+
+// getPaneDisplayName returns the display name for a pane
+// Uses title if set (supports nerd fonts), falls back to index + command
+func getPaneDisplayName(p tmux.PaneInfo) string {
+	if p.Title != "" && p.Title != p.Command {
+		return p.Title
+	}
+	return fmt.Sprintf("P%d", p.Index)
+}
+
+// getPaneSubtitle returns the subtitle for a pane (command if title is used)
+func getPaneSubtitle(p tmux.PaneInfo) string {
+	if p.Title != "" && p.Title != p.Command {
+		return p.Command
+	}
+	return p.Command
+}
+
+// PaneOutput renders just the pane output (for SSE updates)
+templ PaneOutput(output string) {
+	{ output }
+}

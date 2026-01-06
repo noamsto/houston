@@ -1,0 +1,918 @@
+package views
+
+import (
+	"fmt"
+)
+
+// IndexPage renders the main dashboard page with Mission Control design
+templ IndexPage() {
+	<!DOCTYPE html>
+	<html lang="en">
+	<head>
+		<meta charset="UTF-8"/>
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no"/>
+		<link rel="icon" type="image/svg+xml" href="/static/favicon.svg"/>
+		<title>mission control</title>
+		<link rel="preconnect" href="https://fonts.googleapis.com"/>
+		<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
+		<!-- Nerd Font for terminal icons -->
+		<link href="https://cdn.jsdelivr.net/gh/mshaugh/nerdfont-webfonts@v3.3.0/build/symbols-nerd-font-mono.css" rel="stylesheet"/>
+		<script src="https://unpkg.com/idiomorph@0.3.0/dist/idiomorph.min.js"></script>
+		@indexPageInlineScript()
+		@indexPageStyles()
+	</head>
+	<body>
+		<header class="header">
+			<div class="header-content">
+				<div class="logo">
+					<div class="logo-icon">MC</div>
+					<span class="logo-text">mission control</span>
+				</div>
+				<div class="header-right">
+					<div class="status-summary" id="status-summary"></div>
+					<button class="notification-btn" id="notificationBtn" onclick="toggleNotifications()" title="Toggle notifications">
+						<svg class="bell-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+							<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+							<path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+							<line x1="1" y1="1" x2="23" y2="23"></line>
+						</svg>
+						<svg class="bell-on" style="display:none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+							<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+							<path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+						</svg>
+					</button>
+					<button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">
+						<svg class="sun-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+							<circle cx="12" cy="12" r="5"></circle>
+							<line x1="12" y1="1" x2="12" y2="3"></line>
+							<line x1="12" y1="21" x2="12" y2="23"></line>
+							<line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+							<line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+							<line x1="1" y1="12" x2="3" y2="12"></line>
+							<line x1="21" y1="12" x2="23" y2="12"></line>
+							<line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+							<line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+						</svg>
+						<svg class="moon-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+							<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+						</svg>
+					</button>
+				</div>
+			</div>
+			<div class="search-bar">
+				<input type="text" class="search-input" id="searchInput" placeholder="Filter sessions..." oninput="filterSessions(this.value)"/>
+			</div>
+		</header>
+		<main class="main">
+			<div id="sessions">
+				<div class="empty-state">
+					<p>Loading...</p>
+				</div>
+			</div>
+		</main>
+		<!-- Action bar backdrop -->
+		<div class="action-backdrop" id="actionBackdrop" onclick="closeActionBar()"></div>
+		<!-- Action bar -->
+		<div class="action-bar" id="actionBar">
+			<div class="action-bar-content">
+				<div class="action-target">
+					<span id="actionTarget"></span>
+					<button class="action-close" onclick="closeActionBar()">✕</button>
+				</div>
+				<div class="action-context" id="actionContext">
+					<div class="action-status" id="actionStatus"></div>
+					<div class="action-preview" id="actionPreview"></div>
+				</div>
+				<div class="action-choices hidden" id="actionChoices"></div>
+				<div class="action-input-row">
+					<input type="text" class="action-input" placeholder="Send input..." id="actionInput" autocapitalize="off" autocorrect="off" spellcheck="false"/>
+					<button class="action-btn stop" onclick="sendStop()" title="Stop (Escape)">
+						<svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+						</svg>
+					</button>
+					<button class="action-btn view" onclick="viewPane()">View</button>
+					<button class="action-btn" onclick="sendInput()">Send</button>
+				</div>
+				<div class="action-extra-row" style="display: flex; gap: 0.375rem; margin-top: 0.5rem;">
+					<button class="action-btn-secondary" onclick="respawnPane()" title="Respawn pane">Respawn</button>
+					<button class="action-btn-secondary danger" onclick="closePane()" title="Close pane">Close pane</button>
+					<button class="action-btn-secondary danger" onclick="closeWindow()" title="Close window">Close window</button>
+				</div>
+			</div>
+		</div>
+		<script src="/static/app.js"></script>
+		<script>
+			// Track expanded sessions
+			const expandedSessions = new Set();
+			let selectedTarget = null;
+			let currentFilter = '';
+
+			// Dismissed sessions (stored in localStorage)
+			const DISMISSED_KEY = 'houston-dismissed-sessions';
+			let dismissedSessions = new Map(); // session -> timestamp
+
+			// Track "done" state timestamps for auto-transition to idle
+			const doneTimestamps = new Map(); // "session:window:pane" -> timestamp
+			const DONE_TIMEOUT = 60000; // 60 seconds
+
+			function loadDismissed() {
+				try {
+					const stored = localStorage.getItem(DISMISSED_KEY);
+					if (stored) {
+						dismissedSessions = new Map(JSON.parse(stored));
+					}
+				} catch (e) {
+					console.warn('Failed to load dismissed sessions:', e);
+				}
+			}
+
+			function saveDismissed() {
+				try {
+					localStorage.setItem(DISMISSED_KEY, JSON.stringify([...dismissedSessions]));
+				} catch (e) {
+					console.warn('Failed to save dismissed sessions:', e);
+				}
+			}
+
+			function dismissSession(sessionName) {
+				dismissedSessions.set(sessionName, Date.now());
+				saveDismissed();
+				applyDismissals();
+			}
+
+			function undismissSession(sessionName) {
+				dismissedSessions.delete(sessionName);
+				saveDismissed();
+			}
+
+			function applyDismissals() {
+				// Move dismissed sessions from attention to idle visually
+				document.querySelectorAll('.session.has-attention').forEach(session => {
+					const name = session.dataset.session;
+					if (dismissedSessions.has(name)) {
+						session.classList.add('dismissed');
+						session.classList.remove('has-attention');
+						// Update indicator to idle
+						const indicator = session.querySelector('.session-indicator');
+						if (indicator) {
+							indicator.className = 'session-indicator idle';
+						}
+						// Hide badge and dismiss button
+						const badge = session.querySelector('.session-badge');
+						const dismissBtn = session.querySelector('.dismiss-btn');
+						if (badge) badge.style.display = 'none';
+						if (dismissBtn) dismissBtn.style.display = 'none';
+					}
+				});
+
+				// Clear dismissals for sessions no longer needing attention
+				// (they'll naturally be in idle/active sections)
+				const attentionSessions = new Set();
+				document.querySelectorAll('.session.has-attention, .session[data-was-attention="true"]').forEach(s => {
+					attentionSessions.add(s.dataset.session);
+				});
+				for (const [name] of dismissedSessions) {
+					if (!attentionSessions.has(name)) {
+						dismissedSessions.delete(name);
+					}
+				}
+				saveDismissed();
+			}
+
+			// Load dismissed on page load
+			loadDismissed();
+
+			// Event delegation for dismiss buttons
+			document.addEventListener('click', function(e) {
+				const dismissBtn = e.target.closest('[data-dismiss-session]');
+				if (dismissBtn) {
+					e.stopPropagation();
+					const sessionName = dismissBtn.dataset.dismissSession;
+					dismissSession(sessionName);
+				}
+			});
+
+			function filterSessions(query) {
+				currentFilter = query.toLowerCase().trim();
+				const sessions = document.querySelectorAll('#sessions .session');
+
+				sessions.forEach(session => {
+					const sessionName = session.dataset.session?.toLowerCase() || '';
+					const windows = session.querySelectorAll('.window');
+					let hasMatch = false;
+
+					windows.forEach(win => {
+						const windowName = (win.dataset.name || '').toLowerCase();
+						const matches = !currentFilter ||
+							sessionName.includes(currentFilter) ||
+							windowName.includes(currentFilter);
+
+						win.style.display = matches ? '' : 'none';
+						if (matches) hasMatch = true;
+					});
+
+					// Show session if name matches or any window matches
+					const sessionMatches = !currentFilter || sessionName.includes(currentFilter) || hasMatch;
+					session.style.display = sessionMatches ? '' : 'none';
+
+					// Auto-expand if filtering and has matches
+					if (currentFilter && hasMatch) {
+						session.classList.add('expanded');
+						session.querySelector('.windows')?.classList.remove('hidden');
+					}
+				});
+			}
+
+			function toggleSession(header) {
+				const session = header.closest('.session');
+				const windows = session.querySelector('.windows');
+				const sessionName = session.dataset.session;
+
+				session.classList.toggle('expanded');
+				windows.classList.toggle('hidden');
+
+				if (session.classList.contains('expanded')) {
+					expandedSessions.add(sessionName);
+				} else {
+					expandedSessions.delete(sessionName);
+				}
+			}
+
+			function restoreExpandedState() {
+				document.querySelectorAll('.session').forEach(session => {
+					const name = session.dataset.session;
+					if (expandedSessions.has(name)) {
+						session.classList.add('expanded');
+						session.querySelector('.windows')?.classList.remove('hidden');
+					}
+				});
+			}
+
+			// Update status summary counts in header
+			function updateStatusSummary() {
+				const container = document.getElementById('sessions');
+				const attention = container.querySelectorAll('.window-indicator.attention').length;
+				const error = container.querySelectorAll('.window-indicator.error').length;
+				const working = container.querySelectorAll('.window-indicator.working').length;
+				const idle = container.querySelectorAll('.window-indicator.idle').length;
+
+				const summary = document.getElementById('status-summary');
+				let html = '';
+				if (attention + error > 0) {
+					html += `<div class="status-count"><div class="status-dot attention"></div><span>${attention + error}</span></div>`;
+				}
+				if (working > 0) {
+					html += `<div class="status-count"><div class="status-dot working"></div><span>${working}</span></div>`;
+				}
+				if (idle > 0) {
+					html += `<div class="status-count"><div class="status-dot idle"></div><span>${idle}</span></div>`;
+				}
+				summary.innerHTML = html;
+			}
+
+			// Process activity text to convert ANSI codes to HTML with color brightening
+			function processActivityText() {
+				// Process window status text (activity line)
+				document.querySelectorAll('.window-status').forEach(el => {
+					const text = el.textContent;
+					// Only process if text contains ANSI escape codes
+					if (text && text.includes('\x1b[')) {
+						el.innerHTML = window.ansiToHtml(text);
+					}
+				});
+
+				// Process preview lines (terminal output snippets)
+				document.querySelectorAll('.preview-line').forEach(el => {
+					const text = el.textContent;
+					if (text && text.includes('\x1b[')) {
+						el.innerHTML = window.ansiToHtml(text);
+					}
+				});
+			}
+
+			// Track and transition "done" states to "idle" after timeout
+			function trackDoneStates() {
+				const now = Date.now();
+				document.querySelectorAll('.window-indicator.done').forEach(indicator => {
+					const windowEl = indicator.closest('.window');
+					if (!windowEl) return;
+
+					const key = `${windowEl.dataset.session}:${windowEl.dataset.window}:${windowEl.dataset.pane}`;
+
+					// Record timestamp for newly done windows
+					if (!doneTimestamps.has(key)) {
+						doneTimestamps.set(key, now);
+					}
+
+					// Check if timeout has passed
+					const timestamp = doneTimestamps.get(key);
+					if (now - timestamp >= DONE_TIMEOUT) {
+						// Transition to idle
+						indicator.classList.remove('done');
+						indicator.classList.add('idle');
+
+						const statusEl = windowEl.querySelector('.window-status');
+						if (statusEl) {
+							statusEl.classList.remove('done');
+							statusEl.classList.add('idle');
+							statusEl.textContent = 'Idle';
+						}
+
+						// Remove from tracking
+						doneTimestamps.delete(key);
+					}
+				});
+
+				// Clean up timestamps for windows that are no longer in done state
+				const currentDoneKeys = new Set();
+				document.querySelectorAll('.window-indicator.done').forEach(indicator => {
+					const windowEl = indicator.closest('.window');
+					if (windowEl) {
+						const key = `${windowEl.dataset.session}:${windowEl.dataset.window}:${windowEl.dataset.pane}`;
+						currentDoneKeys.add(key);
+					}
+				});
+				for (const key of doneTimestamps.keys()) {
+					if (!currentDoneKeys.has(key)) {
+						doneTimestamps.delete(key);
+					}
+				}
+			}
+
+			// Check for done → idle transitions periodically
+			setInterval(trackDoneStates, 5000); // Check every 5 seconds
+
+			// Action bar functions
+			function selectWindow(el) {
+				const session = el.dataset.session;
+				const windowIdx = parseInt(el.dataset.window);
+				const paneIdx = parseInt(el.dataset.pane || '0');
+				const windowName = el.dataset.name;
+				const status = el.dataset.status;
+				const indicator = el.dataset.indicator;
+				const preview = el.dataset.preview;
+				const question = el.dataset.question;
+				const choices = el.dataset.choices;
+
+				selectedTarget = { session, window: windowIdx, pane: paneIdx };
+				document.getElementById('actionTarget').textContent = `${session}:${windowIdx} ${windowName}`;
+
+				// Update context area
+				const context = document.getElementById('actionContext');
+				const statusEl = document.getElementById('actionStatus');
+				const previewEl = document.getElementById('actionPreview');
+
+				context.className = 'action-context ' + indicator;
+				statusEl.className = 'action-status ' + indicator;
+				statusEl.textContent = status;
+
+				// Show choices if available, then preview (don't duplicate question - it's in status)
+				let html = '';
+				if (choices) {
+					const choiceList = choices.split('|');
+					choiceList.forEach((choice, i) => {
+						html += `<div class="action-preview-line" style="padding-left: 0.5rem;">${i + 1}. ${escapeHtml(choice)}</div>`;
+					});
+				}
+				// Show preview, filtering out lines that match the question/status
+				if (preview) {
+					if (html) html += '<div style="margin-top: 0.5rem; border-top: 1px solid var(--border); padding-top: 0.5rem;"></div>';
+					const previewLines = preview.split('\n').filter(line => {
+						// Skip lines that are the same as status/question to avoid duplication
+						const trimmed = line.trim();
+						if (question && trimmed === question.trim()) return false;
+						if (status && trimmed === status.trim()) return false;
+						return true;
+					});
+					html += previewLines.map(line => {
+						// Convert ANSI codes if present, otherwise escape HTML
+						const processed = line.includes('\x1b[') ? window.ansiToHtml(line) : escapeHtml(line);
+						return `<div class="action-preview-line">${processed}</div>`;
+					}).join('');
+				}
+				if (!html) {
+					html = '<div class="action-preview-line">No output</div>';
+				}
+				previewEl.innerHTML = html;
+
+				// Show choice buttons if choices available
+				const choicesEl = document.getElementById('actionChoices');
+				if (choices) {
+					const choiceList = choices.split('|');
+					let btnHtml = '';
+					choiceList.forEach((choice, i) => {
+						const shortChoice = choice.length > 25 ? choice.substring(0, 22) + '...' : choice;
+						btnHtml += `<button class="choice-btn" onclick="sendChoice(${i + 1})">
+							<span class="choice-num">${i + 1}</span>
+							${escapeHtml(shortChoice)}
+						</button>`;
+					});
+					choicesEl.innerHTML = btnHtml;
+					choicesEl.classList.remove('hidden');
+				} else {
+					choicesEl.classList.add('hidden');
+				}
+
+				document.getElementById('actionBackdrop').classList.add('visible');
+				document.getElementById('actionBar').classList.add('visible');
+				document.getElementById('actionInput').focus();
+			}
+
+			function sendChoice(num) {
+				if (!selectedTarget) return;
+				fetch(`/pane/${encodeURIComponent(selectedTarget.session)}:${selectedTarget.window}.${selectedTarget.pane}/send`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+					body: `input=${num}&noenter=true`
+				});
+				closeActionBar();
+			}
+
+			function escapeHtml(text) {
+				const div = document.createElement('div');
+				div.textContent = text;
+				return div.innerHTML;
+			}
+
+			function closeActionBar() {
+				document.getElementById('actionBackdrop').classList.remove('visible');
+				document.getElementById('actionBar').classList.remove('visible');
+				selectedTarget = null;
+			}
+
+			function refreshActionBar() {
+				if (!selectedTarget) return;
+				// Find the updated window element
+				const windowEl = document.querySelector(
+					`.window[data-session="${selectedTarget.session}"][data-window="${selectedTarget.window}"]`
+				);
+				if (windowEl) {
+					// Re-trigger selectWindow to refresh the action bar content
+					selectWindow(windowEl);
+				}
+			}
+
+			function sendInput() {
+				if (!selectedTarget) return;
+				const input = document.getElementById('actionInput');
+				const value = input.value;
+				if (!value) return;
+
+				fetch(`/pane/${encodeURIComponent(selectedTarget.session)}:${selectedTarget.window}.${selectedTarget.pane}/send`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+					body: `input=${encodeURIComponent(value)}`
+				});
+				input.value = '';
+			}
+
+			function sendStop() {
+				if (!selectedTarget) return;
+				fetch(`/pane/${encodeURIComponent(selectedTarget.session)}:${selectedTarget.window}.${selectedTarget.pane}/send`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+					body: 'input=Escape&special=true'
+				});
+			}
+
+			function viewPane() {
+				if (!selectedTarget) return;
+				window.location.href = `/pane/${encodeURIComponent(selectedTarget.session)}:${selectedTarget.window}.${selectedTarget.pane}`;
+			}
+
+			function respawnPane() {
+				if (!selectedTarget) return;
+				if (!confirm('Respawn this pane? This will kill the current process.')) return;
+				fetch(`/pane/${encodeURIComponent(selectedTarget.session)}:${selectedTarget.window}.${selectedTarget.pane}/respawn`, {
+					method: 'POST'
+				});
+				closeActionBar();
+			}
+
+			function closePane() {
+				if (!selectedTarget) return;
+				if (!confirm('Close this pane?')) return;
+				fetch(`/pane/${encodeURIComponent(selectedTarget.session)}:${selectedTarget.window}.${selectedTarget.pane}/kill`, {
+					method: 'POST'
+				});
+				closeActionBar();
+			}
+
+			function closeWindow() {
+				if (!selectedTarget) return;
+				if (!confirm('Close entire window? This will close all panes in this window.')) return;
+				fetch(`/pane/${encodeURIComponent(selectedTarget.session)}:${selectedTarget.window}.${selectedTarget.pane}/kill-window`, {
+					method: 'POST'
+				});
+				closeActionBar();
+			}
+
+			// Close action bar on escape
+			document.addEventListener('keydown', (e) => {
+				if (e.key === 'Escape') closeActionBar();
+				if (e.key === 'Enter' && document.activeElement.id === 'actionInput') {
+					e.preventDefault();
+					sendInput();
+				}
+			});
+
+			// Handle SSE manually for flicker-free updates
+			function connectSSE() {
+				const evtSource = new EventSource('/sessions?stream=1');
+				const container = document.getElementById('sessions');
+
+				evtSource.onmessage = function(e) {
+					const temp = document.createElement('div');
+					temp.innerHTML = e.data;
+
+					temp.querySelectorAll('.session').forEach(session => {
+						const name = session.dataset.session;
+						// Auto-expand sessions that need attention, or were manually expanded
+						if (expandedSessions.has(name) || session.classList.contains('has-attention')) {
+							session.classList.add('expanded');
+							session.querySelector('.windows')?.classList.remove('hidden');
+							expandedSessions.add(name); // Track auto-expanded too
+						}
+					});
+
+					Idiomorph.morph(container, temp.innerHTML, { morphStyle: 'innerHTML' });
+					updateStatusSummary();
+					// Process activity text for ANSI colors
+					processActivityText();
+					// Track done states for auto-transition to idle
+					trackDoneStates();
+					// Apply dismissals after morph
+					applyDismissals();
+					// Re-apply filter if active
+					if (currentFilter) {
+						filterSessions(currentFilter);
+					}
+					// Refresh action bar if open
+					refreshActionBar();
+				};
+
+				evtSource.onerror = function() {
+					console.log('SSE connection lost, reconnecting...');
+					evtSource.close();
+					setTimeout(connectSSE, 3000);
+				};
+			}
+
+			connectSSE();
+			// Process activity text on initial load
+			processActivityText();
+			// Track done states on initial load
+			trackDoneStates();
+
+			// Theme support
+			function initTheme() {
+				const saved = localStorage.getItem('houston-theme');
+				if (saved === 'light') {
+					document.documentElement.setAttribute('data-theme', 'light');
+				} else if (saved === 'dark') {
+					document.documentElement.removeAttribute('data-theme');
+				} else if (window.matchMedia('(prefers-color-scheme: light)').matches) {
+					document.documentElement.setAttribute('data-theme', 'light');
+				}
+			}
+			initTheme();
+
+			function toggleTheme() {
+				const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+				if (isLight) {
+					document.documentElement.removeAttribute('data-theme');
+					localStorage.setItem('houston-theme', 'dark');
+				} else {
+					document.documentElement.setAttribute('data-theme', 'light');
+					localStorage.setItem('houston-theme', 'light');
+				}
+			}
+
+			// Notification support
+			let notificationsEnabled = false;
+			let notifiedPanes = new Set();
+
+			async function toggleNotifications() {
+				const btn = document.getElementById('notificationBtn');
+
+				if (!notificationsEnabled) {
+					// Request permission
+					if (!('Notification' in window)) {
+						alert('Notifications not supported in this browser');
+						return;
+					}
+
+					const permission = await Notification.requestPermission();
+					if (permission === 'granted') {
+						// Register service worker
+						if ('serviceWorker' in navigator) {
+							try {
+								await navigator.serviceWorker.register('/static/sw.js');
+							} catch (e) {
+								console.log('Service worker registration failed:', e);
+							}
+						}
+						notificationsEnabled = true;
+						btn.classList.add('enabled');
+						btn.querySelector('.bell-off').style.display = 'none';
+						btn.querySelector('.bell-on').style.display = 'block';
+						btn.title = 'Notifications enabled';
+					}
+				} else {
+					notificationsEnabled = false;
+					btn.classList.remove('enabled');
+					btn.querySelector('.bell-off').style.display = 'block';
+					btn.querySelector('.bell-on').style.display = 'none';
+					btn.title = 'Notifications disabled';
+					notifiedPanes.clear();
+				}
+			}
+
+			function checkAndNotify() {
+				if (!notificationsEnabled) return;
+
+				const attentionWindows = document.querySelectorAll('.window-indicator.attention');
+				attentionWindows.forEach(indicator => {
+					const win = indicator.closest('.window');
+					if (!win) return;
+
+					const paneKey = `${win.dataset.session}:${win.dataset.window}.${win.dataset.pane}`;
+					if (notifiedPanes.has(paneKey)) return;
+
+					notifiedPanes.add(paneKey);
+
+					const title = `${win.dataset.session}:${win.dataset.window}`;
+					const body = win.dataset.status || 'Needs attention';
+
+					new Notification(title, {
+						body: body,
+						icon: '/static/icon.png',
+						tag: paneKey,
+						data: { url: `/pane/${paneKey}` }
+					});
+				});
+
+				// Clean up notified panes that no longer need attention
+				const currentAttention = new Set();
+				attentionWindows.forEach(indicator => {
+					const win = indicator.closest('.window');
+					if (win) {
+						currentAttention.add(`${win.dataset.session}:${win.dataset.window}.${win.dataset.pane}`);
+					}
+				});
+				notifiedPanes = new Set([...notifiedPanes].filter(p => currentAttention.has(p)));
+			}
+
+			// Check for attention-needing panes after SSE updates
+			const originalMorph = Idiomorph.morph;
+			Idiomorph.morph = function(...args) {
+				const result = originalMorph.apply(this, args);
+				setTimeout(checkAndNotify, 100);
+				return result;
+			};
+		</script>
+	</body>
+	</html>
+}
+
+// PanePage renders the pane view
+templ PanePage(data PaneData) {
+	<!DOCTYPE html>
+	<html lang="en">
+	<head>
+		<meta charset="UTF-8"/>
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"/>
+		<link rel="icon" type="image/svg+xml" href="/static/favicon.svg"/>
+		<title>{ data.Pane.Session } - houston</title>
+		<!-- Nerd Font for terminal icons -->
+		<link href="https://cdn.jsdelivr.net/gh/mshaugh/nerdfont-webfonts@v3.3.0/build/symbols-nerd-font-mono.css" rel="stylesheet"/>
+		<script src="https://unpkg.com/htmx.org@1.9.10"></script>
+		<script src="https://unpkg.com/htmx.org@1.9.10/dist/ext/sse.js"></script>
+		@panePageStyles()
+	</head>
+	<body>
+		<div class="pane-layout">
+			<!-- Header -->
+			<header class="header">
+				<a href="/" class="back-btn">
+					<svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path>
+					</svg>
+				</a>
+				<div class="header-title">{ data.Pane.Session }</div>
+				if len(data.Windows) > 1 {
+					<select class="window-dropdown" onchange="window.location.href=this.value">
+						for _, w := range data.Windows {
+							<option
+								value={ templ.SafeURL("/pane/" + urlEncode(data.Pane.Session) + ":" + fmt.Sprintf("%d", w.Index)) }
+								selected?={ w.Index == data.Pane.Window }
+							>
+								{ fmt.Sprintf("%d: %s", w.Index, w.Branch) }
+							</option>
+						}
+					</select>
+				} else if len(data.Windows) == 1 {
+					<div class="header-window">{ fmt.Sprintf("%d: %s", data.Windows[0].Index, data.Windows[0].Branch) }</div>
+				}
+				<div class="header-target">{ fmt.Sprintf(":%d.%d", data.Pane.Window, data.Pane.Index) }</div>
+				<div style="position: relative;">
+					<button class="menu-btn" onclick="toggleMenu()">
+						<svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z"></path>
+						</svg>
+					</button>
+					<div id="menu" class="menu hidden">
+						<button
+							hx-post={ "/pane/" + data.Pane.URLTarget() + "/send" }
+							hx-vals='{"input": "C-c", "special": "true"}'
+						>Send Ctrl+C</button>
+						<button onclick="scrollToTop()">Scroll to top</button>
+						<button
+							hx-get={ "/pane/" + data.Pane.URLTarget() }
+							hx-target="#output"
+							hx-swap="innerHTML"
+						>Refresh</button>
+						<button
+							hx-post={ "/pane/" + data.Pane.URLTarget() + "/respawn" }
+							hx-swap="none"
+							hx-confirm="Respawn this pane? This will kill the current process."
+						>Respawn pane</button>
+						<button
+							hx-post={ "/pane/" + data.Pane.URLTarget() + "/kill" }
+							hx-confirm="Close this pane?"
+							style="color: var(--error);"
+						>Close pane</button>
+						<button
+							hx-post={ "/pane/" + data.Pane.URLTarget() + "/kill-window" }
+							hx-confirm="Close entire window? This will close all panes in this window."
+							style="color: var(--error);"
+						>Close window</button>
+					</div>
+				</div>
+			</header>
+			<!-- Pane selector -->
+			if len(data.Panes) > 0 {
+				<div class="selector">
+					for _, p := range data.Panes {
+						<a
+							href={ templ.SafeURL("/pane/" + urlEncode(data.Pane.Session) + ":" + fmt.Sprintf("%d.%d", data.Pane.Window, p.Index)) }
+							class={ "selector-item", templ.KV("pane-active", p.Index == data.Pane.Index) }
+						>
+							{ getPaneDisplayName(p) }
+							<span style="font-size: 10px; opacity: 0.7; margin-left: 4px;">{ getPaneSubtitle(p) }</span>
+						</a>
+					}
+				</div>
+			}
+			<!-- Output area -->
+			<div
+				id="output-container"
+				class="output-container"
+				data-pane-target={ data.Pane.URLTarget() }
+				hx-ext="sse"
+				sse-connect={ "/pane/" + data.Pane.URLTarget() + "?stream=1" }
+				sse-swap="message"
+				hx-target="#output"
+				hx-swap="none"
+				onclick="handleOutputClick(event)"
+			>
+				<pre id="output" class="terminal output">{ data.Output }</pre>
+			</div>
+			<!-- Spacer for fixed bottom bars -->
+			<div class="input-bar-spacer"></div>
+			<!-- Fixed bottom bars container -->
+			<div class="bottom-bars-container">
+				<!-- Claude Status Section (collapsible) -->
+				<div id="status-section" class="status-section">
+					<div style="display: flex; align-items: center; gap: 0.5rem; justify-content: space-between;">
+						<div class="status-line-container">
+							<div id="status-line-left" class="status-line-left"></div>
+							<div id="status-line-right" class="status-line-right"></div>
+						</div>
+						<button
+							type="button"
+							class="status-toggle-btn"
+							onclick="toggleStatusSection()"
+							title="Toggle status"
+						>
+							Hide
+						</button>
+					</div>
+				</div>
+				<!-- Prompt input indicator (shown when Claude has pending input) -->
+				<div id="pending-input-bar" class="pending-input-bar hidden">
+					<span class="pending-label">Pending input:</span>
+					<span id="pending-input-text" class="pending-text"></span>
+					<button class="pending-edit-btn" onclick="editPendingInput()">Edit</button>
+					<button class="pending-clear-btn" onclick="clearPendingInput()">Clear</button>
+				</div>
+				<!-- Quick choice buttons (dynamically updated via SSE) -->
+				<div id="choices-bar" class={ "choices-bar", templ.KV("hidden", len(data.ParseResult.Choices) == 0) } data-pane-target={ data.Pane.URLTarget() }>
+					for i, choice := range data.ParseResult.Choices {
+						<button
+							class="choice-btn"
+							data-choice={ fmt.Sprintf("%d", i+1) }
+							data-choice-text={ choice }
+						>
+							<span class="choice-num">{ fmt.Sprintf("%d", i+1) }</span>
+							<span class="choice-text">{ truncate(choice, 20) }</span>
+						</button>
+					}
+				</div>
+				<!-- Input bar -->
+			<form
+				id="input-form"
+				class="input-bar"
+				data-pane-target={ data.Pane.URLTarget() }
+			>
+				<!-- Top row: badges and indicators -->
+				<div class="input-bar-row">
+					if data.ParseResult.Mode.String() == "insert" {
+						<span id="mode-indicator" class="mode-badge insert">INS</span>
+					} else {
+						<span id="mode-indicator" class="mode-badge normal">NOR</span>
+					}
+					<!-- Auto-accept edits toggle -->
+					<button
+						type="button"
+						id="autoaccept-toggle"
+						class="autoaccept-toggle"
+						onclick="toggleAutoAccept()"
+						title="Toggle auto-accept edits (Shift+Tab)"
+					>
+						<span class="autoaccept-icon">⏵⏵</span>
+						<span id="autoaccept-state" class="autoaccept-state">--</span>
+					</button>
+					<!-- Mode pills -->
+					<button
+						type="button"
+						id="accept-indicator"
+						class="mode-pill accept hidden"
+						onclick="cycleClaudeMode()"
+						title="Click to cycle Claude modes (Shift+Tab)"
+					>ACCEPT</button>
+					<button
+						type="button"
+						id="plan-indicator"
+						class="mode-pill plan hidden"
+						onclick="cycleClaudeMode()"
+						title="Click to cycle Claude modes (Shift+Tab)"
+					>PLAN</button>
+				</div>
+				<!-- Image attachments area -->
+				<div id="attachments-area" class="attachments-area hidden"></div>
+				<!-- Bottom row: input field and buttons -->
+				<div class="input-bar-row">
+					<textarea
+						id="input-field"
+						name="input"
+						class="input-field"
+						placeholder="Send input..."
+						autocomplete="off"
+						autocapitalize="off"
+						autocorrect="off"
+						spellcheck="false"
+						rows="1"
+						onkeydown="handleInputKeydown(event)"
+						oninput="autoResize(this)"
+					></textarea>
+					<!-- Attach image button -->
+					<input type="file" id="image-input" accept="image/*" multiple style="display: none;" onchange="handleImageSelect(event)"/>
+					<button
+						type="button"
+						class="action-btn attach"
+						onclick="document.getElementById('image-input').click()"
+						title="Attach image"
+					>
+						<svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"></path>
+						</svg>
+					</button>
+					<!-- Stop button -->
+					<button
+						type="button"
+						class="action-btn stop"
+						hx-post={ "/pane/" + data.Pane.URLTarget() + "/send" }
+						hx-vals='{"input": "Escape", "special": "true"}'
+						hx-swap="none"
+						title="Stop (Escape)"
+					>
+						<svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+						</svg>
+					</button>
+					<!-- Send button -->
+					<button type="submit" class="action-btn send" title="Send">
+						<svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7"></path>
+						</svg>
+					</button>
+				</div>
+			</form>
+			</div>
+		</div>
+		@paneScripts()
+	</body>
+	</html>
+}

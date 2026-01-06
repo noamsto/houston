@@ -1,0 +1,856 @@
+package views
+
+// indexPageInlineScript contains the inline JavaScript for IndexPage (AnsiUp setup)
+templ indexPageInlineScript() {
+	<script type="module">
+			import { AnsiUp } from 'https://cdn.jsdelivr.net/npm/ansi_up@6/ansi_up.js';
+			const ansiUp = new AnsiUp();
+			ansiUp.escapeHtml = true;
+
+			// Brightens dark 8-bit ANSI colors for visibility on dark backgrounds
+			function brightenAnsiColors(html) {
+				// Standard ANSI colors (0-7) - brighten significantly
+				html = html.replace(/rgb\(0,0,187\)/g, 'rgb(137,180,250)');      // Dark blue → light blue
+				html = html.replace(/rgb\(0,187,0\)/g, 'rgb(166,227,161)');      // Dark green → light green
+				html = html.replace(/rgb\(187,0,187\)/g, 'rgb(243,139,168)');    // Dark magenta → light magenta
+				html = html.replace(/rgb\(187,0,0\)/g, 'rgb(252,165,165)');      // Dark red → light red
+				html = html.replace(/rgb\(187,187,0\)/g, 'rgb(253,224,71)');     // Dark yellow → bright yellow
+				html = html.replace(/rgb\(0,187,187\)/g, 'rgb(137,220,235)');    // Dark cyan → light cyan
+
+				// Bright ANSI colors (8-15) - also improve contrast
+				html = html.replace(/rgb\(85,85,85\)/g, 'rgb(163,163,163)');     // Bright black (gray) → lighter gray
+				html = html.replace(/rgb\(255,85,85\)/g, 'rgb(252,165,165)');    // Bright red → softer red
+				html = html.replace(/rgb\(85,255,85\)/g, 'rgb(134,239,172)');    // Bright green → softer green
+				html = html.replace(/rgb\(255,255,85\)/g, 'rgb(253,224,71)');    // Bright yellow → softer yellow
+				html = html.replace(/rgb\(85,85,255\)/g, 'rgb(147,197,253)');    // Bright blue → softer blue
+				html = html.replace(/rgb\(255,85,255\)/g, 'rgb(244,114,182)');   // Bright magenta → softer magenta
+				html = html.replace(/rgb\(85,255,255\)/g, 'rgb(165,243,252)');   // Bright cyan → softer cyan
+
+				return html;
+			}
+
+			// Convert ANSI to HTML with brightening
+			window.ansiToHtml = function(text) {
+				let html = ansiUp.ansi_to_html(text);
+				return brightenAnsiColors(html);
+			};
+	</script>
+}
+
+templ paneScripts() {
+	<script>
+		// Theme support - must run synchronously before render
+		(function() {
+			const saved = localStorage.getItem('houston-theme');
+			if (saved === 'light') {
+				document.documentElement.setAttribute('data-theme', 'light');
+			} else if (!saved && window.matchMedia('(prefers-color-scheme: light)').matches) {
+				document.documentElement.setAttribute('data-theme', 'light');
+			}
+		})();
+	</script>
+	<script type="module">
+		import { AnsiUp } from 'https://cdn.jsdelivr.net/npm/ansi_up@6/ansi_up.js';
+
+		const ansiUp = new AnsiUp();
+		ansiUp.escapeHtml = true;  // Ensure HTML is escaped (v6 uses camelCase)
+
+		// Strip ANSI background colors from ansi_up output
+		// Only target rgb() values (ansi_up uses rgb, not rgba) to avoid stripping CSS code in terminal content
+		function fixBackgrounds(html) {
+			html = html.replace(/background-color:\s*rgb\([^)]+\);?/gi, '');
+			return html;
+		}
+
+		// Brightens dark 8-bit ANSI colors for visibility on dark backgrounds
+		function brightenAnsiColors(html) {
+			// Standard ANSI colors (0-7) - brighten significantly
+			html = html.replace(/rgb\(0,0,187\)/g, 'rgb(137,180,250)');      // Dark blue → light blue
+			html = html.replace(/rgb\(0,187,0\)/g, 'rgb(166,227,161)');      // Dark green → light green
+			html = html.replace(/rgb\(187,0,187\)/g, 'rgb(243,139,168)');    // Dark magenta → light magenta
+			html = html.replace(/rgb\(187,0,0\)/g, 'rgb(252,165,165)');      // Dark red → light red
+			html = html.replace(/rgb\(187,187,0\)/g, 'rgb(253,224,71)');     // Dark yellow → bright yellow
+			html = html.replace(/rgb\(0,187,187\)/g, 'rgb(137,220,235)');    // Dark cyan → light cyan
+
+			// Bright ANSI colors (8-15) - also improve contrast
+			html = html.replace(/rgb\(85,85,85\)/g, 'rgb(163,163,163)');     // Bright black (gray) → lighter gray
+			html = html.replace(/rgb\(255,85,85\)/g, 'rgb(252,165,165)');    // Bright red → softer red
+			html = html.replace(/rgb\(85,255,85\)/g, 'rgb(134,239,172)');    // Bright green → softer green
+			html = html.replace(/rgb\(255,255,85\)/g, 'rgb(253,224,71)');    // Bright yellow → softer yellow
+			html = html.replace(/rgb\(85,85,255\)/g, 'rgb(147,197,253)');    // Bright blue → softer blue
+			html = html.replace(/rgb\(255,85,255\)/g, 'rgb(244,114,182)');   // Bright magenta → softer magenta
+			html = html.replace(/rgb\(85,255,255\)/g, 'rgb(165,243,252)');   // Bright cyan → softer cyan
+
+			return html;
+		}
+
+		// Add subtle backgrounds for diff lines
+		// Claude Code format: "703 +  code" or "703 -  code" (line number, space, +/-, space, code)
+		function enhanceDiffs(html) {
+			const lines = html.split('\n');
+			return lines.map(line => {
+				const stripped = line.replace(/<[^>]*>/g, ''); // Strip HTML tags to check content
+				// Match Claude Code diff format: line_number +/- code
+				const match = stripped.match(/^\s*\d+\s+([-+])\s/);
+				if (match) {
+					if (match[1] === '+') {
+						return '<span class="diff-add">' + line + '</span>';
+					} else {
+						return '<span class="diff-del">' + line + '</span>';
+					}
+				}
+				// Also match standard diff format (starts with +/- directly)
+				if (stripped.startsWith('+') && !stripped.startsWith('+++')) {
+					return '<span class="diff-add">' + line + '</span>';
+				} else if (stripped.startsWith('-') && !stripped.startsWith('---')) {
+					return '<span class="diff-del">' + line + '</span>';
+				} else if (stripped.startsWith('@@')) {
+					return '<span class="diff-hunk">' + line + '</span>';
+				}
+				return line;
+			}).join('\n');
+		}
+
+		// Highlight user input lines with subtle background
+		function highlightUserInput(html) {
+			const lines = html.split('\n');
+			let inUserInput = false;
+			return lines.map(line => {
+				const stripped = line.replace(/<[^>]*>/g, ''); // Strip HTML tags to check content
+				const trimmed = stripped.trim();
+
+				// Check if this is a prompt line (starts with >)
+				if (/^\s*>/.test(stripped)) {
+					inUserInput = true;
+					return '<span class="user-input">' + line + '</span>';
+				}
+
+				// Check if this is a horizontal separator (ends user input block)
+				if (/^[\s─]{20,}$/.test(stripped)) {
+					inUserInput = false;
+					return line;
+				}
+
+				// Check if this is an indented continuation of user input
+				// (starts with spaces and we're in user input mode)
+				if (inUserInput && /^\s{2,}/.test(stripped) && trimmed.length > 0) {
+					return '<span class="user-input">' + line + '</span>';
+				}
+
+				// Empty line might continue user input block
+				if (inUserInput && trimmed.length === 0) {
+					return line;
+				}
+
+				// Any non-indented content ends user input block
+				if (trimmed.length > 0 && !/^\s{2,}/.test(stripped)) {
+					inUserInput = false;
+				}
+
+				return line;
+			}).join('\n');
+		}
+
+		function processOutput(text) {
+			try {
+				// Normalize line endings and remove carriage returns
+				text = text.replace(/\r\n/g, '\n').replace(/\r/g, '');
+				let html = ansiUp.ansi_to_html(text);
+				// Brighten dark ANSI colors for better visibility
+				html = brightenAnsiColors(html);
+				html = highlightUserInput(html);
+				return html;
+			} catch (err) {
+				console.error('ansi_up error:', err);
+				// Fallback: escape HTML and preserve newlines
+				return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+			}
+		}
+
+		document.addEventListener('DOMContentLoaded', function() {
+			const container = document.getElementById('output-container');
+			if (container) {
+				container.scrollTop = container.scrollHeight;
+			}
+			const output = document.getElementById('output');
+			if (output) {
+				const text = output.textContent;
+				output.innerHTML = processOutput(text);
+				// Check for pending input on initial load
+				updatePendingInput(text);
+			}
+		});
+
+		// Handle SSE messages manually to prevent htmx from setting innerHTML directly
+		// This prevents terminal content with HTML-like text from being rendered as actual HTML
+		document.body.addEventListener('htmx:sseMessage', function(e) {
+			console.debug('SSE message received', e.detail.data?.length || 0, 'bytes');
+			const output = document.getElementById('output');
+			if (!output) return;
+
+			const container = document.getElementById('output-container');
+			// Check if user is at the bottom before updating (with 50px threshold)
+			const wasAtBottom = container &&
+				(container.scrollTop + container.clientHeight >= container.scrollHeight - 50);
+
+			// Get the raw text from SSE (already safe as plain text)
+			let text = e.detail.data;
+
+			// Track current mode and Claude mode for status indicators
+			let currentMode = '';
+			let claudeModeData = {};
+
+			// Extract mode from special first line if present
+			const modeMatch = text.match(/^__MODE__:(\w*)\n/);
+			if (modeMatch) {
+				currentMode = modeMatch[1];
+				text = text.substring(modeMatch[0].length);
+				updateModeIndicatorDirect(currentMode);
+			}
+
+			// Extract choices from special line if present
+			const choicesMatch = text.match(/^__CHOICES__:([^\n]*)\n/);
+			if (choicesMatch) {
+				const choicesStr = choicesMatch[1];
+				text = text.substring(choicesMatch[0].length);
+				updateChoices(choicesStr ? choicesStr.split('|') : []);
+			}
+
+			// Extract Claude mode state if present (JSON)
+			const claudeModeMatch = text.match(/^__CLAUDEMODE__:([^\n]*)\n/);
+			if (claudeModeMatch) {
+				text = text.substring(claudeModeMatch[0].length);
+				try {
+					claudeModeData = JSON.parse(claudeModeMatch[1] || '{}');
+					updateClaudeMode(claudeModeData);
+				} catch (e) {
+					console.warn('Failed to parse Claude mode:', e);
+				}
+			}
+
+			// Extract status line with ANSI colors
+			const statusLineMatch = text.match(/^__STATUSLINE__:([^\n]*)\n/);
+			if (statusLineMatch) {
+				text = text.substring(statusLineMatch[0].length);
+				updateStatusLine(statusLineMatch[1]);
+			}
+
+			// Update mode indicators (combines mode + claudeMode state)
+			updateModeIndicators(currentMode, claudeModeData);
+
+			// Process with ansi_up (which has escapeHtml enabled)
+			output.innerHTML = processOutput(text);
+
+			// Update pending input bar
+			updatePendingInput(text);
+
+			// Only auto-scroll if user was already at the bottom
+			if (wasAtBottom && container) {
+				container.scrollTop = container.scrollHeight;
+			}
+		});
+
+		// Update choices bar dynamically
+		function updateChoices(choices) {
+			const bar = document.getElementById('choices-bar');
+			if (!bar) return;
+
+			if (!choices || choices.length === 0 || (choices.length === 1 && choices[0] === '')) {
+				bar.classList.add('hidden');
+				bar.innerHTML = '';
+				return;
+			}
+
+			bar.classList.remove('hidden');
+			let html = '';
+			choices.forEach((choice, i) => {
+				const num = i + 1;
+				const shortChoice = choice.length > 20 ? choice.substring(0, 17) + '...' : choice;
+				// No inline onclick - handled by event delegation below
+				html += `<button class="choice-btn" data-choice="${num}" data-choice-text="${escapeHtml(choice)}">
+					<span class="choice-num">${num}</span>
+					<span class="choice-text">${escapeHtml(shortChoice)}</span>
+				</button>`;
+			});
+			bar.innerHTML = html;
+		}
+
+		function escapeHtml(text) {
+			const div = document.createElement('div');
+			div.textContent = text;
+			return div.innerHTML;
+		}
+
+		// Send choice to pane
+		window.sendChoice = function(num, choiceText) {
+			const bar = document.getElementById('choices-bar');
+			if (!bar) return;
+			const target = bar.dataset.paneTarget;
+			if (!target) return;
+			fetch(`/pane/${target}/send`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+				body: `input=${num}&noenter=true`
+			});
+
+			// If choice says "Type here" or similar, focus input for custom response
+			if (choiceText && choiceText.toLowerCase().includes('type')) {
+				setTimeout(() => {
+					const inputField = document.getElementById('input-field');
+					if (inputField) {
+						inputField.focus();
+					}
+				}, 100);
+			}
+		}
+
+		// Event delegation for choice buttons (avoids HTML entity escaping issues in onclick)
+		document.addEventListener('click', function(e) {
+			const choiceBtn = e.target.closest('.choice-btn');
+			if (choiceBtn) {
+				e.stopPropagation();
+				const num = choiceBtn.dataset.choice;
+				const text = choiceBtn.dataset.choiceText;
+				if (num) {
+					sendChoice(num, text);
+				}
+			}
+		});
+
+		// Log SSE connection events
+		document.body.addEventListener('htmx:sseOpen', function(e) {
+			console.log('SSE connected');
+		});
+
+		document.body.addEventListener('htmx:sseError', function(e) {
+			console.warn('SSE error', e.detail);
+		});
+
+		// Update mode indicator based on mode string from server
+		function updateModeIndicatorDirect(mode) {
+			const modeEl = document.getElementById('mode-indicator');
+			if (!modeEl) return;
+
+			if (mode === 'insert') {
+				modeEl.textContent = 'INS';
+				modeEl.className = 'text-xs px-2 py-1 bg-green-600 text-white rounded font-medium shadow-sm';
+			} else {
+				modeEl.textContent = 'NOR';
+				modeEl.className = 'text-xs px-2 py-1 bg-blue-600 text-white rounded font-medium shadow-sm';
+			}
+		}
+
+		// Fallback: Update mode indicator by parsing text (for initial page load)
+		function updateModeIndicator(text) {
+			const modeEl = document.getElementById('mode-indicator');
+			if (!modeEl) return;
+
+			// Check last few lines for INSERT mode
+			const lines = text.split('\n').slice(-10).join('\n');
+			const isInsert = lines.includes('-- INSERT --');
+
+			if (isInsert) {
+				modeEl.textContent = 'INS';
+				modeEl.className = 'text-xs px-2 py-1 bg-green-600 text-white rounded font-medium shadow-sm';
+			} else {
+				modeEl.textContent = 'NOR';
+				modeEl.className = 'text-xs px-2 py-1 bg-blue-600 text-white rounded font-medium shadow-sm';
+			}
+		}
+
+		window.toggleMenu = function() {
+			document.getElementById('menu').classList.toggle('hidden');
+		}
+
+		window.scrollToTop = function() {
+			document.getElementById('output-container').scrollTop = 0;
+			document.getElementById('menu').classList.add('hidden');
+		}
+
+		// Click on prompt pattern to focus input field
+		// Detects: ─────── separator lines and > prompt lines
+		window.handleOutputClick = function(e) {
+			// Don't interfere with text selection
+			if (window.getSelection().toString()) return;
+
+			// Get the text at click position
+			let clickedLine = '';
+
+			// Try to get the line that was clicked
+			if (document.caretRangeFromPoint) {
+				const range = document.caretRangeFromPoint(e.clientX, e.clientY);
+				if (range && range.startContainer) {
+					const text = range.startContainer.textContent || '';
+					// Get the line containing the click position
+					const lines = text.split('\n');
+					let pos = 0;
+					for (const line of lines) {
+						if (pos + line.length >= range.startOffset) {
+							clickedLine = line;
+							break;
+						}
+						pos += line.length + 1;
+					}
+				}
+			}
+
+			// Check if clicked line is a prompt pattern
+			const isPromptLine = (
+				clickedLine.match(/^\s*>{1,3}\s*/) ||            // > or >>> (with optional text)
+				clickedLine.match(/^[─━\-]{5,}/)                 // Separator line (────)
+			);
+
+			if (isPromptLine) {
+				document.getElementById('input-field').focus();
+			}
+		}
+
+		// Strip ANSI escape codes from text
+		function stripAnsi(text) {
+			return text.replace(/\x1b\[[0-9;]*m/g, '');
+		}
+
+		// Extract pending input from Claude's prompt line(s)
+		// Claude Code shows: ">" or ">>>" followed by user's typed text
+		// Multi-line input shows continuation lines after the first prompt
+		function extractPendingInput(text) {
+			const lines = text.split('\n');
+			const pendingLines = [];
+			let foundPrompt = false;
+
+			// Scan from bottom up to find prompt area
+			for (let i = lines.length - 1; i >= Math.max(0, lines.length - 20); i--) {
+				const line = lines[i];
+
+				// Match prompt line: > or >>> with optional text
+				// Allow ANSI escape codes before the prompt (e.g., \u001b[0m>)
+				const promptMatch = line.match(/^(?:\x1b\[[0-9;]*m)*\s*(>{1,3})\s*(.*)$/);
+
+				if (promptMatch) {
+					foundPrompt = true;
+					let content = stripAnsi(promptMatch[2]); // Strip ANSI codes from content
+					// Remove pasted text indicators like "[Pasted text #1 +10 lines]"
+					content = content.replace(/\[Pasted text #\d+ \+\d+.*?\]/g, '').trim();
+					if (content) {
+						pendingLines.unshift(content); // Add to front (we're going backwards)
+					}
+				} else if (foundPrompt) {
+					// We found prompts but this line doesn't have one
+					let trimmed = stripAnsi(line.trim());
+					// Stop if we hit a separator, empty line, or status bar content
+					if (!trimmed || trimmed.match(/^[─━\-]{5,}/) ||
+						trimmed.includes('-- INSERT --') || trimmed.includes('-- NORMAL --')) {
+						break;
+					}
+					// Skip pasted text indicator lines
+					if (trimmed.match(/^\[Pasted text #\d+/)) {
+						continue;
+					}
+					// Check if this might be a continuation line (no prompt, just content)
+					// Claude wraps long input, so continuation lines are possible
+					// But stop if we hit obvious non-prompt content
+					if (trimmed.startsWith('│') || trimmed.startsWith('⎿') ||
+						trimmed.startsWith('●') || trimmed.startsWith('✻')) {
+						break;
+					}
+					// This could be wrapped input text, add it
+					pendingLines.unshift(trimmed);
+				}
+			}
+
+			if (pendingLines.length === 0) {
+				return foundPrompt ? '' : null; // Empty prompt vs no prompt
+			}
+
+			return pendingLines.join('\n');
+		}
+
+		// Update pending input bar based on output
+		function updatePendingInput(text) {
+			const pendingBar = document.getElementById('pending-input-bar');
+			const pendingText = document.getElementById('pending-input-text');
+			if (!pendingBar || !pendingText) return;
+
+			const pending = extractPendingInput(text);
+			if (pending && pending.length > 0) {
+				// Show first line + indicator if multi-line
+				const lines = pending.split('\n');
+				let display = lines[0];
+				if (lines.length > 1) {
+					display += ` (+${lines.length - 1} more)`;
+				}
+				pendingText.textContent = display;
+				pendingText.title = pending; // Full text on hover
+				pendingBar.classList.remove('hidden');
+			} else {
+				pendingBar.classList.add('hidden');
+			}
+		}
+
+		// Edit pending input - copy to input field for editing
+		window.editPendingInput = function() {
+			const pendingText = document.getElementById('pending-input-text');
+			const inputField = document.getElementById('input-field');
+			if (!pendingText || !inputField) return;
+
+			// Get full text from title attribute (textContent may be truncated)
+			const fullText = pendingText.title || pendingText.textContent;
+			if (fullText) {
+				// Only fill input field if it's empty (don't overwrite user input)
+				if (inputField.value.trim() === '') {
+					inputField.value = fullText;
+					autoResize(inputField);
+				}
+				inputField.focus();
+
+				// Clear the existing input in Claude (send Ctrl+U to clear line)
+				const bar = document.getElementById('choices-bar');
+				const target = bar?.dataset.paneTarget;
+				if (target) {
+					fetch(`/pane/${target}/send`, {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+						body: 'input=C-u&special=true'
+					});
+				}
+			}
+		}
+
+		// Clear pending input in Claude
+		window.clearPendingInput = function() {
+			const bar = document.getElementById('choices-bar');
+			const target = bar?.dataset.paneTarget;
+			if (target) {
+				// Send Ctrl+U to clear the line
+				fetch(`/pane/${target}/send`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+					body: 'input=C-u&special=true'
+				});
+			}
+		}
+
+		// Toggle auto-accept edits (sends Shift+Tab)
+		window.toggleAutoAccept = function() {
+			const target = document.getElementById('output-container')?.getAttribute('data-pane-target');
+			console.log('toggleAutoAccept called, target:', target);
+			if (target) {
+				fetch(`/pane/${target}/send`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+					body: 'input=BTab&special=true'
+				}).then(r => console.log('toggle response:', r.status));
+			} else {
+				console.warn('No pane target found for toggle');
+			}
+		}
+
+		// Update Claude mode indicator (dynamic - shows whatever mode is active)
+		function updateClaudeMode(mode) {
+			const toggle = document.getElementById('autoaccept-toggle');
+			const iconEl = toggle?.querySelector('.autoaccept-icon');
+			const stateEl = document.getElementById('autoaccept-state');
+			if (!toggle || !stateEl || !iconEl) return;
+
+			toggle.classList.remove('on', 'off');
+			if (mode.state === 'on') {
+				toggle.classList.add('on');
+				iconEl.textContent = mode.icon || '⏵⏵';
+				stateEl.textContent = 'on';
+				toggle.title = `${mode.label || 'Mode'} on (Shift+Tab to cycle)`;
+			} else if (mode.state === 'off') {
+				toggle.classList.add('off');
+				iconEl.textContent = mode.icon || '⏵⏵';
+				stateEl.textContent = 'off';
+				toggle.title = `${mode.label || 'Mode'} off (Shift+Tab to cycle)`;
+			} else {
+				// No mode detected
+				iconEl.textContent = '⏵⏵';
+				stateEl.textContent = '--';
+				toggle.title = 'Toggle mode (Shift+Tab)';
+			}
+		}
+
+		// Toggle status section visibility
+		window.toggleStatusSection = function() {
+			const section = document.getElementById('status-section');
+			const btn = section?.querySelector('.status-toggle-btn');
+			const isVisible = section?.classList.contains('visible');
+
+			if (isVisible) {
+				section.classList.remove('visible');
+				btn.textContent = 'Show';
+				localStorage.setItem('statusSectionVisible', 'false');
+			} else {
+				section.classList.add('visible');
+				btn.textContent = 'Hide';
+				localStorage.setItem('statusSectionVisible', 'true');
+			}
+		}
+
+		// Update status line from SSE
+		function updateStatusLine(statusLine) {
+			const section = document.getElementById('status-section');
+			const leftEl = document.getElementById('status-line-left');
+			if (!leftEl) return;
+
+			// Convert ANSI to HTML to preserve all colors
+			let html = ansiUp.ansi_to_html(statusLine);
+
+			// Fix dark 8-bit ANSI colors that are hard to see on dark backgrounds
+			// Replace ansi_up's dark palette with brighter equivalents
+			html = html.replace(/rgb\(0,0,187\)/g, 'rgb(137,180,250)');      // Dark blue → light blue
+			html = html.replace(/rgb\(0,187,0\)/g, 'rgb(166,227,161)');      // Dark green → light green
+			html = html.replace(/rgb\(187,0,187\)/g, 'rgb(243,139,168)');    // Dark magenta → light magenta
+			html = html.replace(/rgb\(187,0,0\)/g, 'rgb(243,139,168)');      // Dark red → light red
+			html = html.replace(/rgb\(187,187,0\)/g, 'rgb(249,226,175)');    // Dark yellow → light yellow
+			html = html.replace(/rgb\(0,187,187\)/g, 'rgb(137,220,235)');    // Dark cyan → light cyan
+
+			// Strip mode indicators from the HTML
+			html = html.replace(/--\s+INSERT\s+--.*$/, '');
+			html = html.replace(/⏵⏵\s+accept edits.*$/, '');
+			html = html.replace(/⏸\s+plan mode.*$/, '');
+
+			// Display full status line
+			leftEl.innerHTML = html;
+
+			// Auto-show if status exists and user hasn't hidden it
+			if (statusLine && statusLine.trim() !== '') {
+				const shouldShow = localStorage.getItem('statusSectionVisible') !== 'false';
+				if (shouldShow) {
+					section.classList.add('visible');
+					section.querySelector('.status-toggle-btn').textContent = 'Hide';
+				}
+			} else {
+				section.classList.remove('visible');
+			}
+		}
+
+		// Update mode indicators based on current state
+		function updateModeIndicators(mode, claudeMode) {
+			const acceptEl = document.getElementById('accept-indicator');
+			const planEl = document.getElementById('plan-indicator');
+
+			// Accept edits indicator
+			if (claudeMode.label === 'accept edits' && claudeMode.state === 'on') {
+				acceptEl?.classList.remove('hidden');
+			} else {
+				acceptEl?.classList.add('hidden');
+			}
+
+			// Plan mode indicator
+			if (claudeMode.label === 'plan mode' && claudeMode.state === 'on') {
+				planEl?.classList.remove('hidden');
+			} else {
+				planEl?.classList.add('hidden');
+			}
+		}
+
+		// Cycle Claude modes by sending Shift+Tab to tmux
+		window.cycleClaudeMode = function() {
+			const paneTarget = document.getElementById('output-container')?.getAttribute('data-pane-target');
+			if (!paneTarget) return;
+
+			fetch(`/pane/${paneTarget}/send`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+				body: 'input=BTab&special=true'
+			}).then(response => {
+				if (!response.ok) console.error('Failed to cycle Claude mode');
+			});
+		}
+
+		// Restore visibility on page load
+		document.addEventListener('DOMContentLoaded', function() {
+			const shouldShow = localStorage.getItem('statusSectionVisible') !== 'false';
+			if (shouldShow) {
+				document.getElementById('status-section')?.classList.add('visible');
+				const btn = document.querySelector('#status-section .status-toggle-btn');
+				if (btn) btn.textContent = 'Hide';
+			}
+		});
+
+		// Handle multiple image attachments
+		let selectedImages = [];
+
+		function updateAttachmentsUI() {
+			const attachmentsArea = document.getElementById('attachments-area');
+			if (!attachmentsArea) return;
+
+			if (selectedImages.length === 0) {
+				attachmentsArea.classList.add('hidden');
+				attachmentsArea.innerHTML = '';
+			} else {
+				attachmentsArea.classList.remove('hidden');
+				attachmentsArea.innerHTML = selectedImages.map((img, index) => `
+					<div class="attachment-pill">
+						<span class="attachment-name" title="${img.name}">📎 ${img.name}</span>
+						<button type="button" class="attachment-remove" onclick="removeAttachment(${index})" title="Remove">
+							<svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M6 18L18 6M6 6l12 12"></path>
+							</svg>
+						</button>
+					</div>
+				`).join('');
+			}
+		}
+
+		window.removeAttachment = function(index) {
+			selectedImages.splice(index, 1);
+			updateAttachmentsUI();
+		};
+
+		window.handleImageSelect = function(event) {
+			const files = event.target.files;
+			if (!files || files.length === 0) return;
+
+			// Process all selected files
+			Array.from(files).forEach(file => {
+				const reader = new FileReader();
+				reader.onload = function(e) {
+					selectedImages.push({
+						name: file.name,
+						type: file.type,
+						data: e.target.result.split(',')[1] // base64 data without prefix
+					});
+					updateAttachmentsUI();
+				};
+				reader.readAsDataURL(file);
+			});
+
+			// Clear file input to allow selecting the same file again
+			event.target.value = '';
+		};
+
+		// Handle image paste
+		document.addEventListener('DOMContentLoaded', function() {
+			const inputField = document.getElementById('input-field');
+			if (inputField) {
+				inputField.addEventListener('paste', function(e) {
+					const items = e.clipboardData?.items;
+					if (!items) return;
+
+					// Look for images in clipboard
+					let foundImage = false;
+					for (let i = 0; i < items.length; i++) {
+						if (items[i].type.indexOf('image') !== -1) {
+							if (!foundImage) {
+								e.preventDefault(); // Prevent default paste behavior for images
+								foundImage = true;
+							}
+
+							const blob = items[i].getAsFile();
+							if (!blob) continue;
+
+							// Generate filename with timestamp
+							const ext = blob.type.split('/')[1] || 'png';
+							const filename = `pasted-image-${Date.now()}.${ext}`;
+
+							// Convert to base64
+							const reader = new FileReader();
+							reader.onload = function(event) {
+								selectedImages.push({
+									name: filename,
+									type: blob.type,
+									data: event.target.result.split(',')[1] // base64 data without prefix
+								});
+								updateAttachmentsUI();
+							};
+							reader.readAsDataURL(blob);
+						}
+					}
+				});
+			}
+		});
+
+		// Handle all form submissions (with or without images)
+		document.getElementById('input-form')?.addEventListener('submit', async function(e) {
+			e.preventDefault();
+
+			const inputField = document.getElementById('input-field');
+			const text = inputField.value.trim();
+			const paneTarget = this.getAttribute('data-pane-target');
+
+			if (!paneTarget) return;
+
+			// Check if there's pending input that needs to be cleared first
+			const pendingInputBar = document.getElementById('pending-input-bar');
+			const hasPendingInput = pendingInputBar && !pendingInputBar.classList.contains('hidden');
+
+			// If there's pending input, send Ctrl+C first to clear it
+			if (hasPendingInput) {
+				await fetch(`/pane/${paneTarget}/send`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+					body: 'input=C-c&special=true'
+				});
+				// Wait a brief moment for the clear to take effect
+				await new Promise(resolve => setTimeout(resolve, 100));
+			}
+
+			let response;
+
+			if (selectedImages.length > 0) {
+				// Send with images
+				response = await fetch(`/pane/${paneTarget}/send-with-images`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({
+						text: text,
+						images: selectedImages
+					})
+				});
+			} else {
+				// Send text only (URL-encoded, not multipart)
+				const params = new URLSearchParams();
+				params.append('input', text);
+				response = await fetch(`/pane/${paneTarget}/send`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+					body: params
+				});
+			}
+
+			if (response.ok) {
+				// Clear form and images
+				inputField.value = '';
+				inputField.style.height = 'auto';
+				selectedImages = [];
+				updateAttachmentsUI();
+			}
+		});
+
+		// Allow Enter to create newlines (for iOS compatibility)
+		// Only submit via Send button
+		window.handleInputKeydown = function(e) {
+			// Cmd/Ctrl+Enter to send (for desktop users who want keyboard shortcut)
+			if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+				e.preventDefault();
+				document.getElementById('input-form').requestSubmit();
+			}
+			// Ctrl+Shift+X to clear all attached images
+			if (e.key === 'X' && e.ctrlKey && e.shiftKey) {
+				e.preventDefault();
+				if (selectedImages.length > 0) {
+					selectedImages = [];
+					updateAttachmentsUI();
+				}
+			}
+			// Regular Enter creates newline (default behavior for textarea)
+		}
+
+		// Auto-resize textarea
+		window.autoResize = function(el) {
+			el.style.height = 'auto';
+			el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+		}
+
+		document.addEventListener('click', function(e) {
+			const menu = document.getElementById('menu');
+			if (!e.target.closest('#menu') && !e.target.closest('[onclick="toggleMenu()"]')) {
+				menu.classList.add('hidden');
+			}
+		});
+	</script>
+	<script src="/static/app.js"></script>
+}
