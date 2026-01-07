@@ -608,10 +608,14 @@ func getWindowStatusText(win WindowWithStatus) string {
 }
 
 // getWindowDisplayName returns the display name for a window
-// Now window_name contains the branch (set by tmux_nerd)
+// Prefers branch name if available, falls back to process name
 func getWindowDisplayName(win WindowWithStatus) string {
-	// Window.Name now contains the branch name
-	return win.Window.Name
+	// Prefer branch name for git repositories
+	if win.Branch != "" {
+		return win.Branch
+	}
+	// Fall back to process/window name
+	return win.Process
 }
 
 // getPaneDisplayName returns the display name for a pane
@@ -656,7 +660,7 @@ func PaneOutput(output string) templ.Component {
 		var templ_7745c5c3_Var35 string
 		templ_7745c5c3_Var35, templ_7745c5c3_Err = templ.JoinStringErrs(output)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/components.templ`, Line: 192, Col: 9}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/components.templ`, Line: 196, Col: 9}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var35))
 		if templ_7745c5c3_Err != nil {

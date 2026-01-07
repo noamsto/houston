@@ -164,10 +164,14 @@ func getWindowStatusText(win WindowWithStatus) string {
 }
 
 // getWindowDisplayName returns the display name for a window
-// Now window_name contains the branch (set by tmux_nerd)
+// Prefers branch name if available, falls back to process name
 func getWindowDisplayName(win WindowWithStatus) string {
-	// Window.Name now contains the branch name
-	return win.Window.Name
+	// Prefer branch name for git repositories
+	if win.Branch != "" {
+		return win.Branch
+	}
+	// Fall back to process/window name
+	return win.Process
 }
 
 // getPaneDisplayName returns the display name for a pane
