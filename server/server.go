@@ -73,6 +73,65 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	views.Sessions(data).Render(r.Context(), w)
 }
 
+// paneScore represents the priority score for a pane
+type paneScore struct {
+	info  *tmux.PaneInfo
+	index int
+	score int // Higher score = higher priority
+}
+
+// findBestPane selects the best pane to display for a window
+// Priority: Claude attention > Claude working > Claude idle > active > first
+func findBestPane(client *tmux.Client, session string, windowIdx int, panes []tmux.PaneInfo) paneScore {
+	if len(panes) == 0 {
+		return paneScore{nil, 0, 0}
+	}
+
+	bestPane := paneScore{&panes[0], panes[0].Index, 0}
+
+	for i := range panes {
+		p := &panes[i]
+		score := 0
+
+		// Capture output to check if it's Claude
+		pane := tmux.Pane{Session: session, Window: windowIdx, Index: p.Index}
+		output, err := client.CapturePane(pane, 100)
+		if err != nil {
+			continue
+		}
+
+		isClaudeWindow := tmux.LooksLikeClaudeOutput(output)
+		if isClaudeWindow {
+			parseResult := parser.Parse(output)
+
+			// Claude pane needing attention = highest priority
+			if parseResult.Type == parser.TypeError ||
+				parseResult.Type == parser.TypeChoice ||
+				parseResult.Type == parser.TypeQuestion {
+				score = 100 // Highest priority
+			} else if parseResult.Type == parser.TypeWorking {
+				score = 50 // Working Claude
+			} else {
+				score = 30 // Idle/done Claude
+			}
+		} else {
+			// Non-Claude pane: prefer active
+			if p.Active {
+				score = 10
+			} else {
+				score = 1
+			}
+		}
+
+		// Update best pane if this one has higher score
+		if score > bestPane.score {
+			bestPane = paneScore{p, p.Index, score}
+		}
+	}
+
+	return bestPane
+}
+
 func (s *Server) buildSessionsData() views.SessionsData {
 	sessions, _ := s.tmux.ListSessions()
 	statuses := s.watcher.GetAll()
@@ -99,19 +158,18 @@ func (s *Server) buildSessionsData() views.SessionsData {
 			// Get actual panes for this window
 			panes, _ := s.tmux.ListPanes(sess.Name, win.Index)
 
-			// Find pane to check (prefer active, fallback to first)
+			// Find best pane to display based on priority:
+			// 1. Claude pane needing attention (error/choice/question)
+			// 2. Claude pane that's working
+			// 3. Claude pane that's idle/done
+			// 4. Active pane (non-Claude)
+			// 5. First pane
 			var activePaneInfo *tmux.PaneInfo
 			paneIdx := 0
 			if len(panes) > 0 {
-				activePaneInfo = &panes[0]
-				paneIdx = panes[0].Index
-				for i, p := range panes {
-					if p.Active {
-						activePaneInfo = &panes[i]
-						paneIdx = p.Index
-						break
-					}
-				}
+				bestPane := findBestPane(s.tmux, sess.Name, win.Index, panes)
+				activePaneInfo = bestPane.info
+				paneIdx = bestPane.index
 			}
 
 			// Load worktrees on first window (lazy load)
