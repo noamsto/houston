@@ -617,25 +617,48 @@ templ indexPageStyles() {
 				}
 				.main {
 					max-width: 1200px;
-					padding: 1.5rem 2rem;
+					padding: 2rem 2rem;
 				}
-				/* Grid layout for sessions on desktop */
+				/* Grid layout for sessions on desktop - more comfortable spacing */
 				.sessions-grid {
 					display: grid;
-					grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
-					gap: 1rem;
+					grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+					gap: 1.5rem;
 				}
 				.session {
 					margin-bottom: 0;
 				}
+				.session-header {
+					padding: 1.125rem 1.5rem;
+				}
+				.session-name {
+					font-size: 15px;
+				}
+				.session-meta {
+					font-size: 12px;
+					margin-top: 3px;
+				}
 				.section-label {
 					grid-column: 1 / -1;
-					padding: 0.5rem 0;
+					padding: 0.75rem 0;
+					font-size: 11px;
 				}
-				/* Larger window previews */
-				.window-preview {
-					max-height: 8em;
+				.window {
+					padding: 1rem 1.5rem 1rem 3rem;
+				}
+				.window-name {
+					font-size: 14px;
+				}
+				.window-status {
 					font-size: 12px;
+					margin-top: 2px;
+				}
+				/* Larger window previews with more breathing room */
+				.window-preview {
+					max-height: 9em;
+					font-size: 12px;
+					padding: 0.625rem 0.75rem;
+					margin-top: 0.625rem;
 				}
 				.window-info {
 					min-width: 200px;
@@ -678,8 +701,12 @@ templ indexPageStyles() {
 				.main {
 					max-width: 1400px;
 				}
+				.main {
+					padding: 2.5rem 3rem;
+				}
 				.sessions-grid {
-					grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+					grid-template-columns: repeat(auto-fill, minmax(460px, 1fr));
+					gap: 2rem;
 				}
 				.action-bar {
 					width: 450px;
