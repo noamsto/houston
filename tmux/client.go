@@ -237,6 +237,9 @@ func (c *Client) CapturePaneWithMode(p Pane, lines int) (CaptureResult, error) {
 	}
 
 	raw := string(out)
+	// Convert ESC symbol (␛, U+241B) to actual ESC character (\x1b) for ANSI processing
+	raw = strings.ReplaceAll(raw, "␛", "\x1b")
+
 	mode := detectModeFromOutput(raw)
 	statusLine := extractStatusLine(raw)
 	filtered := filterStatusBar(raw)
