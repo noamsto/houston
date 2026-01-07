@@ -278,10 +278,15 @@ func getPreviewLines(output string, n int) []string {
 		result = append([]string{line}, result...)
 	}
 
-	// Truncate long lines
+	// Truncate long lines (UTF-8 safe, but skip lines with ANSI codes to avoid breaking sequences)
 	for i, line := range result {
-		if len(line) > 60 {
-			result[i] = line[:57] + "..."
+		// Don't truncate if line contains ANSI escape codes
+		if strings.Contains(line, "\x1b[") {
+			continue
+		}
+		runes := []rune(line)
+		if len(runes) > 100 {
+			result[i] = string(runes[:97]) + "..."
 		}
 	}
 

@@ -76,7 +76,6 @@ templ windowCard(sessionName string, win WindowWithStatus) {
 		data-name={ win.Window.Name }
 		data-status={ getWindowStatusText(win) }
 		data-indicator={ getWindowIndicator(win) }
-		data-preview={ strings.Join(win.Preview, "\n") }
 		data-question={ win.ParseResult.Question }
 		data-choices={ strings.Join(win.ParseResult.Choices, "|") }
 		onclick="selectWindow(this)"
@@ -89,7 +88,7 @@ templ windowCard(sessionName string, win WindowWithStatus) {
 				{ getWindowStatusText(win) }
 			</div>
 			if len(win.Preview) > 0 {
-				<div class="window-preview">
+				<div class="window-preview" data-ansi-content="true">
 					for _, line := range win.Preview {
 						<div class="preview-line">{ line }</div>
 					}

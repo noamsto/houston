@@ -461,6 +461,19 @@ templ indexPageStyles() {
 				padding: 0.25rem;
 				font-size: 14px;
 			}
+			.action-copy {
+				background: none;
+				border: none;
+				color: var(--text-dim);
+				cursor: pointer;
+				padding: 0.25rem;
+				display: flex;
+				align-items: center;
+				transition: color 0.15s, opacity 0.15s;
+			}
+			.action-copy:hover {
+				color: var(--text-primary);
+			}
 			.action-input-row {
 				display: flex;
 				gap: 0.375rem;
@@ -671,13 +684,13 @@ templ indexPageStyles() {
 					right: 1.5rem;
 					left: auto;
 					transform: translateX(120%) translateY(-50%);
-					width: 400px;
+					width: 600px;
 					max-width: calc(100vw - 3rem);
 					border-radius: 12px;
 					border: 1px solid var(--border);
 					box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
-					padding: 1rem;
-					padding-bottom: 1rem;
+					padding: 1.25rem;
+					padding-bottom: 1.25rem;
 				}
 				.action-bar.visible {
 					transform: translateX(0) translateY(-50%);
@@ -686,11 +699,11 @@ templ indexPageStyles() {
 					background: rgba(0, 0, 0, 0.3);
 				}
 				.action-context {
-					max-height: 300px;
+					max-height: 450px;
 					overflow-y: auto;
 				}
 				.action-preview {
-					max-height: 200px;
+					max-height: 350px;
 				}
 			}
 
@@ -709,7 +722,7 @@ templ indexPageStyles() {
 					gap: 2rem;
 				}
 				.action-bar {
-					width: 450px;
+					width: 650px;
 				}
 			}
 
