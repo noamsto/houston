@@ -1020,6 +1020,9 @@ func (s *Server) streamPane(w http.ResponseWriter, r *http.Request, pane tmux.Pa
 				strippedOutput := ansi.Strip(capture.Output)
 				parseResult := parseClaudeState(panePath, strippedOutput)
 				slog.Debug("SSE pane update", "pane", pane.Target(), "bytes", len(capture.Output), "mode", capture.Mode, "choices", len(parseResult.Choices), "statusChanged", statusChanged, "modeChanged", modeChanged)
+				if len(parseResult.Choices) > 0 {
+					slog.Info("SSE choices detected", "pane", pane.Target(), "count", len(parseResult.Choices), "choices", parseResult.Choices)
+				}
 
 				// Build the SSE message with metadata as first lines
 				var buf strings.Builder

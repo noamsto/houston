@@ -372,11 +372,10 @@ templ IndexPage() {
 				const context = document.getElementById('actionContext');
 				context.className = 'action-context ' + indicator;
 
-				// Show loading state
-				const previewEl = document.getElementById('actionPreview');
-				previewEl.innerHTML = '<div class="action-preview-line">Loading...</div>';
-				document.getElementById('actionStatus').textContent = '';
-				document.getElementById('actionChoices').classList.add('hidden');
+				// Show static data immediately (no "Loading..." delay)
+				const previewLines = Array.from(el.querySelectorAll('.preview-line')).map(line => line.textContent);
+				const status = el.dataset.status;
+				updateActionBarStatic(previewLines, status, indicator, el.dataset.choices);
 
 				// Close any existing SSE connection
 				if (actionBarEventSource) {
@@ -384,6 +383,7 @@ templ IndexPage() {
 				}
 
 				// Start SSE connection to pane (same endpoint as pane page)
+				// This will update the action bar with live data when it arrives
 				const paneTarget = `${encodeURIComponent(session)}:${windowIdx}.${paneIdx}`;
 				actionBarEventSource = new EventSource(`/pane/${paneTarget}?stream=1`);
 
@@ -555,15 +555,9 @@ templ IndexPage() {
 			}
 
 			function refreshActionBar() {
-				if (!selectedTarget) return;
-				// Find the updated window element
-				const windowEl = document.querySelector(
-					`.window[data-session="${selectedTarget.session}"][data-window="${selectedTarget.window}"]`
-				);
-				if (windowEl) {
-					// Re-trigger selectWindow to refresh the action bar content
-					selectWindow(windowEl);
-				}
+				// Action bar now uses SSE for live updates - no need to refresh manually
+				// The SSE connection stays open and receives updates automatically
+				return;
 			}
 
 			function sendInput() {
