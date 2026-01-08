@@ -32,35 +32,24 @@ import (
 func parseClaudeState(panePath, terminalOutput string) parser.Result {
 	var result parser.Result
 
-	fmt.Printf("DEBUG: parseClaudeState called for path=%s outputLen=%d\n", panePath, len(terminalOutput))
-	slog.Info("parseClaudeState called", "panePath", panePath, "outputLen", len(terminalOutput))
-
 	// Try claudelog first if we have a valid pane path
 	if panePath != "" {
 		state, err := claudelog.GetStateForPane(panePath)
 		if err == nil {
-			slog.Info("Claudelog result", "IsWaitingPermission", state.IsWaitingPermission, "PendingTool", state.PendingToolName)
 			result = state.ToParserResult()
 
 			// If JSONL indicates waiting for permission, check terminal for choices
 			if state.IsWaitingPermission {
-				slog.Info("Permission prompt detected in JSONL", "panePath", panePath, "pendingTool", state.PendingToolName)
+				slog.Debug("Permission prompt detected", "panePath", panePath, "tool", state.PendingToolName)
 				terminalResult := parser.Parse(terminalOutput)
-				slog.Info("Terminal parse result", "type", terminalResult.Type, "choices", len(terminalResult.Choices))
 				// If terminal has choice prompt, use that (more specific)
 				if terminalResult.Type == parser.TypeChoice && len(terminalResult.Choices) > 0 {
-					slog.Info("Using terminal choices for permission prompt", "choices", terminalResult.Choices)
+					slog.Debug("Using terminal choices for permission", "choices", len(terminalResult.Choices))
 					result = terminalResult
-				} else {
-					snippet := terminalOutput
-					if len(terminalOutput) > 200 {
-						snippet = terminalOutput[len(terminalOutput)-200:]
-					}
-					slog.Warn("No choices found in terminal despite pending tool_use", "terminalSnippet", snippet)
 				}
 			}
 		} else {
-			slog.Debug("Claudelog error, using terminal parser", "error", err)
+			slog.Debug("Claudelog unavailable, using terminal parser", "error", err)
 			// Fall through to terminal parsing on error
 			result = parser.Parse(terminalOutput)
 		}
@@ -1042,10 +1031,6 @@ func (s *Server) streamPane(w http.ResponseWriter, r *http.Request, pane tmux.Pa
 				// Parse output for choices using claudelog (JSONL) with terminal parser fallback
 				strippedOutput := ansi.Strip(capture.Output)
 				parseResult := parseClaudeState(panePath, strippedOutput)
-				slog.Debug("SSE pane update", "pane", pane.Target(), "bytes", len(capture.Output), "mode", capture.Mode, "choices", len(parseResult.Choices), "statusChanged", statusChanged, "modeChanged", modeChanged)
-				if len(parseResult.Choices) > 0 {
-					slog.Info("SSE choices detected", "pane", pane.Target(), "count", len(parseResult.Choices), "choices", parseResult.Choices)
-				}
 
 				// Build the SSE message with metadata as first lines
 				var buf strings.Builder
