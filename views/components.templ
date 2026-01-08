@@ -80,7 +80,7 @@ templ windowCard(sessionName string, win WindowWithStatus) {
 		data-question={ win.ParseResult.Question }
 		data-choices={ strings.Join(win.ParseResult.Choices, "|") }
 		onclick="selectWindow(this)"
-		class={ "window", templ.KV("attention", win.NeedsAttention) }
+		class={ "window", templ.KV("attention", win.NeedsAttention), templ.KV("working", getWindowIndicator(win) == "working") }
 	>
 		<div class={ "window-indicator", getWindowIndicator(win) }></div>
 		<div class="window-info">

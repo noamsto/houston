@@ -292,7 +292,7 @@ func windowCard(sessionName string, win WindowWithStatus) templ.Component {
 			templ_7745c5c3_Var14 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		var templ_7745c5c3_Var15 = []any{"window", templ.KV("attention", win.NeedsAttention)}
+		var templ_7745c5c3_Var15 = []any{"window", templ.KV("attention", win.NeedsAttention), templ.KV("working", getWindowIndicator(win) == "working")}
 		templ_7745c5c3_Err = templ.RenderCSSItems(ctx, templ_7745c5c3_Buffer, templ_7745c5c3_Var15...)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
