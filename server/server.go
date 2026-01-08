@@ -32,10 +32,14 @@ import (
 func parseClaudeState(panePath, terminalOutput string) parser.Result {
 	var result parser.Result
 
+	fmt.Printf("DEBUG: parseClaudeState called for path=%s outputLen=%d\n", panePath, len(terminalOutput))
+	slog.Info("parseClaudeState called", "panePath", panePath, "outputLen", len(terminalOutput))
+
 	// Try claudelog first if we have a valid pane path
 	if panePath != "" {
 		state, err := claudelog.GetStateForPane(panePath)
 		if err == nil {
+			slog.Info("Claudelog result", "IsWaitingPermission", state.IsWaitingPermission, "PendingTool", state.PendingToolName)
 			result = state.ToParserResult()
 
 			// If JSONL indicates waiting for permission, check terminal for choices
