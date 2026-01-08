@@ -41,6 +41,10 @@ func (a *Agent) FilterStatusBar(output string) string {
 	return output // No filtering for generic
 }
 
+func (a *Agent) ExtractStatusLine(_ string) string {
+	return "" // No status line for generic
+}
+
 func (a *Agent) DetectMode(_ string) parser.Mode {
 	return parser.ModeUnknown
 }

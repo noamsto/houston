@@ -51,6 +51,10 @@ func (a *Agent) FilterStatusBar(output string) string {
 	return FilterStatusBar(output)
 }
 
+func (a *Agent) ExtractStatusLine(output string) string {
+	return ExtractStatusLine(output)
+}
+
 func (a *Agent) DetectMode(_ string) parser.Mode {
 	return parser.ModeUnknown // Amp has no vim modes
 }

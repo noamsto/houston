@@ -128,3 +128,73 @@ func TestParseOutput_AmpChoices_DifferentSelection(t *testing.T) {
 		t.Errorf("expected first choice to be selected item, got %v", result.Choices)
 	}
 }
+
+func TestParseOutput_ActivityPatterns(t *testing.T) {
+	tests := []struct {
+		name         string
+		input        string
+		wantType     parser.ResultType
+		wantActivity string
+	}{
+		{
+			name: "braille spinner thinking",
+			input: `╰── ⣳ Thinking ▶
+          ╰── Analyzing code structure`,
+			wantType:     parser.TypeWorking,
+			wantActivity: "Thinking",
+		},
+		{
+			name: "running tools status",
+			input: `├── ✓ Read file.go
+╰── ⣳ Thinking ▶
+ ≋ Running tools...  Esc to cancel`,
+			wantType:     parser.TypeWorking,
+			wantActivity: "Running tools",
+		},
+		{
+			name: "tool invocation without parens",
+			input: `● Grep CreateAPIKey
+    some results here`,
+			wantType:     parser.TypeWorking,
+			wantActivity: "Searching",
+		},
+		{
+			name: "cogitated thinking",
+			input: `✻ Cogitated for 3m 7s
+
+❯ Some response`,
+			wantType:     parser.TypeWorking,
+			wantActivity: "Thinking",
+		},
+		{
+			name: "completed tool still working",
+			input: `    ├── ✓ Grep CreateAPIKey
+    ├── ✓ Read services/identity/pkg/identity/service.go`,
+			wantType:     parser.TypeWorking,
+			wantActivity: "Searching", // First completed tool found in text
+		},
+		{
+			name: "waiting for response",
+			input: `  ✓ Thinking ▶
+
+╭─54% of 168k · $3.10─────────────────────────────────────────┬──────────────────────────────────────────────────────smart─╮
+│                                                             │ TODOs                                                      │
+╰─────────────────────────────────────────────────────────────┴───────────────────────────~/Data/git/tmux-dashboard (main)─╯
+ ∼ Waiting for response...  Esc to cancel`,
+			wantType:     parser.TypeWorking,
+			wantActivity: "Waiting for response",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ParseOutput(tt.input)
+			if result.Type != tt.wantType {
+				t.Errorf("Type = %v, want %v", result.Type, tt.wantType)
+			}
+			if result.Activity != tt.wantActivity {
+				t.Errorf("Activity = %q, want %q", result.Activity, tt.wantActivity)
+			}
+		})
+	}
+}

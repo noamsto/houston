@@ -12,6 +12,7 @@ const detectionTTL = 15 * time.Second
 
 type cachedDetection struct {
 	agentType AgentType
+	command   string    // pane_current_command when detected
 	expiresAt time.Time
 }
 
@@ -35,30 +36,39 @@ func NewRegistry(agents ...Agent) *Registry {
 // paneID is used for caching, command is from tmux pane_current_command,
 // output is raw terminal output (ANSI will be stripped internally).
 func (r *Registry) Detect(paneID, command, output string) Agent {
-	// Check cache first
+	// Check cache first, but invalidate if command changed
 	r.cacheMu.RLock()
-	if cached, ok := r.cache[paneID]; ok && time.Now().Before(cached.expiresAt) {
-		r.cacheMu.RUnlock()
+	cached, ok := r.cache[paneID]
+	cacheValid := ok && time.Now().Before(cached.expiresAt) && cached.command == command
+	r.cacheMu.RUnlock()
+
+	if cacheValid {
 		return r.getAgent(cached.agentType)
 	}
-	r.cacheMu.RUnlock()
 
 	// Try command-based detection first (cheapest)
 	if agentType := detectFromCommand(command); agentType != AgentGeneric {
-		r.cacheResult(paneID, agentType)
+		r.cacheResult(paneID, command, agentType)
 		return r.getAgent(agentType)
 	}
 
-	// Fall back to output-based detection
+	// If command is a known shell, don't use output-based detection
+	// (old agent output in scrollback would cause false positives)
+	if isShellCommand(command) {
+		r.cacheResult(paneID, command, AgentGeneric)
+		return r.getAgent(AgentGeneric)
+	}
+
+	// Fall back to output-based detection for unknown commands
 	stripped := ansi.Strip(output)
 	for _, a := range r.agents {
 		if a.DetectFromOutput(stripped) {
-			r.cacheResult(paneID, a.Type())
+			r.cacheResult(paneID, command, a.Type())
 			return a
 		}
 	}
 
-	r.cacheResult(paneID, AgentGeneric)
+	r.cacheResult(paneID, command, AgentGeneric)
 	return r.getAgent(AgentGeneric)
 }
 
@@ -87,10 +97,11 @@ func (r *Registry) getAgent(agentType AgentType) Agent {
 	return nil
 }
 
-func (r *Registry) cacheResult(paneID string, agentType AgentType) {
+func (r *Registry) cacheResult(paneID, command string, agentType AgentType) {
 	r.cacheMu.Lock()
 	r.cache[paneID] = cachedDetection{
 		agentType: agentType,
+		command:   command,
 		expiresAt: time.Now().Add(detectionTTL),
 	}
 	r.cacheMu.Unlock()
@@ -107,4 +118,16 @@ func detectFromCommand(command string) AgentType {
 	default:
 		return AgentGeneric
 	}
+}
+
+// isShellCommand returns true if the command is a known shell.
+func isShellCommand(command string) bool {
+	cmd := strings.ToLower(command)
+	shells := []string{"fish", "bash", "zsh", "sh", "dash", "ksh", "tcsh", "csh"}
+	for _, shell := range shells {
+		if cmd == shell {
+			return true
+		}
+	}
+	return false
 }

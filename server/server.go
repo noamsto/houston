@@ -27,18 +27,25 @@ import (
 )
 
 
-// getAgentState gets state from the detected agent using file-based state first,
-// falling back to terminal parsing if unavailable.
+// getAgentState gets state from the detected agent.
+// For Amp: prefer terminal parsing (real-time status) over file-based state.
+// For Claude: prefer file-based state, with terminal fallback for choices.
 func getAgentState(agent agents.Agent, panePath, terminalOutput string) parser.Result {
 	if agent == nil {
 		return parser.Result{Type: parser.TypeIdle}
 	}
 
-	// Try file-based state first for richer info
+	// For Amp, always use terminal parsing as it shows real-time status
+	// (thread files only update when messages complete, not during streaming)
+	if agent.Type() == agents.AgentAmp {
+		return agent.ParseOutput(terminalOutput).Result
+	}
+
+	// For Claude, try file-based state first for richer info
 	if panePath != "" {
 		state, err := agent.GetStateFromFiles(panePath)
 		if err == nil {
-			// For Claude, check if waiting for permission and use terminal for choices
+			// Check if waiting for permission and use terminal for choices
 			if agent.Type() == agents.AgentClaudeCode {
 				if state.Result.Type == parser.TypeQuestion {
 					terminalResult := parser.Parse(terminalOutput)
@@ -57,11 +64,18 @@ func getAgentState(agent agents.Agent, panePath, terminalOutput string) parser.R
 	return agent.ParseOutput(terminalOutput).Result
 }
 
+// recentActivityTTL is how long a session stays in "Active" after becoming idle
+const recentActivityTTL = 2 * time.Minute
+
 type Server struct {
 	tmux     *tmux.Client
 	watcher  *status.Watcher
 	registry *agents.Registry
 	mu       sync.RWMutex
+
+	// Track when sessions last had activity (for keeping recently-active in Active section)
+	lastActivity   map[string]time.Time // session name -> last working timestamp
+	lastActivityMu sync.RWMutex
 }
 
 type Config struct {
@@ -76,9 +90,10 @@ func New(cfg Config) (*Server, error) {
 	)
 
 	return &Server{
-		tmux:     tmux.NewClient(),
-		watcher:  status.NewWatcher(cfg.StatusDir),
-		registry: registry,
+		tmux:         tmux.NewClient(),
+		watcher:      status.NewWatcher(cfg.StatusDir),
+		registry:     registry,
+		lastActivity: make(map[string]time.Time),
 	}, nil
 }
 
@@ -290,10 +305,24 @@ func (s *Server) buildSessionsData() views.SessionsData {
 			return scoreI > scoreJ
 		})
 
+		// Update last activity tracking
+		if sessionData.HasWorking {
+			s.lastActivityMu.Lock()
+			s.lastActivity[sess.Name] = time.Now()
+			s.lastActivityMu.Unlock()
+		}
+
+		// Check if session has recent activity (within TTL)
+		s.lastActivityMu.RLock()
+		lastActive, hasLastActive := s.lastActivity[sess.Name]
+		s.lastActivityMu.RUnlock()
+		recentlyActive := hasLastActive && time.Since(lastActive) < recentActivityTTL
+
 		// Categorize session based on its windows' actual status
 		if sessionData.AttentionCount > 0 {
 			data.NeedsAttention = append(data.NeedsAttention, sessionData)
-		} else if sessionData.HasWorking {
+		} else if sessionData.HasWorking || recentlyActive {
+			// Keep in Active if currently working OR recently active
 			data.Active = append(data.Active, sessionData)
 		} else {
 			data.Idle = append(data.Idle, sessionData)
@@ -1027,7 +1056,7 @@ func (s *Server) streamPane(w http.ResponseWriter, r *http.Request, pane tmux.Pa
 			// Detect agent and get mode
 			agent := s.registry.Detect(paneID, paneCommand, capture.Output)
 			mode := agent.DetectMode(capture.Output)
-			statusLine := claude.ExtractStatusLine(capture.Output) // TODO: make agent-specific
+			statusLine := agent.ExtractStatusLine(capture.Output)
 			filteredOutput := agent.FilterStatusBar(capture.Output)
 
 			// Detect agent mode indicator from status line

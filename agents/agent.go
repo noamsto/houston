@@ -36,6 +36,9 @@ type Agent interface {
 	// FilterStatusBar removes agent-specific status bar elements from output.
 	FilterStatusBar(output string) string
 
+	// ExtractStatusLine extracts the agent's status line with ANSI colors intact.
+	ExtractStatusLine(output string) string
+
 	// DetectMode returns the vim-like mode if applicable (insert/normal).
 	// Returns empty string for agents without mode support.
 	DetectMode(output string) parser.Mode

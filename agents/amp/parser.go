@@ -11,15 +11,29 @@ var (
 	// Match thinking indicators: "✻ Cogitated for 1m 30s" or "✻ Baked for 30s"
 	thinkingPattern = regexp.MustCompile(`✻\s*(Cogitated|Baked)\s+for\s+(\d+[ms]\s*)+`)
 
-	// Match tool invocation: "● ToolName(...)"
-	toolPattern = regexp.MustCompile(`●\s+(\w+)\s*\(`)
+	// Match braille spinner thinking: "⣳ Thinking ▶" (Amp uses braille spinners)
+	brailleThinkingPattern = regexp.MustCompile(`[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⣾⣽⣻⢿⡿⣟⣯⣷⣳]\s+(Thinking|Analyzing|Processing|Working)\b`)
+
+	// Match tool invocation: "● ToolName(...)" or "● ToolName" (Amp often omits parens)
+	toolPattern = regexp.MustCompile(`●\s+(\w+)(?:\s*\(|\s|$)`)
+
+	// Match completed tool lines: "✓ Read file.go" or "✓ Grep pattern"
+	// Only match known tool names to avoid matching TODO items like "✓ Fix something"
+	completedToolPattern = regexp.MustCompile(`✓\s+(Read|Grep|Bash|Task|Edit|Write|Update|Thinking)\b`)
+
+	// Match "Running tools..." or "Waiting for response..." status at bottom
+	// Spinner char may be absent or any of: ≈ ≋ ⚡ ∼ ~
+	runningToolsPattern = regexp.MustCompile(`(?:^|\s)Running\s+tools`)
+	waitingPattern      = regexp.MustCompile(`(?:^|\s)Waiting\s+for\s+response`)
+	// "Esc to cancel" indicates Amp is in an active session
+	escToCancelPattern = regexp.MustCompile(`Esc\s+to\s+cancel`)
 
 	// Match question patterns
 	questionPattern = regexp.MustCompile(`(?m)^(.+\?)\s*$`)
 
 	// Match Amp choice lines: "‣ Yes" (selected) or "  Allow All" (not selected)
 	// Amp uses ‣ (U+2023) for selected item, spaces for others
-	ampChoiceSelectedPattern = regexp.MustCompile(`^[│\s]*‣\s+(.+?)\s*[│]?\s*$`)
+	ampChoiceSelectedPattern   = regexp.MustCompile(`^[│\s]*‣\s+(.+?)\s*[│]?\s*$`)
 	ampChoiceUnselectedPattern = regexp.MustCompile(`^[│\s]{2,}([A-Z][a-zA-Z\s]+?)\s*[│]?\s*$`)
 
 	// Match numbered choices (Claude style, kept for compatibility)
@@ -66,7 +80,42 @@ func ParseOutput(output string) parser.Result {
 		}
 	}
 
-	// Check for thinking indicator
+	// Check bottom status line (last 3 lines) for running/waiting indicators
+	bottomText := strings.Join(lastN(lines, 3), "\n")
+
+	// Check for "Running tools..." status at bottom (highest priority - means actively working)
+	if runningToolsPattern.MatchString(bottomText) {
+		return parser.Result{
+			Type:     parser.TypeWorking,
+			Activity: "Running tools",
+		}
+	}
+
+	// Check for "Waiting for response..." status (means waiting for LLM response)
+	if waitingPattern.MatchString(bottomText) {
+		return parser.Result{
+			Type:     parser.TypeWorking,
+			Activity: "Waiting for response",
+		}
+	}
+
+	// "Esc to cancel" without other indicators means Amp is outputting/active
+	if escToCancelPattern.MatchString(bottomText) {
+		return parser.Result{
+			Type:     parser.TypeWorking,
+			Activity: "Active",
+		}
+	}
+
+	// Check for braille spinner thinking (⣳ Thinking ▶)
+	if match := brailleThinkingPattern.FindStringSubmatch(text); len(match) > 1 {
+		return parser.Result{
+			Type:     parser.TypeWorking,
+			Activity: match[1], // "Thinking", "Analyzing", etc.
+		}
+	}
+
+	// Check for cogitated/baked thinking indicator
 	if thinkingPattern.MatchString(text) {
 		return parser.Result{
 			Type:     parser.TypeWorking,
@@ -82,11 +131,23 @@ func ParseOutput(output string) parser.Result {
 		}
 	}
 
-	// Check for tool activity
+	// Check for tool activity (● Read, ● Grep, etc.)
 	if match := toolPattern.FindStringSubmatch(text); len(match) > 1 {
 		return parser.Result{
 			Type:     parser.TypeWorking,
 			Activity: toolToActivity(match[1]),
+		}
+	}
+
+	// Check for recently completed tools (✓ Read, ✓ Grep) - still indicates working
+	if match := completedToolPattern.FindStringSubmatch(text); len(match) > 1 {
+		// Only consider as working if in the last few lines
+		recentText := strings.Join(lastN(lines, 10), "\n")
+		if completedToolPattern.MatchString(recentText) {
+			return parser.Result{
+				Type:     parser.TypeWorking,
+				Activity: toolToActivity(match[1]),
+			}
 		}
 	}
 

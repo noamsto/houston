@@ -45,6 +45,10 @@ func (a *Agent) FilterStatusBar(output string) string {
 	return FilterStatusBar(output)
 }
 
+func (a *Agent) ExtractStatusLine(output string) string {
+	return ExtractStatusLine(output)
+}
+
 func (a *Agent) DetectMode(output string) parser.Mode {
 	return DetectMode(output)
 }
