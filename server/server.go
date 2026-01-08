@@ -40,13 +40,23 @@ func parseClaudeState(panePath, terminalOutput string) parser.Result {
 
 			// If JSONL indicates waiting for permission, check terminal for choices
 			if state.IsWaitingPermission {
+				slog.Info("Permission prompt detected in JSONL", "panePath", panePath, "pendingTool", state.PendingToolName)
 				terminalResult := parser.Parse(terminalOutput)
+				slog.Info("Terminal parse result", "type", terminalResult.Type, "choices", len(terminalResult.Choices))
 				// If terminal has choice prompt, use that (more specific)
 				if terminalResult.Type == parser.TypeChoice && len(terminalResult.Choices) > 0 {
+					slog.Info("Using terminal choices for permission prompt", "choices", terminalResult.Choices)
 					result = terminalResult
+				} else {
+					snippet := terminalOutput
+					if len(terminalOutput) > 200 {
+						snippet = terminalOutput[len(terminalOutput)-200:]
+					}
+					slog.Warn("No choices found in terminal despite pending tool_use", "terminalSnippet", snippet)
 				}
 			}
 		} else {
+			slog.Debug("Claudelog error, using terminal parser", "error", err)
 			// Fall through to terminal parsing on error
 			result = parser.Parse(terminalOutput)
 		}
