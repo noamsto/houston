@@ -15,9 +15,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/noamsto/houston/claudelog"
+	"github.com/noamsto/houston/agents"
+	"github.com/noamsto/houston/agents/amp"
+	"github.com/noamsto/houston/agents/claude"
+	"github.com/noamsto/houston/agents/generic"
 	"github.com/noamsto/houston/internal/ansi"
-	"github.com/noamsto/houston/internal/statusbar"
 	"github.com/noamsto/houston/parser"
 	"github.com/noamsto/houston/status"
 	"github.com/noamsto/houston/tmux"
@@ -25,46 +27,41 @@ import (
 )
 
 
-// parseClaudeState tries to get state from Claude's JSONL logs first,
+// getAgentState gets state from the detected agent using file-based state first,
 // falling back to terminal parsing if unavailable.
-// panePath is the working directory of the pane (used to find Claude session).
-// terminalOutput is the captured terminal output (used for fallback parsing).
-func parseClaudeState(panePath, terminalOutput string) parser.Result {
-	var result parser.Result
-
-	// Try claudelog first if we have a valid pane path
-	if panePath != "" {
-		state, err := claudelog.GetStateForPane(panePath)
-		if err == nil {
-			result = state.ToParserResult()
-
-			// If JSONL indicates waiting for permission, check terminal for choices
-			if state.IsWaitingPermission {
-				slog.Debug("Permission prompt detected", "panePath", panePath, "tool", state.PendingToolName)
-				terminalResult := parser.Parse(terminalOutput)
-				// If terminal has choice prompt, use that (more specific)
-				if terminalResult.Type == parser.TypeChoice && len(terminalResult.Choices) > 0 {
-					slog.Debug("Using terminal choices for permission", "choices", len(terminalResult.Choices))
-					result = terminalResult
-				}
-			}
-		} else {
-			slog.Debug("Claudelog unavailable, using terminal parser", "error", err)
-			// Fall through to terminal parsing on error
-			result = parser.Parse(terminalOutput)
-		}
-	} else {
-		// Fallback: parse terminal output
-		result = parser.Parse(terminalOutput)
+func getAgentState(agent agents.Agent, panePath, terminalOutput string) parser.Result {
+	if agent == nil {
+		return parser.Result{Type: parser.TypeIdle}
 	}
 
-	return result
+	// Try file-based state first for richer info
+	if panePath != "" {
+		state, err := agent.GetStateFromFiles(panePath)
+		if err == nil {
+			// For Claude, check if waiting for permission and use terminal for choices
+			if agent.Type() == agents.AgentClaudeCode {
+				if state.Result.Type == parser.TypeQuestion {
+					terminalResult := parser.Parse(terminalOutput)
+					if terminalResult.Type == parser.TypeChoice && len(terminalResult.Choices) > 0 {
+						slog.Debug("Using terminal choices for permission", "choices", len(terminalResult.Choices))
+						return terminalResult
+					}
+				}
+			}
+			return state.Result
+		}
+		slog.Debug("Agent file state unavailable, using terminal parser", "agent", agent.Type(), "error", err)
+	}
+
+	// Fallback: parse terminal output
+	return agent.ParseOutput(terminalOutput).Result
 }
 
 type Server struct {
-	tmux    *tmux.Client
-	watcher *status.Watcher
-	mu      sync.RWMutex
+	tmux     *tmux.Client
+	watcher  *status.Watcher
+	registry *agents.Registry
+	mu       sync.RWMutex
 }
 
 type Config struct {
@@ -72,9 +69,16 @@ type Config struct {
 }
 
 func New(cfg Config) (*Server, error) {
+	registry := agents.NewRegistry(
+		claude.New(),
+		amp.New(),
+		generic.New(), // Must be last (fallback)
+	)
+
 	return &Server{
-		tmux:    tmux.NewClient(),
-		watcher: status.NewWatcher(cfg.StatusDir),
+		tmux:     tmux.NewClient(),
+		watcher:  status.NewWatcher(cfg.StatusDir),
+		registry: registry,
 	}, nil
 }
 
@@ -120,8 +124,8 @@ type paneScore struct {
 }
 
 // findBestPane selects the best pane to display for a window
-// Priority: Claude attention > Claude working > Claude idle > active > first
-func findBestPane(client *tmux.Client, session string, windowIdx int, panes []tmux.PaneInfo) paneScore {
+// Priority: Agent attention > Agent working > Agent idle > active > first
+func (s *Server) findBestPane(session string, windowIdx int, panes []tmux.PaneInfo) paneScore {
 	if len(panes) == 0 {
 		return paneScore{nil, 0, 0}
 	}
@@ -132,29 +136,29 @@ func findBestPane(client *tmux.Client, session string, windowIdx int, panes []tm
 		p := &panes[i]
 		score := 0
 
-		// Capture output to check if it's Claude
 		pane := tmux.Pane{Session: session, Window: windowIdx, Index: p.Index}
-		output, err := client.CapturePane(pane, 100)
+		paneID := pane.Target()
+		output, err := s.tmux.CapturePane(pane, 100)
 		if err != nil {
 			continue
 		}
 
-		isClaudeWindow := tmux.LooksLikeClaudeOutput(output)
-		if isClaudeWindow {
-			parseResult := parseClaudeState(p.Path, output)
+		agent := s.registry.Detect(paneID, p.Command, output)
+		if agent.Type() != agents.AgentGeneric {
+			parseResult := getAgentState(agent, p.Path, output)
 
-			// Claude pane needing attention = highest priority
+			// Agent pane needing attention = highest priority
 			if parseResult.Type == parser.TypeError ||
 				parseResult.Type == parser.TypeChoice ||
 				parseResult.Type == parser.TypeQuestion {
 				score = 100 // Highest priority
 			} else if parseResult.Type == parser.TypeWorking {
-				score = 50 // Working Claude
+				score = 50 // Working agent
 			} else {
-				score = 30 // Idle/done Claude
+				score = 30 // Idle/done agent
 			}
 		} else {
-			// Non-Claude pane: prefer active
+			// Non-agent pane: prefer active
 			if p.Active {
 				score = 10
 			} else {
@@ -162,7 +166,6 @@ func findBestPane(client *tmux.Client, session string, windowIdx int, panes []tm
 			}
 		}
 
-		// Update best pane if this one has higher score
 		if score > bestPane.score {
 			bestPane = paneScore{p, p.Index, score}
 		}
@@ -198,15 +201,15 @@ func (s *Server) buildSessionsData() views.SessionsData {
 			panes, _ := s.tmux.ListPanes(sess.Name, win.Index)
 
 			// Find best pane to display based on priority:
-			// 1. Claude pane needing attention (error/choice/question)
-			// 2. Claude pane that's working
-			// 3. Claude pane that's idle/done
-			// 4. Active pane (non-Claude)
+			// 1. Agent pane needing attention (error/choice/question)
+			// 2. Agent pane that's working
+			// 3. Agent pane that's idle/done
+			// 4. Active pane (non-agent)
 			// 5. First pane
 			var activePaneInfo *tmux.PaneInfo
 			paneIdx := 0
 			if len(panes) > 0 {
-				bestPane := findBestPane(s.tmux, sess.Name, win.Index, panes)
+				bestPane := s.findBestPane(sess.Name, win.Index, panes)
 				activePaneInfo = bestPane.info
 				paneIdx = bestPane.index
 			}
@@ -222,33 +225,36 @@ func (s *Server) buildSessionsData() views.SessionsData {
 			if activePaneInfo != nil {
 				branch = tmux.GetBranchForPath(activePaneInfo.Path, worktrees)
 			}
-			// Use window name for process (includes nerd font icons from tmux plugin)
 			process := win.Name
 
 			pane := tmux.Pane{Session: sess.Name, Window: win.Index, Index: paneIdx}
+			paneID := pane.Target()
 			output, _ := s.tmux.CapturePane(pane, 100)
 
-			// Get pane path for claudelog lookup
+			// Get pane path for agent state lookup
 			var panePath string
+			var paneCommand string
 			if activePaneInfo != nil {
 				panePath = activePaneInfo.Path
+				paneCommand = activePaneInfo.Command
 			}
 
-			// Try claudelog first (for accurate state), fallback to terminal parsing
-			parseResult := parseClaudeState(panePath, output)
+			// Detect agent and get state
+			agent := s.registry.Detect(paneID, paneCommand, output)
+			parseResult := getAgentState(agent, panePath, output)
 
-			// Only mark as needing attention if it's a Claude Code window
-			isClaudeWindow := tmux.LooksLikeClaudeOutput(output)
-			windowNeedsAttention := isClaudeWindow && (parseResult.Type == parser.TypeError ||
+			// Only mark as needing attention if it's an agent window
+			isAgentWindow := agent.Type() != agents.AgentGeneric
+			windowNeedsAttention := isAgentWindow && (parseResult.Type == parser.TypeError ||
 				parseResult.Type == parser.TypeChoice ||
 				parseResult.Type == parser.TypeQuestion)
 
 			// Extract preview lines - more for attention states
 			previewLines := 15
 			if windowNeedsAttention {
-				previewLines = 25 // Show more context for choices/questions/errors
+				previewLines = 25
 			}
-			preview := getPreviewLines(output, previewLines)
+			preview := s.getPreviewLines(agent, output, previewLines)
 
 			windowStatus := views.WindowWithStatus{
 				Window:         win,
@@ -270,7 +276,7 @@ func (s *Server) buildSessionsData() views.SessionsData {
 			if activePaneInfo != nil {
 				cmd = activePaneInfo.Command
 			}
-			if isWindowActive(cmd, win.LastActivity, isClaudeWindow, parseResult) {
+			if isWindowActive(cmd, win.LastActivity, isAgentWindow, parseResult) {
 				sessionData.HasWorking = true
 			}
 		}
@@ -297,20 +303,18 @@ func (s *Server) buildSessionsData() views.SessionsData {
 	return data
 }
 
-// getPreviewLines extracts the last n non-empty lines from output, skipping Claude's status bar
+// getPreviewLines extracts the last n non-empty lines from output, using agent-specific filtering
 // Note: Preview lines in window cards are now only used as fallback - action bar uses SSE for live data
-func getPreviewLines(output string, n int) []string {
-	lines := strings.Split(output, "\n")
+func (s *Server) getPreviewLines(agent agents.Agent, output string, n int) []string {
+	// Filter output using agent-specific status bar handling
+	filtered := agent.FilterStatusBar(output)
+	lines := strings.Split(filtered, "\n")
 	var result []string
 
-	// Work backwards to find non-empty lines, skipping status bar elements
+	// Work backwards to find non-empty lines
 	for i := len(lines) - 1; i >= 0 && len(result) < n; i-- {
 		line := strings.TrimSpace(lines[i])
 		if line == "" {
-			continue
-		}
-		// Skip Claude's status bar lines
-		if statusbar.IsStatusLine(line) {
 			continue
 		}
 		// Skip prompt line (just ">")
@@ -412,10 +416,10 @@ func classifyProcess(cmd string) ProcessType {
 // isWindowActive determines if a window is actively working based on:
 // - Process type (shells/interactive are idle)
 // - Recent activity (output in last N seconds)
-// - For Claude windows, use the parser
-func isWindowActive(cmd string, lastActivity time.Time, isClaudeWindow bool, parseResult parser.Result) bool {
-	// Claude windows use their own detection
-	if isClaudeWindow {
+// - For agent windows, use the parser
+func isWindowActive(cmd string, lastActivity time.Time, isAgentWindow bool, parseResult parser.Result) bool {
+	// Agent windows use their own detection
+	if isAgentWindow {
 		return parseResult.Type == parser.TypeWorking
 	}
 
@@ -679,21 +683,27 @@ func (s *Server) handlePane(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get pane path for claudelog lookup
-	var panePath string
+	// Get pane info for agent detection
+	var panePath, paneCommand string
 	for _, p := range panes {
 		if p.Index == pane.Index {
 			panePath = p.Path
+			paneCommand = p.Command
 			break
 		}
 	}
 
-	// Try claudelog first (for accurate state), fallback to terminal parsing
-	parseResult := parseClaudeState(panePath, capture.Output)
+	// Detect agent and get state
+	paneID := pane.Target()
+	agent := s.registry.Detect(paneID, paneCommand, capture.Output)
+	parseResult := getAgentState(agent, panePath, capture.Output)
+
+	// Filter output for display
+	filteredOutput := agent.FilterStatusBar(capture.Output)
 
 	data := views.PaneData{
 		Pane:        pane,
-		Output:      capture.Output,
+		Output:      filteredOutput,
 		ParseResult: parseResult,
 		Windows:     windows,
 		Panes:       panes,
@@ -975,15 +985,17 @@ func (s *Server) streamPane(w http.ResponseWriter, r *http.Request, pane tmux.Pa
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
-	// Get pane path for claudelog lookup (once at start)
-	var panePath string
+	// Get pane info for agent detection (once at start)
+	var panePath, paneCommand string
 	panes, _ := s.tmux.ListPanes(pane.Session, pane.Window)
 	for _, p := range panes {
 		if p.Index == pane.Index {
 			panePath = p.Path
+			paneCommand = p.Command
 			break
 		}
 	}
+	paneID := pane.Target()
 
 	// Send initial comment to establish connection
 	if _, err := fmt.Fprintf(w, ": connected\n\n"); err != nil {
@@ -994,7 +1006,7 @@ func (s *Server) streamPane(w http.ResponseWriter, r *http.Request, pane tmux.Pa
 
 	var lastOutput string
 	var lastStatusLine string
-	var lastClaudeModeJSON string
+	var lastAgentModeJSON string
 	updateCount := 0
 
 	ticker := time.NewTicker(1 * time.Second)
@@ -1012,50 +1024,50 @@ func (s *Server) streamPane(w http.ResponseWriter, r *http.Request, pane tmux.Pa
 				continue
 			}
 
-			// Detect Claude mode indicator from status line
-			claudeMode := detectClaudeMode(capture.StatusLine)
-			claudeModeJSON, _ := json.Marshal(claudeMode)
-			claudeModeJSONStr := string(claudeModeJSON)
+			// Detect agent and get mode
+			agent := s.registry.Detect(paneID, paneCommand, capture.Output)
+			mode := agent.DetectMode(capture.Output)
+			statusLine := claude.ExtractStatusLine(capture.Output) // TODO: make agent-specific
+			filteredOutput := agent.FilterStatusBar(capture.Output)
+
+			// Detect agent mode indicator from status line
+			agentMode := detectClaudeMode(statusLine) // TODO: make agent-specific
+			agentModeJSON, _ := json.Marshal(agentMode)
+			agentModeJSONStr := string(agentModeJSON)
 
 			// Send update if output, status line, or mode changed
-			statusChanged := capture.StatusLine != lastStatusLine
-			modeChanged := claudeModeJSONStr != lastClaudeModeJSON
-			if capture.Output != lastOutput || statusChanged || modeChanged {
-				lastOutput = capture.Output
-				lastStatusLine = capture.StatusLine
-				lastClaudeModeJSON = claudeModeJSONStr
-				lines := strings.Split(capture.Output, "\n")
+			statusChanged := statusLine != lastStatusLine
+			modeChanged := agentModeJSONStr != lastAgentModeJSON
+			if filteredOutput != lastOutput || statusChanged || modeChanged {
+				lastOutput = filteredOutput
+				lastStatusLine = statusLine
+				lastAgentModeJSON = agentModeJSONStr
+				lines := strings.Split(filteredOutput, "\n")
 				updateCount++
 
-
-				// Parse output for choices using claudelog (JSONL) with terminal parser fallback
+				// Parse output for choices
 				strippedOutput := ansi.Strip(capture.Output)
-				parseResult := parseClaudeState(panePath, strippedOutput)
+				parseResult := getAgentState(agent, panePath, strippedOutput)
 
 				// Build the SSE message with metadata as first lines
 				var buf strings.Builder
-				// Send mode as special first line (will be parsed by client)
-				slog.Debug("SSE mode", "pane", pane.Target(), "mode", capture.Mode)
+				slog.Debug("SSE mode", "pane", pane.Target(), "mode", mode.String())
 				buf.WriteString("data: __MODE__:")
-				buf.WriteString(capture.Mode)
+				buf.WriteString(mode.String())
 				buf.WriteString("\n")
-				// Send choices as special second line
 				buf.WriteString("data: __CHOICES__:")
 				buf.WriteString(strings.Join(parseResult.Choices, "|"))
 				buf.WriteString("\n")
-				// Send Claude mode state as JSON
 				buf.WriteString("data: __CLAUDEMODE__:")
-				buf.Write(claudeModeJSON)
+				buf.Write(agentModeJSON)
 				buf.WriteString("\n")
-				// Send status line with ANSI colors
-				if capture.StatusLine != "" {
-					slog.Debug("SSE status line", "pane", pane.Target(), "status", capture.StatusLine, "len", len(capture.StatusLine))
+				if statusLine != "" {
+					slog.Debug("SSE status line", "pane", pane.Target(), "status", statusLine, "len", len(statusLine))
 				}
 				buf.WriteString("data: __STATUSLINE__:")
-				buf.WriteString(capture.StatusLine)
+				buf.WriteString(statusLine)
 				buf.WriteString("\n")
 				for _, line := range lines {
-					// Remove carriage returns that can break SSE
 					line = strings.ReplaceAll(line, "\r", "")
 					buf.WriteString("data: ")
 					buf.WriteString(line)
@@ -1063,7 +1075,6 @@ func (s *Server) streamPane(w http.ResponseWriter, r *http.Request, pane tmux.Pa
 				}
 				buf.WriteString("\n")
 
-				// Write and check for errors
 				_, err := w.Write([]byte(buf.String()))
 				if err != nil {
 					slog.Error("SSE pane write failed", "pane", pane.Target(), "error", err)

@@ -7,8 +7,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/noamsto/houston/internal/statusbar"
 )
 
 type Session struct {
@@ -242,122 +240,17 @@ func (c *Client) CapturePaneWithMode(p Pane, lines int) (CaptureResult, error) {
 	// Convert ESC symbol (␛, U+241B) to actual ESC character (\x1b) for ANSI processing
 	raw = strings.ReplaceAll(raw, "␛", "\x1b")
 
-	mode := string(statusbar.DetectMode(raw))
-	statusLine := extractStatusLine(raw)
-	filtered := statusbar.FilterOutput(raw)
-
+	// Return raw output - agent-specific filtering done by caller
 	return CaptureResult{
-		Output:     filtered,
-		Mode:       mode,
-		StatusLine: statusLine,
+		Output:     raw,
+		Mode:       "", // Agent-specific; set by caller
+		StatusLine: "", // Agent-specific; set by caller
 	}, nil
 }
 
-// extractStatusLine finds Claude's status bar line with ANSI colors intact.
-// Returns the full status line including ANSI escape sequences for frontend display.
-func extractStatusLine(output string) string {
-	lines := strings.Split(output, "\n")
 
-	// Check last 20 lines for status bar (separator might be further up)
-	start := len(lines) - 20
-	if start < 0 {
-		start = 0
-	}
 
-	// Strategy: Find the LAST horizontal separator (after user input block)
-	// and return first non-empty line after it
-	// Structure:
-	//   ───── (separator 1)
-	//   > user input line 1
-	//     user input line 2 (indented continuation - multiline)
-	//     (blank lines)
-	//   ───── (separator 2) <- we want the LAST one
-	//   (blank lines)
-	//   status line <- this is what we return
-	//   -- INSERT --
-	//
-	// By finding the LAST separator, we automatically skip over all user input
-	// regardless of how many lines it spans
 
-	lastSeparatorIdx := -1
-
-	// Find the last separator in the bottom section
-	for i := start; i < len(lines); i++ {
-		trimmed := strings.TrimSpace(lines[i])
-
-		// Check if this is a horizontal separator line
-		// Line may have ANSI codes, so just check for sufficient dashes
-		dashCount := strings.Count(trimmed, "─")
-		isSeparator := dashCount >= 20
-
-		if isSeparator {
-			lastSeparatorIdx = i
-		}
-	}
-
-	// If we found a separator, collect all non-empty lines after it
-	// Claude Code shows TWO status lines:
-	// Line 1: "❄ impure 📂 ~/path  🤖 Sonnet 4.5 | 📊 151k/200k"
-	// Line 2 (INSERT mode): "-- INSERT -- ⏵⏵ accept edits on (shift+tab to cycle)"
-	// Line 2 (NORMAL mode): "⏵⏵ accept edits on (shift+tab to cycle)"
-	if lastSeparatorIdx >= 0 {
-		var statusLines []string
-		for j := lastSeparatorIdx + 1; j < len(lines); j++ {
-			line := lines[j]
-			trimmed := strings.TrimSpace(line)
-
-			// Skip empty lines
-			if trimmed == "" {
-				continue
-			}
-
-			statusLines = append(statusLines, strings.TrimSpace(line))
-		}
-
-		// Return all status lines joined with newline
-		return strings.Join(statusLines, "\n")
-	}
-
-	return ""
-}
-
-// LooksLikeClaudeOutput checks if output appears to be from Claude Code
-func LooksLikeClaudeOutput(output string) bool {
-	// Claude Code has characteristic status bar elements
-	claudeMarkers := []string{
-		"-- INSERT --",
-		"-- NORMAL --",
-		"🤖",  // Model indicator
-		"📊",  // Stats
-		"💬",  // Messages
-	}
-	for _, marker := range claudeMarkers {
-		if strings.Contains(output, marker) {
-			return true
-		}
-	}
-
-	// Also check for Claude conversation patterns
-	// These appear in the output itself, not just status bar
-	conversationMarkers := []string{
-		"Claude:",           // Claude's responses
-		"Human:",            // User messages in transcript
-		">>>",               // Claude Code prompt
-		"Do you want to",    // Common Claude question pattern
-		"Would you like",    // Common Claude question pattern
-		"(Recommended)",     // Choice recommendation
-		"[Y/n]",             // Yes/no prompt
-		"[y/N]",             // Yes/no prompt
-		"Select an option",  // Choice prompt
-	}
-	for _, marker := range conversationMarkers {
-		if strings.Contains(output, marker) {
-			return true
-		}
-	}
-
-	return false
-}
 
 func (c *Client) SendKeys(p Pane, keys string, enter bool) error {
 	// Use -l for literal text to avoid interpreting special characters
