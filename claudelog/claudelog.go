@@ -470,6 +470,13 @@ func (s *SessionState) ToParserResult() parser.Result {
 	// Determine type based on state
 	if len(s.Choices) > 0 {
 		result.Type = parser.TypeChoice
+	} else if s.IsWaitingPermission {
+		// Waiting for permission prompt - mark as needing attention
+		// The actual choices should be parsed from terminal by the caller
+		result.Type = parser.TypeQuestion
+		if result.Question == "" {
+			result.Question = "Waiting for permission..."
+		}
 	} else if s.Question != "" {
 		result.Type = parser.TypeQuestion
 	} else if s.Error != "" {
