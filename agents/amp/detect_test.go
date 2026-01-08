@@ -1,6 +1,10 @@
 package amp
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/noamsto/houston/parser"
+)
 
 func TestDetectFromOutput(t *testing.T) {
 	tests := []struct {
@@ -67,5 +71,60 @@ func TestDetectFromOutput(t *testing.T) {
 				t.Errorf("DetectFromOutput() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestParseOutput_AmpChoices(t *testing.T) {
+	input := `╭───────────────────────────────────────────────────────────────────────────────╮
+│ Run this command?                                                             │
+│                                                                               │
+│ git push                                                                      │
+│                                                                               │
+│ (Matches built-in permissions rule 0: ask Bash --cmd '*git*push*')            │
+│                                                                               │
+│ ‣ Yes                                                                         │
+│   Allow All for This Session                                                  │
+│   Allow All for Every Session                                                 │
+│   No                                                                          │
+╰───────────────────────────────────────────────────────────────────────────────╯`
+
+	result := ParseOutput(input)
+
+	if result.Type != parser.TypeChoice {
+		t.Errorf("expected TypeChoice, got %v", result.Type)
+	}
+
+	if result.Question != "Run this command?" {
+		t.Errorf("expected question 'Run this command?', got %q", result.Question)
+	}
+
+	expectedChoices := []string{"Yes", "Allow All for This Session", "Allow All for Every Session", "No"}
+	if len(result.Choices) != len(expectedChoices) {
+		t.Errorf("expected %d choices, got %d: %v", len(expectedChoices), len(result.Choices), result.Choices)
+		return
+	}
+
+	for i, want := range expectedChoices {
+		if result.Choices[i] != want {
+			t.Errorf("choice[%d] = %q, want %q", i, result.Choices[i], want)
+		}
+	}
+}
+
+func TestParseOutput_AmpChoices_DifferentSelection(t *testing.T) {
+	input := `│ Run this command?                                                             │
+│   Yes                                                                         │
+│ ‣ Allow All for This Session                                                  │
+│   No                                                                          │`
+
+	result := ParseOutput(input)
+
+	if result.Type != parser.TypeChoice {
+		t.Errorf("expected TypeChoice, got %v", result.Type)
+	}
+
+	// Selected item should be first
+	if len(result.Choices) < 1 || result.Choices[0] != "Allow All for This Session" {
+		t.Errorf("expected first choice to be selected item, got %v", result.Choices)
 	}
 }

@@ -1051,9 +1051,12 @@ func (s *Server) streamPane(w http.ResponseWriter, r *http.Request, pane tmux.Pa
 
 				// Build the SSE message with metadata as first lines
 				var buf strings.Builder
-				slog.Debug("SSE mode", "pane", pane.Target(), "mode", mode.String())
+				slog.Debug("SSE mode", "pane", pane.Target(), "mode", mode.String(), "agent", agent.Type())
 				buf.WriteString("data: __MODE__:")
 				buf.WriteString(mode.String())
+				buf.WriteString("\n")
+				buf.WriteString("data: __AGENT__:")
+				buf.WriteString(string(agent.Type()))
 				buf.WriteString("\n")
 				buf.WriteString("data: __CHOICES__:")
 				buf.WriteString(strings.Join(parseResult.Choices, "|"))

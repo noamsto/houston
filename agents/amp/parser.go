@@ -14,11 +14,16 @@ var (
 	// Match tool invocation: "● ToolName(...)"
 	toolPattern = regexp.MustCompile(`●\s+(\w+)\s*\(`)
 
-	// Match question patterns (similar to Claude)
+	// Match question patterns
 	questionPattern = regexp.MustCompile(`(?m)^(.+\?)\s*$`)
 
-	// Match numbered choices
-	choicePattern = regexp.MustCompile(`(?m)^\s*[❯>\-\*]?\s*([0-9]+)[.)\]]\s+(.+)$`)
+	// Match Amp choice lines: "‣ Yes" (selected) or "  Allow All" (not selected)
+	// Amp uses ‣ (U+2023) for selected item, spaces for others
+	ampChoiceSelectedPattern = regexp.MustCompile(`^[│\s]*‣\s+(.+?)\s*[│]?\s*$`)
+	ampChoiceUnselectedPattern = regexp.MustCompile(`^[│\s]{2,}([A-Z][a-zA-Z\s]+?)\s*[│]?\s*$`)
+
+	// Match numbered choices (Claude style, kept for compatibility)
+	numberedChoicePattern = regexp.MustCompile(`(?m)^\s*[❯>\-\*]?\s*([0-9]+)[.)\]]\s+(.+)$`)
 
 	// Match hook running indicator
 	hookPattern = regexp.MustCompile(`Running\s+\w+\s+hooks`)
@@ -30,23 +35,33 @@ func ParseOutput(output string) parser.Result {
 	lastLines := lastN(lines, 50)
 	text := strings.Join(lastLines, "\n")
 
-	// Check for questions with choices
+	// Check for Amp-style choices (‣ cursor selection)
+	choices, question := parseAmpChoices(lastLines)
+	if len(choices) > 0 {
+		return parser.Result{
+			Type:     parser.TypeChoice,
+			Question: question,
+			Choices:  choices,
+		}
+	}
+
+	// Check for numbered choices (Claude style)
 	if qMatches := questionPattern.FindAllStringSubmatchIndex(text, -1); len(qMatches) > 0 {
 		lastQMatch := qMatches[len(qMatches)-1]
 		textAfterQuestion := text[lastQMatch[1]:]
 
-		choiceMatches := choicePattern.FindAllStringSubmatch(textAfterQuestion, -1)
+		choiceMatches := numberedChoicePattern.FindAllStringSubmatch(textAfterQuestion, -1)
 		if len(choiceMatches) >= 2 {
-			var choices []string
+			var numberedChoices []string
 			for _, m := range choiceMatches {
-				choices = append(choices, strings.TrimSpace(m[2]))
+				numberedChoices = append(numberedChoices, strings.TrimSpace(m[2]))
 			}
 
-			question := strings.TrimSpace(text[lastQMatch[2]:lastQMatch[3]])
+			q := strings.TrimSpace(text[lastQMatch[2]:lastQMatch[3]])
 			return parser.Result{
 				Type:     parser.TypeChoice,
-				Question: question,
-				Choices:  choices,
+				Question: q,
+				Choices:  numberedChoices,
 			}
 		}
 	}
@@ -88,6 +103,71 @@ func ParseOutput(output string) parser.Result {
 	}
 
 	return parser.Result{Type: parser.TypeIdle}
+}
+
+// parseAmpChoices extracts choices from Amp's cursor-based selection UI.
+// Returns choices and the question text.
+func parseAmpChoices(lines []string) ([]string, string) {
+	var choices []string
+	var question string
+	inChoiceBlock := false
+	selectedIdx := -1
+	firstChoiceLineIdx := -1
+
+	for i, line := range lines {
+		// Check for selected choice (‣ prefix)
+		if match := ampChoiceSelectedPattern.FindStringSubmatch(line); len(match) > 1 {
+			choice := strings.TrimSpace(match[1])
+			if choice != "" && !strings.HasPrefix(choice, "(") {
+				if firstChoiceLineIdx == -1 {
+					firstChoiceLineIdx = i
+				}
+				selectedIdx = len(choices)
+				choices = append(choices, choice)
+				inChoiceBlock = true
+			}
+			continue
+		}
+
+		// Check for unselected choices (indented, starts with capital letter)
+		if inChoiceBlock {
+			// Look for choice-like lines: indented text starting with capital
+			trimmed := strings.TrimLeft(line, "│ \t")
+			trimmed = strings.TrimRight(trimmed, "│ \t")
+			if trimmed != "" && len(trimmed) > 1 && trimmed[0] >= 'A' && trimmed[0] <= 'Z' {
+				// Make sure it's not a sentence (choices are typically short)
+				if len(trimmed) < 40 && !strings.Contains(trimmed, ".") {
+					choices = append(choices, trimmed)
+					continue
+				}
+			}
+			// If we hit an empty line or non-choice content after choices, stop
+			if trimmed == "" || strings.HasPrefix(trimmed, "╰") {
+				break
+			}
+		}
+	}
+
+	// Look for question in lines before the first choice
+	if firstChoiceLineIdx > 0 {
+		for j := firstChoiceLineIdx - 1; j >= 0 && j > firstChoiceLineIdx-15; j-- {
+			prevLine := strings.TrimLeft(lines[j], "│ \t")
+			prevLine = strings.TrimRight(prevLine, "│ \t")
+			prevLine = strings.TrimSpace(prevLine)
+			if strings.HasSuffix(prevLine, "?") && len(prevLine) > 3 {
+				question = prevLine
+				break
+			}
+		}
+	}
+
+	// Reorder so selected item is first (for UI display)
+	if selectedIdx > 0 && selectedIdx < len(choices) {
+		selected := choices[selectedIdx]
+		choices = append([]string{selected}, append(choices[:selectedIdx], choices[selectedIdx+1:]...)...)
+	}
+
+	return choices, question
 }
 
 func toolToActivity(tool string) string {

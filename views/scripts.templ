@@ -197,8 +197,9 @@ templ paneScripts() {
 			// Get the raw text from SSE (already safe as plain text)
 			let text = e.detail.data;
 
-			// Track current mode and Claude mode for status indicators
+			// Track current mode, agent type, and Claude mode for status indicators
 			let currentMode = '';
+			let currentAgent = 'generic';
 			let claudeModeData = {};
 
 			// Extract mode from special first line if present
@@ -210,12 +211,22 @@ templ paneScripts() {
 				updateModeIndicatorDirect(currentMode);
 			}
 
+			// Extract agent type if present
+			const agentMatch = text.match(/^__AGENT__:([^\n]*)\n/);
+			if (agentMatch) {
+				currentAgent = agentMatch[1] || 'generic';
+				text = text.substring(agentMatch[0].length);
+				// Store agent type for choice handling
+				const bar = document.getElementById('choices-bar');
+				if (bar) bar.dataset.agentType = currentAgent;
+			}
+
 			// Extract choices from special line if present
 			const choicesMatch = text.match(/^__CHOICES__:([^\n]*)\n/);
 			if (choicesMatch) {
 				const choicesStr = choicesMatch[1];
 				text = text.substring(choicesMatch[0].length);
-				updateChoices(choicesStr ? choicesStr.split('|') : []);
+				updateChoices(choicesStr ? choicesStr.split('|') : [], currentAgent);
 			}
 
 			// Extract Claude mode state if present (JSON)
@@ -253,7 +264,7 @@ templ paneScripts() {
 		});
 
 		// Update choices bar dynamically
-		function updateChoices(choices) {
+		function updateChoices(choices, agentType) {
 			const bar = document.getElementById('choices-bar');
 			if (!bar) return;
 
@@ -263,14 +274,15 @@ templ paneScripts() {
 				return;
 			}
 
+			const isAmp = agentType === 'amp';
 			bar.classList.remove('hidden');
 			let html = '';
 			choices.forEach((choice, i) => {
 				const num = i + 1;
 				const shortChoice = choice.length > 20 ? choice.substring(0, 17) + '...' : choice;
-				// No inline onclick - handled by event delegation below
-				html += `<button class="choice-btn" data-choice="${num}" data-choice-text="${escapeHtml(choice)}">
-					<span class="choice-num">${num}</span>
+				// For Amp, store index for arrow navigation; for Claude, use number
+				html += `<button class="choice-btn" data-choice="${num}" data-choice-index="${i}" data-choice-text="${escapeHtml(choice)}">
+					<span class="choice-num">${isAmp ? '↓' + i : num}</span>
 					<span class="choice-text">${escapeHtml(shortChoice)}</span>
 				</button>`;
 			});
@@ -284,16 +296,25 @@ templ paneScripts() {
 		}
 
 		// Send choice to pane
-		window.sendChoice = function(num, choiceText) {
+		window.sendChoice = function(num, choiceText, choiceIndex) {
 			const bar = document.getElementById('choices-bar');
 			if (!bar) return;
 			const target = bar.dataset.paneTarget;
+			const agentType = bar.dataset.agentType || 'generic';
 			if (!target) return;
-			fetch(`/pane/${target}/send`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-				body: `input=${num}&noenter=true`
-			});
+
+			if (agentType === 'amp') {
+				// Amp uses cursor navigation: send Down arrows then Enter
+				// First choice (index 0) is already selected, just send Enter
+				sendAmpChoice(target, choiceIndex);
+			} else {
+				// Claude uses numbers
+				fetch(`/pane/${target}/send`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+					body: `input=${num}&noenter=true`
+				});
+			}
 
 			// If choice says "Type here" or similar, focus input for custom response
 			if (choiceText && choiceText.toLowerCase().includes('type')) {
@@ -306,6 +327,26 @@ templ paneScripts() {
 			}
 		}
 
+		// Send Amp choice using arrow navigation
+		async function sendAmpChoice(target, index) {
+			// Send Down arrow 'index' times, then Enter
+			for (let i = 0; i < index; i++) {
+				await fetch(`/pane/${target}/send`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+					body: 'input=Down&special=true'
+				});
+				// Small delay between key presses
+				await new Promise(r => setTimeout(r, 50));
+			}
+			// Send Enter to confirm
+			await fetch(`/pane/${target}/send`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+				body: 'input=Enter&special=true'
+			});
+		}
+
 		// Event delegation for choice buttons (avoids HTML entity escaping issues in onclick)
 		document.addEventListener('click', function(e) {
 			const choiceBtn = e.target.closest('.choice-btn');
@@ -313,8 +354,9 @@ templ paneScripts() {
 				e.stopPropagation();
 				const num = choiceBtn.dataset.choice;
 				const text = choiceBtn.dataset.choiceText;
+				const index = parseInt(choiceBtn.dataset.choiceIndex || '0', 10);
 				if (num) {
-					sendChoice(num, text);
+					sendChoice(num, text, index);
 				}
 			}
 		});
