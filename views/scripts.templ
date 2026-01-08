@@ -46,7 +46,11 @@ templ indexPageInlineScript() {
 
 			// Convert ANSI to HTML with brightening (uses shared brightenAnsiColors)
 			window.ansiToHtml = function(text) {
+				// Convert tmux's visible ESC symbol (␛, U+241B) to real ESC byte
+				text = text.replace(/\u241b/g, '\x1b');
 				let html = ansiUp.ansi_to_html(text);
+				// Strip any orphaned ANSI codes that survived (ESC lost in transmission)
+				html = html.replace(/\[[0-9;]*m/g, '');
 				return window.brightenAnsiColors(html);
 			};
 	</script>
@@ -175,6 +179,9 @@ templ paneScripts() {
 			}
 		});
 
+		// Track current vim mode (persists across SSE messages)
+		let currentVimMode = '';
+
 		// Handle SSE messages manually to prevent htmx from setting innerHTML directly
 		// This prevents terminal content with HTML-like text from being rendered as actual HTML
 		document.body.addEventListener('htmx:sseMessage', function(e) {
@@ -198,6 +205,7 @@ templ paneScripts() {
 			const modeMatch = text.match(/^__MODE__:(\w*)\n/);
 			if (modeMatch) {
 				currentMode = modeMatch[1];
+				currentVimMode = currentMode; // Persist for form submission
 				text = text.substring(modeMatch[0].length);
 				updateModeIndicatorDirect(currentMode);
 			}
@@ -793,6 +801,17 @@ templ paneScripts() {
 				});
 				// Wait a brief moment for the clear to take effect
 				await new Promise(resolve => setTimeout(resolve, 100));
+			}
+
+			// If in NORMAL mode, switch to INSERT mode first
+			if (currentVimMode === 'normal') {
+				await fetch(`/pane/${paneTarget}/send`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+					body: 'input=i&noenter=true'
+				});
+				// Wait for mode switch to take effect
+				await new Promise(resolve => setTimeout(resolve, 50));
 			}
 
 			let response;

@@ -4,6 +4,8 @@ package parser
 import (
 	"regexp"
 	"strings"
+
+	"github.com/noamsto/houston/internal/ansi"
 )
 
 type ResultType int
@@ -65,8 +67,9 @@ var (
 
 func Parse(output string) Result {
 	lines := strings.Split(output, "\n")
-	// Look at last 50 lines to capture edit prompts with diffs
-	lastLines := lastN(lines, 50)
+	// Look at last 80 lines to capture edit prompts with diffs and choice prompts
+	// (Choice prompts can have long context text above them)
+	lastLines := lastN(lines, 80)
 	text := strings.Join(lastLines, "\n")
 
 	// Detect mode from last few lines
@@ -85,19 +88,38 @@ func Parse(output string) Result {
 
 		choiceMatches := choicePattern.FindAllStringSubmatch(textAfterQuestion, -1)
 		if len(choiceMatches) >= 2 {
-			var choices []string
-			for _, m := range choiceMatches {
-				choices = append(choices, strings.TrimSpace(m[2]))
+			// Check if user already responded (look for "> " input after choices)
+			// Find the end of the last choice
+			lastChoiceEnd := 0
+			if len(choiceMatches) > 0 {
+				lastMatch := choiceMatches[len(choiceMatches)-1]
+				// Approximate position of last choice in textAfterQuestion
+				lastChoiceEnd = strings.Index(textAfterQuestion, lastMatch[0]) + len(lastMatch[0])
 			}
 
-			// Extract the question text
-			question := strings.TrimSpace(text[lastQMatch[2]:lastQMatch[3]])
+			// Check for user input after choices (lines starting with ">")
+			textAfterChoices := textAfterQuestion[lastChoiceEnd:]
+			if strings.Contains(textAfterChoices, "\n>") || strings.HasPrefix(textAfterChoices, ">") {
+				// User already responded - this is not an active choice prompt
+				// Fall through to other checks
+			} else {
+				// Active choice prompt - no user response yet
+				var choices []string
+				for _, m := range choiceMatches {
+					// Strip ANSI codes from choice text
+					choiceText := ansi.Strip(strings.TrimSpace(m[2]))
+					choices = append(choices, choiceText)
+				}
 
-			return Result{
-				Type:     TypeChoice,
-				Mode:     mode,
-				Question: question,
-				Choices:  choices,
+				// Extract the question text
+				question := strings.TrimSpace(text[lastQMatch[2]:lastQMatch[3]])
+
+				return Result{
+					Type:     TypeChoice,
+					Mode:     mode,
+					Question: question,
+					Choices:  choices,
+				}
 			}
 		}
 	}
@@ -127,6 +149,15 @@ func Parse(output string) Result {
 				Mode:     mode,
 				Question: fullQuestion,
 			}
+		}
+	}
+
+	// Check for errors (look in recent output)
+	if matches := errorPattern.FindStringSubmatch(text); len(matches) > 1 {
+		return Result{
+			Type:         TypeError,
+			Mode:         mode,
+			ErrorSnippet: strings.TrimSpace(matches[1]),
 		}
 	}
 

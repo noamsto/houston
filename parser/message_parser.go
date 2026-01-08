@@ -2,9 +2,10 @@ package parser
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
+
+	"github.com/noamsto/houston/internal/ansi"
 )
 
 // ParserConfig defines conversation delimiters and markers for a specific agent/format
@@ -97,7 +98,6 @@ type MessageParser struct {
 	buffer       []string          // Raw output lines with ANSI colors
 	state        ConversationState
 	seenMessages map[int]bool      // Track processed lines
-	ansiRegex    *regexp.Regexp    // Compiled ANSI color regex
 }
 
 // NewMessageParser creates a new parser with the given configuration
@@ -106,7 +106,6 @@ func NewMessageParser(config ParserConfig) *MessageParser {
 		config:       config,
 		state:        ConversationState{Messages: []Message{}},
 		seenMessages: make(map[int]bool),
-		ansiRegex:    regexp.MustCompile(`\x1b\[[0-9;]*m`),
 	}
 }
 
@@ -201,14 +200,6 @@ func (s *ConversationState) ToLegacyResult() Result {
 	}
 }
 
-// stripColors removes ANSI escape codes from a line
-func (p *MessageParser) stripColors(s string) string {
-	if !p.config.PreserveColors {
-		return s // Already stripped or not needed
-	}
-	return p.ansiRegex.ReplaceAllString(s, "")
-}
-
 // detectMessages scans the buffer for message boundaries
 func (p *MessageParser) detectMessages() {
 	// Scan forward through buffer (oldest to newest)
@@ -219,7 +210,7 @@ func (p *MessageParser) detectMessages() {
 
 		// Strip colors for pattern matching, keep raw for display
 		rawLine := p.buffer[i]
-		cleanLine := strings.TrimSpace(p.stripColors(rawLine))
+		cleanLine := strings.TrimSpace(ansi.Strip(rawLine))
 
 		// Skip empty lines
 		if cleanLine == "" {
@@ -303,7 +294,7 @@ func (p *MessageParser) detectUIState() {
 
 	for i := 0; i < len(p.buffer); i++ {
 		rawLine := p.buffer[i]
-		cleanLine := strings.TrimSpace(p.stripColors(rawLine))
+		cleanLine := strings.TrimSpace(ansi.Strip(rawLine))
 
 		if cleanLine == "" {
 			continue
@@ -424,7 +415,7 @@ func (p *MessageParser) isToolCall(lineIdx int) bool {
 		return false
 	}
 
-	cleanLine := p.stripColors(p.buffer[lineIdx])
+	cleanLine := ansi.Strip(p.buffer[lineIdx])
 
 	// Check for known tool names after the prefix
 	for _, tool := range p.config.KnownTools {
@@ -435,7 +426,7 @@ func (p *MessageParser) isToolCall(lineIdx int) bool {
 
 	// Check if next line has tool output prefix (⎿)
 	if lineIdx+1 < len(p.buffer) {
-		nextLine := strings.TrimSpace(p.stripColors(p.buffer[lineIdx+1]))
+		nextLine := strings.TrimSpace(ansi.Strip(p.buffer[lineIdx+1]))
 		for _, prefix := range p.config.ToolOutputPrefixes {
 			if strings.HasPrefix(nextLine, prefix) {
 				return true
@@ -473,7 +464,7 @@ func (p *MessageParser) extractUserMessage(lineIdx int) *Message {
 	}
 
 	rawLine := p.buffer[lineIdx]
-	cleanLine := p.stripColors(rawLine)
+	cleanLine := ansi.Strip(rawLine)
 
 	// Remove prefix and trim
 	content := strings.TrimSpace(strings.TrimPrefix(cleanLine, p.config.UserPrefix))
@@ -496,7 +487,7 @@ func (p *MessageParser) extractAgentMessage(lineIdx int) *Message {
 	}
 
 	rawLine := p.buffer[lineIdx]
-	cleanLine := p.stripColors(rawLine)
+	cleanLine := ansi.Strip(rawLine)
 
 	// Remove prefix and trim
 	content := strings.TrimSpace(strings.TrimPrefix(cleanLine, p.config.AgentPrefix))
@@ -519,7 +510,7 @@ func (p *MessageParser) extractToolCall(lineIdx int) *Message {
 	}
 
 	rawLine := p.buffer[lineIdx]
-	cleanLine := p.stripColors(rawLine)
+	cleanLine := ansi.Strip(rawLine)
 
 	// Remove prefix (try ToolPrefix first, then AgentPrefix)
 	content := cleanLine
@@ -556,7 +547,7 @@ func (p *MessageParser) extractToolOutput(lineIdx int) *Message {
 	}
 
 	rawLine := p.buffer[lineIdx]
-	cleanLine := p.stripColors(rawLine)
+	cleanLine := ansi.Strip(rawLine)
 
 	// Remove tree prefix
 	content := cleanLine

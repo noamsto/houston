@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/noamsto/houston/internal/ansi"
 	"github.com/noamsto/houston/parser"
 	"github.com/noamsto/houston/tmux"
 )
@@ -135,26 +136,28 @@ func getWindowStatusText(win WindowWithStatus) string {
 	case parser.TypeError:
 		// Show error snippet if available, otherwise just indicate there was an error
 		if win.ParseResult.ErrorSnippet != "" {
-			// Use UTF-8 safe truncate helper
-			return truncate(win.ParseResult.ErrorSnippet, 50)
+			// Strip ANSI codes - ESC character gets lost in HTML attributes
+			return truncate(ansi.StripOrphaned(win.ParseResult.ErrorSnippet), 50)
 		}
 		return ""
 	case parser.TypeChoice:
 		return "Waiting for choice..."
 	case parser.TypeQuestion:
 		if win.ParseResult.Question != "" {
-			// Use UTF-8 safe truncate helper
-			return truncate(win.ParseResult.Question, 40)
+			// Strip ANSI codes - ESC character gets lost in HTML attributes
+			return truncate(ansi.StripOrphaned(win.ParseResult.Question), 40)
 		}
 		return "Waiting for input..."
 	case parser.TypeWorking:
 		if win.ParseResult.Activity != "" {
-			return win.ParseResult.Activity + "..."
+			// Strip ANSI codes - ESC character gets lost in HTML attributes
+			return ansi.StripOrphaned(win.ParseResult.Activity) + "..."
 		}
 		return "Working..."
 	case parser.TypeDone:
 		if win.ParseResult.Activity != "" {
-			return win.ParseResult.Activity
+			// Strip ANSI codes - ESC character gets lost in HTML attributes
+			return ansi.StripOrphaned(win.ParseResult.Activity)
 		}
 		return "Done"
 	default:

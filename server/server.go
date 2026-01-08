@@ -10,17 +10,44 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/noamsto/houston/claudelog"
+	"github.com/noamsto/houston/internal/ansi"
+	"github.com/noamsto/houston/internal/statusbar"
 	"github.com/noamsto/houston/parser"
 	"github.com/noamsto/houston/status"
 	"github.com/noamsto/houston/tmux"
 	"github.com/noamsto/houston/views"
 )
+
+
+// parseClaudeState tries to get state from Claude's JSONL logs first,
+// falling back to terminal parsing if unavailable.
+// panePath is the working directory of the pane (used to find Claude session).
+// terminalOutput is the captured terminal output (used for fallback parsing).
+func parseClaudeState(panePath, terminalOutput string) parser.Result {
+	var result parser.Result
+
+	// Try claudelog first if we have a valid pane path
+	if panePath != "" {
+		state, err := claudelog.GetStateForPane(panePath)
+		if err == nil {
+			result = state.ToParserResult()
+		} else {
+			// Fall through to terminal parsing on error
+			result = parser.Parse(terminalOutput)
+		}
+	} else {
+		// Fallback: parse terminal output
+		result = parser.Parse(terminalOutput)
+	}
+
+	return result
+}
 
 type Server struct {
 	tmux    *tmux.Client
@@ -102,7 +129,7 @@ func findBestPane(client *tmux.Client, session string, windowIdx int, panes []tm
 
 		isClaudeWindow := tmux.LooksLikeClaudeOutput(output)
 		if isClaudeWindow {
-			parseResult := parser.Parse(output)
+			parseResult := parseClaudeState(p.Path, output)
 
 			// Claude pane needing attention = highest priority
 			if parseResult.Type == parser.TypeError ||
@@ -189,8 +216,14 @@ func (s *Server) buildSessionsData() views.SessionsData {
 			pane := tmux.Pane{Session: sess.Name, Window: win.Index, Index: paneIdx}
 			output, _ := s.tmux.CapturePane(pane, 100)
 
-			// Use simple parser (MessageParser doesn't detect unstructured prompts)
-			parseResult := parser.Parse(output)
+			// Get pane path for claudelog lookup
+			var panePath string
+			if activePaneInfo != nil {
+				panePath = activePaneInfo.Path
+			}
+
+			// Try claudelog first (for accurate state), fallback to terminal parsing
+			parseResult := parseClaudeState(panePath, output)
 
 			// Only mark as needing attention if it's a Claude Code window
 			isClaudeWindow := tmux.LooksLikeClaudeOutput(output)
@@ -253,6 +286,7 @@ func (s *Server) buildSessionsData() views.SessionsData {
 }
 
 // getPreviewLines extracts the last n non-empty lines from output, skipping Claude's status bar
+// Note: Preview lines in window cards are now only used as fallback - action bar uses SSE for live data
 func getPreviewLines(output string, n int) []string {
 	lines := strings.Split(output, "\n")
 	var result []string
@@ -264,7 +298,7 @@ func getPreviewLines(output string, n int) []string {
 			continue
 		}
 		// Skip Claude's status bar lines
-		if isStatusBarLine(line) {
+		if statusbar.IsStatusLine(line) {
 			continue
 		}
 		// Skip prompt line (just ">")
@@ -275,40 +309,14 @@ func getPreviewLines(output string, n int) []string {
 		if isAllSeparator(line) {
 			continue
 		}
+		// Strip ANSI codes for window card preview (ESC gets lost in HTML anyway)
+		line = ansi.StripOrphaned(line)
 		result = append([]string{line}, result...)
-	}
-
-	// Truncate long lines (UTF-8 safe, but skip lines with ANSI codes to avoid breaking sequences)
-	for i, line := range result {
-		// Don't truncate if line contains ANSI escape codes
-		if strings.Contains(line, "\x1b[") {
-			continue
-		}
-		runes := []rune(line)
-		if len(runes) > 100 {
-			result[i] = string(runes[:97]) + "..."
-		}
 	}
 
 	return result
 }
 
-// isStatusBarLine checks if a line is part of Claude's status bar
-func isStatusBarLine(line string) bool {
-	// Claude status bar contains these indicators
-	statusIndicators := []string{
-		"-- INSERT --", "-- NORMAL --", // vim mode
-		"🤖", "📊", "⏱️", "💬",           // Claude stats
-		"❄", "📂",                         // env/path indicators
-		"accept edits",                    // edit acceptance hint
-	}
-	for _, indicator := range statusIndicators {
-		if strings.Contains(line, indicator) {
-			return true
-		}
-	}
-	return false
-}
 
 // windowActivityScore returns a score for sorting windows by activity
 // Higher score = more important (should appear first)
@@ -423,15 +431,6 @@ type ClaudeMode struct {
 	Icon  string `json:"icon"`  // "⏵⏵", "⏸", etc.
 	Label string `json:"label"` // "accept edits", "plan mode", etc.
 	State string `json:"state"` // "on" or "off"
-}
-
-// ANSI escape sequence regex pattern
-var ansiEscapeRegex = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
-
-// stripAnsiCodes removes ANSI escape sequences from text
-// This is needed for parsing patterns that expect plain text
-func stripAnsiCodes(text string) string {
-	return ansiEscapeRegex.ReplaceAllString(text, "")
 }
 
 // detectClaudeMode finds the current Claude Code mode from status line
@@ -668,8 +667,17 @@ func (s *Server) handlePane(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Use simple parser (MessageParser doesn't detect unstructured prompts)
-	parseResult := parser.Parse(capture.Output)
+	// Get pane path for claudelog lookup
+	var panePath string
+	for _, p := range panes {
+		if p.Index == pane.Index {
+			panePath = p.Path
+			break
+		}
+	}
+
+	// Try claudelog first (for accurate state), fallback to terminal parsing
+	parseResult := parseClaudeState(panePath, capture.Output)
 
 	data := views.PaneData{
 		Pane:        pane,
@@ -955,6 +963,16 @@ func (s *Server) streamPane(w http.ResponseWriter, r *http.Request, pane tmux.Pa
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
+	// Get pane path for claudelog lookup (once at start)
+	var panePath string
+	panes, _ := s.tmux.ListPanes(pane.Session, pane.Window)
+	for _, p := range panes {
+		if p.Index == pane.Index {
+			panePath = p.Path
+			break
+		}
+	}
+
 	// Send initial comment to establish connection
 	if _, err := fmt.Fprintf(w, ": connected\n\n"); err != nil {
 		slog.Error("SSE initial write failed", "error", err)
@@ -998,10 +1016,9 @@ func (s *Server) streamPane(w http.ResponseWriter, r *http.Request, pane tmux.Pa
 				updateCount++
 
 
-				// Parse output for choices using simple parser
-				// Strip ANSI codes before parsing to avoid breaking regex patterns
-				strippedOutput := stripAnsiCodes(capture.Output)
-				parseResult := parser.Parse(strippedOutput)
+				// Parse output for choices using claudelog (JSONL) with terminal parser fallback
+				strippedOutput := ansi.Strip(capture.Output)
+				parseResult := parseClaudeState(panePath, strippedOutput)
 				slog.Debug("SSE pane update", "pane", pane.Target(), "bytes", len(capture.Output), "mode", capture.Mode, "choices", len(parseResult.Choices), "statusChanged", statusChanged, "modeChanged", modeChanged)
 
 				// Build the SSE message with metadata as first lines

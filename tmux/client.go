@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/noamsto/houston/internal/statusbar"
 )
 
 type Session struct {
@@ -240,32 +242,15 @@ func (c *Client) CapturePaneWithMode(p Pane, lines int) (CaptureResult, error) {
 	// Convert ESC symbol (␛, U+241B) to actual ESC character (\x1b) for ANSI processing
 	raw = strings.ReplaceAll(raw, "␛", "\x1b")
 
-	mode := detectModeFromOutput(raw)
+	mode := string(statusbar.DetectMode(raw))
 	statusLine := extractStatusLine(raw)
-	filtered := filterStatusBar(raw)
+	filtered := statusbar.FilterOutput(raw)
 
 	return CaptureResult{
 		Output:     filtered,
 		Mode:       mode,
 		StatusLine: statusLine,
 	}, nil
-}
-
-// detectModeFromOutput checks for INSERT mode in the last few lines of output.
-// The mode indicator appears at the bottom of the terminal.
-// If INSERT isn't shown, we're in NORMAL mode (Claude Code only shows -- INSERT --).
-func detectModeFromOutput(output string) string {
-	lines := strings.Split(output, "\n")
-	// Only check last 5 lines where status bar appears
-	start := len(lines) - 5
-	if start < 0 {
-		start = 0
-	}
-	bottomLines := strings.Join(lines[start:], "\n")
-	if strings.Contains(bottomLines, "-- INSERT --") {
-		return "insert"
-	}
-	return "normal"
 }
 
 // extractStatusLine finds Claude's status bar line with ANSI colors intact.
@@ -336,28 +321,6 @@ func extractStatusLine(output string) string {
 	return ""
 }
 
-// filterStatusBar removes Claude Code status bar lines from output.
-// The status bar includes horizontal lines, mode indicators, and context info.
-// Only filters if output looks like Claude Code (has characteristic markers).
-func filterStatusBar(output string) string {
-	// Only filter if this looks like Claude Code output
-	if !LooksLikeClaudeOutput(output) {
-		return output
-	}
-
-	lines := strings.Split(output, "\n")
-	var filtered []string
-
-	for _, line := range lines {
-		if isStatusBarLine(line) {
-			continue
-		}
-		filtered = append(filtered, line)
-	}
-
-	return strings.Join(filtered, "\n")
-}
-
 // LooksLikeClaudeOutput checks if output appears to be from Claude Code
 func LooksLikeClaudeOutput(output string) bool {
 	// Claude Code has characteristic status bar elements
@@ -392,39 +355,6 @@ func LooksLikeClaudeOutput(output string) bool {
 			return true
 		}
 	}
-
-	return false
-}
-
-func isStatusBarLine(line string) bool {
-	trimmed := strings.TrimSpace(line)
-
-	// Skip empty lines at the end (but keep them in content)
-	if trimmed == "" {
-		return false
-	}
-
-	// Horizontal separator lines (─────)
-	if len(trimmed) > 10 && strings.Count(trimmed, "─") > len(trimmed)/2 {
-		return true
-	}
-
-	// Mode indicators
-	if strings.Contains(line, "-- INSERT --") || strings.Contains(line, "-- NORMAL --") {
-		return true
-	}
-
-	// Status line with model info, context, cost
-	if strings.Contains(line, "🤖") || strings.Contains(line, "📊") || strings.Contains(line, "💬") {
-		return true
-	}
-
-	// Status line with directory/git info
-	if strings.Contains(line, "❄") && strings.Contains(line, "📂") {
-		return true
-	}
-
-	// Note: We keep ">" and ">>>" prompts - users need to see them
 
 	return false
 }

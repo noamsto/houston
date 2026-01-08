@@ -83,8 +83,18 @@ templ IndexPage() {
 								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
 							</svg>
 						</button>
+						<button class="action-menu-btn" onclick="toggleActionMenu()" title="Menu">
+							<svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z"></path>
+							</svg>
+						</button>
 						<button class="action-close" onclick="closeActionBar()">✕</button>
 					</div>
+				</div>
+				<div id="actionMenu" class="action-menu hidden">
+					<button onclick="respawnPane()">Respawn pane</button>
+					<button onclick="closePane()" class="danger">Close pane</button>
+					<button onclick="closeWindow()" class="danger">Close window</button>
 				</div>
 				<div class="action-context" id="actionContext">
 					<div class="action-status" id="actionStatus"></div>
@@ -100,11 +110,6 @@ templ IndexPage() {
 					</button>
 					<button class="action-btn view" onclick="viewPane()">View</button>
 					<button class="action-btn" onclick="sendInput()">Send</button>
-				</div>
-				<div class="action-extra-row" style="display: flex; gap: 0.375rem; margin-top: 0.5rem;">
-					<button class="action-btn-secondary" onclick="respawnPane()" title="Respawn pane">Respawn</button>
-					<button class="action-btn-secondary danger" onclick="closePane()" title="Close pane">Close pane</button>
-					<button class="action-btn-secondary danger" onclick="closeWindow()" title="Close window">Close window</button>
 				</div>
 			</div>
 		</div>
@@ -349,62 +354,134 @@ templ IndexPage() {
 			// Check for done → idle transitions periodically
 			setInterval(trackDoneStates, 5000); // Check every 5 seconds
 
+			// Action bar SSE connection
+			let actionBarEventSource = null;
+
 			// Action bar functions
 			function selectWindow(el) {
 				const session = el.dataset.session;
 				const windowIdx = parseInt(el.dataset.window);
 				const paneIdx = parseInt(el.dataset.pane || '0');
 				const windowName = el.dataset.name;
-				const status = el.dataset.status;
 				const indicator = el.dataset.indicator;
-				// Get preview HTML from actual preview-line divs (already ANSI-processed)
-				const previewLinesHtml = Array.from(el.querySelectorAll('.preview-line')).map(line => line.innerHTML);
-				const question = el.dataset.question;
-				const choices = el.dataset.choices;
 
 				selectedTarget = { session, window: windowIdx, pane: paneIdx };
 				document.getElementById('actionTarget').textContent = `${session}:${windowIdx} ${windowName}`;
 
-				// Update context area
+				// Update context area with initial indicator
 				const context = document.getElementById('actionContext');
+				context.className = 'action-context ' + indicator;
+
+				// Show loading state
+				const previewEl = document.getElementById('actionPreview');
+				previewEl.innerHTML = '<div class="action-preview-line">Loading...</div>';
+				document.getElementById('actionStatus').textContent = '';
+				document.getElementById('actionChoices').classList.add('hidden');
+
+				// Close any existing SSE connection
+				if (actionBarEventSource) {
+					actionBarEventSource.close();
+				}
+
+				// Start SSE connection to pane (same endpoint as pane page)
+				const paneTarget = `${encodeURIComponent(session)}:${windowIdx}.${paneIdx}`;
+				actionBarEventSource = new EventSource(`/pane/${paneTarget}?stream=1`);
+
+				actionBarEventSource.onmessage = function(e) {
+					let text = e.data;
+					console.log('Action bar SSE received:', text.length, 'bytes');
+
+					// Extract mode
+					const modeMatch = text.match(/^__MODE__:(\w*)\n/);
+					if (modeMatch) {
+						console.log('Mode:', modeMatch[1]);
+						text = text.substring(modeMatch[0].length);
+					}
+
+					// Extract choices
+					let choices = [];
+					const choicesMatch = text.match(/^__CHOICES__:([^\n]*)\n/);
+					if (choicesMatch) {
+						const choicesStr = choicesMatch[1];
+						text = text.substring(choicesMatch[0].length);
+						if (choicesStr) {
+							choices = choicesStr.split('|');
+							console.log('Choices found:', choices.length, choices);
+						}
+					}
+
+					// Extract Claude mode (skip for action bar)
+					const claudeModeMatch = text.match(/^__CLAUDEMODE__:([^\n]*)\n/);
+					if (claudeModeMatch) {
+						text = text.substring(claudeModeMatch[0].length);
+					}
+
+					// Extract status line
+					let statusLine = '';
+					const statusLineMatch = text.match(/^__STATUSLINE__:([^\n]*)\n/);
+					if (statusLineMatch) {
+						statusLine = statusLineMatch[1];
+						text = text.substring(statusLineMatch[0].length);
+						console.log('Status line:', statusLine.substring(0, 50));
+					}
+
+					// Update action bar with SSE data
+					updateActionBarFromSSE(text, choices, statusLine, indicator);
+				};
+
+				actionBarEventSource.onerror = function(e) {
+					console.log('Action bar SSE error, falling back to static data', e);
+					// On error, show static preview from data attributes as fallback
+					const previewLines = Array.from(el.querySelectorAll('.preview-line')).map(line => line.textContent);
+					const status = el.dataset.status;
+					updateActionBarStatic(previewLines, status, indicator, el.dataset.choices);
+				};
+
+				document.getElementById('actionBackdrop').classList.add('visible');
+				document.getElementById('actionBar').classList.add('visible');
+				document.getElementById('actionInput').focus();
+			}
+
+			function updateActionBarFromSSE(output, choices, statusLine, indicator) {
 				const statusEl = document.getElementById('actionStatus');
 				const previewEl = document.getElementById('actionPreview');
+				const choicesEl = document.getElementById('actionChoices');
+				const context = document.getElementById('actionContext');
 
-				context.className = 'action-context ' + indicator;
+				// Update status from status line (strip ANSI for clean text)
+				// Use \x1b for real ESC and \u241b for tmux's visible ESC symbol
+				if (statusLine) {
+					const cleanStatus = statusLine
+						.replace(/[\x1b\u241b]\[[0-9;?]*[a-zA-Z]/g, '') // Full ANSI sequences
+						.replace(/\[[0-9;]*m/g, '') // Orphaned SGR sequences
+						.trim()
+						.substring(0, 50);
+					statusEl.textContent = cleanStatus || 'Working...';
+				}
 				statusEl.className = 'action-status ' + indicator;
-				statusEl.textContent = status;
+				context.className = 'action-context ' + indicator;
 
-				// Show choices if available, then preview (don't duplicate question - it's in status)
-				let html = '';
-				if (choices) {
-					const choiceList = choices.split('|');
-					choiceList.forEach((choice, i) => {
-						html += `<div class="action-preview-line" style="padding-left: 0.5rem;">${i + 1}. ${escapeHtml(choice)}</div>`;
-					});
-				}
-				// Show preview (already ANSI-formatted HTML from preview-line divs)
-				if (previewLinesHtml && previewLinesHtml.length > 0) {
-					if (html) html += '<div style="margin-top: 0.5rem; border-top: 1px solid var(--border); padding-top: 0.5rem;"></div>';
-					// Use the pre-formatted HTML directly
-					html += previewLinesHtml.map(lineHtml => {
-						return `<div class="action-preview-line">${lineHtml}</div>`;
-					}).join('');
-				}
+				// Show last N lines of output with colors
+				const lines = output.split('\n').filter(l => l.trim());
+				const lastLines = lines.slice(-20); // Show last 20 lines
+				let html = lastLines.map(line => {
+					const coloredHtml = window.ansiToHtml(line);
+					return `<div class="action-preview-line">${coloredHtml}</div>`;
+				}).join('');
 				if (!html) {
 					html = '<div class="action-preview-line">No output</div>';
 				}
 				previewEl.innerHTML = html;
 
-				// Show choice buttons if choices available
-				const choicesEl = document.getElementById('actionChoices');
-				if (choices) {
-					const choiceList = choices.split('|');
+				// Update choice buttons
+				console.log('SSE choices:', choices);
+				if (choices && choices.length > 0 && choices[0] !== '') {
 					let btnHtml = '';
-					choiceList.forEach((choice, i) => {
+					choices.forEach((choice, i) => {
 						const shortChoice = choice.length > 25 ? choice.substring(0, 22) + '...' : choice;
 						btnHtml += `<button class="choice-btn" onclick="sendChoice(${i + 1})">
 							<span class="choice-num">${i + 1}</span>
-							${escapeHtml(shortChoice)}
+							<span class="choice-text">${escapeHtml(shortChoice)}</span>
 						</button>`;
 					});
 					choicesEl.innerHTML = btnHtml;
@@ -412,10 +489,42 @@ templ IndexPage() {
 				} else {
 					choicesEl.classList.add('hidden');
 				}
+			}
 
-				document.getElementById('actionBackdrop').classList.add('visible');
-				document.getElementById('actionBar').classList.add('visible');
-				document.getElementById('actionInput').focus();
+			function updateActionBarStatic(previewLines, status, indicator, choicesStr) {
+				const statusEl = document.getElementById('actionStatus');
+				const previewEl = document.getElementById('actionPreview');
+				const choicesEl = document.getElementById('actionChoices');
+
+				statusEl.className = 'action-status ' + indicator;
+				statusEl.textContent = status || '';
+
+				let html = '';
+				if (previewLines && previewLines.length > 0) {
+					html = previewLines.map(lineText => {
+						return `<div class="action-preview-line">${escapeHtml(lineText)}</div>`;
+					}).join('');
+				}
+				if (!html) {
+					html = '<div class="action-preview-line">No output</div>';
+				}
+				previewEl.innerHTML = html;
+
+				if (choicesStr) {
+					const choices = choicesStr.split('|');
+					let btnHtml = '';
+					choices.forEach((choice, i) => {
+						const shortChoice = choice.length > 25 ? choice.substring(0, 22) + '...' : choice;
+						btnHtml += `<button class="choice-btn" onclick="sendChoice(${i + 1})">
+							<span class="choice-num">${i + 1}</span>
+							<span class="choice-text">${escapeHtml(shortChoice)}</span>
+						</button>`;
+					});
+					choicesEl.innerHTML = btnHtml;
+					choicesEl.classList.remove('hidden');
+				} else {
+					choicesEl.classList.add('hidden');
+				}
 			}
 
 			function sendChoice(num) {
@@ -435,6 +544,11 @@ templ IndexPage() {
 			}
 
 			function closeActionBar() {
+				// Close SSE connection
+				if (actionBarEventSource) {
+					actionBarEventSource.close();
+					actionBarEventSource = null;
+				}
 				document.getElementById('actionBackdrop').classList.remove('visible');
 				document.getElementById('actionBar').classList.remove('visible');
 				selectedTarget = null;
@@ -486,6 +600,7 @@ templ IndexPage() {
 				fetch(`/pane/${encodeURIComponent(selectedTarget.session)}:${selectedTarget.window}.${selectedTarget.pane}/respawn`, {
 					method: 'POST'
 				});
+				document.getElementById('actionMenu').classList.add('hidden');
 				closeActionBar();
 			}
 
@@ -495,6 +610,7 @@ templ IndexPage() {
 				fetch(`/pane/${encodeURIComponent(selectedTarget.session)}:${selectedTarget.window}.${selectedTarget.pane}/kill`, {
 					method: 'POST'
 				});
+				document.getElementById('actionMenu').classList.add('hidden');
 				closeActionBar();
 			}
 
@@ -504,6 +620,7 @@ templ IndexPage() {
 				fetch(`/pane/${encodeURIComponent(selectedTarget.session)}:${selectedTarget.window}.${selectedTarget.pane}/kill-window`, {
 					method: 'POST'
 				});
+				document.getElementById('actionMenu').classList.add('hidden');
 				closeActionBar();
 			}
 
@@ -521,12 +638,24 @@ templ IndexPage() {
 				});
 			}
 
+			function toggleActionMenu() {
+				const menu = document.getElementById('actionMenu');
+				menu.classList.toggle('hidden');
+			}
+
 			// Close action bar on escape
 			document.addEventListener('keydown', (e) => {
 				if (e.key === 'Escape') closeActionBar();
 				if (e.key === 'Enter' && document.activeElement.id === 'actionInput') {
 					e.preventDefault();
 					sendInput();
+				}
+			});
+
+			// Close menu when clicking outside
+			document.addEventListener('click', (e) => {
+				if (!e.target.closest('.action-menu-btn') && !e.target.closest('.action-menu')) {
+					document.getElementById('actionMenu')?.classList.add('hidden');
 				}
 			});
 

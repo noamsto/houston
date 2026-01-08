@@ -26,6 +26,24 @@ func TestDetectChoices(t *testing.T) {
 	}
 }
 
+func TestDetectChoicesWithCursor(t *testing.T) {
+	output := `Do you want to proceed?
+❯ 1. Yes
+2. Type here to tell Claude what to do differently`
+
+	result := Parse(output)
+
+	if result.Type != TypeChoice {
+		t.Errorf("expected TypeChoice, got %v", result.Type)
+	}
+	if len(result.Choices) != 2 {
+		t.Errorf("expected 2 choices, got %d: %v", len(result.Choices), result.Choices)
+	}
+	if result.Question != "Do you want to proceed?" {
+		t.Errorf("unexpected question: %q", result.Question)
+	}
+}
+
 func TestDetectError(t *testing.T) {
 	output := `Running build...
 Error: missing dependency xyz
