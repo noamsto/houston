@@ -225,13 +225,46 @@ func GetSessionState(messages []Message) SessionState {
 		}
 	}
 
-	// Analyze from the end to determine current state
-	for i := len(messages) - 1; i >= 0 && i >= len(messages)-20; i-- {
+	// First pass: scan last 20 messages to find pending tool_use
+	// Process FORWARD (oldest to newest) to correctly track tool_use -> tool_result flow
+	startIdx := len(messages) - 20
+	if startIdx < 0 {
+		startIdx = 0
+	}
+
+	for i := startIdx; i < len(messages); i++ {
 		msg := messages[i]
 
 		if !msg.Timestamp.IsZero() && msg.Timestamp.After(state.LastActivity) {
 			state.LastActivity = msg.Timestamp
 		}
+
+		if msg.Type == "assistant" {
+			blocks := parseContentBlocks(msg.Message.Content)
+
+			for _, block := range blocks {
+				switch block.Type {
+				case "tool_use":
+					// Track this tool_use as pending
+					state.PendingToolUseID = block.ID
+					state.PendingToolName = block.Name
+				}
+			}
+		}
+
+		if msg.Type == "user" {
+			// Check if this user message contains tool_result for pending tool_use
+			if state.PendingToolUseID != "" && hasToolResultFor(msg.Message.Content, state.PendingToolUseID) {
+				// Tool result received, clear pending
+				state.PendingToolUseID = ""
+				state.PendingToolName = ""
+			}
+		}
+	}
+
+	// Second pass: analyze backwards from end for current state
+	for i := len(messages) - 1; i >= 0 && i >= len(messages)-20; i-- {
+		msg := messages[i]
 
 		// Get todos from the most recent message that has them
 		if len(state.Todos) == 0 && len(msg.Todos) > 0 {
@@ -259,9 +292,6 @@ func GetSessionState(messages []Message) SessionState {
 					if state.LastToolName == "" {
 						state.LastToolName = block.Name
 					}
-					// Track pending tool_use (might be waiting for permission)
-					state.PendingToolUseID = block.ID
-					state.PendingToolName = block.Name
 					// If the last message is a tool_use, we're waiting for results
 					if i == len(messages)-1 {
 						state.IsWorking = true
@@ -277,13 +307,6 @@ func GetSessionState(messages []Message) SessionState {
 		}
 
 		if msg.Type == "user" {
-			// Check if this user message contains tool_result for pending tool_use
-			if state.PendingToolUseID != "" && hasToolResultFor(msg.Message.Content, state.PendingToolUseID) {
-				// Tool result received, clear pending
-				state.PendingToolUseID = ""
-				state.PendingToolName = ""
-			}
-
 			// If user message is last and contains tool_result, Claude is still working
 			if i == len(messages)-1 {
 				if isToolResult(msg.Message.Content) {
