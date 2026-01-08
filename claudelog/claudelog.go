@@ -87,16 +87,19 @@ type SessionState struct {
 	LastActivity time.Time
 
 	// Current state detection
-	IsWorking     bool
-	IsWaiting     bool // Waiting for user input
-	IsThinking    bool
-	CurrentTool   string   // Currently running tool (if any)
-	LastToolName  string   // Last tool that was called
-	Todos         []Todo   // Current todo list
-	Question      string   // Current question being asked
-	Choices       []string // Current choices being presented
-	LastAssistant string   // Last assistant text (for activity display)
-	Error         string   // Last error if any
+	IsWorking           bool
+	IsWaiting           bool   // Waiting for user input
+	IsThinking          bool
+	CurrentTool         string // Currently running tool (if any)
+	LastToolName        string // Last tool that was called
+	PendingToolUseID    string // Tool use ID waiting for permission/result
+	PendingToolName     string // Tool name waiting for permission/result
+	IsWaitingPermission bool   // Waiting for permission prompt
+	Todos               []Todo // Current todo list
+	Question            string // Current question being asked
+	Choices             []string // Current choices being presented
+	LastAssistant       string // Last assistant text (for activity display)
+	Error               string // Last error if any
 }
 
 // ProjectDir returns the Claude projects directory for a given working directory.
@@ -256,6 +259,9 @@ func GetSessionState(messages []Message) SessionState {
 					if state.LastToolName == "" {
 						state.LastToolName = block.Name
 					}
+					// Track pending tool_use (might be waiting for permission)
+					state.PendingToolUseID = block.ID
+					state.PendingToolName = block.Name
 					// If the last message is a tool_use, we're waiting for results
 					if i == len(messages)-1 {
 						state.IsWorking = true
@@ -271,6 +277,13 @@ func GetSessionState(messages []Message) SessionState {
 		}
 
 		if msg.Type == "user" {
+			// Check if this user message contains tool_result for pending tool_use
+			if state.PendingToolUseID != "" && hasToolResultFor(msg.Message.Content, state.PendingToolUseID) {
+				// Tool result received, clear pending
+				state.PendingToolUseID = ""
+				state.PendingToolName = ""
+			}
+
 			// If user message is last and contains tool_result, Claude is still working
 			if i == len(messages)-1 {
 				if isToolResult(msg.Message.Content) {
@@ -287,6 +300,12 @@ func GetSessionState(messages []Message) SessionState {
 	// If we have a question but no working state, we're waiting for input
 	if state.Question != "" && !state.IsWorking {
 		state.IsWaiting = true
+	}
+
+	// If we have a pending tool_use without result, might be waiting for permission
+	// The caller should check terminal output for permission prompts
+	if state.PendingToolUseID != "" {
+		state.IsWaitingPermission = true
 	}
 
 	return state
@@ -340,6 +359,22 @@ func isToolResult(content any) bool {
 			if m, ok := item.(map[string]any); ok {
 				if t, ok := m["type"].(string); ok && t == "tool_result" {
 					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// hasToolResultFor checks if content has a tool_result for a specific tool_use ID.
+func hasToolResultFor(content any, toolUseID string) bool {
+	if arr, ok := content.([]any); ok {
+		for _, item := range arr {
+			if m, ok := item.(map[string]any); ok {
+				if t, ok := m["type"].(string); ok && t == "tool_result" {
+					if id, ok := m["tool_use_id"].(string); ok && id == toolUseID {
+						return true
+					}
 				}
 			}
 		}

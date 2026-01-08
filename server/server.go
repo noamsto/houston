@@ -37,6 +37,15 @@ func parseClaudeState(panePath, terminalOutput string) parser.Result {
 		state, err := claudelog.GetStateForPane(panePath)
 		if err == nil {
 			result = state.ToParserResult()
+
+			// If JSONL indicates waiting for permission, check terminal for choices
+			if state.IsWaitingPermission {
+				terminalResult := parser.Parse(terminalOutput)
+				// If terminal has choice prompt, use that (more specific)
+				if terminalResult.Type == parser.TypeChoice && len(terminalResult.Choices) > 0 {
+					result = terminalResult
+				}
+			}
 		} else {
 			// Fall through to terminal parsing on error
 			result = parser.Parse(terminalOutput)
