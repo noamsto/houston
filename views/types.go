@@ -1,6 +1,7 @@
 package views
 
 import (
+	"github.com/noamsto/houston/agents"
 	"github.com/noamsto/houston/parser"
 	"github.com/noamsto/houston/tmux"
 )
@@ -12,8 +13,9 @@ type WindowWithStatus struct {
 	ParseResult    parser.Result
 	Preview        []string // Last 2-3 lines for preview
 	NeedsAttention bool
-	Branch         string // Git branch name (from worktree or git command)
-	Process        string // Running process (pane_current_command)
+	Branch         string           // Git branch name (from worktree or git command)
+	Process        string           // Running process (pane_current_command)
+	AgentType      agents.AgentType // Type of agent running (claude-code, amp, generic)
 }
 
 // SessionWithWindows holds a session and all its windows with status

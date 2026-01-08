@@ -279,6 +279,7 @@ func (s *Server) buildSessionsData() views.SessionsData {
 				NeedsAttention: windowNeedsAttention,
 				Branch:         branch,
 				Process:        process,
+				AgentType:      agent.Type(),
 			}
 
 			sessionData.Windows = append(sessionData.Windows, windowStatus)

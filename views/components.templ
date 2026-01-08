@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/noamsto/houston/agents"
 	"github.com/noamsto/houston/internal/ansi"
 	"github.com/noamsto/houston/parser"
 	"github.com/noamsto/houston/tmux"
@@ -84,7 +85,14 @@ templ windowCard(sessionName string, win WindowWithStatus) {
 	>
 		<div class={ "window-indicator", getWindowIndicator(win) }></div>
 		<div class="window-info">
-			<div class="window-name">{ fmt.Sprintf("%d: %s", win.Window.Index, getWindowDisplayName(win)) }</div>
+			<div class="window-name">
+				if win.AgentType == agents.AgentClaudeCode {
+					<img src="/static/claude-logo.svg" class="agent-icon" alt="Claude" />
+				} else if win.AgentType == agents.AgentAmp {
+					<img src="/static/amp-logo.svg" class="agent-icon" alt="Amp" />
+				}
+				{ fmt.Sprintf("%d: %s", win.Window.Index, getWindowDisplayName(win)) }
+			</div>
 			<div class={ "window-status", getWindowIndicator(win) }>
 				{ getWindowStatusText(win) }
 			</div>
