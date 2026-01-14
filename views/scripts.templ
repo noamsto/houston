@@ -793,21 +793,8 @@ templ paneScripts() {
 			setZoom(100);
 		}
 
-		// Keyboard shortcuts for zoom (Ctrl+Plus, Ctrl+Minus, Ctrl+0)
-		document.addEventListener('keydown', function(e) {
-			if (e.ctrlKey || e.metaKey) {
-				if (e.key === '=' || e.key === '+') {
-					e.preventDefault();
-					zoomIn();
-				} else if (e.key === '-') {
-					e.preventDefault();
-					zoomOut();
-				} else if (e.key === '0') {
-					e.preventDefault();
-					resetZoom();
-				}
-			}
-		});
+		// Note: Ctrl+/- not intercepted - let browser/terminal handle native zoom
+		// Use the +/- buttons in the header for houston's CSS zoom
 
 		// Handle multiple image attachments
 		let selectedImages = [];
