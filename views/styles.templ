@@ -927,6 +927,43 @@ templ panePageStyles() {
 				color: var(--text-secondary);
 				font-family: 'SF Mono', 'Symbols Nerd Font Mono', ui-monospace, monospace;
 			}
+			/* Zoom controls */
+			.zoom-controls {
+				display: flex;
+				align-items: center;
+				gap: 0.25rem;
+				margin-left: auto;
+				margin-right: 0.5rem;
+			}
+			.zoom-btn {
+				background: var(--bg-elevated);
+				border: 1px solid var(--border);
+				color: var(--text-primary);
+				width: 28px;
+				height: 28px;
+				border-radius: 6px;
+				cursor: pointer;
+				font-size: 16px;
+				font-weight: 600;
+				display: flex;
+				align-items: center;
+				justify-content: center;
+				transition: all 0.15s;
+			}
+			.zoom-btn:hover {
+				background: var(--accent-dim);
+				border-color: var(--accent);
+			}
+			.zoom-btn:active {
+				transform: scale(0.95);
+			}
+			.zoom-level {
+				font-size: 11px;
+				color: var(--text-secondary);
+				min-width: 36px;
+				text-align: center;
+				font-family: 'SF Mono', ui-monospace, monospace;
+			}
 			.menu-btn {
 				background: none;
 				border: none;

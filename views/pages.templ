@@ -92,9 +92,6 @@ templ IndexPage() {
 					</div>
 				</div>
 				<div id="actionMenu" class="action-menu hidden">
-					<button onclick="zoomPane()">Toggle zoom</button>
-					<button onclick="resizePane('U')">Resize ↑</button>
-					<button onclick="resizePane('D')">Resize ↓</button>
 					<button onclick="respawnPane()">Respawn pane</button>
 					<button onclick="closePane()" class="danger">Close pane</button>
 					<button onclick="closeWindow()" class="danger">Close window</button>
@@ -640,23 +637,6 @@ templ IndexPage() {
 				closeActionBar();
 			}
 
-			function resizePane(direction) {
-				if (!selectedTarget) return;
-				fetch(`/pane/${encodeURIComponent(selectedTarget.session)}:${selectedTarget.window}.${selectedTarget.pane}/resize`, {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-					body: `direction=${direction}&adjustment=10`
-				});
-			}
-
-			function zoomPane() {
-				if (!selectedTarget) return;
-				fetch(`/pane/${encodeURIComponent(selectedTarget.session)}:${selectedTarget.window}.${selectedTarget.pane}/zoom`, {
-					method: 'POST'
-				});
-				document.getElementById('actionMenu').classList.add('hidden');
-			}
-
 			function copyOutput() {
 				if (!selectedTarget) return;
 				const previewEl = document.getElementById('actionPreview');
@@ -891,6 +871,12 @@ templ PanePage(data PaneData) {
 					<div class="header-window">{ fmt.Sprintf("%d: %s", data.Windows[0].Index, data.Windows[0].Branch) }</div>
 				}
 				<div class="header-target">{ fmt.Sprintf(":%d.%d", data.Pane.Window, data.Pane.Index) }</div>
+				<!-- Font size controls -->
+				<div class="zoom-controls">
+					<button class="zoom-btn" onclick="zoomOut()" title="Zoom out (Ctrl+-)">−</button>
+					<span class="zoom-level" id="zoom-level">100%</span>
+					<button class="zoom-btn" onclick="zoomIn()" title="Zoom in (Ctrl++)">+</button>
+				</div>
 				<div style="position: relative;">
 					<button class="menu-btn" onclick="toggleMenu()">
 						<svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -908,20 +894,6 @@ templ PanePage(data PaneData) {
 							hx-target="#output"
 							hx-swap="innerHTML"
 						>Refresh</button>
-						<button
-							hx-post={ "/pane/" + data.Pane.URLTarget() + "/zoom" }
-							hx-swap="none"
-						>Toggle zoom</button>
-						<button
-							hx-post={ "/pane/" + data.Pane.URLTarget() + "/resize" }
-							hx-vals='{"direction": "U", "adjustment": "10"}'
-							hx-swap="none"
-						>Resize ↑</button>
-						<button
-							hx-post={ "/pane/" + data.Pane.URLTarget() + "/resize" }
-							hx-vals='{"direction": "D", "adjustment": "10"}'
-							hx-swap="none"
-						>Resize ↓</button>
 						<button
 							hx-post={ "/pane/" + data.Pane.URLTarget() + "/respawn" }
 							hx-swap="none"

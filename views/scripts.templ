@@ -756,6 +756,57 @@ templ paneScripts() {
 				const btn = document.querySelector('#status-section .status-toggle-btn');
 				if (btn) btn.textContent = 'Hide';
 			}
+
+			// Restore zoom level
+			const savedZoom = localStorage.getItem('houston-zoom') || 100;
+			setZoom(parseInt(savedZoom, 10));
+		});
+
+		// Font size zoom for terminal output
+		let currentZoom = 100;
+		const MIN_ZOOM = 50;
+		const MAX_ZOOM = 200;
+		const ZOOM_STEP = 10;
+
+		function setZoom(level) {
+			currentZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, level));
+			const output = document.getElementById('output');
+			if (output) {
+				output.style.fontSize = (currentZoom / 100) + 'em';
+			}
+			const zoomLabel = document.getElementById('zoom-level');
+			if (zoomLabel) {
+				zoomLabel.textContent = currentZoom + '%';
+			}
+			localStorage.setItem('houston-zoom', currentZoom);
+		}
+
+		window.zoomIn = function() {
+			setZoom(currentZoom + ZOOM_STEP);
+		}
+
+		window.zoomOut = function() {
+			setZoom(currentZoom - ZOOM_STEP);
+		}
+
+		window.resetZoom = function() {
+			setZoom(100);
+		}
+
+		// Keyboard shortcuts for zoom (Ctrl+Plus, Ctrl+Minus, Ctrl+0)
+		document.addEventListener('keydown', function(e) {
+			if (e.ctrlKey || e.metaKey) {
+				if (e.key === '=' || e.key === '+') {
+					e.preventDefault();
+					zoomIn();
+				} else if (e.key === '-') {
+					e.preventDefault();
+					zoomOut();
+				} else if (e.key === '0') {
+					e.preventDefault();
+					resetZoom();
+				}
+			}
 		});
 
 		// Handle multiple image attachments
