@@ -324,6 +324,40 @@ func (c *Client) KillWindow(session string, window int) error {
 	return cmd.Run()
 }
 
+// ResizePane resizes a pane by the given adjustment in lines/columns.
+// direction: "U" (up), "D" (down), "L" (left), "R" (right)
+// adjustment: number of lines/columns to resize by (default 5)
+func (c *Client) ResizePane(p Pane, direction string, adjustment int) error {
+	if adjustment <= 0 {
+		adjustment = 5
+	}
+	flag := "-" + direction
+	cmd := exec.Command(c.tmuxPath, "resize-pane", "-t", p.Target(), flag, strconv.Itoa(adjustment))
+	return cmd.Run()
+}
+
+// ZoomPane toggles zoom on a pane (maximizes/restores).
+func (c *Client) ZoomPane(p Pane) error {
+	cmd := exec.Command(c.tmuxPath, "resize-pane", "-t", p.Target(), "-Z")
+	return cmd.Run()
+}
+
+// GetPaneSize returns the width and height of a pane.
+func (c *Client) GetPaneSize(p Pane) (width, height int, err error) {
+	cmd := exec.Command(c.tmuxPath, "display-message", "-t", p.Target(), "-p", "#{pane_width}x#{pane_height}")
+	out, err := cmd.Output()
+	if err != nil {
+		return 0, 0, err
+	}
+	parts := strings.Split(strings.TrimSpace(string(out)), "x")
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("unexpected output format: %s", string(out))
+	}
+	width, _ = strconv.Atoi(parts[0])
+	height, _ = strconv.Atoi(parts[1])
+	return width, height, nil
+}
+
 // Worktree represents a git worktree with its path and branch
 type Worktree struct {
 	Path   string

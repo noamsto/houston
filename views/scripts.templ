@@ -733,6 +733,21 @@ templ paneScripts() {
 			});
 		}
 
+		// Cycle Amp modes by sending Ctrl+Shift+M
+		window.cycleAmpMode = function() {
+			const paneTarget = document.getElementById('output-container')?.getAttribute('data-pane-target');
+			if (!paneTarget) return;
+
+			// Amp uses Ctrl+Shift+M to cycle modes (smart -> rush -> auto)
+			fetch(`/pane/${paneTarget}/send`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+				body: 'input=M-m&special=true'
+			}).then(response => {
+				if (!response.ok) console.error('Failed to cycle Amp mode');
+			});
+		}
+
 		// Restore visibility on page load
 		document.addEventListener('DOMContentLoaded', function() {
 			const shouldShow = localStorage.getItem('statusSectionVisible') !== 'false';

@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -655,6 +656,18 @@ func (s *Server) handlePane(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Handle resize pane action
+	if strings.HasSuffix(r.URL.Path, "/resize") {
+		s.handlePaneResize(w, r, pane)
+		return
+	}
+
+	// Handle zoom pane action
+	if strings.HasSuffix(r.URL.Path, "/zoom") {
+		s.handlePaneZoom(w, r, pane)
+		return
+	}
+
 	accept := r.Header.Get("Accept")
 	if strings.Contains(accept, "text/event-stream") || r.URL.Query().Get("stream") == "1" {
 		s.streamPane(w, r, pane)
@@ -999,6 +1012,58 @@ func (s *Server) handleWindowKill(w http.ResponseWriter, r *http.Request, pane t
 
 	// Redirect back to home
 	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (s *Server) handlePaneResize(w http.ResponseWriter, r *http.Request, pane tmux.Pane) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	r.ParseForm()
+	direction := r.FormValue("direction") // U, D, L, R
+	adjustment := 5                        // default
+	if adj := r.FormValue("adjustment"); adj != "" {
+		if n, err := strconv.Atoi(adj); err == nil && n > 0 {
+			adjustment = n
+		}
+	}
+
+	// Validate direction
+	switch direction {
+	case "U", "D", "L", "R":
+		// valid
+	default:
+		http.Error(w, "invalid direction: must be U, D, L, or R", http.StatusBadRequest)
+		return
+	}
+
+	slog.Info("resize pane", "pane", pane.Target(), "direction", direction, "adjustment", adjustment)
+
+	if err := s.tmux.ResizePane(pane, direction, adjustment); err != nil {
+		slog.Error("resize pane failed", "error", err)
+		http.Error(w, "failed to resize pane: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) handlePaneZoom(w http.ResponseWriter, r *http.Request, pane tmux.Pane) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	slog.Info("zoom pane", "pane", pane.Target())
+
+	if err := s.tmux.ZoomPane(pane); err != nil {
+		slog.Error("zoom pane failed", "error", err)
+		http.Error(w, "failed to zoom pane: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
 }
 
 func (s *Server) streamPane(w http.ResponseWriter, r *http.Request, pane tmux.Pane) {
