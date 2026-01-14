@@ -647,6 +647,14 @@ templ indexPageStyles() {
 				border-color: var(--accent);
 			}
 			.choice-btn:active { transform: scale(0.98); }
+			.choice-btn:disabled {
+				opacity: 0.6;
+				cursor: not-allowed;
+			}
+			.choice-btn.sending {
+				background: var(--accent-dim);
+				border-color: var(--accent);
+			}
 			.choice-num {
 				display: block;
 				font-size: 14px;
@@ -1033,6 +1041,14 @@ templ panePageStyles() {
 				transition: all 0.15s;
 			}
 			.choice-btn:hover {
+				background: var(--accent-dim);
+				border-color: var(--accent);
+			}
+			.choice-btn:disabled {
+				opacity: 0.6;
+				cursor: not-allowed;
+			}
+			.choice-btn.sending {
 				background: var(--accent-dim);
 				border-color: var(--accent);
 			}

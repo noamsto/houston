@@ -560,18 +560,37 @@ templ IndexPage() {
 				return;
 			}
 
-			function sendInput() {
+			async function sendInput() {
 				if (!selectedTarget) return;
 				const input = document.getElementById('actionInput');
 				const value = input.value;
 				if (!value) return;
 
-				fetch(`/pane/${encodeURIComponent(selectedTarget.session)}:${selectedTarget.window}.${selectedTarget.pane}/send`, {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-					body: `input=${encodeURIComponent(value)}`
-				});
-				input.value = '';
+				const sendBtn = document.querySelector('.action-btn');
+				const originalText = sendBtn.textContent;
+				sendBtn.textContent = 'Sending...';
+				sendBtn.disabled = true;
+
+				try {
+					const response = await fetch(`/pane/${encodeURIComponent(selectedTarget.session)}:${selectedTarget.window}.${selectedTarget.pane}/send`, {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+						body: `input=${encodeURIComponent(value)}`
+					});
+
+					if (response.ok) {
+						input.value = '';
+					} else {
+						console.error('Failed to send input:', response.status, response.statusText);
+						alert('Failed to send input. Please try again.');
+					}
+				} catch (err) {
+					console.error('Error sending input:', err);
+					alert('Failed to send input. Please try again.');
+				} finally {
+					sendBtn.textContent = originalText;
+					sendBtn.disabled = false;
+				}
 			}
 
 			function sendStop() {

@@ -296,34 +296,57 @@ templ paneScripts() {
 		}
 
 		// Send choice to pane
-		window.sendChoice = function(num, choiceText, choiceIndex) {
+		window.sendChoice = async function(num, choiceText, choiceIndex) {
 			const bar = document.getElementById('choices-bar');
 			if (!bar) return;
 			const target = bar.dataset.paneTarget;
 			const agentType = bar.dataset.agentType || 'generic';
 			if (!target) return;
 
-			if (agentType === 'amp') {
-				// Amp uses cursor navigation: send Down arrows then Enter
-				// First choice (index 0) is already selected, just send Enter
-				sendAmpChoice(target, choiceIndex);
-			} else {
-				// Claude uses numbers
-				fetch(`/pane/${target}/send`, {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-					body: `input=${num}&noenter=true`
-				});
+			// Visual feedback - disable all choice buttons during send
+			const buttons = bar.querySelectorAll('.choice-btn');
+			const clickedBtn = bar.querySelector(`[data-choice="${num}"]`);
+			buttons.forEach(btn => btn.disabled = true);
+			if (clickedBtn) {
+				clickedBtn.classList.add('sending');
+				clickedBtn.querySelector('.choice-num').textContent = '...';
 			}
 
-			// If choice says "Type here" or similar, focus input for custom response
-			if (choiceText && choiceText.toLowerCase().includes('type')) {
-				setTimeout(() => {
-					const inputField = document.getElementById('input-field');
-					if (inputField) {
-						inputField.focus();
+			try {
+				if (agentType === 'amp') {
+					// Amp uses cursor navigation: send Down arrows then Enter
+					// First choice (index 0) is already selected, just send Enter
+					await sendAmpChoice(target, choiceIndex);
+				} else {
+					// Claude uses numbers
+					const response = await fetch(`/pane/${target}/send`, {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+						body: `input=${num}&noenter=true`
+					});
+					if (!response.ok) {
+						throw new Error(`Send failed: ${response.status}`);
 					}
-				}, 100);
+				}
+
+				// If choice says "Type here" or similar, focus input for custom response
+				if (choiceText && choiceText.toLowerCase().includes('type')) {
+					setTimeout(() => {
+						const inputField = document.getElementById('input-field');
+						if (inputField) {
+							inputField.focus();
+						}
+					}, 100);
+				}
+			} catch (err) {
+				console.error('Failed to send choice:', err);
+				// Re-enable buttons on error
+				buttons.forEach(btn => btn.disabled = false);
+				if (clickedBtn) {
+					clickedBtn.classList.remove('sending');
+					clickedBtn.querySelector('.choice-num').textContent = num;
+				}
+				alert('Failed to send choice. Please try again.');
 			}
 		}
 
@@ -331,20 +354,26 @@ templ paneScripts() {
 		async function sendAmpChoice(target, index) {
 			// Send Down arrow 'index' times, then Enter
 			for (let i = 0; i < index; i++) {
-				await fetch(`/pane/${target}/send`, {
+				const response = await fetch(`/pane/${target}/send`, {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
 					body: 'input=Down&special=true'
 				});
-				// Small delay between key presses
+				if (!response.ok) {
+					throw new Error(`Failed to send Down key: ${response.status}`);
+				}
+				// Small delay between key presses for terminal to process
 				await new Promise(r => setTimeout(r, 50));
 			}
 			// Send Enter to confirm
-			await fetch(`/pane/${target}/send`, {
+			const response = await fetch(`/pane/${target}/send`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
 				body: 'input=Enter&special=true'
 			});
+			if (!response.ok) {
+				throw new Error(`Failed to send Enter key: ${response.status}`);
+			}
 		}
 
 		// Event delegation for choice buttons (avoids HTML entity escaping issues in onclick)
