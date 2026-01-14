@@ -46,4 +46,6 @@ type PaneData struct {
 	ParseResult parser.Result
 	Windows     []tmux.Window
 	Panes       []tmux.PaneInfo
+	PaneWidth   int // columns
+	PaneHeight  int // rows
 }

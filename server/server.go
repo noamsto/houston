@@ -72,6 +72,7 @@ type Server struct {
 	tmux     *tmux.Client
 	watcher  *status.Watcher
 	registry *agents.Registry
+	font     FontController
 	mu       sync.RWMutex
 
 	// Track when sessions last had activity (for keeping recently-active in Active section)
@@ -79,8 +80,17 @@ type Server struct {
 	lastActivityMu sync.RWMutex
 }
 
+// FontController controls terminal font size.
+type FontController interface {
+	Increase() error
+	Decrease() error
+	Reset() error
+	Name() string
+}
+
 type Config struct {
-	StatusDir string
+	StatusDir      string
+	FontController FontController
 }
 
 func New(cfg Config) (*Server, error) {
@@ -94,6 +104,7 @@ func New(cfg Config) (*Server, error) {
 		tmux:         tmux.NewClient(),
 		watcher:      status.NewWatcher(cfg.StatusDir),
 		registry:     registry,
+		font:         cfg.FontController,
 		lastActivity: make(map[string]time.Time),
 	}, nil
 }
@@ -106,6 +117,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/sessions", s.handleSessions)
 	mux.HandleFunc("/pane/", s.handlePane)
+	mux.HandleFunc("/font/", s.handleFont)
 
 	return mux
 }
@@ -1182,4 +1194,44 @@ func (s *Server) streamPane(w http.ResponseWriter, r *http.Request, pane tmux.Pa
 			}
 		}
 	}
+}
+
+func (s *Server) handleFont(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.font == nil {
+		http.Error(w, "no terminal font controller configured", http.StatusNotImplemented)
+		return
+	}
+
+	action := strings.TrimPrefix(r.URL.Path, "/font/")
+	var err error
+
+	switch action {
+	case "increase":
+		err = s.font.Increase()
+	case "decrease":
+		err = s.font.Decrease()
+	case "reset":
+		err = s.font.Reset()
+	case "info":
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"terminal":"` + s.font.Name() + `"}`))
+		return
+	default:
+		http.Error(w, "unknown action: "+action, http.StatusBadRequest)
+		return
+	}
+
+	if err != nil {
+		slog.Error("font control failed", "action", action, "error", err)
+		http.Error(w, "font control failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	slog.Info("font size changed", "action", action, "terminal", s.font.Name())
+	w.WriteHeader(http.StatusOK)
 }

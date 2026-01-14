@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/noamsto/houston/server"
+	"github.com/noamsto/houston/terminal"
 )
 
 func main() {
@@ -32,8 +33,15 @@ func main() {
 		*statusDir = filepath.Join(home, ".local", "state", "houston")
 	}
 
+	// Auto-detect terminal for font size control
+	fontCtrl := terminal.NewFontController()
+	if fontCtrl.Name() != "" {
+		slog.Info("terminal font control", "terminal", fontCtrl.Name())
+	}
+
 	srv, err := server.New(server.Config{
-		StatusDir: *statusDir,
+		StatusDir:      *statusDir,
+		FontController: fontCtrl,
 	})
 	if err != nil {
 		log.Fatalf("failed to create server: %v", err)

@@ -756,45 +756,26 @@ templ paneScripts() {
 				const btn = document.querySelector('#status-section .status-toggle-btn');
 				if (btn) btn.textContent = 'Hide';
 			}
-
-			// Restore zoom level
-			const savedZoom = localStorage.getItem('houston-zoom') || 100;
-			setZoom(parseInt(savedZoom, 10));
 		});
 
-		// Font size zoom for terminal output
-		let currentZoom = 100;
-		const MIN_ZOOM = 50;
-		const MAX_ZOOM = 200;
-		const ZOOM_STEP = 10;
-
-		function setZoom(level) {
-			currentZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, level));
-			const output = document.getElementById('output');
-			if (output) {
-				output.style.fontSize = (currentZoom / 100) + 'em';
-			}
-			const zoomLabel = document.getElementById('zoom-level');
-			if (zoomLabel) {
-				zoomLabel.textContent = currentZoom + '%';
-			}
-			localStorage.setItem('houston-zoom', currentZoom);
+		// Terminal font size control (calls host terminal via houston API)
+		window.fontIncrease = function() {
+			fetch('/font/increase', { method: 'POST' })
+				.then(r => { if (!r.ok) console.error('Font increase failed'); })
+				.catch(e => console.error('Font increase error:', e));
 		}
 
-		window.zoomIn = function() {
-			setZoom(currentZoom + ZOOM_STEP);
+		window.fontDecrease = function() {
+			fetch('/font/decrease', { method: 'POST' })
+				.then(r => { if (!r.ok) console.error('Font decrease failed'); })
+				.catch(e => console.error('Font decrease error:', e));
 		}
 
-		window.zoomOut = function() {
-			setZoom(currentZoom - ZOOM_STEP);
+		window.fontReset = function() {
+			fetch('/font/reset', { method: 'POST' })
+				.then(r => { if (!r.ok) console.error('Font reset failed'); })
+				.catch(e => console.error('Font reset error:', e));
 		}
-
-		window.resetZoom = function() {
-			setZoom(100);
-		}
-
-		// Note: Ctrl+/- not intercepted - let browser/terminal handle native zoom
-		// Use the +/- buttons in the header for houston's CSS zoom
 
 		// Handle multiple image attachments
 		let selectedImages = [];

@@ -871,11 +871,11 @@ templ PanePage(data PaneData) {
 					<div class="header-window">{ fmt.Sprintf("%d: %s", data.Windows[0].Index, data.Windows[0].Branch) }</div>
 				}
 				<div class="header-target">{ fmt.Sprintf(":%d.%d", data.Pane.Window, data.Pane.Index) }</div>
-				<!-- Font size controls -->
-				<div class="zoom-controls" title="Zoom: Ctrl+/- or click">
-					<button class="zoom-btn" onclick="zoomOut()" title="Zoom out">−</button>
-					<span class="zoom-level" id="zoom-level" onclick="resetZoom()" title="Reset zoom">100%</span>
-					<button class="zoom-btn" onclick="zoomIn()" title="Zoom in">+</button>
+				<!-- Terminal font size controls -->
+				<div class="zoom-controls" title="Terminal font size">
+					<button class="zoom-btn" onclick="fontDecrease()" title="Smaller font (more rows)">−</button>
+					<span class="zoom-level" id="zoom-level" onclick="fontReset()" title="Reset font size">font</span>
+					<button class="zoom-btn" onclick="fontIncrease()" title="Larger font">+</button>
 				</div>
 				<div style="position: relative;">
 					<button class="menu-btn" onclick="toggleMenu()">
