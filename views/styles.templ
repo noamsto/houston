@@ -927,42 +927,57 @@ templ panePageStyles() {
 				color: var(--text-secondary);
 				font-family: 'SF Mono', 'Symbols Nerd Font Mono', ui-monospace, monospace;
 			}
-			/* Zoom controls */
+			/* Zoom controls - mission control style */
 			.zoom-controls {
 				display: flex;
 				align-items: center;
-				gap: 0.25rem;
+				gap: 2px;
 				margin-left: auto;
-				margin-right: 0.5rem;
+				background: var(--bg-deep);
+				border: 1px solid var(--border);
+				border-radius: 4px;
+				padding: 2px;
+				box-shadow: inset 0 1px 2px rgba(0,0,0,0.3);
 			}
 			.zoom-btn {
-				background: var(--bg-elevated);
-				border: 1px solid var(--border);
-				color: var(--text-primary);
-				width: 28px;
-				height: 28px;
-				border-radius: 6px;
+				background: transparent;
+				border: none;
+				color: var(--text-dim);
+				width: 24px;
+				height: 22px;
 				cursor: pointer;
-				font-size: 16px;
-				font-weight: 600;
+				font-size: 14px;
+				font-weight: 700;
+				font-family: 'IBM Plex Mono', monospace;
 				display: flex;
 				align-items: center;
 				justify-content: center;
-				transition: all 0.15s;
+				transition: all 0.1s;
+				border-radius: 2px;
 			}
 			.zoom-btn:hover {
-				background: var(--accent-dim);
-				border-color: var(--accent);
+				background: var(--bg-elevated);
+				color: var(--text-primary);
 			}
 			.zoom-btn:active {
-				transform: scale(0.95);
+				background: var(--accent-dim);
+				color: var(--working);
 			}
 			.zoom-level {
-				font-size: 11px;
-				color: var(--text-secondary);
-				min-width: 36px;
+				font-size: 10px;
+				color: var(--text-dim);
+				min-width: 32px;
 				text-align: center;
-				font-family: 'SF Mono', ui-monospace, monospace;
+				font-family: 'IBM Plex Mono', monospace;
+				letter-spacing: 0.5px;
+				padding: 0 2px;
+				border-left: 1px solid var(--border);
+				border-right: 1px solid var(--border);
+				cursor: pointer;
+				transition: color 0.1s;
+			}
+			.zoom-level:hover {
+				color: var(--text-secondary);
 			}
 			.menu-btn {
 				background: none;

@@ -872,10 +872,10 @@ templ PanePage(data PaneData) {
 				}
 				<div class="header-target">{ fmt.Sprintf(":%d.%d", data.Pane.Window, data.Pane.Index) }</div>
 				<!-- Font size controls -->
-				<div class="zoom-controls">
-					<button class="zoom-btn" onclick="zoomOut()" title="Zoom out (Ctrl+-)">−</button>
-					<span class="zoom-level" id="zoom-level">100%</span>
-					<button class="zoom-btn" onclick="zoomIn()" title="Zoom in (Ctrl++)">+</button>
+				<div class="zoom-controls" title="Zoom: Ctrl+/- or click">
+					<button class="zoom-btn" onclick="zoomOut()" title="Zoom out">−</button>
+					<span class="zoom-level" id="zoom-level" onclick="resetZoom()" title="Reset zoom">100%</span>
+					<button class="zoom-btn" onclick="zoomIn()" title="Zoom in">+</button>
 				</div>
 				<div style="position: relative;">
 					<button class="menu-btn" onclick="toggleMenu()">
