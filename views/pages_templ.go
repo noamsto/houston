@@ -228,295 +228,308 @@ func PanePage(data PaneData) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var11 string
-		templ_7745c5c3_Var11, templ_7745c5c3_Err = templ.JoinStringErrs("/pane/" + data.Pane.URLTarget() + "/respawn")
+		templ_7745c5c3_Var11, templ_7745c5c3_Err = templ.JoinStringErrs("/pane/" + data.Pane.URLTarget() + "/zoom")
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 898, Col: 62}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 898, Col: 59}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var11))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 20, "\" hx-swap=\"none\" hx-confirm=\"Respawn this pane? This will kill the current process.\">Respawn pane</button> <button hx-post=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 20, "\" hx-swap=\"none\">Zoom pane (tmux)</button> <button hx-post=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var12 string
-		templ_7745c5c3_Var12, templ_7745c5c3_Err = templ.JoinStringErrs("/pane/" + data.Pane.URLTarget() + "/kill")
+		templ_7745c5c3_Var12, templ_7745c5c3_Err = templ.JoinStringErrs("/pane/" + data.Pane.URLTarget() + "/respawn")
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 903, Col: 59}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 902, Col: 62}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var12))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 21, "\" hx-confirm=\"Close this pane?\" style=\"color: var(--error);\">Close pane</button> <button hx-post=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 21, "\" hx-swap=\"none\" hx-confirm=\"Respawn this pane? This will kill the current process.\">Respawn pane</button> <button hx-post=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var13 string
-		templ_7745c5c3_Var13, templ_7745c5c3_Err = templ.JoinStringErrs("/pane/" + data.Pane.URLTarget() + "/kill-window")
+		templ_7745c5c3_Var13, templ_7745c5c3_Err = templ.JoinStringErrs("/pane/" + data.Pane.URLTarget() + "/kill")
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 908, Col: 66}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 907, Col: 59}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var13))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 22, "\" hx-confirm=\"Close entire window? This will close all panes in this window.\" style=\"color: var(--error);\">Close window</button></div></div></header><!-- Pane selector -->")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 22, "\" hx-confirm=\"Close this pane?\" style=\"color: var(--error);\">Close pane</button> <button hx-post=\"")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		var templ_7745c5c3_Var14 string
+		templ_7745c5c3_Var14, templ_7745c5c3_Err = templ.JoinStringErrs("/pane/" + data.Pane.URLTarget() + "/kill-window")
+		if templ_7745c5c3_Err != nil {
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 912, Col: 66}
+		}
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var14))
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 23, "\" hx-confirm=\"Close entire window? This will close all panes in this window.\" style=\"color: var(--error);\">Close window</button></div></div></header><!-- Pane selector -->")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		if len(data.Panes) > 0 {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 23, "<div class=\"selector\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 24, "<div class=\"selector\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			for _, p := range data.Panes {
-				var templ_7745c5c3_Var14 = []any{"selector-item", templ.KV("pane-active", p.Index == data.Pane.Index)}
-				templ_7745c5c3_Err = templ.RenderCSSItems(ctx, templ_7745c5c3_Buffer, templ_7745c5c3_Var14...)
+				var templ_7745c5c3_Var15 = []any{"selector-item", templ.KV("pane-active", p.Index == data.Pane.Index)}
+				templ_7745c5c3_Err = templ.RenderCSSItems(ctx, templ_7745c5c3_Buffer, templ_7745c5c3_Var15...)
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 24, "<a href=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 25, "<a href=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				var templ_7745c5c3_Var15 templ.SafeURL
-				templ_7745c5c3_Var15, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/pane/" + urlEncode(data.Pane.Session) + ":" + fmt.Sprintf("%d.%d", data.Pane.Window, p.Index)))
+				var templ_7745c5c3_Var16 templ.SafeURL
+				templ_7745c5c3_Var16, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/pane/" + urlEncode(data.Pane.Session) + ":" + fmt.Sprintf("%d.%d", data.Pane.Window, p.Index)))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 920, Col: 124}
-				}
-				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var15))
-				if templ_7745c5c3_Err != nil {
-					return templ_7745c5c3_Err
-				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 25, "\" class=\"")
-				if templ_7745c5c3_Err != nil {
-					return templ_7745c5c3_Err
-				}
-				var templ_7745c5c3_Var16 string
-				templ_7745c5c3_Var16, templ_7745c5c3_Err = templ.JoinStringErrs(templ.CSSClasses(templ_7745c5c3_Var14).String())
-				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 1, Col: 0}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 924, Col: 124}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var16))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 26, "\">")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 26, "\" class=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var17 string
-				templ_7745c5c3_Var17, templ_7745c5c3_Err = templ.JoinStringErrs(getPaneDisplayName(p))
+				templ_7745c5c3_Var17, templ_7745c5c3_Err = templ.JoinStringErrs(templ.CSSClasses(templ_7745c5c3_Var15).String())
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 923, Col: 30}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 1, Col: 0}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var17))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 27, " <span style=\"font-size: 10px; opacity: 0.7; margin-left: 4px;\">")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 27, "\">")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var18 string
-				templ_7745c5c3_Var18, templ_7745c5c3_Err = templ.JoinStringErrs(getPaneSubtitle(p))
+				templ_7745c5c3_Var18, templ_7745c5c3_Err = templ.JoinStringErrs(getPaneDisplayName(p))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 924, Col: 90}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 927, Col: 30}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var18))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 28, "</span></a>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 28, " <span style=\"font-size: 10px; opacity: 0.7; margin-left: 4px;\">")
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
+				var templ_7745c5c3_Var19 string
+				templ_7745c5c3_Var19, templ_7745c5c3_Err = templ.JoinStringErrs(getPaneSubtitle(p))
+				if templ_7745c5c3_Err != nil {
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 928, Col: 90}
+				}
+				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var19))
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 29, "</span></a>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 29, "</div>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 30, "</div>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 30, "<!-- Output area --><div id=\"output-container\" class=\"output-container\" data-pane-target=\"")
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		var templ_7745c5c3_Var19 string
-		templ_7745c5c3_Var19, templ_7745c5c3_Err = templ.JoinStringErrs(data.Pane.URLTarget())
-		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 933, Col: 44}
-		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var19))
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 31, "\" hx-ext=\"sse\" sse-connect=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 31, "<!-- Output area --><div id=\"output-container\" class=\"output-container\" data-pane-target=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var20 string
-		templ_7745c5c3_Var20, templ_7745c5c3_Err = templ.JoinStringErrs("/pane/" + data.Pane.URLTarget() + "?stream=1")
+		templ_7745c5c3_Var20, templ_7745c5c3_Err = templ.JoinStringErrs(data.Pane.URLTarget())
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 935, Col: 64}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 937, Col: 44}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var20))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 32, "\" sse-swap=\"message\" hx-target=\"#output\" hx-swap=\"none\" onclick=\"handleOutputClick(event)\"><pre id=\"output\" class=\"terminal output\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 32, "\" hx-ext=\"sse\" sse-connect=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var21 string
-		templ_7745c5c3_Var21, templ_7745c5c3_Err = templ.JoinStringErrs(data.Output)
+		templ_7745c5c3_Var21, templ_7745c5c3_Err = templ.JoinStringErrs("/pane/" + data.Pane.URLTarget() + "?stream=1")
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 941, Col: 58}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 939, Col: 64}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var21))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 33, "</pre></div><!-- Spacer for fixed bottom bars --><div class=\"input-bar-spacer\"></div><!-- Fixed bottom bars container --><div class=\"bottom-bars-container\"><!-- Claude Status Section (collapsible) --><div id=\"status-section\" class=\"status-section\"><div style=\"display: flex; align-items: center; gap: 0.5rem; justify-content: space-between;\"><div class=\"status-line-container\"><div id=\"status-line-left\" class=\"status-line-left\"></div><div id=\"status-line-right\" class=\"status-line-right\"></div></div><button type=\"button\" class=\"status-toggle-btn\" onclick=\"toggleStatusSection()\" title=\"Toggle status\">Hide</button></div></div><!-- Prompt input indicator (shown when Claude has pending input) --><div id=\"pending-input-bar\" class=\"pending-input-bar hidden\"><span class=\"pending-label\">Pending input:</span> <span id=\"pending-input-text\" class=\"pending-text\"></span> <button class=\"pending-edit-btn\" onclick=\"editPendingInput()\">Edit</button> <button class=\"pending-clear-btn\" onclick=\"clearPendingInput()\">Clear</button></div><!-- Quick choice buttons (dynamically updated via SSE) -->")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 33, "\" sse-swap=\"message\" hx-target=\"#output\" hx-swap=\"none\" onclick=\"handleOutputClick(event)\"><pre id=\"output\" class=\"terminal output\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		var templ_7745c5c3_Var22 = []any{"choices-bar", templ.KV("hidden", len(data.ParseResult.Choices) == 0)}
-		templ_7745c5c3_Err = templ.RenderCSSItems(ctx, templ_7745c5c3_Buffer, templ_7745c5c3_Var22...)
+		var templ_7745c5c3_Var22 string
+		templ_7745c5c3_Var22, templ_7745c5c3_Err = templ.JoinStringErrs(data.Output)
+		if templ_7745c5c3_Err != nil {
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 945, Col: 58}
+		}
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var22))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 34, "<div id=\"choices-bar\" class=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 34, "</pre></div><!-- Spacer for fixed bottom bars --><div class=\"input-bar-spacer\"></div><!-- Fixed bottom bars container --><div class=\"bottom-bars-container\"><!-- Claude Status Section (collapsible) --><div id=\"status-section\" class=\"status-section\"><div style=\"display: flex; align-items: center; gap: 0.5rem; justify-content: space-between;\"><div class=\"status-line-container\"><div id=\"status-line-left\" class=\"status-line-left\"></div><div id=\"status-line-right\" class=\"status-line-right\"></div></div><button type=\"button\" class=\"status-toggle-btn\" onclick=\"toggleStatusSection()\" title=\"Toggle status\">Hide</button></div></div><!-- Prompt input indicator (shown when Claude has pending input) --><div id=\"pending-input-bar\" class=\"pending-input-bar hidden\"><span class=\"pending-label\">Pending input:</span> <span id=\"pending-input-text\" class=\"pending-text\"></span> <button class=\"pending-edit-btn\" onclick=\"editPendingInput()\">Edit</button> <button class=\"pending-clear-btn\" onclick=\"clearPendingInput()\">Clear</button></div><!-- Quick choice buttons (dynamically updated via SSE) -->")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		var templ_7745c5c3_Var23 string
-		templ_7745c5c3_Var23, templ_7745c5c3_Err = templ.JoinStringErrs(templ.CSSClasses(templ_7745c5c3_Var22).String())
-		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 1, Col: 0}
-		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var23))
+		var templ_7745c5c3_Var23 = []any{"choices-bar", templ.KV("hidden", len(data.ParseResult.Choices) == 0)}
+		templ_7745c5c3_Err = templ.RenderCSSItems(ctx, templ_7745c5c3_Buffer, templ_7745c5c3_Var23...)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 35, "\" data-pane-target=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 35, "<div id=\"choices-bar\" class=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var24 string
-		templ_7745c5c3_Var24, templ_7745c5c3_Err = templ.JoinStringErrs(data.Pane.URLTarget())
+		templ_7745c5c3_Var24, templ_7745c5c3_Err = templ.JoinStringErrs(templ.CSSClasses(templ_7745c5c3_Var23).String())
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 972, Col: 146}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 1, Col: 0}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var24))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 36, "\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 36, "\" data-pane-target=\"")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		var templ_7745c5c3_Var25 string
+		templ_7745c5c3_Var25, templ_7745c5c3_Err = templ.JoinStringErrs(data.Pane.URLTarget())
+		if templ_7745c5c3_Err != nil {
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 976, Col: 146}
+		}
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var25))
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 37, "\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		for i, choice := range data.ParseResult.Choices {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 37, "<button class=\"choice-btn\" data-choice=\"")
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			var templ_7745c5c3_Var25 string
-			templ_7745c5c3_Var25, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("%d", i+1))
-			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 976, Col: 43}
-			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var25))
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 38, "\" data-choice-text=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 38, "<button class=\"choice-btn\" data-choice=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var26 string
-			templ_7745c5c3_Var26, templ_7745c5c3_Err = templ.JoinStringErrs(choice)
+			templ_7745c5c3_Var26, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("%d", i+1))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 977, Col: 32}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 980, Col: 43}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var26))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 39, "\"><span class=\"choice-num\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 39, "\" data-choice-text=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var27 string
-			templ_7745c5c3_Var27, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("%d", i+1))
+			templ_7745c5c3_Var27, templ_7745c5c3_Err = templ.JoinStringErrs(choice)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 979, Col: 56}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 981, Col: 32}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var27))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 40, "</span> <span class=\"choice-text\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 40, "\"><span class=\"choice-num\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var28 string
-			templ_7745c5c3_Var28, templ_7745c5c3_Err = templ.JoinStringErrs(truncate(choice, 20))
+			templ_7745c5c3_Var28, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("%d", i+1))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 980, Col: 55}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 983, Col: 56}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var28))
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 41, "</span></button>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 41, "</span> <span class=\"choice-text\">")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var29 string
+			templ_7745c5c3_Var29, templ_7745c5c3_Err = templ.JoinStringErrs(truncate(choice, 20))
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 984, Col: 55}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var29))
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 42, "</span></button>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 42, "</div><!-- Input bar --><form id=\"input-form\" class=\"input-bar\" data-pane-target=\"")
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		var templ_7745c5c3_Var29 string
-		templ_7745c5c3_Var29, templ_7745c5c3_Err = templ.JoinStringErrs(data.Pane.URLTarget())
-		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 988, Col: 44}
-		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var29))
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 43, "\"><!-- Top row: badges and indicators --><div class=\"input-bar-row\">")
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		if data.ParseResult.Mode.String() == "insert" {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 44, "<span id=\"mode-indicator\" class=\"mode-badge insert\">INS</span>")
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-		} else {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 45, "<span id=\"mode-indicator\" class=\"mode-badge normal\">NOR</span>")
-			if templ_7745c5c3_Err != nil {
-				return templ_7745c5c3_Err
-			}
-		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 46, "<!-- Auto-accept edits toggle --><button type=\"button\" id=\"autoaccept-toggle\" class=\"autoaccept-toggle\" onclick=\"toggleAutoAccept()\" title=\"Toggle auto-accept edits (Shift+Tab)\"><span class=\"autoaccept-icon\">⏵⏵</span> <span id=\"autoaccept-state\" class=\"autoaccept-state\">--</span></button><!-- Mode pills --><button type=\"button\" id=\"accept-indicator\" class=\"mode-pill accept hidden\" onclick=\"cycleClaudeMode()\" title=\"Click to cycle Claude modes (Shift+Tab)\">ACCEPT</button> <button type=\"button\" id=\"plan-indicator\" class=\"mode-pill plan hidden\" onclick=\"cycleClaudeMode()\" title=\"Click to cycle Claude modes (Shift+Tab)\">PLAN</button></div><!-- Image attachments area --><div id=\"attachments-area\" class=\"attachments-area hidden\"></div><!-- Bottom row: input field and buttons --><div class=\"input-bar-row\"><textarea id=\"input-field\" name=\"input\" class=\"input-field\" placeholder=\"Send input...\" autocomplete=\"off\" autocapitalize=\"off\" autocorrect=\"off\" spellcheck=\"false\" rows=\"1\" maxlength=\"100000\" onkeydown=\"handleInputKeydown(event)\" oninput=\"autoResize(this)\"></textarea><!-- Attach image button --><input type=\"file\" id=\"image-input\" accept=\"image/*\" multiple style=\"display: none;\" onchange=\"handleImageSelect(event)\"> <button type=\"button\" class=\"action-btn attach\" onclick=\"document.getElementById('image-input').click()\" title=\"Attach image\"><svg width=\"18\" height=\"18\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13\"></path></svg></button><!-- Stop button --><button type=\"button\" class=\"action-btn stop\" hx-post=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 43, "</div><!-- Input bar --><form id=\"input-form\" class=\"input-bar\" data-pane-target=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var30 string
-		templ_7745c5c3_Var30, templ_7745c5c3_Err = templ.JoinStringErrs("/pane/" + data.Pane.URLTarget() + "/send")
+		templ_7745c5c3_Var30, templ_7745c5c3_Err = templ.JoinStringErrs(data.Pane.URLTarget())
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 1058, Col: 58}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 992, Col: 44}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var30))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 47, "\" hx-vals='{\"input\": \"Escape\", \"special\": \"true\"}' hx-swap=\"none\" title=\"Stop (Escape)\"><svg width=\"18\" height=\"18\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M6 18L18 6M6 6l12 12\"></path></svg></button><!-- Send button --><button type=\"submit\" class=\"action-btn send\" title=\"Send\"><svg width=\"18\" height=\"18\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M13 5l7 7-7 7M5 5l7 7-7 7\"></path></svg></button></div></form></div></div>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 44, "\"><!-- Top row: badges and indicators --><div class=\"input-bar-row\">")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		if data.ParseResult.Mode.String() == "insert" {
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 45, "<span id=\"mode-indicator\" class=\"mode-badge insert\">INS</span>")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+		} else {
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 46, "<span id=\"mode-indicator\" class=\"mode-badge normal\">NOR</span>")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 47, "<!-- Auto-accept edits toggle --><button type=\"button\" id=\"autoaccept-toggle\" class=\"autoaccept-toggle\" onclick=\"toggleAutoAccept()\" title=\"Toggle auto-accept edits (Shift+Tab)\"><span class=\"autoaccept-icon\">⏵⏵</span> <span id=\"autoaccept-state\" class=\"autoaccept-state\">--</span></button><!-- Mode pills --><button type=\"button\" id=\"accept-indicator\" class=\"mode-pill accept hidden\" onclick=\"cycleClaudeMode()\" title=\"Click to cycle Claude modes (Shift+Tab)\">ACCEPT</button> <button type=\"button\" id=\"plan-indicator\" class=\"mode-pill plan hidden\" onclick=\"cycleClaudeMode()\" title=\"Click to cycle Claude modes (Shift+Tab)\">PLAN</button></div><!-- Image attachments area --><div id=\"attachments-area\" class=\"attachments-area hidden\"></div><!-- Bottom row: input field and buttons --><div class=\"input-bar-row\"><textarea id=\"input-field\" name=\"input\" class=\"input-field\" placeholder=\"Send input...\" autocomplete=\"off\" autocapitalize=\"off\" autocorrect=\"off\" spellcheck=\"false\" rows=\"1\" maxlength=\"100000\" onkeydown=\"handleInputKeydown(event)\" oninput=\"autoResize(this)\"></textarea><!-- Attach image button --><input type=\"file\" id=\"image-input\" accept=\"image/*\" multiple style=\"display: none;\" onchange=\"handleImageSelect(event)\"> <button type=\"button\" class=\"action-btn attach\" onclick=\"document.getElementById('image-input').click()\" title=\"Attach image\"><svg width=\"18\" height=\"18\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13\"></path></svg></button><!-- Stop button --><button type=\"button\" class=\"action-btn stop\" hx-post=\"")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		var templ_7745c5c3_Var31 string
+		templ_7745c5c3_Var31, templ_7745c5c3_Err = templ.JoinStringErrs("/pane/" + data.Pane.URLTarget() + "/send")
+		if templ_7745c5c3_Err != nil {
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 1062, Col: 58}
+		}
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var31))
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 48, "\" hx-vals='{\"input\": \"Escape\", \"special\": \"true\"}' hx-swap=\"none\" title=\"Stop (Escape)\"><svg width=\"18\" height=\"18\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M6 18L18 6M6 6l12 12\"></path></svg></button><!-- Send button --><button type=\"submit\" class=\"action-btn send\" title=\"Send\"><svg width=\"18\" height=\"18\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M13 5l7 7-7 7M5 5l7 7-7 7\"></path></svg></button></div></form></div></div>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -524,7 +537,7 @@ func PanePage(data PaneData) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 48, "</body></html>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 49, "</body></html>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
