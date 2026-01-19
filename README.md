@@ -129,19 +129,19 @@ houston intelligently detects what's happening in your tmux sessions:
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                   Mobile Browser                     │
-│  ┌──────────────────────────────────────────────────┐
-│  │  Session List  │  Terminal View  │  Input Bar   │
-│  │  (cards)       │  (live output)  │  (+ image)   │
-│  └──────────────────────────────────────────────────┘
-└─────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────┐
+│                   Mobile Browser                      │
+│  ┌──────────────────────────────────────────────────┐ │
+│  │  Session List  │  Terminal View  │  Input Bar    │ │
+│  │  (cards)       │  (live output)  │  (+ image)    │ │
+│  └──────────────────────────────────────────────────┘ │
+└───────────────────────────────────────────────────────┘
                           │
                 SSE streams + templ components
                           │
                           ▼
 ┌─────────────────────────────────────────────────────┐
-│                  Go HTTP Server                      │
+│                  Go HTTP Server                     │
 │  • Session listing with smart filtering             │
 │  • SSE output streaming                             │
 │  • Command input handling                           │
@@ -151,7 +151,7 @@ houston intelligently detects what's happening in your tmux sessions:
                           │
                           ▼
 ┌─────────────────────────────────────────────────────┐
-│                   tmux CLI                           │
+│                   tmux CLI                          │
 │  • List sessions/windows/panes                      │
 │  • Capture output with history                      │
 │  • Send keys and special commands                   │
