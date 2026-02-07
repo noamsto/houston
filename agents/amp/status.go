@@ -1,8 +1,11 @@
 package amp
 
 import (
+	"encoding/json"
 	"regexp"
 	"strings"
+
+	"github.com/noamsto/houston/internal/ansi"
 )
 
 // AmpStatus contains parsed Amp status bar information.
@@ -35,6 +38,9 @@ var (
 // ParseStatus extracts structured status information from Amp's status box.
 func ParseStatus(statusLine string) AmpStatus {
 	status := AmpStatus{}
+
+	// Strip ANSI codes before parsing - they interfere with regex matching
+	statusLine = ansi.Strip(statusLine)
 
 	lines := strings.Split(statusLine, "\n")
 	for _, line := range lines {
@@ -84,29 +90,30 @@ func ParseStatus(statusLine string) AmpStatus {
 	return status
 }
 
-// FormatStatusJSON returns JSON-like data for frontend consumption.
+// FormatStatusJSON returns JSON data for frontend consumption.
 func (s AmpStatus) FormatStatusJSON() string {
-	parts := []string{}
+	m := map[string]string{}
 	if s.TokenPercent != "" {
-		parts = append(parts, `"tokenPercent":"`+s.TokenPercent+`"`)
+		m["tokenPercent"] = s.TokenPercent
 	}
 	if s.TokenLimit != "" {
-		parts = append(parts, `"tokenLimit":"`+s.TokenLimit+`"`)
+		m["tokenLimit"] = s.TokenLimit
 	}
 	if s.Cost != "" {
-		parts = append(parts, `"cost":"`+s.Cost+`"`)
+		m["cost"] = s.Cost
 	}
 	if s.CostNote != "" {
-		parts = append(parts, `"costNote":"`+s.CostNote+`"`)
+		m["costNote"] = s.CostNote
 	}
 	if s.Mode != "" {
-		parts = append(parts, `"mode":"`+s.Mode+`"`)
+		m["mode"] = s.Mode
 	}
 	if s.Path != "" {
-		parts = append(parts, `"path":"`+s.Path+`"`)
+		m["path"] = s.Path
 	}
 	if s.Branch != "" {
-		parts = append(parts, `"branch":"`+s.Branch+`"`)
+		m["branch"] = s.Branch
 	}
-	return "{" + strings.Join(parts, ",") + "}"
+	data, _ := json.Marshal(m)
+	return string(data)
 }

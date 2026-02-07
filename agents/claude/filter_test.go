@@ -93,6 +93,16 @@ func TestDetectMode(t *testing.T) {
 			output: "line1\nline2\nline3\n-- INSERT --\nlast line",
 			want:   parser.ModeInsert,
 		},
+		{
+			name:   "insert mode with ANSI color codes",
+			output: "content\n\x1b[38;2;153;153;153m--\x1b[39m \x1b[38;2;153;153;153mINSERT\x1b[39m \x1b[38;2;153;153;153m--\x1b[39m",
+			want:   parser.ModeInsert,
+		},
+		{
+			name:   "normal mode with ANSI color codes",
+			output: "content\n\x1b[38;2;153;153;153m--\x1b[39m \x1b[38;2;153;153;153mNORMAL\x1b[39m \x1b[38;2;153;153;153m--\x1b[39m",
+			want:   parser.ModeNormal,
+		},
 	}
 
 	for _, tt := range tests {

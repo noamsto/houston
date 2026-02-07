@@ -205,3 +205,133 @@ func getPaneSubtitle(p tmux.PaneInfo) string {
 templ PaneOutput(output string) {
 	{ output }
 }
+
+// OpenCode Sessions
+
+// OpenCodeSessions renders the OpenCode sessions list
+templ OpenCodeSessions(data OpenCodeData) {
+	<div class="sessions-grid opencode-sessions">
+		// Server info
+		if len(data.Servers) > 0 {
+			<div class="opencode-servers">
+				for _, srv := range data.Servers {
+					<div class="opencode-server-badge">
+						<span class="server-icon">⚡</span>
+						<span class="server-url">{ srv.URL }</span>
+						if srv.Project != nil {
+							<span class="server-project">{ srv.Project.Name }</span>
+						}
+						<span class="server-version">v{ srv.Version }</span>
+					</div>
+				}
+			</div>
+		}
+		// Needs Attention section
+		if len(data.NeedsAttention) > 0 {
+			<div class="section-label">Needs attention</div>
+			for _, sess := range data.NeedsAttention {
+				@openCodeSessionCard(sess)
+			}
+		}
+		// Active section
+		if len(data.Active) > 0 {
+			<div class="section-label">Active</div>
+			for _, sess := range data.Active {
+				@openCodeSessionCard(sess)
+			}
+		}
+		// Idle section
+		if len(data.Idle) > 0 {
+			<div class="section-label">Idle</div>
+			for _, sess := range data.Idle {
+				@openCodeSessionCard(sess)
+			}
+		}
+		// Empty state
+		if len(data.NeedsAttention) == 0 && len(data.Active) == 0 && len(data.Idle) == 0 {
+			if len(data.Servers) == 0 {
+				<div class="empty-state">
+					<div class="empty-icon">⚡</div>
+					<p>No OpenCode servers found</p>
+					<p class="empty-hint">Run <code>opencode serve --port 4096</code></p>
+				</div>
+			} else {
+				<div class="empty-state">
+					<div class="empty-icon">◯</div>
+					<p>No OpenCode sessions</p>
+				</div>
+			}
+		}
+	</div>
+}
+
+// openCodeSessionCard renders a single OpenCode session
+// Clicking opens the OpenCode web UI directly
+templ openCodeSessionCard(sess OpenCodeSession) {
+	<div class={ "session opencode-session", templ.KV("has-attention", sess.NeedsAttention), templ.KV("working", sess.IsWorking) }
+		data-server-url={ sess.State.ServerURL }
+		data-session-id={ sess.State.Session.ID }>
+		<a href={ templ.SafeURL(sess.State.ServerURL) } 
+			target="_blank"
+			class="opencode-link">
+			<div class="session-header">
+				<div class={ "session-indicator", getOpenCodeIndicator(sess) }></div>
+				<div class="session-info">
+					<div class="session-name">
+						<img src="/static/opencode-logo.svg" class="agent-icon" alt="OpenCode" onerror="this.style.display='none'" />
+						if sess.State.Project != nil {
+							{ sess.State.Project.Name }
+						} else {
+							{ getOpenCodeSessionTitle(sess) }
+						}
+					</div>
+					<div class="session-meta">
+						<span class="session-title">{ getOpenCodeSessionTitle(sess) }</span>
+						if sess.State.ActiveTodos > 0 {
+							<span class="todo-count">{ fmt.Sprintf("%d todos", sess.State.ActiveTodos) }</span>
+						}
+					</div>
+				</div>
+				<div class="session-status">
+					<span class={ "status-badge", sess.State.Status }>{ sess.State.Status }</span>
+					<span class="open-indicator">↗</span>
+				</div>
+			</div>
+			if sess.State.LastActivity != "" {
+				<div class="session-activity">
+					{ sess.State.LastActivity }
+				</div>
+			}
+		</a>
+		if sess.State.Status == "busy" {
+			<div class="session-quick-actions">
+				<button class="abort-btn" 
+					onclick={ templ.ComponentScript{Call: fmt.Sprintf("abortOpenCodeSession('%s', '%s')", sess.State.ServerURL, sess.State.Session.ID)} }
+					title="Abort session">
+					Abort
+				</button>
+			</div>
+		}
+	</div>
+}
+
+func getOpenCodeIndicator(sess OpenCodeSession) string {
+	if sess.NeedsAttention {
+		return "attention"
+	}
+	if sess.IsWorking {
+		return "working"
+	}
+	return "idle"
+}
+
+func getOpenCodeSessionTitle(sess OpenCodeSession) string {
+	if sess.State.Session.Title != "" {
+		return sess.State.Session.Title
+	}
+	// Truncate ID for display
+	if len(sess.State.Session.ID) > 8 {
+		return sess.State.Session.ID[:8] + "..."
+	}
+	return sess.State.Session.ID
+}

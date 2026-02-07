@@ -21,3 +21,31 @@ document.addEventListener('DOMContentLoaded', function() {
         console.log('SSE connection lost, will reconnect...');
     });
 });
+
+// OpenCode: Abort session
+function abortOpenCodeSession(serverURL, sessionID) {
+    if (!confirm('Abort this OpenCode session?')) return;
+    
+    const encodedServer = encodeURIComponent(serverURL);
+    fetch(`/opencode/session/${encodedServer}/${sessionID}/abort`, {
+        method: 'POST'
+    })
+    .then(response => {
+        if (response.ok) {
+            console.log('OpenCode session aborted');
+            // Refresh the sessions list
+            if (window.htmx) {
+                htmx.trigger(document.body, 'refresh');
+            }
+        } else {
+            console.error('Failed to abort OpenCode session');
+            alert('Failed to abort session');
+        }
+    })
+    .catch(err => {
+        console.error('OpenCode abort error:', err);
+        alert('Error aborting session');
+    });
+}
+
+

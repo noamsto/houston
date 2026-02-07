@@ -3,6 +3,7 @@ package claude
 import (
 	"strings"
 
+	"github.com/noamsto/houston/internal/ansi"
 	"github.com/noamsto/houston/parser"
 )
 
@@ -62,7 +63,8 @@ func DetectMode(output string) parser.Mode {
 		start = 0
 	}
 
-	bottomLines := strings.Join(lines[start:], "\n")
+	// Strip ANSI codes - Claude Code now wraps mode text with color codes
+	bottomLines := ansi.Strip(strings.Join(lines[start:], "\n"))
 	if strings.Contains(bottomLines, "-- INSERT --") {
 		return parser.ModeInsert
 	}

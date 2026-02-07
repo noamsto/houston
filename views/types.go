@@ -2,6 +2,7 @@ package views
 
 import (
 	"github.com/noamsto/houston/agents"
+	"github.com/noamsto/houston/opencode"
 	"github.com/noamsto/houston/parser"
 	"github.com/noamsto/houston/tmux"
 )
@@ -33,12 +34,6 @@ type SessionsData struct {
 	Idle           []SessionWithWindows // Sessions with all idle windows
 }
 
-// Legacy: keep for backward compatibility during transition
-type SessionWithStatus struct {
-	Session     tmux.Session
-	ParseResult parser.Result
-}
-
 // PaneData holds data for the pane view
 type PaneData struct {
 	Pane        tmux.Pane
@@ -48,4 +43,20 @@ type PaneData struct {
 	Panes       []tmux.PaneInfo
 	PaneWidth   int // columns
 	PaneHeight  int // rows
+}
+
+// OpenCodeSession represents an OpenCode session for display.
+type OpenCodeSession struct {
+	State          opencode.SessionState
+	NeedsAttention bool
+	IsWorking      bool
+	Preview        []string // Recent message excerpts
+}
+
+// OpenCodeData holds OpenCode sessions for display.
+type OpenCodeData struct {
+	NeedsAttention []OpenCodeSession
+	Active         []OpenCodeSession
+	Idle           []OpenCodeSession
+	Servers        []*opencode.Server
 }

@@ -153,16 +153,57 @@ templ paneScripts() {
 			try {
 				// Normalize line endings and remove carriage returns
 				text = text.replace(/\r\n/g, '\n').replace(/\r/g, '');
+				
+				// Extract OSC 8 hyperlinks BEFORE ansi_up (which escapes HTML)
+				// Store them with placeholders, restore after
+				const links = [];
+				text = extractOSC8Links(text, links);
+				
 				let html = ansiUp.ansi_to_html(text);
 				// Brighten dark ANSI colors for better visibility (uses shared function)
 				html = window.brightenAnsiColors(html);
 				html = highlightUserInput(html);
+				
+				// Restore OSC 8 links as HTML
+				html = restoreOSC8Links(html, links);
+				
 				return html;
 			} catch (err) {
 				console.error('ansi_up error:', err);
 				// Fallback: escape HTML and preserve newlines
 				return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 			}
+		}
+		
+		// Extract OSC 8 links and replace with placeholders
+		function extractOSC8Links(text, links) {
+			// OSC 8 format: \x1b]8;id=xxx;url\x1b\\visible_text\x1b]8;;\x1b\\
+			// Or with \x07 (BEL) as terminator
+			const osc8Pattern = /\x1b\]8;([^;]*);([^\x1b\x07]*?)(?:\x1b\\|\x07)(.*?)\x1b\]8;;(?:\x1b\\|\x07)/g;
+			
+			return text.replace(osc8Pattern, (match, params, url, linkText) => {
+				const placeholder = `__OSC8LINK_${links.length}__`;
+				links.push({ url, text: linkText });
+				return placeholder;
+			});
+		}
+		
+		// Restore OSC 8 links from placeholders to HTML
+		function restoreOSC8Links(html, links) {
+			// Pattern for visible ANSI escape symbols (tmux sometimes uses ␛ instead of \x1b)
+			const visibleAnsiPattern = /␛\[[0-9;]*[a-zA-Z]/g;
+			
+			for (let i = 0; i < links.length; i++) {
+				let { url, text } = links[i];
+				// Strip any visible ANSI sequences from link text
+				text = text.replace(visibleAnsiPattern, '');
+				const placeholder = `__OSC8LINK_${i}__`;
+				// Only allow http/https URLs to prevent javascript: XSS
+				const safeUrl = url.startsWith('http://') || url.startsWith('https://') ? url : '#';
+				const link = `<a href="${safeUrl}" class="terminal-link" target="_blank">${text}</a>`;
+				html = html.replace(placeholder, link);
+			}
+			return html;
 		}
 
 		document.addEventListener('DOMContentLoaded', function() {
@@ -181,6 +222,27 @@ templ paneScripts() {
 
 		// Track current vim mode (persists across SSE messages)
 		let currentVimMode = '';
+		
+		// Track current agent type for scroll behavior
+		let currentAgentType = 'generic';
+		
+		// Send scroll keys to Amp (called from scroll buttons)
+		window.ampScroll = function(direction) {
+			const container = document.getElementById('output-container');
+			const paneTarget = container?.getAttribute('data-pane-target');
+			if (!paneTarget) return;
+			
+			// Dim container until SSE refreshes (with fallback timeout)
+			container.classList.add('scrolling');
+			setTimeout(() => container.classList.remove('scrolling'), 2000);
+			
+			const key = direction === 'up' ? 'PPage' : 'NPage';
+			fetch(`/pane/${paneTarget}/send`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+				body: `input=${key}&special=true`
+			}).catch(err => console.error('Scroll send failed:', err));
+		};
 
 		// Handle SSE messages manually to prevent htmx from setting innerHTML directly
 		// This prevents terminal content with HTML-like text from being rendered as actual HTML
@@ -215,6 +277,7 @@ templ paneScripts() {
 			const agentMatch = text.match(/^__AGENT__:([^\n]*)\n/);
 			if (agentMatch) {
 				currentAgent = agentMatch[1] || 'generic';
+				currentAgentType = currentAgent; // Update global for scroll handling
 				text = text.substring(agentMatch[0].length);
 				// Store agent type for choice handling
 				const bar = document.getElementById('choices-bar');
@@ -241,11 +304,30 @@ templ paneScripts() {
 				}
 			}
 
-			// Extract status line with ANSI colors
+			// Extract status line with ANSI colors (newlines encoded as ␊)
 			const statusLineMatch = text.match(/^__STATUSLINE__:([^\n]*)\n/);
+			let rawStatusLine = '';
 			if (statusLineMatch) {
+				// Restore newlines from placeholder
+				rawStatusLine = statusLineMatch[1].replace(/␊/g, '\n');
 				text = text.substring(statusLineMatch[0].length);
-				updateStatusLine(statusLineMatch[1]);
+			}
+
+			// Extract structured Amp status
+			const ampStatusMatch = text.match(/^__AMPSTATUS__:(\{[^\n]*\})\n/);
+			if (ampStatusMatch) {
+				text = text.substring(ampStatusMatch[0].length);
+				try {
+					const ampStatus = JSON.parse(ampStatusMatch[1]);
+					updateAmpStatus(ampStatus);
+				} catch (e) {
+					console.warn('Failed to parse Amp status:', e, ampStatusMatch[1]);
+				}
+			}
+			
+			if (currentAgent === 'claude-code' && rawStatusLine) {
+				// For Claude Code, show raw status line
+				updateClaudeStatusLine(rawStatusLine);
 			}
 
 			// Update mode indicators (combines mode + claudeMode state)
@@ -260,6 +342,11 @@ templ paneScripts() {
 			// Only auto-scroll if user was already at the bottom
 			if (wasAtBottom && container) {
 				container.scrollTop = container.scrollHeight;
+			}
+			
+			// Clear scroll dimming (from Amp scroll buttons)
+			if (container) {
+				container.classList.remove('scrolling');
 			}
 		});
 
@@ -644,55 +731,124 @@ templ paneScripts() {
 			}
 		}
 
-		// Toggle status section visibility
+		// Toggle status section visibility (close button hides it)
 		window.toggleStatusSection = function() {
 			const section = document.getElementById('status-section');
-			const btn = section?.querySelector('.status-toggle-btn');
-			const isVisible = section?.classList.contains('visible');
+			section?.classList.remove('visible');
+			localStorage.setItem('statusSectionVisible', 'false');
+		}
 
-			if (isVisible) {
-				section.classList.remove('visible');
-				btn.textContent = 'Show';
-				localStorage.setItem('statusSectionVisible', 'false');
+		// Update Amp status display from structured data
+		function updateAmpStatus(status) {
+			const section = document.getElementById('status-section');
+			const ctxEl = document.getElementById('status-context-value');
+			const costEl = document.getElementById('status-cost-value');
+			const modeEl = document.getElementById('status-mode-value');
+
+			if (!ctxEl) return;
+
+			// Update context usage (e.g., "27% of 168k")
+			if (status.tokenPercent && status.tokenLimit) {
+				ctxEl.textContent = `${status.tokenPercent} of ${status.tokenLimit}`;
+			} else if (status.tokenPercent) {
+				ctxEl.textContent = status.tokenPercent;
+			}
+
+			// Update cost (e.g., "$0.63" or "$0.63 (free)")
+			if (status.cost) {
+				costEl.textContent = status.costNote ? `${status.cost} ${status.costNote}` : status.cost;
+			}
+
+			// Update mode (e.g., "smart", "rush", "auto")
+			if (status.mode) {
+				modeEl.textContent = status.mode;
+			}
+
+			// Show Amp bar, hide Claude bar
+			document.getElementById('status-bar-amp')?.classList.remove('hidden');
+			document.getElementById('status-bar-claude')?.classList.add('hidden');
+
+			// Auto-show if we have data
+			const hasData = status.tokenPercent || status.cost || status.mode;
+			if (hasData) {
+				const shouldShow = localStorage.getItem('statusSectionVisible') !== 'false';
+				if (shouldShow) {
+					section.classList.add('visible');
+				}
 			} else {
-				section.classList.add('visible');
-				btn.textContent = 'Hide';
-				localStorage.setItem('statusSectionVisible', 'true');
+				section.classList.remove('visible');
 			}
 		}
 
-		// Update status line from SSE
-		function updateStatusLine(statusLine) {
+		// Update Claude Code status line (two columns: left scrollable, right fixed)
+		function updateClaudeStatusLine(statusLine) {
 			const section = document.getElementById('status-section');
 			const leftEl = document.getElementById('status-line-left');
+			const rightEl = document.getElementById('status-line-right');
 			if (!leftEl) return;
 
-			// Convert ANSI to HTML to preserve all colors
-			let html = ansiUp.ansi_to_html(statusLine);
+			// Helper to convert ANSI and fix colors
+			function processLine(line) {
+				let html = ansiUp.ansi_to_html(line);
+				html = html.replace(/rgb\(0,0,187\)/g, 'rgb(137,180,250)');
+				html = html.replace(/rgb\(0,187,0\)/g, 'rgb(166,227,161)');
+				html = html.replace(/rgb\(187,0,187\)/g, 'rgb(243,139,168)');
+				html = html.replace(/rgb\(187,0,0\)/g, 'rgb(243,139,168)');
+				html = html.replace(/rgb\(187,187,0\)/g, 'rgb(249,226,175)');
+				html = html.replace(/rgb\(0,187,187\)/g, 'rgb(137,220,235)');
+				// Strip mode indicators
+				html = html.replace(/--\s+INSERT\s+--.*$/, '');
+				html = html.replace(/⏵⏵\s+accept edits.*$/, '');
+				html = html.replace(/⏸\s+plan mode.*$/, '');
+				return html.trim();
+			}
 
-			// Fix dark 8-bit ANSI colors that are hard to see on dark backgrounds
-			// Replace ansi_up's dark palette with brighter equivalents
-			html = html.replace(/rgb\(0,0,187\)/g, 'rgb(137,180,250)');      // Dark blue → light blue
-			html = html.replace(/rgb\(0,187,0\)/g, 'rgb(166,227,161)');      // Dark green → light green
-			html = html.replace(/rgb\(187,0,187\)/g, 'rgb(243,139,168)');    // Dark magenta → light magenta
-			html = html.replace(/rgb\(187,0,0\)/g, 'rgb(243,139,168)');      // Dark red → light red
-			html = html.replace(/rgb\(187,187,0\)/g, 'rgb(249,226,175)');    // Dark yellow → light yellow
-			html = html.replace(/rgb\(0,187,187\)/g, 'rgb(137,220,235)');    // Dark cyan → light cyan
+			// Parse status line into left (main info) and right (notifications) columns
+			// This is best-effort - if parsing fails, everything goes to left
+			const lines = statusLine.split('\n').filter(l => l.trim() !== '');
+			let leftParts = [];
+			let rightParts = [];
 
-			// Strip mode indicators from the HTML
-			html = html.replace(/--\s+INSERT\s+--.*$/, '');
-			html = html.replace(/⏵⏵\s+accept edits.*$/, '');
-			html = html.replace(/⏸\s+plan mode.*$/, '');
+			try {
+				// Pattern for CC notifications that should go to right side
+				// These are specific alert messages, not regular status info
+				const notificationPattern = /Context left|auto-compact|compacting/i;
 
-			// Display full status line
-			leftEl.innerHTML = html;
+				for (const line of lines) {
+					// Try to split on 3+ consecutive spaces (terminal column separator)
+					const parts = line.split(/\s{3,}/).filter(p => p.trim());
+					
+					for (const part of parts) {
+						const processed = processLine(part);
+						if (!processed) continue;
+						
+						// Only specific notifications go to right
+						if (notificationPattern.test(part)) {
+							rightParts.push(processed);
+						} else {
+							leftParts.push(processed);
+						}
+					}
+				}
+			} catch (e) {
+				// Fallback: show everything in left column
+				console.warn('Status line parsing failed:', e);
+				leftParts = lines.map(l => processLine(l)).filter(p => p);
+				rightParts = [];
+			}
 
-			// Auto-show if status exists and user hasn't hidden it
+			leftEl.innerHTML = leftParts.join(' · ') || '';
+			if (rightEl) rightEl.innerHTML = rightParts.join(' · ') || '';
+
+			// Show Claude bar, hide Amp bar
+			document.getElementById('status-bar-amp')?.classList.add('hidden');
+			document.getElementById('status-bar-claude')?.classList.remove('hidden');
+
+			// Auto-show if we have content
 			if (statusLine && statusLine.trim() !== '') {
 				const shouldShow = localStorage.getItem('statusSectionVisible') !== 'false';
 				if (shouldShow) {
 					section.classList.add('visible');
-					section.querySelector('.status-toggle-btn').textContent = 'Hide';
 				}
 			} else {
 				section.classList.remove('visible');
@@ -948,6 +1104,10 @@ templ paneScripts() {
 				inputField.style.height = 'auto';
 				selectedImages = [];
 				updateAttachmentsUI();
+			} else {
+				const errText = await response.text().catch(() => 'Unknown error');
+				console.error('Send failed:', response.status, errText);
+				alert('Failed to send: ' + errText);
 			}
 		});
 

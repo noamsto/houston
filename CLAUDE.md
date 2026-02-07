@@ -1,6 +1,48 @@
 # houston
 
-Mission control for Claude Code agents in tmux. A mobile-friendly web dashboard for monitoring and controlling tmux sessions remotely. Built for checking on AI agents and sending them instructions from your phone.
+Mission control for AI coding agents. A mobile-friendly web dashboard for monitoring and controlling tmux sessions and OpenCode instances remotely. Built for checking on AI agents and sending them instructions from your phone.
+
+## Supported Agents
+
+- **Claude Code** - via tmux session monitoring
+- **Amp** - via tmux session monitoring  
+- **OpenCode** - via native API integration
+
+### OpenCode Setup
+
+OpenCode TUI uses a **random port by default**, which houston can't discover. To enable houston integration:
+
+**Option 1: Start OpenCode with a fixed port**
+```bash
+opencode --port 4096
+```
+
+**Option 2: Use opencode serve + attach**
+```bash
+# Terminal 1: Start headless server
+opencode serve --port 4096
+
+# Terminal 2: Attach TUI for interaction  
+opencode attach http://localhost:4096
+```
+
+**Option 3: Tell houston the port**
+```bash
+houston --opencode-url http://localhost:YOUR_PORT
+```
+
+**Option 4: Use the houston plugin (recommended)**
+
+Copy the plugin to your OpenCode config:
+```bash
+cp ~/.config/opencode/plugins/houston.ts ~/.config/opencode/plugins/
+```
+
+The plugin automatically writes server info to `~/.local/state/houston/opencode-servers/` when OpenCode starts. Houston reads these files to discover running instances.
+
+After installing the plugin, restart your OpenCode instances.
+
+Houston scans ports 4096-4100 by default. Use `--no-opencode` to disable.
 
 ## Project Goals
 

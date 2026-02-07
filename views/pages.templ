@@ -871,11 +871,11 @@ templ PanePage(data PaneData) {
 					<div class="header-window">{ fmt.Sprintf("%d: %s", data.Windows[0].Index, data.Windows[0].Branch) }</div>
 				}
 				<div class="header-target">{ fmt.Sprintf(":%d.%d", data.Pane.Window, data.Pane.Index) }</div>
-				<!-- Terminal font size controls -->
-				<div class="zoom-controls" title="Terminal font size">
-					<button class="zoom-btn" onclick="fontDecrease()" title="Smaller font (more rows)">−</button>
-					<span class="zoom-level" id="zoom-level" onclick="fontReset()" title="Reset font size">font</span>
-					<button class="zoom-btn" onclick="fontIncrease()" title="Larger font">+</button>
+				<!-- Terminal column width controls -->
+				<div class="zoom-controls" title="Adjust terminal columns">
+					<button class="zoom-btn" onclick="fontDecrease()" title="Fewer columns (larger font)">−</button>
+					<span class="zoom-level" id="zoom-level" onclick="fontReset()" title="Reset terminal size">cols</span>
+					<button class="zoom-btn" onclick="fontIncrease()" title="More columns (smaller font)">+</button>
 				</div>
 				<div style="position: relative;">
 					<button class="menu-btn" onclick="toggleMenu()">
@@ -948,21 +948,32 @@ templ PanePage(data PaneData) {
 			<div class="input-bar-spacer"></div>
 			<!-- Fixed bottom bars container -->
 			<div class="bottom-bars-container">
-				<!-- Claude Status Section (collapsible) -->
+				<!-- Status Section - agent-aware layout -->
 				<div id="status-section" class="status-section">
-					<div style="display: flex; align-items: center; gap: 0.5rem; justify-content: space-between;">
-						<div class="status-line-container">
-							<div id="status-line-left" class="status-line-left"></div>
-							<div id="status-line-right" class="status-line-right"></div>
+					<!-- Amp: structured status (ctx/cost/mode) -->
+					<div id="status-bar-amp" class="status-bar hidden">
+						<div class="status-item" id="status-context" title="Context window usage">
+							<span class="status-label">ctx</span>
+							<span class="status-value" id="status-context-value">—</span>
 						</div>
-						<button
-							type="button"
-							class="status-toggle-btn"
-							onclick="toggleStatusSection()"
-							title="Toggle status"
-						>
-							Hide
-						</button>
+						<div class="status-item" id="status-cost" title="Session cost">
+							<span class="status-label">cost</span>
+							<span class="status-value" id="status-cost-value">—</span>
+						</div>
+						<div class="status-item" id="status-mode" title="Agent mode">
+							<span class="status-value status-mode-value" id="status-mode-value">—</span>
+						</div>
+						<div class="status-item scroll-btns">
+							<button type="button" class="scroll-btn" onclick="ampScroll('up')" title="Page Up">▲</button>
+							<button type="button" class="scroll-btn" onclick="ampScroll('down')" title="Page Down">▼</button>
+						</div>
+						<button type="button" class="status-toggle-btn" onclick="toggleStatusSection()" title="Hide">✕</button>
+					</div>
+					<!-- Claude: two-column status (left scrollable, right fixed) -->
+					<div id="status-bar-claude" class="status-bar-claude hidden">
+						<div id="status-line-left" class="status-line-left"></div>
+						<div id="status-line-right" class="status-line-right"></div>
+						<button type="button" class="status-toggle-btn" onclick="toggleStatusSection()" title="Hide">✕</button>
 					</div>
 				</div>
 				<!-- Prompt input indicator (shown when Claude has pending input) -->

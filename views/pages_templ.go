@@ -197,7 +197,7 @@ func PanePage(data PaneData) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 17, "</div><!-- Terminal font size controls --><div class=\"zoom-controls\" title=\"Terminal font size\"><button class=\"zoom-btn\" onclick=\"fontDecrease()\" title=\"Smaller font (more rows)\">−</button> <span class=\"zoom-level\" id=\"zoom-level\" onclick=\"fontReset()\" title=\"Reset font size\">font</span> <button class=\"zoom-btn\" onclick=\"fontIncrease()\" title=\"Larger font\">+</button></div><div style=\"position: relative;\"><button class=\"menu-btn\" onclick=\"toggleMenu()\"><svg width=\"20\" height=\"20\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z\"></path></svg></button><div id=\"menu\" class=\"menu hidden\"><button hx-post=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 17, "</div><!-- Terminal column width controls --><div class=\"zoom-controls\" title=\"Adjust terminal columns\"><button class=\"zoom-btn\" onclick=\"fontDecrease()\" title=\"Fewer columns (larger font)\">−</button> <span class=\"zoom-level\" id=\"zoom-level\" onclick=\"fontReset()\" title=\"Reset terminal size\">cols</span> <button class=\"zoom-btn\" onclick=\"fontIncrease()\" title=\"More columns (smaller font)\">+</button></div><div style=\"position: relative;\"><button class=\"menu-btn\" onclick=\"toggleMenu()\"><svg width=\"20\" height=\"20\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z\"></path></svg></button><div id=\"menu\" class=\"menu hidden\"><button hx-post=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -391,7 +391,7 @@ func PanePage(data PaneData) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 34, "</pre></div><!-- Spacer for fixed bottom bars --><div class=\"input-bar-spacer\"></div><!-- Fixed bottom bars container --><div class=\"bottom-bars-container\"><!-- Claude Status Section (collapsible) --><div id=\"status-section\" class=\"status-section\"><div style=\"display: flex; align-items: center; gap: 0.5rem; justify-content: space-between;\"><div class=\"status-line-container\"><div id=\"status-line-left\" class=\"status-line-left\"></div><div id=\"status-line-right\" class=\"status-line-right\"></div></div><button type=\"button\" class=\"status-toggle-btn\" onclick=\"toggleStatusSection()\" title=\"Toggle status\">Hide</button></div></div><!-- Prompt input indicator (shown when Claude has pending input) --><div id=\"pending-input-bar\" class=\"pending-input-bar hidden\"><span class=\"pending-label\">Pending input:</span> <span id=\"pending-input-text\" class=\"pending-text\"></span> <button class=\"pending-edit-btn\" onclick=\"editPendingInput()\">Edit</button> <button class=\"pending-clear-btn\" onclick=\"clearPendingInput()\">Clear</button></div><!-- Quick choice buttons (dynamically updated via SSE) -->")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 34, "</pre></div><!-- Spacer for fixed bottom bars --><div class=\"input-bar-spacer\"></div><!-- Fixed bottom bars container --><div class=\"bottom-bars-container\"><!-- Status Section - agent-aware layout --><div id=\"status-section\" class=\"status-section\"><!-- Amp: structured status (ctx/cost/mode) --><div id=\"status-bar-amp\" class=\"status-bar hidden\"><div class=\"status-item\" id=\"status-context\" title=\"Context window usage\"><span class=\"status-label\">ctx</span> <span class=\"status-value\" id=\"status-context-value\">—</span></div><div class=\"status-item\" id=\"status-cost\" title=\"Session cost\"><span class=\"status-label\">cost</span> <span class=\"status-value\" id=\"status-cost-value\">—</span></div><div class=\"status-item\" id=\"status-mode\" title=\"Agent mode\"><span class=\"status-value status-mode-value\" id=\"status-mode-value\">—</span></div><div class=\"status-item scroll-btns\"><button type=\"button\" class=\"scroll-btn\" onclick=\"ampScroll('up')\" title=\"Page Up\">▲</button> <button type=\"button\" class=\"scroll-btn\" onclick=\"ampScroll('down')\" title=\"Page Down\">▼</button></div><button type=\"button\" class=\"status-toggle-btn\" onclick=\"toggleStatusSection()\" title=\"Hide\">✕</button></div><!-- Claude: two-column status (left scrollable, right fixed) --><div id=\"status-bar-claude\" class=\"status-bar-claude hidden\"><div id=\"status-line-left\" class=\"status-line-left\"></div><div id=\"status-line-right\" class=\"status-line-right\"></div><button type=\"button\" class=\"status-toggle-btn\" onclick=\"toggleStatusSection()\" title=\"Hide\">✕</button></div></div><!-- Prompt input indicator (shown when Claude has pending input) --><div id=\"pending-input-bar\" class=\"pending-input-bar hidden\"><span class=\"pending-label\">Pending input:</span> <span id=\"pending-input-text\" class=\"pending-text\"></span> <button class=\"pending-edit-btn\" onclick=\"editPendingInput()\">Edit</button> <button class=\"pending-clear-btn\" onclick=\"clearPendingInput()\">Clear</button></div><!-- Quick choice buttons (dynamically updated via SSE) -->")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -420,7 +420,7 @@ func PanePage(data PaneData) templ.Component {
 		var templ_7745c5c3_Var25 string
 		templ_7745c5c3_Var25, templ_7745c5c3_Err = templ.JoinStringErrs(data.Pane.URLTarget())
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 976, Col: 146}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 987, Col: 146}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var25))
 		if templ_7745c5c3_Err != nil {
@@ -438,7 +438,7 @@ func PanePage(data PaneData) templ.Component {
 			var templ_7745c5c3_Var26 string
 			templ_7745c5c3_Var26, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("%d", i+1))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 980, Col: 43}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 991, Col: 43}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var26))
 			if templ_7745c5c3_Err != nil {
@@ -451,7 +451,7 @@ func PanePage(data PaneData) templ.Component {
 			var templ_7745c5c3_Var27 string
 			templ_7745c5c3_Var27, templ_7745c5c3_Err = templ.JoinStringErrs(choice)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 981, Col: 32}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 992, Col: 32}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var27))
 			if templ_7745c5c3_Err != nil {
@@ -464,7 +464,7 @@ func PanePage(data PaneData) templ.Component {
 			var templ_7745c5c3_Var28 string
 			templ_7745c5c3_Var28, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("%d", i+1))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 983, Col: 56}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 994, Col: 56}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var28))
 			if templ_7745c5c3_Err != nil {
@@ -477,7 +477,7 @@ func PanePage(data PaneData) templ.Component {
 			var templ_7745c5c3_Var29 string
 			templ_7745c5c3_Var29, templ_7745c5c3_Err = templ.JoinStringErrs(truncate(choice, 20))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 984, Col: 55}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 995, Col: 55}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var29))
 			if templ_7745c5c3_Err != nil {
@@ -495,7 +495,7 @@ func PanePage(data PaneData) templ.Component {
 		var templ_7745c5c3_Var30 string
 		templ_7745c5c3_Var30, templ_7745c5c3_Err = templ.JoinStringErrs(data.Pane.URLTarget())
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 992, Col: 44}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 1003, Col: 44}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var30))
 		if templ_7745c5c3_Err != nil {
@@ -523,7 +523,7 @@ func PanePage(data PaneData) templ.Component {
 		var templ_7745c5c3_Var31 string
 		templ_7745c5c3_Var31, templ_7745c5c3_Err = templ.JoinStringErrs("/pane/" + data.Pane.URLTarget() + "/send")
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 1062, Col: 58}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `views/pages.templ`, Line: 1073, Col: 58}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var31))
 		if templ_7745c5c3_Err != nil {

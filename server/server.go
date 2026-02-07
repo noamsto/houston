@@ -12,6 +12,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -21,12 +22,12 @@ import (
 	"github.com/noamsto/houston/agents/claude"
 	"github.com/noamsto/houston/agents/generic"
 	"github.com/noamsto/houston/internal/ansi"
+	"github.com/noamsto/houston/opencode"
 	"github.com/noamsto/houston/parser"
 	"github.com/noamsto/houston/status"
 	"github.com/noamsto/houston/tmux"
 	"github.com/noamsto/houston/views"
 )
-
 
 // getAgentState gets state from the detected agent.
 // For Amp: prefer terminal parsing (real-time status) over file-based state.
@@ -78,6 +79,10 @@ type Server struct {
 	// Track when sessions last had activity (for keeping recently-active in Active section)
 	lastActivity   map[string]time.Time // session name -> last working timestamp
 	lastActivityMu sync.RWMutex
+
+	// OpenCode integration
+	ocDiscovery *opencode.Discovery
+	ocManager   *opencode.Manager
 }
 
 // FontController controls terminal font size.
@@ -91,6 +96,11 @@ type FontController interface {
 type Config struct {
 	StatusDir      string
 	FontController FontController
+
+	// OpenCode configuration
+	OpenCodeEnabled bool   // Enable OpenCode integration
+	OpenCodeURL     string // Static URL (if set, skip discovery)
+	OpenCodePorts   []int  // Ports to scan (default: 4096-4100)
 }
 
 func New(cfg Config) (*Server, error) {
@@ -100,13 +110,47 @@ func New(cfg Config) (*Server, error) {
 		generic.New(), // Must be last (fallback)
 	)
 
-	return &Server{
+	s := &Server{
 		tmux:         tmux.NewClient(),
 		watcher:      status.NewWatcher(cfg.StatusDir),
 		registry:     registry,
 		font:         cfg.FontController,
 		lastActivity: make(map[string]time.Time),
-	}, nil
+	}
+
+	// Initialize OpenCode integration if enabled
+	if cfg.OpenCodeEnabled {
+		var opts []opencode.DiscoveryOption
+		if cfg.OpenCodeURL != "" {
+			opts = append(opts, opencode.WithStaticURL(cfg.OpenCodeURL))
+		}
+		if len(cfg.OpenCodePorts) > 0 {
+			opts = append(opts, opencode.WithPorts(cfg.OpenCodePorts))
+		}
+
+		s.ocDiscovery = opencode.NewDiscovery(opts...)
+		s.ocManager = opencode.NewManager(s.ocDiscovery)
+
+		// Do initial scan synchronously
+		ctx := context.Background()
+		if cfg.OpenCodeURL != "" {
+			slog.Info("OpenCode scanning", "url", cfg.OpenCodeURL)
+		} else {
+			slog.Info("OpenCode scanning", "ports", "4096-4100")
+		}
+		servers := s.ocDiscovery.Scan(ctx)
+		if len(servers) > 0 {
+			slog.Info("OpenCode servers found", "count", len(servers))
+		} else {
+			slog.Info("OpenCode no servers found (will keep scanning)")
+		}
+
+		// Start background discovery
+		s.ocDiscovery.StartBackgroundScan(ctx, 30*time.Second)
+		s.ocManager.StartBackgroundRefresh(ctx, 10*time.Second)
+	}
+
+	return s, nil
 }
 
 func (s *Server) Handler() http.Handler {
@@ -118,6 +162,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/sessions", s.handleSessions)
 	mux.HandleFunc("/pane/", s.handlePane)
 	mux.HandleFunc("/font/", s.handleFont)
+
+	// OpenCode routes
+	mux.HandleFunc("/opencode/sessions", s.handleOpenCodeSessions)
+	mux.HandleFunc("/opencode/session/", s.handleOpenCodeSession)
 
 	return mux
 }
@@ -376,7 +424,6 @@ func (s *Server) getPreviewLines(agent agents.Agent, output string, n int) []str
 	return result
 }
 
-
 // windowActivityScore returns a score for sorting windows by activity
 // Higher score = more important (should appear first)
 func windowActivityScore(win views.WindowWithStatus) int {
@@ -496,19 +543,22 @@ type ClaudeMode struct {
 // Looks for patterns like: "⏵⏵ accept edits on (shift+tab...)" or "⏸ plan mode on"
 // Input is the extracted status line (after separator), which may span multiple lines if wrapped
 func detectClaudeMode(statusLine string) ClaudeMode {
+	// Strip ANSI codes - Claude Code wraps text with color codes
+	stripped := ansi.Strip(statusLine)
+
 	// Check for "accept edits on" first (most common)
-	if strings.Contains(statusLine, "accept edits on") {
+	if strings.Contains(stripped, "accept edits on") {
 		return ClaudeMode{Icon: "⏵⏵", Label: "accept edits", State: "on"}
 	}
-	if strings.Contains(statusLine, "accept edits off") {
+	if strings.Contains(stripped, "accept edits off") {
 		return ClaudeMode{Icon: "⏵⏵", Label: "accept edits", State: "off"}
 	}
 
 	// Check for "plan mode on"
-	if strings.Contains(statusLine, "plan mode on") {
+	if strings.Contains(stripped, "plan mode on") {
 		return ClaudeMode{Icon: "⏸", Label: "plan mode", State: "on"}
 	}
-	if strings.Contains(statusLine, "plan mode off") {
+	if strings.Contains(stripped, "plan mode off") {
 		return ClaudeMode{Icon: "⏸", Label: "plan mode", State: "off"}
 	}
 
@@ -591,6 +641,8 @@ func (s *Server) sendSessionsEvent(ctx context.Context, w http.ResponseWriter, f
 func parsePaneTarget(path string) (tmux.Pane, error) {
 	// Path format: /pane/session:window.pane or /pane/session:window.pane/action
 	path = strings.TrimPrefix(path, "/pane/")
+	path = strings.TrimSuffix(path, "/send-with-images")
+	path = strings.TrimSuffix(path, "/send-with-image")
 	path = strings.TrimSuffix(path, "/send")
 	path = strings.TrimSuffix(path, "/kill")
 	path = strings.TrimSuffix(path, "/respawn")
@@ -797,20 +849,13 @@ func (s *Server) handlePaneSend(w http.ResponseWriter, r *http.Request, pane tmu
 	w.WriteHeader(http.StatusOK)
 }
 
-// getFileExtension extracts the file extension from a filename
-func getFileExtension(filename string) string {
-	parts := strings.Split(filename, ".")
-	if len(parts) > 1 {
-		return parts[len(parts)-1]
-	}
-	return "jpg" // default to jpg if no extension found
-}
-
 func (s *Server) handlePaneSendWithImage(w http.ResponseWriter, r *http.Request, pane tmux.Pane) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 50*1024*1024) // 50MB limit
 
 	var req struct {
 		Text  string `json:"text"`
@@ -835,9 +880,9 @@ func (s *Server) handlePaneSendWithImage(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
-	// Write image to temp file with original filename preserved
-	// Use timestamp prefix to ensure uniqueness
-	tmpPath := fmt.Sprintf("/tmp/houston-%d-%s", time.Now().UnixNano(), req.Image.Name)
+	// Write image to temp file with sanitized filename
+	safeName := filepath.Base(req.Image.Name)
+	tmpPath := fmt.Sprintf("/tmp/houston-%d-%s", time.Now().UnixNano(), safeName)
 	tmpFile, err := os.Create(tmpPath)
 	if err != nil {
 		slog.Error("failed to create temp file", "error", err)
@@ -882,6 +927,8 @@ func (s *Server) handlePaneSendWithImages(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 50*1024*1024) // 50MB limit
+
 	var req struct {
 		Text   string `json:"text"`
 		Images []struct {
@@ -919,9 +966,9 @@ func (s *Server) handlePaneSendWithImages(w http.ResponseWriter, r *http.Request
 			return
 		}
 
-		// Write image to temp file with original filename preserved
-		// Use timestamp prefix to ensure uniqueness
-		tmpPath := fmt.Sprintf("/tmp/houston-%d-%s", time.Now().UnixNano(), img.Name)
+		// Write image to temp file with sanitized filename
+		safeName := filepath.Base(img.Name)
+		tmpPath := fmt.Sprintf("/tmp/houston-%d-%s", time.Now().UnixNano(), safeName)
 		tmpFile, err := os.Create(tmpPath)
 		if err != nil {
 			slog.Error("failed to create temp file", "error", err, "index", i)
@@ -953,11 +1000,11 @@ func (s *Server) handlePaneSendWithImages(w http.ResponseWriter, r *http.Request
 	// Note: We don't clean up temp files after sending
 	// They remain in /tmp for user to reference and will be cleaned by OS
 
-	// Send all image paths and text to Claude Code
-	// Format: image1\nimage2\nimage3\ntext + Enter
-	message := strings.Join(tmpFiles, "\n")
+	// Send all image paths and text to Claude Code as a single prompt line
+	// Format: image1 image2 image3 text + Enter
+	message := strings.Join(tmpFiles, " ")
 	if req.Text != "" {
-		message = fmt.Sprintf("%s\n%s", message, req.Text)
+		message = fmt.Sprintf("%s %s", message, req.Text)
 	}
 
 	slog.Info("send images with text", "pane", pane.Target(), "count", len(tmpFiles), "text", req.Text)
@@ -1034,7 +1081,7 @@ func (s *Server) handlePaneResize(w http.ResponseWriter, r *http.Request, pane t
 
 	r.ParseForm()
 	direction := r.FormValue("direction") // U, D, L, R
-	adjustment := 5                        // default
+	adjustment := 5                       // default
 	if adj := r.FormValue("adjustment"); adj != "" {
 		if n, err := strconv.Atoi(adj); err == nil && n > 0 {
 			adjustment = n
@@ -1174,9 +1221,18 @@ func (s *Server) streamPane(w http.ResponseWriter, r *http.Request, pane tmux.Pa
 				if statusLine != "" {
 					slog.Debug("SSE status line", "pane", pane.Target(), "status", statusLine, "len", len(statusLine))
 				}
+				// Replace newlines with placeholder for SSE transmission
+				sseStatusLine := strings.ReplaceAll(statusLine, "\n", "␊")
 				buf.WriteString("data: __STATUSLINE__:")
-				buf.WriteString(statusLine)
+				buf.WriteString(sseStatusLine)
 				buf.WriteString("\n")
+				// Send structured Amp status if available
+				if agent.Type() == agents.AgentAmp {
+					ampStatus := amp.ParseStatus(statusLine)
+					buf.WriteString("data: __AMPSTATUS__:")
+					buf.WriteString(ampStatus.FormatStatusJSON())
+					buf.WriteString("\n")
+				}
 				for _, line := range lines {
 					line = strings.ReplaceAll(line, "\r", "")
 					buf.WriteString("data: ")
@@ -1233,5 +1289,219 @@ func (s *Server) handleFont(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("font size changed", "action", action, "terminal", s.font.Name())
+	w.WriteHeader(http.StatusOK)
+}
+
+// OpenCode handlers
+
+func (s *Server) handleOpenCodeSessions(w http.ResponseWriter, r *http.Request) {
+	if s.ocManager == nil {
+		http.Error(w, "OpenCode integration not enabled", http.StatusNotImplemented)
+		return
+	}
+
+	accept := r.Header.Get("Accept")
+
+	// Check if SSE stream requested
+	if strings.Contains(accept, "text/event-stream") || r.URL.Query().Get("stream") == "1" {
+		s.streamOpenCodeSessions(w, r)
+		return
+	}
+
+	data := s.buildOpenCodeData(r.Context())
+
+	// Return JSON if requested
+	if strings.Contains(accept, "application/json") {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(data)
+		return
+	}
+
+	// Return HTML fragment
+	views.OpenCodeSessions(data).Render(r.Context(), w)
+}
+
+func (s *Server) buildOpenCodeData(ctx context.Context) views.OpenCodeData {
+	states := s.ocManager.GetAllSessions(ctx)
+	servers := s.ocDiscovery.GetServers()
+
+	var data views.OpenCodeData
+	data.Servers = servers
+
+	for _, state := range states {
+		ocSession := views.OpenCodeSession{
+			State: state,
+		}
+
+		// Determine status category
+		switch state.Status {
+		case "error":
+			ocSession.NeedsAttention = true
+			data.NeedsAttention = append(data.NeedsAttention, ocSession)
+		case "busy":
+			ocSession.IsWorking = true
+			data.Active = append(data.Active, ocSession)
+		default:
+			// Check if there are active todos that might need attention
+			if state.ActiveTodos > 0 {
+				data.Active = append(data.Active, ocSession)
+			} else {
+				data.Idle = append(data.Idle, ocSession)
+			}
+		}
+	}
+
+	return data
+}
+
+func (s *Server) streamOpenCodeSessions(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "SSE not supported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	// Send initial comment
+	fmt.Fprintf(w, ": connected\n\n")
+	flusher.Flush()
+
+	// Send initial data
+	if err := s.sendOpenCodeSessionsEvent(r.Context(), w, flusher); err != nil {
+		slog.Debug("SSE OpenCode sessions write failed", "error", err)
+		return
+	}
+
+	// Poll and send updates
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			slog.Debug("SSE OpenCode sessions client disconnected")
+			return
+		case <-ticker.C:
+			if err := s.sendOpenCodeSessionsEvent(r.Context(), w, flusher); err != nil {
+				slog.Debug("SSE OpenCode sessions write failed", "error", err)
+				return
+			}
+		}
+	}
+}
+
+func (s *Server) sendOpenCodeSessionsEvent(ctx context.Context, w http.ResponseWriter, flusher http.Flusher) error {
+	var buf strings.Builder
+	data := s.buildOpenCodeData(ctx)
+	views.OpenCodeSessions(data).Render(ctx, &buf)
+
+	// Build SSE message
+	var msg strings.Builder
+	for _, line := range strings.Split(buf.String(), "\n") {
+		msg.WriteString("data: ")
+		msg.WriteString(line)
+		msg.WriteString("\n")
+	}
+	msg.WriteString("\n")
+
+	_, err := w.Write([]byte(msg.String()))
+	if err != nil {
+		return err
+	}
+	flusher.Flush()
+	return nil
+}
+
+func (s *Server) handleOpenCodeSession(w http.ResponseWriter, r *http.Request) {
+	if s.ocManager == nil {
+		http.Error(w, "OpenCode integration not enabled", http.StatusNotImplemented)
+		return
+	}
+
+	// Parse path: /opencode/session/{serverURL}/{sessionID}/action
+	path := strings.TrimPrefix(r.URL.Path, "/opencode/session/")
+	parts := strings.SplitN(path, "/", 3)
+
+	if len(parts) < 2 {
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+
+	serverURL, err := url.PathUnescape(parts[0])
+	if err != nil {
+		http.Error(w, "invalid server URL", http.StatusBadRequest)
+		return
+	}
+	sessionID := parts[1]
+
+	// Handle actions
+	if len(parts) == 3 {
+		action := parts[2]
+		switch action {
+		case "send":
+			s.handleOpenCodeSend(w, r, serverURL, sessionID)
+		case "abort":
+			s.handleOpenCodeAbort(w, r, serverURL, sessionID)
+		default:
+			http.Error(w, "unknown action", http.StatusBadRequest)
+		}
+		return
+	}
+
+	// Get session details
+	state, err := s.ocManager.GetSessionDetails(r.Context(), serverURL, sessionID)
+	if err != nil {
+		slog.Error("failed to get OpenCode session", "error", err)
+		http.Error(w, "failed to get session: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Return JSON
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(state)
+}
+
+func (s *Server) handleOpenCodeSend(w http.ResponseWriter, r *http.Request, serverURL, sessionID string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	r.ParseForm()
+	text := r.FormValue("input")
+
+	if text == "" {
+		http.Error(w, "input required", http.StatusBadRequest)
+		return
+	}
+
+	slog.Info("send to OpenCode", "server", serverURL, "session", sessionID, "text", text)
+
+	if err := s.ocManager.SendPrompt(r.Context(), serverURL, sessionID, text); err != nil {
+		slog.Error("failed to send to OpenCode", "error", err)
+		http.Error(w, "failed to send: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) handleOpenCodeAbort(w http.ResponseWriter, r *http.Request, serverURL, sessionID string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	slog.Info("abort OpenCode session", "server", serverURL, "session", sessionID)
+
+	if err := s.ocManager.AbortSession(r.Context(), serverURL, sessionID); err != nil {
+		slog.Error("failed to abort OpenCode session", "error", err)
+		http.Error(w, "failed to abort: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	w.WriteHeader(http.StatusOK)
 }

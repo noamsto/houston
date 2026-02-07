@@ -296,3 +296,18 @@ Create `agents/TEMPLATE.md`:
 3. Config file for custom patterns?
    - Allow users to tweak detection without code changes
    - Could be overkill for v1.0
+
+---
+
+## Future Ideas
+
+### Amp Threads Support
+- Read Amp thread history/context
+- Display thread metadata (handoff info, parent thread)
+- Navigate between related threads
+
+### Custom Agent Features
+- User-configurable status line parsing patterns
+- Custom notification patterns for right-side display
+- Configurable mode toggle keybindings per agent
+- Agent-specific status bar layouts (like Amp's ctx/cost/mode)

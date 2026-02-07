@@ -16,6 +16,12 @@ var Pattern = regexp.MustCompile(`[\x1b␛]\[[0-9;?]*[a-zA-Z]`)
 // Only matches sequences ending in 'm' (Select Graphic Rendition) to avoid false positives.
 var OrphanedSGRPattern = regexp.MustCompile(`\[[0-9;]*m`)
 
+// OSC8Pattern matches OSC 8 hyperlink sequences.
+// Format: \x1b]8;params;url\x1b\\ or \x1b]8;params;url\x07
+// The hyperlink text follows, then \x1b]8;;\x1b\\ or \x1b]8;;\x07 terminates.
+// We strip the escape sequences but keep the visible text.
+var OSC8Pattern = regexp.MustCompile(`\x1b\]8;[^;]*;[^\x1b\x07]*[\x1b\x07][\\\x07]?`)
+
 // Strip removes all ANSI escape sequences from a string.
 // Use this before pattern matching or text analysis.
 func Strip(s string) string {

@@ -437,6 +437,159 @@ templ indexPageStyles() {
 				color: var(--text-secondary);
 			}
 			.empty-icon { font-size: 48px; margin-bottom: 1rem; opacity: 0.5; }
+			.empty-hint {
+				font-size: 12px;
+				margin-top: 0.5rem;
+				color: var(--text-dim);
+			}
+			.empty-hint code {
+				background: var(--bg-elevated);
+				padding: 0.25rem 0.5rem;
+				border-radius: 4px;
+				font-size: 11px;
+			}
+			/* OpenCode styles */
+			.opencode-sessions {
+				/* Inherits from sessions-grid */
+			}
+			.opencode-servers {
+				display: flex;
+				flex-wrap: wrap;
+				gap: 0.5rem;
+				padding: 0.5rem 0.5rem 0;
+			}
+			.opencode-server-badge {
+				display: inline-flex;
+				align-items: center;
+				gap: 0.375rem;
+				background: var(--bg-elevated);
+				border: 1px solid var(--border);
+				border-radius: 6px;
+				padding: 0.375rem 0.625rem;
+				font-size: 11px;
+			}
+			.opencode-server-badge .server-icon {
+				color: #fbbf24;
+			}
+			.opencode-server-badge .server-url {
+				color: var(--text-secondary);
+			}
+			.opencode-server-badge .server-project {
+				color: var(--text-primary);
+				font-weight: 500;
+			}
+			.opencode-server-badge .server-version {
+				color: var(--text-dim);
+				font-size: 10px;
+			}
+			.opencode-session {
+				/* Inherits from session */
+			}
+			.opencode-session .opencode-link {
+				display: block;
+				text-decoration: none;
+				color: inherit;
+				cursor: pointer;
+				transition: background 0.15s;
+			}
+			.opencode-session .opencode-link:hover {
+				background: var(--bg-elevated);
+			}
+			.opencode-session .opencode-link:hover .open-indicator {
+				color: var(--accent);
+			}
+			.opencode-session .session-status {
+				display: flex;
+				align-items: center;
+				gap: 0.5rem;
+			}
+			.opencode-session .open-indicator {
+				color: var(--text-dim);
+				font-size: 16px;
+				transition: color 0.15s;
+			}
+			.opencode-session .session-title {
+				color: var(--text-dim);
+			}
+			.opencode-session .session-activity {
+				padding: 0.5rem 1rem 0.5rem 2.5rem;
+				font-size: 12px;
+				color: var(--text-secondary);
+				white-space: nowrap;
+				overflow: hidden;
+				text-overflow: ellipsis;
+				border-top: 1px solid var(--border);
+				background: var(--bg-elevated);
+			}
+			.opencode-session .session-quick-actions {
+				padding: 0.5rem 1rem;
+				border-top: 1px solid var(--border);
+				display: flex;
+				gap: 0.5rem;
+			}
+			.opencode-session .abort-btn {
+				background: var(--error);
+				border: none;
+				color: white;
+				padding: 0.375rem 0.75rem;
+				border-radius: 4px;
+				cursor: pointer;
+				font-size: 12px;
+				font-weight: 500;
+			}
+			.opencode-session .abort-btn:hover {
+				opacity: 0.9;
+			}
+			.opencode-session .status-badge {
+				font-size: 10px;
+				padding: 0.2rem 0.5rem;
+				border-radius: 4px;
+				text-transform: uppercase;
+				font-weight: 500;
+			}
+			.opencode-session .status-badge.idle {
+				background: var(--bg-elevated);
+				color: var(--text-dim);
+			}
+			.opencode-session .status-badge.busy {
+				background: var(--working);
+				color: var(--bg-deep);
+			}
+			.opencode-session .status-badge.error {
+				background: var(--error);
+				color: white;
+			}
+			.opencode-session .abort-btn {
+				background: var(--error);
+				border: none;
+				color: white;
+				width: 24px;
+				height: 24px;
+				border-radius: 4px;
+				cursor: pointer;
+				display: flex;
+				align-items: center;
+				justify-content: center;
+				font-size: 12px;
+			}
+			.opencode-session .abort-btn:hover {
+				background: #dc2626;
+			}
+			.opencode-session .session-preview {
+				padding: 0.5rem 1rem;
+				border-top: 1px solid var(--border);
+				background: var(--bg-elevated);
+			}
+
+			.opencode-session .todo-count {
+				background: var(--working);
+				color: var(--bg-deep);
+				padding: 0.125rem 0.375rem;
+				border-radius: 4px;
+				font-size: 10px;
+				font-weight: 500;
+			}
+
 			/* Action bar */
 			.action-backdrop {
 				position: fixed;
@@ -892,15 +1045,20 @@ templ panePageStyles() {
 			}
 			.back-btn:hover { background: var(--bg-elevated); color: var(--text-primary); }
 			.header-title {
-				flex: 1;
 				font-weight: 500;
 				font-size: 15px;
 				color: var(--text-primary);
+				white-space: nowrap;
+				overflow: hidden;
+				text-overflow: ellipsis;
+				min-width: 0;
+				flex-shrink: 1;
 			}
 			.header-target {
 				font-size: 12px;
 				color: var(--text-secondary);
 				font-family: 'SF Mono', ui-monospace, monospace;
+				flex-shrink: 0;
 			}
 			.window-dropdown {
 				background: var(--bg-elevated);
@@ -911,8 +1069,13 @@ templ panePageStyles() {
 				font-size: 13px;
 				font-family: 'SF Mono', 'Symbols Nerd Font Mono', ui-monospace, monospace;
 				cursor: pointer;
-				max-width: 250px;
+				max-width: 140px;
 				font-weight: 500;
+				white-space: nowrap;
+				overflow: hidden;
+				text-overflow: ellipsis;
+				flex-shrink: 1;
+				min-width: 60px;
 			}
 			.window-dropdown:hover {
 				border-color: var(--accent);
@@ -926,6 +1089,12 @@ templ panePageStyles() {
 				font-size: 13px;
 				color: var(--text-secondary);
 				font-family: 'SF Mono', 'Symbols Nerd Font Mono', ui-monospace, monospace;
+				white-space: nowrap;
+				overflow: hidden;
+				text-overflow: ellipsis;
+				max-width: 120px;
+				flex-shrink: 1;
+				min-width: 0;
 			}
 			/* Zoom controls - mission control style */
 			.zoom-controls {
@@ -938,6 +1107,7 @@ templ panePageStyles() {
 				border-radius: 4px;
 				padding: 2px;
 				box-shadow: inset 0 1px 2px rgba(0,0,0,0.3);
+				flex-shrink: 0;
 			}
 			.zoom-btn {
 				background: transparent;
@@ -1060,6 +1230,11 @@ templ panePageStyles() {
 				/* Force GPU acceleration for smooth scrolling */
 				transform: translateZ(0);
 				will-change: scroll-position;
+				/* Smooth opacity transition for Amp scroll feedback */
+				transition: opacity 0.15s ease-out;
+			}
+			.output-container.scrolling {
+				opacity: 0.5;
 			}
 			.output {
 				padding: 1rem;
@@ -1068,6 +1243,14 @@ templ panePageStyles() {
 				min-width: 100%;
 				/* Force browser to calculate full layout upfront */
 				content-visibility: visible;
+			}
+			.output .terminal-link {
+				color: var(--accent);
+				text-decoration: underline;
+				text-decoration-style: dotted;
+			}
+			.output .terminal-link:hover {
+				text-decoration-style: solid;
 			}
 			.choices-bar {
 				display: flex;
@@ -1156,33 +1339,115 @@ templ panePageStyles() {
 				transition: max-height 0.2s ease-out, padding 0.2s ease-out;
 			}
 			.status-section.visible {
-				max-height: 80px;
-				padding: 0.5rem 1rem;
+				max-height: 50px;
+				padding: 0.375rem 0.75rem;
 			}
-			.status-line-container {
+			.status-bar {
 				display: flex;
-				justify-content: space-between;
 				align-items: center;
-				width: 100%;
-				font-family: 'IBM Plex Mono', monospace;
-				font-size: 11px;
-				color: var(--text-secondary);
 				gap: 1rem;
-				overflow-x: auto;
-				-webkit-overflow-scrolling: touch;
+			}
+			.status-bar.hidden {
+				display: none;
+			}
+			.status-item {
+				display: flex;
+				align-items: center;
+				gap: 0.375rem;
+			}
+			.status-label {
+				font-size: 10px;
+				color: var(--text-dim);
+				text-transform: uppercase;
+				letter-spacing: 0.05em;
+			}
+			.status-value {
+				font-size: 12px;
+				color: var(--text-primary);
+				font-weight: 500;
+			}
+			.status-mode-value {
+				padding: 0.125rem 0.5rem;
+				border-radius: 3px;
+				font-size: 10px;
+				font-weight: 600;
+				text-transform: uppercase;
+				background: var(--accent-dim);
+				color: var(--accent);
+			}
+			.status-mode-btn {
+				background: none;
+				border: none;
+				cursor: pointer;
+				padding: 0;
+				transition: opacity 0.15s;
+			}
+			.status-mode-btn:hover {
+				opacity: 0.8;
+			}
+			.status-mode-btn:active .status-mode-value {
+				opacity: 0.6;
+			}
+			.status-toggle-btn {
+				margin-left: auto;
+				background: none;
+				border: none;
+				color: var(--text-dim);
+				cursor: pointer;
+				padding: 0.25rem;
+				font-size: 12px;
+				line-height: 1;
+			}
+			.status-toggle-btn:hover {
+				color: var(--text-secondary);
+			}
+			.scroll-btns {
+				display: flex;
+				gap: 0.25rem;
+				margin-left: auto;
+			}
+			.scroll-btn {
+				background: var(--bg-elevated);
+				border: 1px solid var(--border);
+				border-radius: 4px;
+				color: var(--text-secondary);
+				cursor: pointer;
+				padding: 0.25rem 0.5rem;
+				font-size: 12px;
+				line-height: 1;
+				transition: all 0.15s;
+			}
+			.scroll-btn:hover {
+				background: var(--accent-dim);
+				border-color: var(--accent);
+				color: var(--text-primary);
+			}
+			.scroll-btn:active {
+				opacity: 0.7;
+			}
+			.status-bar-claude {
+				display: flex;
+				align-items: center;
+				gap: 0.75rem;
+				width: 100%;
+			}
+			.status-bar-claude.hidden {
+				display: none;
 			}
 			.status-line-left {
+				flex: 1;
+				font-size: 11px;
+				color: var(--text-secondary);
 				white-space: nowrap;
-				flex-shrink: 1;
-				overflow: hidden;
-				text-overflow: ellipsis;
+				overflow-x: auto;
+				-webkit-overflow-scrolling: touch;
+				min-width: 0;
 			}
 			.status-line-right {
+				flex-shrink: 0;
+				font-size: 11px;
+				color: var(--text-dim);
 				white-space: nowrap;
-				flex-shrink: 1;
-				margin-left: auto;
-				overflow: hidden;
-				text-overflow: ellipsis;
 			}
 			.mode-pill {
 				padding: 0.125rem 0.5rem;
@@ -1306,11 +1571,15 @@ templ panePageStyles() {
 			.bottom-bars-container {
 				position: fixed;
 				bottom: 0;
-				left: env(safe-area-inset-left);
-				right: env(safe-area-inset-right);
+				left: 0;
+				right: 0;
 				display: flex;
 				flex-direction: column;
 				z-index: 100;
+				max-width: 32rem;
+				margin: 0 auto;
+				padding-left: env(safe-area-inset-left);
+				padding-right: env(safe-area-inset-right);
 			}
 			/* Spacer to prevent content from being hidden behind fixed bottom bars */
 			.input-bar-spacer {
@@ -1409,6 +1678,9 @@ templ panePageStyles() {
 				.pane-layout {
 					max-width: 900px;
 				}
+				.bottom-bars-container {
+					max-width: 900px;
+				}
 				.terminal {
 					font-size: 13px;
 				}
@@ -1453,6 +1725,9 @@ templ panePageStyles() {
 					display: flex;
 					flex-direction: column;
 				}
+				.bottom-bars-container {
+					max-width: 1100px;
+				}
 				.terminal {
 					font-size: 14px;
 					line-height: 1.6;
@@ -1484,6 +1759,9 @@ templ panePageStyles() {
 			/* Wide desktop */
 			@media (min-width: 1400px) {
 				.pane-layout {
+					max-width: 1400px;
+				}
+				.bottom-bars-container {
 					max-width: 1400px;
 				}
 				.terminal {
