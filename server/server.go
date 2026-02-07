@@ -1163,6 +1163,9 @@ func (s *Server) streamPane(w http.ResponseWriter, r *http.Request, pane tmux.Pa
 	var lastAgentModeJSON string
 	updateCount := 0
 
+	// Per-connection suggestion cache for Claude Code panes
+	var suggestionCache claude.SuggestionCache
+
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
@@ -1233,6 +1236,16 @@ func (s *Server) streamPane(w http.ResponseWriter, r *http.Request, pane tmux.Pa
 					buf.WriteString(ampStatus.FormatStatusJSON())
 					buf.WriteString("\n")
 				}
+				// Send prompt suggestion for Claude Code when idle/waiting
+				var suggestion string
+				if agent.Type() == agents.AgentClaudeCode {
+					if parseResult.Type == parser.TypeIdle || parseResult.Type == parser.TypeQuestion || parseResult.Type == parser.TypeDone {
+						suggestion = suggestionCache.GetCachedSuggestion(panePath)
+					}
+				}
+				buf.WriteString("data: __SUGGESTION__:")
+				buf.WriteString(suggestion)
+				buf.WriteString("\n")
 				for _, line := range lines {
 					line = strings.ReplaceAll(line, "\r", "")
 					buf.WriteString("data: ")

@@ -324,7 +324,14 @@ templ paneScripts() {
 					console.warn('Failed to parse Amp status:', e, ampStatusMatch[1]);
 				}
 			}
-			
+
+			// Extract prompt suggestion
+			const suggestionMatch = text.match(/^__SUGGESTION__:([^\n]*)\n/);
+			if (suggestionMatch) {
+				text = text.substring(suggestionMatch[0].length);
+				updateSuggestion(suggestionMatch[1] || '');
+			}
+
 			if (currentAgent === 'claude-code' && rawStatusLine) {
 				// For Claude Code, show raw status line
 				updateClaudeStatusLine(rawStatusLine);
@@ -645,6 +652,86 @@ templ paneScripts() {
 			} else {
 				pendingBar.classList.add('hidden');
 			}
+		}
+
+		// Track whether user dismissed the current suggestion
+		let suggestionDismissed = false;
+		let currentSuggestion = '';
+
+		// Update suggestion bar from SSE data
+		function updateSuggestion(text) {
+			const bar = document.getElementById('suggestion-bar');
+			const textEl = document.getElementById('suggestion-text');
+			if (!bar || !textEl) return;
+
+			if (!text) {
+				// Empty suggestion from SSE (CC working or no suggestion)
+				// Don't hide - keep showing the last suggestion until user acts
+				return;
+			}
+
+			// New suggestion text arrived
+			if (text !== currentSuggestion) {
+				// Different suggestion - reset dismissal, show it
+				currentSuggestion = text;
+				suggestionDismissed = false;
+			}
+
+			if (suggestionDismissed) return;
+
+			textEl.textContent = text;
+			textEl.title = text;
+			bar.classList.remove('hidden');
+		}
+
+		// Pre-fill input with suggestion text
+		window.useSuggestion = function() {
+			const textEl = document.getElementById('suggestion-text');
+			const inputField = document.getElementById('input-field');
+			if (!textEl || !inputField) return;
+
+			inputField.value = textEl.title || textEl.textContent;
+			autoResize(inputField);
+			inputField.focus();
+			document.getElementById('suggestion-bar')?.classList.add('hidden');
+		}
+
+		// Send suggestion directly
+		window.sendSuggestion = function() {
+			const textEl = document.getElementById('suggestion-text');
+			const paneTarget = document.getElementById('output-container')?.getAttribute('data-pane-target');
+			if (!textEl || !paneTarget) return;
+
+			const text = textEl.title || textEl.textContent;
+			if (!text) return;
+
+			document.getElementById('suggestion-bar')?.classList.add('hidden');
+			suggestionDismissed = true;
+			currentSuggestion = '';
+
+			// Switch to INSERT mode if needed
+			const modeSwitch = currentVimMode === 'normal'
+				? fetch(`/pane/${paneTarget}/send`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+					body: 'input=i&noenter=true'
+				}).then(() => new Promise(r => setTimeout(r, 50)))
+				: Promise.resolve();
+
+			modeSwitch.then(() => {
+				fetch(`/pane/${paneTarget}/send`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+					body: `input=${encodeURIComponent(text)}`
+				});
+			});
+		}
+
+		// Dismiss suggestion
+		window.dismissSuggestion = function() {
+			document.getElementById('suggestion-bar')?.classList.add('hidden');
+			suggestionDismissed = true;
+			currentSuggestion = '';
 		}
 
 		// Edit pending input - copy to input field for editing
@@ -1104,6 +1191,10 @@ templ paneScripts() {
 				inputField.style.height = 'auto';
 				selectedImages = [];
 				updateAttachmentsUI();
+				// Hide suggestion bar (stale after user sends)
+				document.getElementById('suggestion-bar')?.classList.add('hidden');
+				suggestionDismissed = true;
+				currentSuggestion = '';
 			} else {
 				const errText = await response.text().catch(() => 'Unknown error');
 				console.error('Send failed:', response.status, errText);

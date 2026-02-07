@@ -1252,6 +1252,66 @@ templ panePageStyles() {
 			.output .terminal-link:hover {
 				text-decoration-style: solid;
 			}
+			.suggestion-bar {
+				display: flex;
+				align-items: center;
+				gap: 0.5rem;
+				padding: 0.5rem 0.75rem;
+				background: var(--bg-panel);
+				border-top: 1px solid var(--border);
+			}
+			.suggestion-bar.hidden { display: none; }
+			.suggestion-label {
+				color: var(--text-dim);
+				font-size: 11px;
+				flex-shrink: 0;
+			}
+			.suggestion-text {
+				flex: 1;
+				color: var(--text-primary);
+				font-size: 12px;
+				font-family: 'SF Mono', 'Symbols Nerd Font Mono', ui-monospace, monospace;
+				background: var(--bg-elevated);
+				padding: 0.375rem 0.625rem;
+				border-radius: 6px;
+				border: 1px solid var(--border);
+				cursor: pointer;
+				white-space: nowrap;
+				overflow: hidden;
+				text-overflow: ellipsis;
+				transition: border-color 0.15s, background 0.15s;
+			}
+			.suggestion-text:hover {
+				border-color: var(--accent);
+				background: var(--accent-dim);
+			}
+			.suggestion-send-btn {
+				background: var(--working);
+				border: none;
+				border-radius: 4px;
+				color: white;
+				cursor: pointer;
+				padding: 0.375rem;
+				display: flex;
+				align-items: center;
+				justify-content: center;
+				flex-shrink: 0;
+				transition: opacity 0.15s;
+			}
+			.suggestion-send-btn:hover { opacity: 0.8; }
+			.suggestion-dismiss-btn {
+				background: none;
+				border: none;
+				color: var(--text-dim);
+				cursor: pointer;
+				padding: 0.25rem;
+				display: flex;
+				align-items: center;
+				justify-content: center;
+				flex-shrink: 0;
+				transition: color 0.15s;
+			}
+			.suggestion-dismiss-btn:hover { color: var(--text-secondary); }
 			.choices-bar {
 				display: flex;
 				gap: 0.5rem;

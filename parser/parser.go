@@ -42,6 +42,7 @@ type Result struct {
 	Choices      []string
 	ErrorSnippet string
 	Activity     string // What Claude is currently doing (for TypeWorking)
+	Suggestion   string // Prompt suggestion from Claude Code subagent
 }
 
 var (
