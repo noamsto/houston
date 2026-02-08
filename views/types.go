@@ -43,6 +43,7 @@ type PaneData struct {
 	Panes       []tmux.PaneInfo
 	PaneWidth   int // columns
 	PaneHeight  int // rows
+	Suggestion  string // Initial prompt suggestion for Claude Code
 }
 
 // OpenCodeSession represents an OpenCode session for display.

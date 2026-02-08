@@ -808,12 +808,22 @@ func (s *Server) handlePane(w http.ResponseWriter, r *http.Request) {
 	// Filter output for display
 	filteredOutput := agent.FilterStatusBar(capture.Output)
 
+	// Get initial suggestion for Claude Code panes
+	var suggestion string
+	if agent.Type() == agents.AgentClaudeCode {
+		if parseResult.Type == parser.TypeIdle || parseResult.Type == parser.TypeQuestion || parseResult.Type == parser.TypeDone {
+			var cache claude.SuggestionCache
+			suggestion = cache.GetCachedSuggestion(panePath)
+		}
+	}
+
 	data := views.PaneData{
 		Pane:        pane,
 		Output:      filteredOutput,
 		ParseResult: parseResult,
 		Windows:     windows,
 		Panes:       panes,
+		Suggestion:  suggestion,
 	}
 
 	views.PanePage(data).Render(r.Context(), w)

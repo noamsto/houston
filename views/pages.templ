@@ -983,20 +983,12 @@ templ PanePage(data PaneData) {
 					<button class="pending-edit-btn" onclick="editPendingInput()">Edit</button>
 					<button class="pending-clear-btn" onclick="clearPendingInput()">Clear</button>
 				</div>
-				<!-- Prompt suggestion bar (populated via SSE) -->
-				<div id="suggestion-bar" class="suggestion-bar hidden">
-					<span class="suggestion-label">Suggested:</span>
-					<span id="suggestion-text" class="suggestion-text" onclick="useSuggestion()"></span>
-					<button class="suggestion-send-btn" onclick="sendSuggestion()" title="Send suggestion">
-						<svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7"></path>
-						</svg>
-					</button>
-					<button class="suggestion-dismiss-btn" onclick="dismissSuggestion()" title="Dismiss">
-						<svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
-						</svg>
-					</button>
+				<!-- Prompt suggestion bar (populated initially + via SSE) -->
+				<div id="suggestion-bar" class={ "suggestion-bar", templ.KV("hidden", data.Suggestion == "") }>
+					<span class="suggestion-label">Tab</span>
+					<span id="suggestion-text" class="suggestion-text" onclick="useSuggestion()" title={ data.Suggestion }>{ data.Suggestion }</span>
+					<button class="suggestion-send-btn" onclick="sendSuggestion()">Send</button>
+					<button class="suggestion-dismiss-btn" onclick="dismissSuggestion()" title="Dismiss">&times;</button>
 				</div>
 				<!-- Quick choice buttons (dynamically updated via SSE) -->
 				<div id="choices-bar" class={ "choices-bar", templ.KV("hidden", len(data.ParseResult.Choices) == 0) } data-pane-target={ data.Pane.URLTarget() }>

@@ -325,10 +325,23 @@ templ paneScripts() {
 				}
 			}
 
-			// Extract prompt suggestion
-			const suggestionMatch = text.match(/^__SUGGESTION__:([^\n]*)\n/);
+			// Extract prompt suggestion (try anchored first, fallback to search anywhere)
+			let suggestionMatch = text.match(/^__SUGGESTION__:([^\n]*)\n/);
 			if (suggestionMatch) {
 				text = text.substring(suggestionMatch[0].length);
+			} else {
+				// Fallback: find __SUGGESTION__ anywhere in text (in case previous extractions shifted position)
+				const idx = text.indexOf('__SUGGESTION__:');
+				if (idx !== -1) {
+					const end = text.indexOf('\n', idx);
+					if (end !== -1) {
+						suggestionMatch = [text.substring(idx, end + 1), text.substring(idx + '__SUGGESTION__:'.length, end)];
+						text = text.substring(0, idx) + text.substring(end + 1);
+					}
+				}
+			}
+			if (suggestionMatch) {
+				console.debug('SSE suggestion:', JSON.stringify(suggestionMatch[1]));
 				updateSuggestion(suggestionMatch[1] || '');
 			}
 
@@ -656,13 +669,17 @@ templ paneScripts() {
 
 		// Track whether user dismissed the current suggestion
 		let suggestionDismissed = false;
-		let currentSuggestion = '';
+		// Initialize from server-rendered suggestion (if any)
+		let currentSuggestion = document.getElementById('suggestion-text')?.textContent || '';
 
 		// Update suggestion bar from SSE data
 		function updateSuggestion(text) {
 			const bar = document.getElementById('suggestion-bar');
 			const textEl = document.getElementById('suggestion-text');
-			if (!bar || !textEl) return;
+			if (!bar || !textEl) {
+				console.warn('Suggestion bar elements not found');
+				return;
+			}
 
 			if (!text) {
 				// Empty suggestion from SSE (CC working or no suggestion)
@@ -677,11 +694,15 @@ templ paneScripts() {
 				suggestionDismissed = false;
 			}
 
-			if (suggestionDismissed) return;
+			if (suggestionDismissed) {
+				console.debug('Suggestion dismissed, not showing');
+				return;
+			}
 
 			textEl.textContent = text;
 			textEl.title = text;
 			bar.classList.remove('hidden');
+			console.debug('Suggestion bar shown:', text.substring(0, 40));
 		}
 
 		// Pre-fill input with suggestion text
