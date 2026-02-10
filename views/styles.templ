@@ -431,6 +431,13 @@ templ indexPageStyles() {
 				color: var(--text-dim);
 				font-size: 12px;
 			}
+			/* Card actions — hidden on mobile */
+			.card-actions {
+				display: none;
+			}
+			.card-choices {
+				display: none;
+			}
 			.empty-state {
 				text-align: center;
 				padding: 4rem 2rem;
@@ -855,60 +862,246 @@ templ indexPageStyles() {
 
 			/* Desktop breakpoint */
 			@media (min-width: 1024px) {
+				/* Sans-serif typography for desktop UI */
+				body {
+					font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+				}
+				/* Terminal zones keep monospace */
+				.window-preview, .action-preview, .action-input {
+					font-family: 'IBM Plex Mono', 'Symbols Nerd Font Mono', ui-monospace, monospace;
+				}
+
+				/* Remove scan lines on desktop */
+				body::before {
+					display: none;
+				}
+
+				/* Full-width layout */
 				.header-content {
-					max-width: 1200px;
+					max-width: none;
+					padding: 0 2rem;
 				}
 				.search-bar {
-					max-width: 1200px;
+					max-width: none;
+					padding: 0 2rem 0.75rem;
 				}
 				.main {
-					max-width: 1200px;
-					padding: 2rem 2rem;
+					max-width: none;
+					padding: 1.5rem 2rem;
 				}
-				/* Grid layout for sessions on desktop - more comfortable spacing */
-				.sessions-grid {
-					display: grid;
-					grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
-					gap: 1.5rem;
+
+				/* Hide section labels on desktop - sort order communicates priority */
+				.section-label {
+					display: none;
 				}
+
+				/* Session wrapper becomes transparent — repo label only */
 				.session {
+					background: none;
+					border: none;
+					border-radius: 0;
+					box-shadow: none;
 					margin-bottom: 0;
+					overflow: visible;
 				}
+				.session.has-attention {
+					border-color: transparent;
+					box-shadow: none;
+				}
+
+				/* Session header becomes flat repo label */
 				.session-header {
-					padding: 1.125rem 1.5rem;
+					padding: 0 0 0.5rem 0;
+					cursor: default;
+				}
+				.session-header:hover {
+					background: none;
 				}
 				.session-name {
-					font-size: 15px;
+					font-size: 11px;
+					font-weight: 600;
+					text-transform: uppercase;
+					letter-spacing: 0.08em;
+					color: var(--text-dim);
 				}
 				.session-meta {
-					font-size: 12px;
-					margin-top: 3px;
+					display: none;
 				}
-				.section-label {
-					grid-column: 1 / -1;
-					padding: 0.75rem 0;
-					font-size: 11px;
+				.session-indicator {
+					display: none;
 				}
+				.session-chevron {
+					display: none;
+				}
+				.session-badge {
+					display: none;
+				}
+				.dismiss-btn {
+					display: none;
+				}
+
+				/* Windows always visible, in grid layout */
+				.windows {
+					display: grid !important;
+					grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+					gap: 1rem;
+					border-top: none;
+					background: none;
+				}
+				.windows.hidden {
+					display: grid !important;
+				}
+
+				/* Sessions grid becomes simple flex column with spacing */
+				.sessions-grid {
+					display: flex;
+					flex-direction: column;
+					gap: 1.5rem;
+				}
+
+				/* Window becomes a proper card on desktop */
 				.window {
-					padding: 1rem 1.5rem 1rem 3rem;
+					display: flex;
+					flex-direction: column;
+					align-items: stretch;
+					padding: 0;
+					border: 1px solid var(--border);
+					border-radius: 10px;
+					background: var(--bg-panel);
+					box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+					cursor: default;
+					overflow: hidden;
+					transition: border-color 0.2s, box-shadow 0.2s;
+				}
+				.window:hover {
+					border-color: color-mix(in srgb, var(--border) 100%, white 20%);
+					box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+				}
+				.window:last-child {
+					border-bottom: 1px solid var(--border);
+				}
+				.window.attention {
+					border-color: var(--attention);
+					box-shadow: 0 0 0 1px var(--attention-glow), 0 2px 8px rgba(0, 0, 0, 0.3);
+				}
+				.window.working {
+					border-color: var(--working);
+					box-shadow: 0 0 0 1px var(--working-glow), 0 1px 3px rgba(0, 0, 0, 0.3);
+				}
+
+				/* Card header zone */
+				.window-indicator {
+					width: 8px;
+					height: 8px;
+					margin-right: 0.5rem;
+					margin-top: 0;
+				}
+				.window-info {
+					flex: none;
+					width: 100%;
+					padding: 1rem 1.25rem 0.5rem;
+					min-width: 0;
 				}
 				.window-name {
 					font-size: 14px;
+					font-weight: 500;
+					display: flex;
+					align-items: center;
+					gap: 0.375rem;
 				}
 				.window-status {
 					font-size: 12px;
-					margin-top: 2px;
+					margin-top: 0.25rem;
 				}
-				/* Larger window previews with more breathing room */
+
+				/* Card preview zone — recessed terminal area */
 				.window-preview {
-					max-height: 9em;
-					font-size: 12px;
-					padding: 0.625rem 0.75rem;
-					margin-top: 0.625rem;
+					max-height: 15em;
+					margin: 0 0.75rem;
+					padding: 0.75rem;
+					background: var(--bg-deep);
+					border: 1px solid var(--border);
+					border-radius: 6px;
+					font-family: 'IBM Plex Mono', 'Symbols Nerd Font Mono', ui-monospace, monospace;
+					font-size: 11.5px;
+					line-height: 1.5;
 				}
-				.window-info {
-					min-width: 200px;
+
+				/* Actions zone */
+				.window-actions {
+					flex-direction: row;
+					padding: 0.75rem 1.25rem;
+					border-top: 1px solid var(--border);
+					gap: 0.5rem;
+					width: 100%;
 				}
+				.window-arrow {
+					display: none;
+				}
+				.window-view-btn {
+					margin-left: auto;
+				}
+
+				/* Card actions — hidden on mobile, visible on desktop */
+				.card-actions {
+					display: flex;
+					align-items: center;
+					gap: 0.375rem;
+					padding: 0.75rem 1.25rem;
+					border-top: 1px solid var(--border);
+				}
+				.card-input {
+					flex: 1;
+					min-width: 0;
+					background: var(--bg-deep);
+					border: 1px solid var(--border);
+					border-radius: 6px;
+					padding: 0.5rem 0.75rem;
+					font-family: 'IBM Plex Mono', ui-monospace, monospace;
+					font-size: 13px;
+					color: var(--text-primary);
+					outline: none;
+				}
+				.card-input:focus {
+					border-color: var(--accent);
+					box-shadow: 0 0 0 2px var(--accent-dim);
+				}
+				.card-input::placeholder {
+					color: var(--text-dim);
+				}
+				.card-btn {
+					background: var(--bg-elevated);
+					border: 1px solid var(--border);
+					border-radius: 6px;
+					color: var(--text-secondary);
+					cursor: pointer;
+					padding: 0.5rem;
+					display: flex;
+					align-items: center;
+					justify-content: center;
+					transition: all 0.15s;
+					flex-shrink: 0;
+				}
+				.card-btn:hover {
+					background: var(--accent-dim);
+					border-color: var(--accent);
+					color: var(--text-primary);
+				}
+				.card-btn.card-stop:hover {
+					background: rgba(239, 68, 68, 0.15);
+					border-color: var(--error);
+					color: var(--error);
+				}
+
+				/* Card choices */
+				.card-choices {
+					display: flex;
+					gap: 0.5rem;
+					padding: 0.5rem 1.25rem;
+					border-top: 1px solid var(--border);
+					flex-wrap: wrap;
+				}
+
 				/* Desktop action bar as side panel */
 				.action-bar {
 					position: fixed;
@@ -943,16 +1136,18 @@ templ indexPageStyles() {
 			/* Wide desktop */
 			@media (min-width: 1400px) {
 				.header-content,
-				.search-bar,
-				.main {
-					max-width: 1400px;
+				.search-bar {
+					padding: 0 3rem;
+				}
+				.search-bar {
+					padding: 0 3rem 0.75rem;
 				}
 				.main {
-					padding: 2.5rem 3rem;
+					padding: 2rem 3rem;
 				}
-				.sessions-grid {
+				.windows {
 					grid-template-columns: repeat(auto-fill, minmax(460px, 1fr));
-					gap: 2rem;
+					gap: 1.5rem;
 				}
 				.action-bar {
 					width: 650px;
