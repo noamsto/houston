@@ -34,6 +34,17 @@ type SessionsData struct {
 	Idle           []SessionWithWindows // Sessions with all idle windows
 }
 
+// AgentStripItem represents one agent in the strip bar
+type AgentStripItem struct {
+	Session   string
+	Window    int
+	Pane      int
+	Name      string           // display name (branch or process)
+	Indicator string           // attention, working, done, idle
+	AgentType agents.AgentType
+	Active    bool             // is this the currently viewed pane
+}
+
 // PaneData holds data for the pane view
 type PaneData struct {
 	Pane        tmux.Pane
@@ -44,6 +55,7 @@ type PaneData struct {
 	PaneWidth   int // columns
 	PaneHeight  int // rows
 	Suggestion  string // Initial prompt suggestion for Claude Code
+	StripItems  []AgentStripItem // All agents for strip bar
 }
 
 // OpenCodeSession represents an OpenCode session for display.

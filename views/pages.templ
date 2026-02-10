@@ -893,6 +893,9 @@ templ PanePage(data PaneData) {
 		@panePageStyles()
 	</head>
 	<body>
+		if len(data.StripItems) > 0 {
+			@AgentStrip(data.StripItems)
+		}
 		<div class="pane-layout">
 			<!-- Header -->
 			<header class="header">

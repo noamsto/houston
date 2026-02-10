@@ -394,6 +394,91 @@ func (s *Server) buildSessionsData() views.SessionsData {
 	return data
 }
 
+// buildAgentStripItems returns strip items for all agent windows across all sessions,
+// for the desktop pane page navigation strip.
+func (s *Server) buildAgentStripItems(activeSession string, activeWindow, activePane int) []views.AgentStripItem {
+	sessions, _ := s.tmux.ListSessions()
+	var items []views.AgentStripItem
+
+	for _, sess := range sessions {
+		windows, err := s.tmux.ListWindows(sess.Name)
+		if err != nil || len(windows) == 0 {
+			continue
+		}
+
+		// Load worktrees once per session
+		var worktrees map[string]string
+		var worktreesLoaded bool
+
+		for _, win := range windows {
+			panes, _ := s.tmux.ListPanes(sess.Name, win.Index)
+			if len(panes) == 0 {
+				continue
+			}
+
+			bestPane := s.findBestPane(sess.Name, win.Index, panes)
+			activePaneInfo := bestPane.info
+			paneIdx := bestPane.index
+
+			if !worktreesLoaded && activePaneInfo != nil && activePaneInfo.Path != "" {
+				worktrees, _ = tmux.GetWorktrees(activePaneInfo.Path)
+				worktreesLoaded = true
+			}
+
+			var panePath, paneCommand string
+			if activePaneInfo != nil {
+				panePath = activePaneInfo.Path
+				paneCommand = activePaneInfo.Command
+			}
+
+			pane := tmux.Pane{Session: sess.Name, Window: win.Index, Index: paneIdx}
+			paneID := pane.Target()
+			output, _ := s.tmux.CapturePane(pane, 50)
+
+			agent := s.registry.Detect(paneID, paneCommand, output)
+			// Skip non-agent windows
+			if agent.Type() == agents.AgentGeneric {
+				continue
+			}
+
+			parseResult := getAgentState(agent, panePath, output)
+
+			var branch string
+			if activePaneInfo != nil {
+				branch = tmux.GetBranchForPath(activePaneInfo.Path, worktrees)
+			}
+
+			indicator := "idle"
+			if parseResult.Type == parser.TypeError || parseResult.Type == parser.TypeChoice || parseResult.Type == parser.TypeQuestion {
+				indicator = "attention"
+			} else if parseResult.Type == parser.TypeWorking {
+				indicator = "working"
+			} else if parseResult.Type == parser.TypeDone {
+				indicator = "done"
+			}
+
+			displayName := branch
+			if displayName == "" {
+				displayName = paneCommand
+			}
+			if displayName == "" {
+				displayName = win.Name
+			}
+
+			items = append(items, views.AgentStripItem{
+				Session:   sess.Name,
+				Window:    win.Index,
+				Pane:      paneIdx,
+				Name:      displayName,
+				Indicator: indicator,
+				AgentType: agent.Type(),
+				Active:    sess.Name == activeSession && win.Index == activeWindow && paneIdx == activePane,
+			})
+		}
+	}
+	return items
+}
+
 // getPreviewLines extracts the last n non-empty lines from output, using agent-specific filtering
 // Note: Preview lines in window cards are now only used as fallback - action bar uses SSE for live data
 func (s *Server) getPreviewLines(agent agents.Agent, output string, n int) []string {
@@ -814,6 +899,9 @@ func (s *Server) handlePane(w http.ResponseWriter, r *http.Request) {
 		suggestion = claude.ExtractSuggestion(capture.Output)
 	}
 
+	// Build agent strip items for desktop navigation
+	stripItems := s.buildAgentStripItems(pane.Session, pane.Window, pane.Index)
+
 	data := views.PaneData{
 		Pane:        pane,
 		Output:      filteredOutput,
@@ -821,6 +909,7 @@ func (s *Server) handlePane(w http.ResponseWriter, r *http.Request) {
 		Windows:     windows,
 		Panes:       panes,
 		Suggestion:  suggestion,
+		StripItems:  stripItems,
 	}
 
 	views.PanePage(data).Render(r.Context(), w)

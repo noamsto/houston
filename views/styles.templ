@@ -1821,6 +1821,10 @@ templ panePageStyles() {
 				background: var(--error);
 				color: white;
 			}
+			/* Agent strip — hidden on mobile */
+			.agent-strip {
+				display: none;
+			}
 			/* Fixed bottom container for all bottom bars */
 			.bottom-bars-container {
 				position: fixed;
@@ -1971,6 +1975,79 @@ templ panePageStyles() {
 
 			/* Desktop breakpoint */
 			@media (min-width: 1024px) {
+				.agent-strip {
+					display: flex;
+					align-items: center;
+					gap: 0.5rem;
+					padding: 0.5rem 2rem;
+					background: var(--bg-panel);
+					border-bottom: 1px solid var(--border);
+					overflow-x: auto;
+				}
+				.strip-pill {
+					display: flex;
+					align-items: center;
+					gap: 0.375rem;
+					padding: 0.375rem 0.75rem;
+					border-radius: 6px;
+					font-size: 12px;
+					font-weight: 500;
+					text-decoration: none;
+					color: var(--text-secondary);
+					background: var(--bg-elevated);
+					border: 1px solid transparent;
+					white-space: nowrap;
+					transition: all 0.15s;
+				}
+				.strip-pill:hover {
+					border-color: var(--border);
+					color: var(--text-primary);
+				}
+				.strip-pill.active {
+					background: var(--accent-dim);
+					border-color: var(--accent);
+					color: var(--accent);
+				}
+				.strip-pill.attention {
+					border-color: var(--attention);
+				}
+				.strip-pill.attention:not(.active) {
+					animation: pulse 2s ease-in-out infinite;
+				}
+				.strip-dot {
+					width: 6px;
+					height: 6px;
+					border-radius: 50%;
+					flex-shrink: 0;
+				}
+				.strip-dot.attention {
+					background: var(--attention);
+					box-shadow: 0 0 6px var(--attention-glow);
+				}
+				.strip-dot.working {
+					background: var(--working);
+					box-shadow: 0 0 4px var(--working-glow);
+				}
+				.strip-dot.done {
+					background: var(--done);
+				}
+				.strip-dot.idle {
+					background: var(--idle);
+				}
+				.strip-back {
+					margin-left: auto;
+					display: flex;
+					align-items: center;
+					padding: 0.375rem;
+					border-radius: 6px;
+					color: var(--text-dim);
+					text-decoration: none;
+					transition: all 0.15s;
+				}
+				.strip-back:hover {
+					background: var(--bg-elevated);
+					color: var(--text-primary);
+				}
 				.pane-layout {
 					max-width: 1100px;
 					margin: 0 auto;
