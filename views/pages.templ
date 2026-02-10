@@ -300,6 +300,11 @@ templ IndexPage() {
 						el.innerHTML = window.ansiToHtml(text);
 					}
 				});
+
+				// Scroll previews to bottom so latest output is visible
+				document.querySelectorAll('.window-preview').forEach(el => {
+					el.scrollTop = el.scrollHeight;
+				});
 			}
 
 			// Track and transition "done" states to "idle" after timeout

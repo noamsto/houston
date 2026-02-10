@@ -1053,6 +1053,11 @@ templ indexPageStyles() {
 					font-family: 'IBM Plex Mono', 'Symbols Nerd Font Mono', ui-monospace, monospace;
 					font-size: 11.5px;
 					line-height: 1.5;
+					overflow-y: auto;
+					scrollbar-width: none; /* Firefox */
+				}
+				.window-preview::-webkit-scrollbar {
+					display: none; /* Chrome/Safari */
 				}
 
 				/* Actions zone */
