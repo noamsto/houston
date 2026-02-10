@@ -357,8 +357,54 @@ templ IndexPage() {
 			// Action bar SSE connection
 			let actionBarEventSource = null;
 
+			// Desktop card inline actions
+			function handleCardInput(event, input) {
+				if (event.key === 'Enter') {
+					event.preventDefault();
+					const target = input.dataset.target;
+					sendCardInput(input, target);
+				}
+			}
+
+			async function sendCardInput(el, target) {
+				const input = el.closest('.card-actions')?.querySelector('.card-input') || el;
+				const value = input.value?.trim();
+				if (!value || !target) return;
+
+				try {
+					const response = await fetch('/pane/' + encodeURIComponent(target) + '/send', {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+						body: 'input=' + encodeURIComponent(value)
+					});
+					if (response.ok) {
+						input.value = '';
+					}
+				} catch (err) {
+					console.error('Card send error:', err);
+				}
+			}
+
+			function sendCardStop(target) {
+				fetch('/pane/' + encodeURIComponent(target) + '/send', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+					body: 'input=Escape&special=true'
+				});
+			}
+
+			function sendCardChoice(target, num) {
+				fetch('/pane/' + encodeURIComponent(target) + '/send', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+					body: 'input=' + num + '&noenter=true'
+				});
+			}
+
 			// Action bar functions
 			function selectWindow(el) {
+				// Desktop: skip action bar, no-op (card actions are inline)
+				if (window.innerWidth >= 1024) return;
 				const session = el.dataset.session;
 				const windowIdx = parseInt(el.dataset.window);
 				const paneIdx = parseInt(el.dataset.pane || '0');

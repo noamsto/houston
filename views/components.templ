@@ -111,6 +111,41 @@ templ windowCard(sessionName string, win WindowWithStatus) {
 				title="Open pane view">view</a>
 			<span class="window-arrow">→</span>
 		</div>
+		// Desktop card inline actions (hidden on mobile via CSS)
+		if len(win.ParseResult.Choices) > 0 {
+			<div class="card-choices">
+				for i, choice := range win.ParseResult.Choices {
+					<button class="choice-btn"
+						onclick={ templ.ComponentScript{Call: fmt.Sprintf("sendCardChoice('%s:%d.%d', %d)", sessionName, win.Window.Index, win.Pane.Index, i+1)} }
+						title={ choice }>
+						<span class="choice-num">{ fmt.Sprintf("%d", i+1) }</span>
+						<span class="choice-text">{ truncate(choice, 25) }</span>
+					</button>
+				}
+			</div>
+		}
+		<div class="card-actions">
+			<input type="text" class="card-input"
+				placeholder="Send input..."
+				autocapitalize="off" autocorrect="off" spellcheck="false"
+				data-target={ fmt.Sprintf("%s:%d.%d", sessionName, win.Window.Index, win.Pane.Index) }
+				onkeydown="handleCardInput(event, this)"
+				onclick="event.stopPropagation()" />
+			<button class="card-btn card-send"
+				onclick={ templ.ComponentScript{Call: fmt.Sprintf("sendCardInput(this, '%s:%d.%d')", sessionName, win.Window.Index, win.Pane.Index)} }
+				title="Send">
+				<svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M12 5l7 7-7 7"></path>
+				</svg>
+			</button>
+			<button class="card-btn card-stop"
+				onclick={ templ.ComponentScript{Call: fmt.Sprintf("sendCardStop('%s:%d.%d')", sessionName, win.Window.Index, win.Pane.Index)} }
+				title="Stop (Escape)">
+				<svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+				</svg>
+			</button>
+		</div>
 	</div>
 }
 
