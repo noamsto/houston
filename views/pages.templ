@@ -702,12 +702,46 @@ templ IndexPage() {
 				menu.classList.toggle('hidden');
 			}
 
-			// Close action bar on escape
+			// Keyboard shortcuts
 			document.addEventListener('keydown', (e) => {
-				if (e.key === 'Escape') closeActionBar();
+				if (e.key === 'Escape') {
+					if (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA') {
+						document.activeElement.blur();
+						return;
+					}
+					closeActionBar();
+					return;
+				}
 				if (e.key === 'Enter' && document.activeElement.id === 'actionInput') {
 					e.preventDefault();
 					sendInput();
+					return;
+				}
+
+				// Skip if typing in an input field
+				if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+				// Desktop-only shortcuts
+				if (window.innerWidth < 1024) return;
+
+				// 1-9: navigate to agent by position
+				if (e.key >= '1' && e.key <= '9') {
+					const cards = document.querySelectorAll('.window');
+					const idx = parseInt(e.key) - 1;
+					if (idx < cards.length) {
+						const card = cards[idx];
+						const session = card.dataset.session;
+						const win = card.dataset.window;
+						const pane = card.dataset.pane || '0';
+						window.location.href = '/pane/' + encodeURIComponent(session) + ':' + win + '.' + pane;
+					}
+					return;
+				}
+
+				// / : focus search
+				if (e.key === '/') {
+					e.preventDefault();
+					document.getElementById('searchInput')?.focus();
+					return;
 				}
 			});
 

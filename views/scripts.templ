@@ -1251,6 +1251,36 @@ templ paneScripts() {
 				menu.classList.add('hidden');
 			}
 		});
+
+		// Desktop keyboard shortcuts for pane page
+		document.addEventListener('keydown', function(e) {
+			// Skip if typing in an input field
+			if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
+				if (e.key === 'Escape') e.target.blur();
+				return;
+			}
+			// Desktop only
+			if (window.innerWidth < 1024) return;
+
+			// [ ] to switch between agents in strip
+			if (e.key === '[' || e.key === ']') {
+				const pills = document.querySelectorAll('.strip-pill');
+				if (pills.length < 2) return;
+				let activeIdx = -1;
+				pills.forEach(function(p, i) { if (p.classList.contains('active')) activeIdx = i; });
+				if (activeIdx === -1) return;
+
+				var nextIdx;
+				if (e.key === '[') {
+					nextIdx = activeIdx > 0 ? activeIdx - 1 : pills.length - 1;
+				} else {
+					nextIdx = activeIdx < pills.length - 1 ? activeIdx + 1 : 0;
+				}
+				var nextPill = pills[nextIdx];
+				if (nextPill.href) window.location.href = nextPill.href;
+				return;
+			}
+		});
 	</script>
 	<script src="/static/app.js"></script>
 }
