@@ -968,25 +968,35 @@ templ indexPageStyles() {
 					border: 1px solid var(--border);
 					border-radius: 10px;
 					background: var(--bg-panel);
-					box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+					box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.03);
 					cursor: default;
 					overflow: hidden;
 					transition: border-color 0.2s, box-shadow 0.2s;
 				}
 				.window:hover {
 					border-color: color-mix(in srgb, var(--border) 100%, white 20%);
-					box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+					box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.05);
 				}
 				.window:last-child {
 					border-bottom: 1px solid var(--border);
 				}
+				/* Attention cards glow on left edge */
 				.window.attention {
 					border-color: var(--attention);
-					box-shadow: 0 0 0 1px var(--attention-glow), 0 2px 8px rgba(0, 0, 0, 0.3);
+					border-left: 3px solid var(--attention);
+					box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3), -2px 0 12px var(--attention-glow);
 				}
 				.window.working {
 					border-color: var(--working);
+					border-left: 3px solid var(--working);
 					box-shadow: 0 0 0 1px var(--working-glow), 0 1px 3px rgba(0, 0, 0, 0.3);
+				}
+				/* Light theme card adjustments */
+				[data-theme="light"] .window {
+					box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.05);
+				}
+				[data-theme="light"] .window:hover {
+					box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.08);
 				}
 
 				/* Card header zone */
