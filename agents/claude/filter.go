@@ -75,6 +75,51 @@ func DetectMode(output string) parser.Mode {
 	return parser.ModeNormal // Default to normal if no mode indicator found
 }
 
+// ExtractSuggestion extracts the prompt suggestion from raw terminal output.
+// Claude Code shows suggestions as dim text (ANSI SGR 2) after the prompt
+// character ❯. The prompt line sits between two horizontal separator lines.
+// Returns empty string if no suggestion is present (e.g. user typed input,
+// CC is working, or prompt is empty).
+func ExtractSuggestion(output string) string {
+	lines := strings.Split(output, "\n")
+
+	// Scan bottom 20 lines for the prompt line with ❯
+	start := len(lines) - 20
+	if start < 0 {
+		start = 0
+	}
+
+	for i := start; i < len(lines); i++ {
+		line := lines[i]
+		// Find the prompt character ❯ (U+276F)
+		idx := strings.Index(line, "❯")
+		if idx == -1 {
+			continue
+		}
+
+		// Get text after ❯
+		after := line[idx+len("❯"):]
+
+		// Skip NBSP (U+00A0) or regular space after prompt char
+		after = strings.TrimLeft(after, "\u00a0 ")
+
+		// A suggestion is marked by the DIM attribute: \x1b[2m
+		// User-typed input does NOT have this attribute.
+		if !strings.HasPrefix(after, "\x1b[2m") {
+			return ""
+		}
+
+		// Extract text between \x1b[2m and the next ANSI escape
+		after = after[len("\x1b[2m"):]
+		if endIdx := strings.Index(after, "\x1b["); endIdx >= 0 {
+			return strings.TrimSpace(after[:endIdx])
+		}
+		return strings.TrimSpace(after)
+	}
+
+	return ""
+}
+
 // ExtractStatusLine finds Claude's status bar line with ANSI colors intact.
 func ExtractStatusLine(output string) string {
 	lines := strings.Split(output, "\n")
