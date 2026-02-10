@@ -431,11 +431,14 @@ templ indexPageStyles() {
 				color: var(--text-dim);
 				font-size: 12px;
 			}
-			/* Card actions — hidden on mobile */
+			/* Card actions and numbers — hidden on mobile */
 			.card-actions {
 				display: none;
 			}
 			.card-choices {
+				display: none;
+			}
+			.card-number {
 				display: none;
 			}
 			.empty-state {
@@ -999,12 +1002,27 @@ templ indexPageStyles() {
 					box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.08);
 				}
 
-				/* Card header zone */
+				/* Quick-access number badge */
+				.card-number {
+					display: inline-flex;
+					align-items: center;
+					justify-content: center;
+					width: 18px;
+					height: 18px;
+					border-radius: 4px;
+					background: var(--bg-elevated);
+					border: 1px solid var(--border);
+					color: var(--text-dim);
+					font-size: 11px;
+					font-weight: 600;
+					font-family: ui-monospace, monospace;
+					flex-shrink: 0;
+					margin-right: 0.375rem;
+				}
+
+				/* Card header zone — hide standalone indicator, left border shows state */
 				.window-indicator {
-					width: 8px;
-					height: 8px;
-					margin-right: 0.5rem;
-					margin-top: 0;
+					display: none;
 				}
 				.window-info {
 					flex: none;

@@ -761,13 +761,15 @@ templ IndexPage() {
 					const temp = document.createElement('div');
 					temp.innerHTML = e.data;
 
+					const isDesktop = window.innerWidth >= 1024;
 					temp.querySelectorAll('.session').forEach(session => {
 						const name = session.dataset.session;
-						// Auto-expand sessions that need attention, or were manually expanded
-						if (expandedSessions.has(name) || session.classList.contains('has-attention')) {
+						// Desktop: always expand all sessions (windows are always visible)
+						// Mobile: expand sessions that need attention or were manually expanded
+						if (isDesktop || expandedSessions.has(name) || session.classList.contains('has-attention')) {
 							session.classList.add('expanded');
 							session.querySelector('.windows')?.classList.remove('hidden');
-							expandedSessions.add(name); // Track auto-expanded too
+							if (!isDesktop) expandedSessions.add(name); // Track auto-expanded on mobile only
 						}
 					});
 
@@ -783,6 +785,8 @@ templ IndexPage() {
 					if (currentFilter) {
 						filterSessions(currentFilter);
 					}
+					// Update desktop quick-access numbers
+					updateCardNumbers();
 					// Refresh action bar if open
 					refreshActionBar();
 				};
@@ -794,11 +798,31 @@ templ IndexPage() {
 				};
 			}
 
+			// Desktop: stamp quick-access numbers (1-9) on card headers
+			function updateCardNumbers() {
+				if (window.innerWidth < 1024) return;
+				// Remove existing badges
+				document.querySelectorAll('.card-number').forEach(el => el.remove());
+				// Add numbers to first 9 visible cards
+				const cards = document.querySelectorAll('.window');
+				cards.forEach((card, i) => {
+					if (i >= 9) return;
+					const name = card.querySelector('.window-name');
+					if (!name) return;
+					const badge = document.createElement('span');
+					badge.className = 'card-number';
+					badge.textContent = String(i + 1);
+					name.prepend(badge);
+				});
+			}
+
 			connectSSE();
 			// Process activity text on initial load
 			processActivityText();
 			// Track done states on initial load
 			trackDoneStates();
+			// Desktop quick-access numbers
+			updateCardNumbers();
 
 			// Theme support
 			function initTheme() {
