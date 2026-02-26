@@ -16,19 +16,14 @@ export function usePaneSocket(target: string | null, callbacks: PaneSocketCallba
 
   const sendInput = useCallback((data: string) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({
-        type: 'input',
-        data: JSON.stringify({ data }),
-      }))
+      // data field must be an embedded JSON object (json.RawMessage on the Go side)
+      wsRef.current.send(JSON.stringify({ type: 'input', data: { data } }))
     }
   }, [])
 
   const sendResize = useCallback((cols: number, rows: number) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({
-        type: 'resize',
-        data: JSON.stringify({ cols, rows }),
-      }))
+      wsRef.current.send(JSON.stringify({ type: 'resize', data: { cols, rows } }))
     }
   }, [])
 
@@ -47,14 +42,15 @@ export function usePaneSocket(target: string | null, callbacks: PaneSocketCallba
     ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data as string)
+        // msg.data is already a parsed object (json.RawMessage embeds as JSON, not a string)
         switch (msg.type) {
           case 'output': {
-            const output: WSOutput = JSON.parse(msg.data as string)
+            const output = msg.data as WSOutput
             callbacksRef.current.onOutput(output.data)
             break
           }
           case 'meta': {
-            const meta: WSMeta = JSON.parse(msg.data as string)
+            const meta = msg.data as WSMeta
             callbacksRef.current.onMeta(meta)
             break
           }
