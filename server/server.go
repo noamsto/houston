@@ -167,6 +167,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/opencode/sessions", s.handleOpenCodeSessions)
 	mux.HandleFunc("/opencode/session/", s.handleOpenCodeSession)
 
+	// JSON API routes
+	apiMux := http.NewServeMux()
+	apiMux.HandleFunc("/api/sessions", s.handleAPISessions)
+	mux.Handle("/api/", corsMiddleware(apiMux))
+
 	return mux
 }
 
