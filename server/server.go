@@ -171,6 +171,8 @@ func (s *Server) Handler() http.Handler {
 	apiMux := http.NewServeMux()
 	apiMux.HandleFunc("/api/sessions", s.handleAPISessions)
 	apiMux.HandleFunc("/api/pane/", s.handleAPIPane)
+	apiMux.HandleFunc("/api/opencode/sessions", s.handleAPIOpenCodeSessions)
+	apiMux.HandleFunc("/api/opencode/session/", s.handleAPIOpenCodeSession)
 	mux.Handle("/api/", corsMiddleware(apiMux))
 
 	return mux
