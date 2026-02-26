@@ -10,35 +10,35 @@ import (
 )
 
 type Session struct {
-	Name         string
-	Created      time.Time
-	Windows      int
-	Attached     bool
-	LastActivity time.Time
+	Name         string    `json:"name"`
+	Created      time.Time `json:"created"`
+	Windows      int       `json:"windows"`
+	Attached     bool      `json:"attached"`
+	LastActivity time.Time `json:"last_activity"`
 }
 
 type Window struct {
-	Index        int
-	Name         string
-	Active       bool
-	Panes        int
-	LastActivity time.Time // window_activity timestamp
-	Path         string    // pane_current_path from active pane
-	Branch       string    // git branch name derived from Path
+	Index        int       `json:"index"`
+	Name         string    `json:"name"`
+	Active       bool      `json:"active"`
+	Panes        int       `json:"panes"`
+	LastActivity time.Time `json:"last_activity"` // window_activity timestamp
+	Path         string    `json:"path"`          // pane_current_path from active pane
+	Branch       string    `json:"branch"`        // git branch name derived from Path
 }
 
 type Pane struct {
-	Session string
-	Window  int
-	Index   int
+	Session string `json:"session"`
+	Window  int    `json:"window"`
+	Index   int    `json:"index"`
 }
 
 type PaneInfo struct {
-	Index   int
-	Active  bool
-	Command string
-	Path    string // pane_current_path
-	Title   string // pane_title (can be set with nerd fonts)
+	Index   int    `json:"index"`
+	Active  bool   `json:"active"`
+	Command string `json:"command"`
+	Path    string `json:"path"`  // pane_current_path
+	Title   string `json:"title"` // pane_title (can be set with nerd fonts)
 }
 
 func (p Pane) Target() string {
@@ -211,9 +211,9 @@ func (c *Client) ListPanes(session string, window int) ([]PaneInfo, error) {
 
 // CaptureResult holds the captured pane output and detected mode
 type CaptureResult struct {
-	Output     string
-	Mode       string // "insert", "normal", or ""
-	StatusLine string // Full status line with ANSI colors intact
+	Output     string `json:"output"`
+	Mode       string `json:"mode"`        // "insert", "normal", or ""
+	StatusLine string `json:"status_line"` // Full status line with ANSI colors intact
 }
 
 func (c *Client) CapturePane(p Pane, lines int) (string, error) {

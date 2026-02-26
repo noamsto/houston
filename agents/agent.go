@@ -14,8 +14,8 @@ const (
 
 // AgentState wraps parser.Result with agent metadata.
 type AgentState struct {
-	Agent  AgentType
-	Result parser.Result
+	Agent  AgentType    `json:"agent"`
+	Result parser.Result `json:"result"`
 }
 
 // Agent is the interface for AI coding agent implementations.

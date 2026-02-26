@@ -2,6 +2,7 @@
 package parser
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 
@@ -23,6 +24,21 @@ func (t ResultType) String() string {
 	return [...]string{"idle", "working", "done", "question", "choice", "error"}[t]
 }
 
+func (t ResultType) MarshalJSON() ([]byte, error) {
+	return []byte(`"` + t.String() + `"`), nil
+}
+
+func (t *ResultType) UnmarshalJSON(data []byte) error {
+	s := strings.Trim(string(data), `"`)
+	for i, name := range [...]string{"idle", "working", "done", "question", "choice", "error"} {
+		if name == s {
+			*t = ResultType(i)
+			return nil
+		}
+	}
+	return fmt.Errorf("unknown ResultType: %s", s)
+}
+
 type Mode int
 
 const (
@@ -35,14 +51,29 @@ func (m Mode) String() string {
 	return [...]string{"unknown", "insert", "normal"}[m]
 }
 
+func (m Mode) MarshalJSON() ([]byte, error) {
+	return []byte(`"` + m.String() + `"`), nil
+}
+
+func (m *Mode) UnmarshalJSON(data []byte) error {
+	s := strings.Trim(string(data), `"`)
+	for i, name := range [...]string{"unknown", "insert", "normal"} {
+		if name == s {
+			*m = Mode(i)
+			return nil
+		}
+	}
+	return fmt.Errorf("unknown Mode: %s", s)
+}
+
 type Result struct {
-	Type         ResultType
-	Mode         Mode
-	Question     string
-	Choices      []string
-	ErrorSnippet string
-	Activity     string // What Claude is currently doing (for TypeWorking)
-	Suggestion   string // Prompt suggestion from Claude Code subagent
+	Type         ResultType `json:"type"`
+	Mode         Mode       `json:"mode"`
+	Question     string     `json:"question,omitempty"`
+	Choices      []string   `json:"choices,omitempty"`
+	ErrorSnippet string     `json:"error_snippet,omitempty"`
+	Activity     string     `json:"activity,omitempty"`     // What Claude is currently doing (for TypeWorking)
+	Suggestion   string     `json:"suggestion,omitempty"`   // Prompt suggestion from Claude Code subagent
 }
 
 var (
