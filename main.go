@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io/fs"
 	"log"
 	"log/slog"
 	"net/http"
@@ -44,11 +45,18 @@ func main() {
 		slog.Info("terminal font control", "terminal", fontCtrl.Name())
 	}
 
+	// Embed React SPA: strip the ui/dist prefix so the FS root is the dist dir.
+	uiSubFS, err := fs.Sub(uiFS, "ui/dist")
+	if err != nil {
+		log.Fatalf("failed to create UI sub-filesystem: %v", err)
+	}
+
 	srv, err := server.New(server.Config{
 		StatusDir:       *statusDir,
 		FontController:  fontCtrl,
 		OpenCodeEnabled: !*noOpenCode,
 		OpenCodeURL:     *openCodeURL,
+		UIFS:            uiSubFS,
 	})
 	if err != nil {
 		log.Fatalf("failed to create server: %v", err)

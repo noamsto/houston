@@ -6,13 +6,14 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -74,6 +75,7 @@ type Server struct {
 	watcher  *status.Watcher
 	registry *agents.Registry
 	font     FontController
+	uiFS     fs.FS // embedded React SPA (nil = use legacy templ handlers)
 	mu       sync.RWMutex
 
 	// Track when sessions last had activity (for keeping recently-active in Active section)
@@ -101,6 +103,10 @@ type Config struct {
 	OpenCodeEnabled bool   // Enable OpenCode integration
 	OpenCodeURL     string // Static URL (if set, skip discovery)
 	OpenCodePorts   []int  // Ports to scan (default: 4096-4100)
+
+	// UIFS is the embedded React SPA filesystem. When set, serves the SPA at /.
+	// When nil, falls back to the legacy templ handlers.
+	UIFS fs.FS
 }
 
 func New(cfg Config) (*Server, error) {
@@ -115,6 +121,7 @@ func New(cfg Config) (*Server, error) {
 		watcher:      status.NewWatcher(cfg.StatusDir),
 		registry:     registry,
 		font:         cfg.FontController,
+		uiFS:         cfg.UIFS,
 		lastActivity: make(map[string]time.Time),
 	}
 
@@ -158,16 +165,19 @@ func (s *Server) Handler() http.Handler {
 
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
 
-	mux.HandleFunc("/", s.handleIndex)
-	mux.HandleFunc("/sessions", s.handleSessions)
-	mux.HandleFunc("/pane/", s.handlePane)
-	mux.HandleFunc("/font/", s.handleFont)
+	// Serve React SPA when embedded FS is available; otherwise fall back to legacy templ handlers.
+	if s.uiFS != nil {
+		mux.Handle("/", SPAHandler(s.uiFS))
+	} else {
+		mux.HandleFunc("/", s.handleIndex)
+		mux.HandleFunc("/sessions", s.handleSessions)
+		mux.HandleFunc("/pane/", s.handlePane)
+		mux.HandleFunc("/font/", s.handleFont)
+		mux.HandleFunc("/opencode/sessions", s.handleOpenCodeSessions)
+		mux.HandleFunc("/opencode/session/", s.handleOpenCodeSession)
+	}
 
-	// OpenCode routes
-	mux.HandleFunc("/opencode/sessions", s.handleOpenCodeSessions)
-	mux.HandleFunc("/opencode/session/", s.handleOpenCodeSession)
-
-	// JSON API routes
+	// JSON API routes (always available)
 	apiMux := http.NewServeMux()
 	apiMux.HandleFunc("/api/sessions", s.handleAPISessions)
 	apiMux.HandleFunc("/api/pane/", s.handleAPIPane)
@@ -176,6 +186,26 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/api/", corsMiddleware(apiMux))
 
 	return mux
+}
+
+// SPAHandler serves an embedded filesystem with fallback to index.html for client-side routing.
+func SPAHandler(uiFS fs.FS) http.Handler {
+	fileServer := http.FileServer(http.FS(uiFS))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimPrefix(r.URL.Path, "/")
+		if path == "" {
+			path = "index.html"
+		}
+
+		// Serve the file if it exists; otherwise fallback to index.html (client-side routing).
+		if _, err := fs.Stat(uiFS, path); err == nil {
+			fileServer.ServeHTTP(w, r)
+			return
+		}
+
+		r.URL.Path = "/"
+		fileServer.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
