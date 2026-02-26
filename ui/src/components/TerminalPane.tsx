@@ -26,7 +26,14 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
   const isDesktop = useIsDesktop()
 
   const { sendInput, sendResize } = usePaneSocket(pane.target, {
-    onOutput: (data) => termRef.current?.write(data),
+    onOutput: (data) => {
+      const term = termRef.current
+      if (!term) return
+      // This is a snapshot (full tmux screen), not a byte stream.
+      // Clear scrollback + display + home cursor, then write the new snapshot
+      // so xterm always shows the current state rather than accumulating copies.
+      term.write('\x1b[3J\x1b[2J\x1b[H' + data)
+    },
     onMeta: (m) => setMeta(m),
   })
 
@@ -42,7 +49,11 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
       lineHeight: 1.2,
       cursorBlink: true,
       disableStdin: !isDesktop,
-      scrollback: 5000,
+      // convertEol: make \n behave as \r\n so lines start at column 0.
+      // tmux capture-pane uses \n separators; without this, cursor stays at
+      // the same column after each newline, causing text to "float".
+      convertEol: true,
+      scrollback: 0, // Scrollback is noise for snapshots; clear-before-write handles it
     })
 
     const fitAddon = new FitAddon()
