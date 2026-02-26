@@ -102,7 +102,13 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
       <PaneHeader target={pane.target} meta={meta} onClose={onClose} />
       <div
         ref={containerRef}
-        style={{ flex: 1, overflow: 'hidden', minHeight: 0, background: 'var(--bg-terminal)' }}
+        style={{
+          flex: 1,
+          overflow: 'hidden',
+          minHeight: 0,
+          position: 'relative',  // required for xterm's absolute-positioned internals
+          background: 'var(--bg-terminal)',
+        }}
       />
       {!isDesktop && (
         <MobileInputBar
