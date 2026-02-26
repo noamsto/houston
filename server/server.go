@@ -293,7 +293,12 @@ func (s *Server) buildSessionsData() views.SessionsData {
 	statuses := s.watcher.GetAll()
 	_ = statuses // TODO: integrate hook status per-window
 
-	var data views.SessionsData
+	// Initialize slices to empty (not nil) so JSON serializes as [] not null.
+	data := views.SessionsData{
+		NeedsAttention: []views.SessionWithWindows{},
+		Active:         []views.SessionWithWindows{},
+		Idle:           []views.SessionWithWindows{},
+	}
 
 	for _, sess := range sessions {
 		// Get all windows for this session
@@ -1470,8 +1475,13 @@ func (s *Server) buildOpenCodeData(ctx context.Context) views.OpenCodeData {
 	states := s.ocManager.GetAllSessions(ctx)
 	servers := s.ocDiscovery.GetServers()
 
-	var data views.OpenCodeData
-	data.Servers = servers
+	// Initialize slices to empty (not nil) so JSON serializes as [] not null.
+	data := views.OpenCodeData{
+		NeedsAttention: []views.OpenCodeSession{},
+		Active:         []views.OpenCodeSession{},
+		Idle:           []views.OpenCodeSession{},
+		Servers:        servers,
+	}
 
 	for _, state := range states {
 		ocSession := views.OpenCodeSession{
