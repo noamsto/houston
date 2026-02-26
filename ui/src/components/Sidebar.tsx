@@ -1,4 +1,6 @@
+import { useEffect, useState } from 'react'
 import type { SessionsData } from '../api/types'
+import { SessionTree } from './SessionTree'
 
 interface Props {
   sessions: SessionsData | null
@@ -10,7 +12,27 @@ interface Props {
   isDesktop: boolean
 }
 
-export function Sidebar({ sessions, open, onClose, onSelectWindow, isDesktop }: Props) {
+function useTheme() {
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
+    return (localStorage.getItem('houston-theme') as 'dark' | 'light') ?? 'dark'
+  })
+
+  useEffect(() => {
+    if (theme === 'light') {
+      document.documentElement.classList.add('light')
+    } else {
+      document.documentElement.classList.remove('light')
+    }
+    localStorage.setItem('houston-theme', theme)
+  }, [theme])
+
+  const toggle = () => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))
+  return { theme, toggle }
+}
+
+export function Sidebar({ sessions, connected, open, onClose, onSelectWindow, onSplitWindow, isDesktop }: Props) {
+  const { theme, toggle } = useTheme()
+
   if (!open) return null
 
   return (
@@ -19,25 +41,55 @@ export function Sidebar({ sessions, open, onClose, onSelectWindow, isDesktop }: 
         width: isDesktop ? 'var(--sidebar-width)' : '100vw',
         background: 'var(--bg-sidebar)',
         borderRight: '1px solid var(--border)',
-        overflow: 'auto',
         flexShrink: 0,
         position: isDesktop ? 'relative' : 'fixed',
         zIndex: isDesktop ? 'auto' : 100,
         height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
       }}
     >
-      <div style={{ padding: '12px' }}>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            marginBottom: 12,
-          }}
-        >
-          <h2 style={{ fontSize: 14, color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>
+      <header
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '10px 12px 8px',
+          borderBottom: '1px solid var(--border)',
+          flexShrink: 0,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span
+            style={{
+              width: 7,
+              height: 7,
+              borderRadius: '50%',
+              background: connected ? 'var(--accent-done)' : 'var(--accent-error)',
+              flexShrink: 0,
+            }}
+          />
+          <h2 style={{ fontSize: 13, color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', fontWeight: 600 }}>
             houston
           </h2>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <button
+            onClick={toggle}
+            title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: 'var(--text-muted)',
+              cursor: 'pointer',
+              fontSize: 13,
+              padding: '2px 4px',
+              borderRadius: 4,
+            }}
+          >
+            {theme === 'dark' ? '☀' : '◑'}
+          </button>
           {!isDesktop && (
             <button
               onClick={onClose}
@@ -47,50 +99,19 @@ export function Sidebar({ sessions, open, onClose, onSelectWindow, isDesktop }: 
             </button>
           )}
         </div>
+      </header>
 
-        {!sessions && (
-          <p style={{ color: 'var(--text-muted)', fontSize: 12 }}>Connecting...</p>
-        )}
-
-        {sessions && (
-          <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-            {/* Placeholder: will be replaced by SessionTree in Task 10 */}
-            {[
-              { label: 'ATTENTION', items: sessions.needs_attention },
-              { label: 'ACTIVE', items: sessions.active },
-              { label: 'IDLE', items: sessions.idle },
-            ].map(({ label, items }) =>
-              items.length === 0 ? null : (
-                <div key={label} style={{ marginBottom: 12 }}>
-                  <div style={{ color: 'var(--text-muted)', fontSize: 10, marginBottom: 4 }}>
-                    {label} ({items.length})
-                  </div>
-                  {items.map((s) => (
-                    <div key={s.session.name} style={{ marginBottom: 4 }}>
-                      <div style={{ color: 'var(--text-primary)' }}>{s.session.name}</div>
-                      {s.windows.map((w) => {
-                        const target = `${s.session.name}:${w.window.index}.${w.pane.index}`
-                        return (
-                          <div
-                            key={w.window.index}
-                            style={{
-                              paddingLeft: 12,
-                              color: 'var(--text-secondary)',
-                              cursor: 'pointer',
-                              padding: '2px 8px',
-                            }}
-                            onClick={() => onSelectWindow(target)}
-                          >
-                            {w.window.name}
-                          </div>
-                        )
-                      })}
-                    </div>
-                  ))}
-                </div>
-              ),
-            )}
-          </div>
+      <div style={{ flex: 1, overflow: 'hidden' }}>
+        {!sessions ? (
+          <p style={{ color: 'var(--text-muted)', fontSize: 12, padding: '12px' }}>
+            {connected ? 'Loading...' : 'Connecting...'}
+          </p>
+        ) : (
+          <SessionTree
+            sessions={sessions}
+            onSelect={onSelectWindow}
+            onSplit={onSplitWindow}
+          />
         )}
       </div>
     </aside>
