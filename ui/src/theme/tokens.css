@@ -56,6 +56,34 @@ body,
   font-family: var(--font-ui);
 }
 
+/* UI transitions — buttons and sidebar only, never inputs or terminal */
+button,
+aside,
+[role="complementary"] {
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+}
+
+/* Allotment split divider — invisible by default, appears on hover/drag */
+.split-view-container > .sash-container > .sash {
+  background: transparent;
+  transition: background-color 0.1s ease;
+}
+.split-view-container > .sash-container > .sash:hover,
+.split-view-container > .sash-container > .sash.active {
+  background: var(--border);
+}
+
+/* Choice buttons animate in when available */
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Status dot pulse — smooth color transition */
+.status-dot {
+  transition: background-color 2s ease;
+}
+
 /* xterm.js layout: pin terminal to all four edges of the positioning context */
 .xterm {
   position: absolute !important;

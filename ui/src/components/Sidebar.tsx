@@ -38,8 +38,11 @@ export function Sidebar({ sessions, connected, open, onClose, onSelectWindow, on
   return (
     <aside
       style={{
-        width: isDesktop ? 'var(--sidebar-width)' : '100vw',
-        background: 'var(--bg-sidebar)',
+        width: isDesktop ? 'var(--sidebar-width)' : '85vw',
+        maxWidth: isDesktop ? undefined : 320,
+        background: isDesktop ? 'var(--bg-sidebar)' : 'rgba(15,16,23,0.92)',
+        backdropFilter: isDesktop ? undefined : 'blur(12px)',
+        WebkitBackdropFilter: isDesktop ? undefined : 'blur(12px)',
         borderRight: '1px solid var(--border)',
         flexShrink: 0,
         position: isDesktop ? 'relative' : 'fixed',

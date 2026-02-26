@@ -107,6 +107,7 @@ export function MobileInputBar({ target, choices }: Props) {
             gap: 6,
             padding: '6px 8px 0',
             flexWrap: 'wrap',
+            animation: 'slide-up 0.18s ease-out',
           }}
         >
           {choices.map((c) => (
@@ -115,9 +116,9 @@ export function MobileInputBar({ target, choices }: Props) {
               onClick={() => handleChoice(c)}
               style={{
                 background: 'var(--bg-surface)',
-                border: '1px solid var(--border)',
+                border: '1px solid var(--accent-attention)',
                 borderRadius: 4,
-                color: 'var(--text-primary)',
+                color: 'var(--accent-attention)',
                 fontSize: 12,
                 padding: '4px 10px',
                 cursor: 'pointer',
