@@ -1,11 +1,7 @@
 # houston justfile
 
-# Generate templ files
-generate:
-    templ generate
-
 # Build the binary
-build: generate
+build:
     go build -o houston .
 
 # Build and run the server
