@@ -1,4 +1,5 @@
 import type { useLayout } from '../hooks/useLayout'
+import { SplitContainer } from './SplitContainer'
 
 interface Props {
   layout: ReturnType<typeof useLayout>
@@ -7,6 +8,14 @@ interface Props {
 }
 
 export function TerminalArea({ layout, onMenuClick, isDesktop }: Props) {
+  const handleFocus = (paneId: string) => {
+    layout.dispatch({ type: 'FOCUS_PANE', paneId })
+  }
+
+  const handleClose = (paneId: string) => {
+    layout.dispatch({ type: 'CLOSE_PANE', paneId })
+  }
+
   return (
     <main
       style={{
@@ -31,7 +40,13 @@ export function TerminalArea({ layout, onMenuClick, isDesktop }: Props) {
         >
           <button
             onClick={onMenuClick}
-            style={{ background: 'none', border: 'none', color: 'var(--text-primary)', cursor: 'pointer', fontSize: 16 }}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: 'var(--text-primary)',
+              cursor: 'pointer',
+              fontSize: 16,
+            }}
           >
             ☰
           </button>
@@ -39,18 +54,29 @@ export function TerminalArea({ layout, onMenuClick, isDesktop }: Props) {
         </header>
       )}
 
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ flex: 1, overflow: 'hidden' }}>
         {layout.layout.type === 'empty' ? (
-          <div style={{ textAlign: 'center' }}>
+          <div
+            style={{
+              display: 'flex',
+              height: '100%',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexDirection: 'column',
+              gap: 8,
+            }}
+          >
             <p style={{ color: 'var(--text-muted)', fontSize: 14 }}>Select a session to start</p>
-            <p style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 8 }}>
-              Click a window in the sidebar
-            </p>
+            <p style={{ color: 'var(--text-muted)', fontSize: 12 }}>Click a window in the sidebar</p>
           </div>
         ) : (
-          <p style={{ color: 'var(--text-secondary)', fontSize: 12 }}>
-            {layout.panes.map((p) => p.target).join(', ')}
-          </p>
+          <SplitContainer
+            layout={layout.layout}
+            panes={layout.panes}
+            focusedPaneId={layout.focusedPaneId}
+            onFocus={handleFocus}
+            onClose={handleClose}
+          />
         )}
       </div>
     </main>
