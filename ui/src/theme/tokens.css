@@ -56,6 +56,14 @@ body,
   font-family: var(--font-ui);
 }
 
+/* xterm.js layout: make terminal fill its container instead of sizing to content */
+.xterm {
+  height: 100%;
+}
+.xterm-viewport {
+  overflow-y: auto !important;
+}
+
 @keyframes attention-pulse {
   0%,
   100% {

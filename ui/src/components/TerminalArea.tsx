@@ -54,7 +54,7 @@ export function TerminalArea({ layout, onMenuClick, isDesktop }: Props) {
         </header>
       )}
 
-      <div style={{ flex: 1, overflow: 'hidden' }}>
+      <div style={{ flex: 1, overflow: 'hidden', minHeight: 0 }}>
         {layout.layout.type === 'empty' ? (
           <div
             style={{

@@ -49,10 +49,12 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
     term.loadAddon(fitAddon)
     term.loadAddon(new WebLinksAddon())
     term.open(containerRef.current)
-    fitAddon.fit()
 
     termRef.current = term
     fitAddonRef.current = fitAddon
+
+    // Defer initial fit so the DOM has its final layout before measuring
+    requestAnimationFrame(() => fitAddon.fit())
 
     if (isDesktop) {
       term.onData((data) => sendInput(data))
@@ -100,7 +102,7 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
       <PaneHeader target={pane.target} meta={meta} onClose={onClose} />
       <div
         ref={containerRef}
-        style={{ flex: 1, overflow: 'hidden', background: 'var(--bg-terminal)' }}
+        style={{ flex: 1, overflow: 'hidden', minHeight: 0, background: 'var(--bg-terminal)' }}
       />
       {!isDesktop && (
         <MobileInputBar
