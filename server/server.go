@@ -170,6 +170,7 @@ func (s *Server) Handler() http.Handler {
 	// JSON API routes
 	apiMux := http.NewServeMux()
 	apiMux.HandleFunc("/api/sessions", s.handleAPISessions)
+	apiMux.HandleFunc("/api/pane/", s.handleAPIPane)
 	mux.Handle("/api/", corsMiddleware(apiMux))
 
 	return mux
@@ -737,6 +738,9 @@ func parsePaneTarget(path string) (tmux.Pane, error) {
 	path = strings.TrimSuffix(path, "/kill")
 	path = strings.TrimSuffix(path, "/respawn")
 	path = strings.TrimSuffix(path, "/kill-window")
+	path = strings.TrimSuffix(path, "/zoom")
+	path = strings.TrimSuffix(path, "/resize")
+	path = strings.TrimSuffix(path, "/ws")
 
 	// URL-decode the path (handles %2F -> / in session names)
 	decoded, err := url.PathUnescape(path)
