@@ -51,6 +51,14 @@ dev-local:
     echo "No available port found in range 7474-7479"
     exit 1
 
+# Start React dev server (proxy to Go backend at :9090)
+ui-dev:
+    cd ui && npm run dev
+
+# Build React frontend for production
+ui-build:
+    cd ui && npm run build
+
 # Remove build artifacts
 clean:
     rm -f houston
