@@ -2,7 +2,7 @@ root = "."
 tmp_dir = "tmp"
 
 [build]
-pre_cmd = ["npm run build --prefix ui"]
+pre_cmd = ["cd ui && node_modules/.bin/vite build"]
 cmd = "go build -o ./tmp/houston ."
 full_bin = "./tmp/houston -addr ${HOUSTON_ADDR:-0.0.0.0:${HOUSTON_PORT}}"
 include_ext = ["go", "ts", "tsx", "css"]

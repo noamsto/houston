@@ -11,6 +11,7 @@ run: build
 # Run with hot reload (air), finds available port
 dev:
     #!/usr/bin/env bash
+    test -d ui/node_modules || npm install --prefix ui
     for port in 7474 7475 7476 7477 7478 7479; do
         if ! nc -z localhost $port 2>/dev/null; then
             export HOUSTON_PORT=$port
@@ -24,6 +25,7 @@ dev:
 # Run without hot reload, finds available port
 run-dev:
     #!/usr/bin/env bash
+    test -d ui/node_modules || npm install --prefix ui
     for port in 7474 7475 7476 7477 7478 7479; do
         if ! nc -z localhost $port 2>/dev/null; then
             echo "Starting houston on port $port"
@@ -36,6 +38,7 @@ run-dev:
 # Run with localhost binding only (use with Tailscale serve)
 dev-local:
     #!/usr/bin/env bash
+    test -d ui/node_modules || npm install --prefix ui
     for port in 7474 7475 7476 7477 7478 7479; do
         if ! nc -z localhost $port 2>/dev/null; then
             export HOUSTON_PORT=$port
