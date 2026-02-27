@@ -29,6 +29,10 @@ function writeSnapshot(term: Terminal, data: string) {
   term.write('\x1b[2J\x1b[3J\x1b[H' + data + '\x1b[?25l\x1b[?1007l\x1b[?1l')
 }
 
+// Width of the mobile terminal container (pre-transform). Wider than the viewport
+// so FitAddon calculates ~80 columns. CSS transform scales it to fit the screen.
+const MOBILE_TERM_WIDTH = 640
+
 export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
   // outerRef: observed by ResizeObserver; has padding that creates visual breathing room
   const outerRef = useRef<HTMLDivElement>(null)
@@ -38,6 +42,13 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
   const fitAddonRef = useRef<FitAddon | null>(null)
   const [meta, setMeta] = useState<WSMeta | null>(null)
   const isDesktop = useIsDesktop()
+
+  // Mobile zoom/pan state (refs for direct DOM manipulation — no re-renders)
+  const scaleRef = useRef(1)
+  const translateXRef = useRef(0)
+  const translateYRef = useRef(0)
+  const minScaleRef = useRef(1)
+  const termDimsRef = useRef({ w: 0, h: 0 })
 
   // Pending output for RAF-deferred rendering — coalesces rapid updates into one frame
   const pendingOutputRef = useRef<string | null>(null)
@@ -74,7 +85,7 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
 
   // Mount xterm.js — remount when target or desktop mode changes
   useEffect(() => {
-    if (!innerRef.current) return
+    if (!innerRef.current || !outerRef.current) return
 
     const isDark = !document.documentElement.classList.contains('light')
     const term = new Terminal({
@@ -96,6 +107,27 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
     const fitAddon = new FitAddon()
     term.loadAddon(fitAddon)
     term.loadAddon(new WebLinksAddon())
+
+    // Mobile: render terminal wider than viewport for ~80 columns.
+    // Scale it down via CSS transform so the full width is visible.
+    if (!isDesktop) {
+      const pad = 6
+      const outerW = outerRef.current.clientWidth - pad * 2
+      const outerH = outerRef.current.clientHeight - pad * 2
+      const s = outerW / MOBILE_TERM_WIDTH
+      const termH = Math.round(outerH / s)
+
+      innerRef.current.style.width = `${MOBILE_TERM_WIDTH}px`
+      innerRef.current.style.height = `${termH}px`
+      innerRef.current.style.transform = `scale(${s})`
+
+      scaleRef.current = s
+      minScaleRef.current = s
+      translateXRef.current = 0
+      translateYRef.current = 0
+      termDimsRef.current = { w: MOBILE_TERM_WIDTH, h: termH }
+    }
+
     term.open(innerRef.current)
 
     termRef.current = term
@@ -127,34 +159,132 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
     }
     viewport?.addEventListener('scroll', onViewportScroll)
 
-    // Mobile touch scrolling — xterm.js's internal Gesture class adds non-passive
-    // touch listeners on document that call preventDefault(), blocking native scroll.
-    // We intercept touch events on the screen element, stop propagation so xterm's
-    // Gesture handler never sees them, and scroll manually via term.scrollLines().
+    // Mobile touch gestures — xterm.js's internal Gesture class adds non-passive
+    // touch listeners on document that call preventDefault(), blocking all touch
+    // interaction. We intercept on the screen element and handle:
+    //   1-finger vertical drag → scroll terminal history (term.scrollLines)
+    //   2-finger pinch → zoom (CSS transform scale)
+    //   2-finger drag → pan (CSS transform translate)
     const screen = innerRef.current.querySelector('.xterm-screen') as HTMLElement | null
     const lineHeight = 13 * 1.2 // fontSize * lineHeight
-    let touchStartY = 0
-    let scrollAccumulator = 0
+
+    let gesture: 'none' | 'scroll' | 'pinch' = 'none'
+    // Scroll state
+    let scrollStartY = 0
+    let scrollAcc = 0
+    // Pinch state
+    let pinchStartDist = 0
+    let pinchStartScale = 0
+    let pinchFocalCX = 0 // focal point in content coordinates
+    let pinchFocalCY = 0
+    let pinchScreenMidX = 0 // starting midpoint on screen
+    let pinchScreenMidY = 0
+    let pinchStartTX = 0
+    let pinchStartTY = 0
+
+    const applyTransform = () => {
+      if (!innerRef.current) return
+      const s = scaleRef.current
+      const tx = translateXRef.current
+      const ty = translateYRef.current
+      innerRef.current.style.transform = `translate(${tx}px, ${ty}px) scale(${s})`
+    }
+
+    const clampPan = () => {
+      if (!outerRef.current) return
+      const pad = 6
+      const outerW = outerRef.current.clientWidth - pad * 2
+      const outerH = outerRef.current.clientHeight - pad * 2
+      const s = scaleRef.current
+      const visW = termDimsRef.current.w * s
+      const visH = termDimsRef.current.h * s
+      // Keep content covering the viewport — don't let it pull away from edges
+      translateXRef.current = Math.min(0, Math.max(outerW - visW, translateXRef.current))
+      translateYRef.current = Math.min(0, Math.max(outerH - visH, translateYRef.current))
+    }
 
     const onTouchStart = (e: TouchEvent) => {
-      touchStartY = e.touches[0].clientY
-      scrollAccumulator = 0
       e.stopPropagation()
+      if (e.touches.length === 1) {
+        gesture = 'scroll'
+        scrollStartY = e.touches[0].clientY
+        scrollAcc = 0
+      } else if (e.touches.length === 2) {
+        gesture = 'pinch'
+        const t1 = e.touches[0], t2 = e.touches[1]
+        pinchStartDist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY)
+        pinchStartScale = scaleRef.current
+        pinchStartTX = translateXRef.current
+        pinchStartTY = translateYRef.current
+
+        // Midpoint on screen
+        pinchScreenMidX = (t1.clientX + t2.clientX) / 2
+        pinchScreenMidY = (t1.clientY + t2.clientY) / 2
+
+        // Convert screen midpoint to content coordinates so we can keep
+        // the focal point stable during zoom.
+        // screen = containerOrigin + content * scale + translate
+        const rect = outerRef.current!.getBoundingClientRect()
+        const relX = pinchScreenMidX - rect.left - 6
+        const relY = pinchScreenMidY - rect.top - 6
+        pinchFocalCX = (relX - pinchStartTX) / pinchStartScale
+        pinchFocalCY = (relY - pinchStartTY) / pinchStartScale
+      }
     }
+
     const onTouchMove = (e: TouchEvent) => {
       e.preventDefault()
       e.stopPropagation()
-      const deltaY = touchStartY - e.touches[0].clientY
-      touchStartY = e.touches[0].clientY
-      scrollAccumulator += deltaY
-      const lines = Math.trunc(scrollAccumulator / lineHeight)
-      if (lines !== 0) {
-        scrollAccumulator -= lines * lineHeight
-        term.scrollLines(lines)
+
+      if (gesture === 'scroll' && e.touches.length === 1) {
+        const deltaY = scrollStartY - e.touches[0].clientY
+        scrollStartY = e.touches[0].clientY
+        scrollAcc += deltaY
+        const lines = Math.trunc(scrollAcc / lineHeight)
+        if (lines !== 0) {
+          scrollAcc -= lines * lineHeight
+          term.scrollLines(lines)
+        }
+      } else if (e.touches.length === 2) {
+        // Switch to pinch if a second finger was added mid-gesture
+        if (gesture !== 'pinch') {
+          gesture = 'pinch'
+          const t1 = e.touches[0], t2 = e.touches[1]
+          pinchStartDist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY)
+          pinchStartScale = scaleRef.current
+          pinchStartTX = translateXRef.current
+          pinchStartTY = translateYRef.current
+          pinchScreenMidX = (t1.clientX + t2.clientX) / 2
+          pinchScreenMidY = (t1.clientY + t2.clientY) / 2
+          const rect = outerRef.current!.getBoundingClientRect()
+          pinchFocalCX = (pinchScreenMidX - rect.left - 6 - pinchStartTX) / pinchStartScale
+          pinchFocalCY = (pinchScreenMidY - rect.top - 6 - pinchStartTY) / pinchStartScale
+          return
+        }
+
+        const t1 = e.touches[0], t2 = e.touches[1]
+        const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY)
+        const newScale = Math.max(minScaleRef.current, Math.min(2.0, pinchStartScale * (dist / pinchStartDist)))
+
+        // New midpoint (tracks two-finger pan)
+        const newMidX = (t1.clientX + t2.clientX) / 2
+        const newMidY = (t1.clientY + t2.clientY) / 2
+        const rect = outerRef.current!.getBoundingClientRect()
+        const relMidX = newMidX - rect.left - 6
+        const relMidY = newMidY - rect.top - 6
+
+        // Translate so the focal content point stays under the midpoint
+        scaleRef.current = newScale
+        translateXRef.current = relMidX - pinchFocalCX * newScale
+        translateYRef.current = relMidY - pinchFocalCY * newScale
+        clampPan()
+        applyTransform()
       }
     }
+
     const onTouchEnd = (e: TouchEvent) => {
       e.stopPropagation()
+      if (e.touches.length === 0) gesture = 'none'
     }
 
     if (!isDesktop && screen) {
@@ -189,6 +319,17 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
       const fit = fitAddonRef.current
       const term = termRef.current
       if (!fit || !term) return
+
+      // Mobile: update terminal height to fill visual space after scaling
+      if (!isDesktop && innerRef.current) {
+        const pad = 6
+        const outerH = container.clientHeight - pad * 2
+        const s = minScaleRef.current
+        const termH = Math.round(outerH / s)
+        innerRef.current.style.height = `${termH}px`
+        termDimsRef.current = { ...termDimsRef.current, h: termH }
+      }
+
       try {
         fit.fit()
         sendResize(term.cols, term.rows)
@@ -199,7 +340,7 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
 
     ro.observe(container)
     return () => ro.disconnect()
-  }, [sendResize])
+  }, [sendResize, isDesktop])
 
   return (
     <div
@@ -224,10 +365,16 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
           background: 'var(--bg-terminal)',
         }}
       >
-        {/* Inner div: inset by 6px — xterm opens here; FitAddon measures this area */}
+        {/* Inner div: inset by 6px — xterm opens here; FitAddon measures this area.
+            Desktop: stretches to fill. Mobile: fixed wider width, CSS-transformed to fit. */}
         <div
           ref={innerRef}
-          style={{ position: 'absolute', top: 6, left: 6, right: 6, bottom: 6, touchAction: 'pan-y' }}
+          style={{
+            position: 'absolute',
+            top: 6,
+            left: 6,
+            ...(isDesktop ? { right: 6, bottom: 6 } : { transformOrigin: '0 0' }),
+          }}
         />
       </div>
       {!isDesktop && (

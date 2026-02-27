@@ -63,10 +63,10 @@ const quickActions: { label: string; action: 'text' | 'special'; value: string }
   { label: '3', action: 'text', value: '3' },
   { label: '4', action: 'text', value: '4' },
   { label: '5', action: 'text', value: '5' },
-  { label: '^C', action: 'special', value: 'C-c' },
-  { label: '⏎', action: 'special', value: 'Enter' },
   { label: 'Y', action: 'text', value: 'y' },
   { label: 'N', action: 'text', value: 'n' },
+  { label: '^C', action: 'special', value: 'C-c' },
+  { label: '⏎', action: 'special', value: 'Enter' },
   { label: '↑', action: 'special', value: 'Up' },
   { label: '↓', action: 'special', value: 'Down' },
 ]
