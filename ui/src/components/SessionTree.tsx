@@ -21,9 +21,6 @@ function WindowRow({ w, sessionName, onSelect, onSplit }: WindowRowProps) {
   return (
     <div
       style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 6,
         padding: '3px 8px 3px 24px',
         cursor: 'pointer',
         borderRadius: 4,
@@ -44,14 +41,16 @@ function WindowRow({ w, sessionName, onSelect, onSplit }: WindowRowProps) {
         ;(e.currentTarget as HTMLDivElement).style.background = 'transparent'
       }}
     >
-      <span style={{ width: 6, height: 6, borderRadius: '50%', background: dotColor, flexShrink: 0 }} />
-      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {w.window.name}
-      </span>
-      {w.branch && (
-        <span style={{ color: 'var(--text-muted)', fontSize: 10, flexShrink: 0, maxWidth: 60, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          {w.branch}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ width: 6, height: 6, borderRadius: '50%', background: dotColor, flexShrink: 0 }} />
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {w.window.name}
         </span>
+      </div>
+      {w.branch && (
+        <div style={{ color: 'var(--text-muted)', fontSize: 10, paddingLeft: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {w.branch}
+        </div>
       )}
     </div>
   )

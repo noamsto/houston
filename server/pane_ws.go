@@ -57,14 +57,14 @@ func (s *Server) handlePaneWS(w http.ResponseWriter, r *http.Request, pane tmux.
 
 	slog.Info("pane websocket connected", "target", pane.Target())
 
-	// Read loop: handle client messages (input, resize)
-	go s.paneWSReadLoop(conn, pane)
+	// nudge signals the write loop to capture immediately after input
+	nudge := make(chan struct{}, 1)
 
-	// Write loop: stream pane output and metadata
-	s.paneWSWriteLoop(conn, pane)
+	go s.paneWSReadLoop(conn, pane, nudge)
+	s.paneWSWriteLoop(conn, pane, nudge)
 }
 
-func (s *Server) paneWSReadLoop(conn *websocket.Conn, pane tmux.Pane) {
+func (s *Server) paneWSReadLoop(conn *websocket.Conn, pane tmux.Pane, nudge chan<- struct{}) {
 	defer conn.Close()
 
 	for {
@@ -91,6 +91,11 @@ func (s *Server) paneWSReadLoop(conn *websocket.Conn, pane tmux.Pane) {
 			if err := s.tmux.SendKeys(pane, input.Data, false); err != nil {
 				slog.Error("send keys failed", "error", err)
 			}
+			// Signal write loop to capture immediately
+			select {
+			case nudge <- struct{}{}:
+			default:
+			}
 
 		case "resize":
 			var resize WSResize
@@ -100,13 +105,18 @@ func (s *Server) paneWSReadLoop(conn *websocket.Conn, pane tmux.Pane) {
 			if resize.Cols > 0 && resize.Rows > 0 {
 				s.tmux.ResizePane(pane, "x", resize.Cols)
 				s.tmux.ResizePane(pane, "y", resize.Rows)
+				// Signal write loop to capture immediately with new dimensions
+				select {
+				case nudge <- struct{}{}:
+				default:
+				}
 			}
 		}
 	}
 }
 
-func (s *Server) paneWSWriteLoop(conn *websocket.Conn, pane tmux.Pane) {
-	ticker := time.NewTicker(500 * time.Millisecond)
+func (s *Server) paneWSWriteLoop(conn *websocket.Conn, pane tmux.Pane, nudge <-chan struct{}) {
+	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
 
 	var lastOutput string
@@ -123,7 +133,14 @@ func (s *Server) paneWSWriteLoop(conn *websocket.Conn, pane tmux.Pane) {
 		}
 	}
 
-	for range ticker.C {
+	for {
+		select {
+		case <-ticker.C:
+		case <-nudge:
+			// Brief pause to let the process update its output after receiving input
+			time.Sleep(50 * time.Millisecond)
+			ticker.Reset(200 * time.Millisecond)
+		}
 		capture, err := s.tmux.CapturePaneWithMode(pane, 500)
 		if err != nil {
 			slog.Debug("capture failed", "error", err)
