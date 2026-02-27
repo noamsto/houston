@@ -5,7 +5,7 @@ Mission control for AI coding agents. A mobile-friendly web dashboard for monito
 ## Supported Agents
 
 - **Claude Code** - via tmux session monitoring
-- **Amp** - via tmux session monitoring  
+- **Amp** - via tmux session monitoring
 - **OpenCode** - via native API integration
 
 ### OpenCode Setup
@@ -22,7 +22,7 @@ opencode --port 4096
 # Terminal 1: Start headless server
 opencode serve --port 4096
 
-# Terminal 2: Attach TUI for interaction  
+# Terminal 2: Attach TUI for interaction
 opencode attach http://localhost:4096
 ```
 
@@ -44,51 +44,41 @@ After installing the plugin, restart your OpenCode instances.
 
 Houston scans ports 4096-4100 by default. Use `--no-opencode` to disable.
 
-## Project Goals
-
-1. **View tmux sessions** - See all sessions with status at a glance
-2. **Monitor output** - Live-stream terminal output from any session/window/pane
-3. **Send commands** - Text input with voice-to-text support for giving instructions
-4. **Mobile-first** - Touch-friendly UI that works well on phones
-5. **Simple deployment** - Single binary, runs as systemd service on NixOS
-
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                   Mobile Browser                     │
-│  ┌──────────────────────────────────────────────────┐
-│  │  Session List  │  Terminal View  │  Input Bar   │
-│  │  (cards)       │  (live output)  │  (+ voice)   │
-│  └──────────────────────────────────────────────────┘
-└─────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────┐
+│                   Mobile Browser                      │
+│  React SPA (xterm.js + WebSocket + SSE)              │
+└──────────────────────────────────────────────────────┘
                           │
-              WebSocket + htmx (HTML fragments)
+           SSE (session list) + WebSocket (pane I/O)
                           │
                           ▼
-┌─────────────────────────────────────────────────────┐
-│                  Go HTTP Server                      │
-│                                                      │
-│  Routes:                                             │
-│  GET  /                    - Dashboard home          │
-│  GET  /sessions            - List sessions (htmx)    │
-│  GET  /sessions/:id        - Session detail view     │
-│  GET  /sessions/:id/output - Pane output (htmx)      │
-│  POST /sessions/:id/send   - Send keys to pane       │
-│  WS   /sessions/:id/stream - Live output stream      │
-│                                                      │
-└─────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────┐
+│                  Go HTTP Server                       │
+│                                                       │
+│  JSON API:                                            │
+│  GET  /api/sessions?stream=1  - SSE session stream    │
+│  WS   /api/pane/:target/ws   - Pane I/O (bidi)       │
+│  POST /api/pane/:target/send - Send text/special keys │
+│  GET  /api/font/bigger       - Increase terminal font │
+│  GET  /api/font/smaller      - Decrease terminal font │
+│  GET  /*                     - Serve React SPA        │
+│                                                       │
+│  React SPA embedded via go:embed at compile time      │
+└──────────────────────────────────────────────────────┘
                           │
-                          ▼
-┌─────────────────────────────────────────────────────┐
-│                   tmux CLI                           │
-│                                                      │
-│  tmux list-sessions -F "#{...}"                      │
-│  tmux list-windows -t session -F "#{...}"            │
-│  tmux capture-pane -t session:window.pane -p         │
-│  tmux send-keys -t session:window.pane "text" Enter  │
-│                                                      │
-└─────────────────────────────────────────────────────┘
+                ┌─────────┴─────────┐
+                ▼                   ▼
+┌────────────────────┐  ┌────────────────────┐
+│     tmux CLI        │  │   OpenCode API      │
+│                     │  │                     │
+│  list-sessions      │  │  GET /sessions      │
+│  list-windows       │  │  WS  /events        │
+│  capture-pane       │  │                     │
+│  send-keys          │  │                     │
+└────────────────────┘  └────────────────────┘
 ```
 
 ## Tech Stack
@@ -96,263 +86,73 @@ Houston scans ports 4096-4100 by default. Use `--no-opencode` to disable.
 | Component | Choice | Rationale |
 |-----------|--------|-----------|
 | Backend | Go | Single binary, fast, good tmux process handling |
-| Frontend | htmx + HTML templates | Simple, server-rendered, minimal JS |
-| Styling | Tailwind CSS (CDN) | Mobile-first utilities, fast iteration |
-| Live updates | WebSocket | Real-time terminal output streaming |
+| Frontend | React + TypeScript | Rich terminal rendering with xterm.js |
+| Terminal | xterm.js v6 | Full terminal emulation in browser |
+| Layout | allotment | Resizable split panes (desktop) |
+| Styling | CSS custom properties | Dark theme, no framework dependency |
+| Build | Vite | Fast dev server with HMR, production bundling |
+| Live updates | SSE + WebSocket | SSE for session list, WS for pane I/O |
 | Voice input | Web Speech API | Built into browsers, no backend needed |
-| Auth | None initially | Rely on Tailscale/SSH tunnel for security |
-
-## Features
-
-### MVP (v0.1)
-
-- [ ] List all tmux sessions with window count
-- [ ] View session detail (list windows/panes)
-- [ ] Display recent output from a pane (last 100 lines)
-- [ ] Send text input to a pane
-- [ ] Auto-refresh output every 2 seconds
-- [ ] Mobile-responsive layout
-
-### v0.2
-
-- [ ] WebSocket live streaming (replace polling)
-- [ ] Voice-to-text input (Web Speech API)
-- [ ] Session status indicators (active/idle/has-activity)
-- [ ] Quick actions (scroll up/down, clear, ctrl+c)
-
-### v0.3
-
-- [ ] Search/filter sessions
-- [ ] Pane output highlighting (errors in red, etc.)
-- [ ] Keyboard shortcuts for power users
-- [ ] Dark/light theme (match system)
-
-### Future Ideas
-
-- Claude agent status integration (parse output for status indicators)
-- Notification on activity (via service worker)
-- Multiple server support (SSH to different hosts)
-- Session creation/killing from UI
-
-## UI Design
-
-### Mobile Layout (Primary)
-
-```
-┌─────────────────────────────┐
-│  houston              [☰]  │  <- Header with menu
-├─────────────────────────────┤
-│ ┌─────────────────────────┐ │
-│ │ 🟢 main                 │ │  <- Session cards
-│ │    3 windows            │ │     (tap to expand)
-│ └─────────────────────────┘ │
-│ ┌─────────────────────────┐ │
-│ │ 🟡 nix-config           │ │
-│ │    2 windows • activity │ │
-│ └─────────────────────────┘ │
-│ ┌─────────────────────────┐ │
-│ │ 🔵 claude-agent-1       │ │
-│ │    1 window • running   │ │
-│ └─────────────────────────┘ │
-├─────────────────────────────┤
-│                             │
-│  [Terminal output area]     │  <- Selected pane output
-│  $ claude --chat            │     (scrollable)
-│  > Working on task...       │
-│  > Reading file xyz.nix     │
-│                             │
-├─────────────────────────────┤
-│ [________________] [🎤] [↵] │  <- Input bar with voice
-└─────────────────────────────┘
-```
-
-### Session Card States
-
-- 🟢 Green dot: Recently active (output in last 30s)
-- 🟡 Yellow dot: Has unseen activity
-- 🔵 Blue dot: Idle
-- ⚪ Gray dot: No recent activity
-
-## API Design
-
-### tmux Data Structures
-
-```go
-type Session struct {
-    Name        string    `json:"name"`
-    Created     time.Time `json:"created"`
-    Windows     int       `json:"windows"`
-    Attached    bool      `json:"attached"`
-    LastActivity time.Time `json:"last_activity"`
-}
-
-type Window struct {
-    Index   int    `json:"index"`
-    Name    string `json:"name"`
-    Active  bool   `json:"active"`
-    Panes   int    `json:"panes"`
-}
-
-type Pane struct {
-    Index   int    `json:"index"`
-    Active  bool   `json:"active"`
-    Command string `json:"command"`
-    Pid     int    `json:"pid"`
-}
-```
-
-### tmux Commands Reference
-
-```bash
-# List sessions
-tmux list-sessions -F "#{session_name}|#{session_created}|#{session_windows}|#{session_attached}|#{session_activity}"
-
-# List windows in session
-tmux list-windows -t "session" -F "#{window_index}|#{window_name}|#{window_active}|#{window_panes}"
-
-# List panes in window
-tmux list-panes -t "session:window" -F "#{pane_index}|#{pane_active}|#{pane_current_command}|#{pane_pid}"
-
-# Capture pane output (last 100 lines)
-tmux capture-pane -t "session:window.pane" -p -S -100
-
-# Send keys to pane
-tmux send-keys -t "session:window.pane" "command text" Enter
-
-# Send special keys
-tmux send-keys -t "session:window.pane" C-c  # Ctrl+C
-tmux send-keys -t "session:window.pane" C-l  # Clear
-```
-
-## Voice Input Implementation
-
-```javascript
-// Web Speech API - works in Chrome, Safari, Edge on mobile
-const recognition = new webkitSpeechRecognition();
-recognition.continuous = false;
-recognition.interimResults = true;
-recognition.lang = 'en-US';
-
-recognition.onresult = (event) => {
-    const transcript = event.results[0][0].transcript;
-    document.getElementById('input').value = transcript;
-};
-
-// Trigger with microphone button
-document.getElementById('voice-btn').onclick = () => recognition.start();
-```
-
-## Security Considerations
-
-**Initial approach: No built-in auth**
-
-Rely on network-level security:
-1. Bind to localhost only (`127.0.0.1:9090`)
-2. Access via Tailscale (recommended)
-3. Or SSH tunnel: `ssh -L 9090:localhost:9090 host`
-
-**Future auth options:**
-- Basic auth with password
-- Tailscale auth headers
-- mTLS with client certificates
-
-## NixOS Integration
-
-### Package Definition
-
-```nix
-{
-  lib,
-  buildGoModule,
-  fetchFromGitHub,
-}:
-
-buildGoModule rec {
-  pname = "houston";
-  version = "0.1.0";
-
-  src = ./.;
-
-  vendorHash = "sha256-AAAA...";  # Update after go mod tidy
-
-  meta = with lib; {
-    description = "Mission control for Claude Code agents in tmux";
-    homepage = "https://github.com/noamsto/houston";
-    license = licenses.mit;
-    maintainers = [];
-  };
-}
-```
-
-### NixOS Module
-
-```nix
-{ config, lib, pkgs, ... }:
-
-with lib;
-
-let
-  cfg = config.services.houston;
-in {
-  options.services.houston = {
-    enable = mkEnableOption "houston web interface";
-
-    port = mkOption {
-      type = types.port;
-      default = 9090;
-      description = "Port to listen on";
-    };
-
-    address = mkOption {
-      type = types.str;
-      default = "127.0.0.1";
-      description = "Address to bind to";
-    };
-
-    user = mkOption {
-      type = types.str;
-      default = "noams";
-      description = "User whose tmux sessions to expose";
-    };
-  };
-
-  config = mkIf cfg.enable {
-    systemd.user.services.houston = {
-      description = "houston web server";
-      wantedBy = [ "default.target" ];
-      after = [ "network.target" ];
-
-      serviceConfig = {
-        ExecStart = "${pkgs.houston}/bin/houston -addr ${cfg.address}:${toString cfg.port}";
-        Restart = "on-failure";
-      };
-    };
-  };
-}
-```
+| Auth | None | Rely on Tailscale/SSH tunnel for security |
 
 ## Project Structure
 
 ```
 houston/
-├── main.go              # Entry point, CLI flags
-├── server.go            # HTTP server setup, routes
-├── tmux.go              # tmux command wrappers
-├── handlers.go          # HTTP handlers
-├── websocket.go         # WebSocket streaming
-├── templates/
-│   ├── layout.html      # Base template with htmx
-│   ├── index.html       # Dashboard home
-│   ├── sessions.html    # Session list partial
-│   ├── session.html     # Session detail view
-│   ├── output.html      # Pane output partial
-│   └── input.html       # Input bar partial
-├── static/
-│   └── app.js           # Voice input, minimal JS
-├── flake.nix            # Nix flake for building
+├── main.go              # Entry point, CLI flags, embed FS setup
+├── embed.go             # go:embed directive for ui/dist
+├── server/
+│   ├── server.go        # HTTP server, mux, SSE session stream
+│   ├── api.go           # JSON API handlers (sessions, panes, font)
+│   └── pane_ws.go       # WebSocket handler for pane I/O
+├── tmux/
+│   ├── client.go        # tmux CLI wrapper (list/capture/send)
+│   └── client_test.go
+├── opencode/
+│   ├── client.go        # OpenCode HTTP/WS client
+│   ├── discovery.go     # Port scanning + file-based discovery
+│   ├── manager.go       # Lifecycle management
+│   ├── types.go         # OpenCode data types
+│   └── client_test.go
+├── terminal/
+│   └── font.go          # Terminal font size control (kitty)
+├── agents/              # Agent type detection (claude-code, amp)
+├── parser/              # Terminal output parsing
+├── status/              # Status file management
+├── internal/            # Internal utilities
+├── ui/                  # React frontend (Vite)
+│   ├── src/
+│   │   ├── App.tsx              # Root layout, sidebar toggle, pane management
+│   │   ├── main.tsx             # React entry point
+│   │   ├── api/
+│   │   │   └── types.ts         # Shared TypeScript types (Session, WSMeta, etc.)
+│   │   ├── components/
+│   │   │   ├── Sidebar.tsx      # Slide-out session list with filter
+│   │   │   ├── SessionTree.tsx  # Collapsible session/window tree
+│   │   │   ├── TerminalArea.tsx # Container managing open panes
+│   │   │   ├── TerminalPane.tsx # xterm.js terminal with mobile zoom/pan
+│   │   │   ├── SplitContainer.tsx # Desktop split pane layout (allotment)
+│   │   │   ├── PaneHeader.tsx   # Agent icon, status, mode badge, wide toggle
+│   │   │   └── MobileInputBar.tsx # Quick actions, text input, voice
+│   │   ├── hooks/
+│   │   │   ├── useSessionsStream.ts # SSE hook for live session list
+│   │   │   ├── usePaneSocket.ts     # WebSocket hook for pane I/O
+│   │   │   ├── useLayout.ts         # Persist layout state to localStorage
+│   │   │   └── useMediaQuery.ts     # Responsive breakpoint hook
+│   │   ├── lib/
+│   │   │   └── xterm.ts        # xterm.js theme and initialization
+│   │   └── theme/
+│   │       └── tokens.css      # CSS custom properties (colors, fonts)
+│   ├── vite.config.ts          # Vite config with API proxy
+│   ├── tsconfig.json
+│   └── package.json
+├── views/               # Legacy templ templates (to be removed)
+├── static/              # Legacy static assets (to be removed)
+├── justfile             # Task runner
+├── .air.toml            # Hot reload config
+├── flake.nix            # Nix flake
 ├── go.mod
-├── go.sum
-└── README.md
+└── go.sum
 ```
 
 ## Development Setup
@@ -361,37 +161,65 @@ houston/
 # Enter dev shell
 nix develop
 
-# Run with hot reload (uses just dev to auto-find port 9090-9095)
+# Run Go backend with hot reload (auto-finds port 7474-7479)
 just dev
 
-# Or run manually on specific port
-go run . -addr localhost:9090
+# Run React dev server with HMR (port 5173, proxies /api to Go backend)
+just ui-dev
 
-# Build
+# Build React frontend for production
+just ui-build
+
+# Build Go binary (embeds ui/dist at compile time)
 go build -o houston .
-
-# Test tmux commands
-tmux list-sessions
 ```
 
-## Dependencies (Go)
+### Development Workflow
 
-```go
-// go.mod
-module github.com/noamsto/houston
+**For frontend changes:** Use `just ui-dev` for instant HMR. The Vite dev server proxies `/api` requests to the Go backend.
 
-go 1.23
+**For production testing:** Run `just ui-build` then `just dev`. The Go binary embeds `ui/dist` via `go:embed`, so you must rebuild both the React app and the Go binary to see frontend changes in production mode.
 
-require (
-    github.com/a-h/templ  // Type-safe HTML templates
-)
-```
+**Important:** `air` watches `.go` files but not `ui/dist`. After `just ui-build`, touch `embed.go` to trigger a Go rebuild, or restart `just dev`.
 
-Minimal dependencies - stdlib for HTTP, templates, and process execution.
+### Vite Proxy
 
-## References
+The Vite dev server (`ui/vite.config.ts`) proxies `/api` to `http://localhost:9090`. Change the target port if your Go backend runs on a different port.
 
-- [htmx documentation](https://htmx.org/docs/)
-- [tmux man page - FORMATS section](https://man7.org/linux/man-pages/man1/tmux.1.html)
-- [Web Speech API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Speech_API)
-- [Tailwind CSS](https://tailwindcss.com/docs)
+## Mobile Features
+
+- **Wide terminal mode** (default): 960px container (~120 columns) scaled to fit viewport, good for diffs
+- **Fit mode**: Terminal matches viewport width, larger text
+- **Touch scrolling**: Single-finger vertical scroll through terminal history
+- **Pinch-to-zoom**: Two-finger pinch with focal-point tracking
+- **Pan**: Single-finger horizontal drag or two-finger drag when zoomed
+- **Quick actions**: Number keys (1-5), Y/N, with expandable section for ^C, Enter, arrows, Esc, Tab, Shift+Tab, Alt+P, Ctrl+O, Ctrl+Z
+- **Voice input**: Web Speech API microphone button
+- **WIDE/FIT toggle**: In pane header, switches between wide and fit modes
+
+## WebSocket Protocol
+
+The pane WebSocket (`/api/pane/:target/ws`) is bidirectional:
+
+**Server → Client:**
+- `output:<data>` — Terminal capture-pane content (sent on change, deduped)
+- `meta:<json>` — Pane metadata (agent type, status, mode, activity, choices)
+- `resize-done` — Acknowledgment of resize
+
+**Client → Server:**
+- `input:<text>` — Send text to pane (appends Enter)
+- `special:<key>` — Send special key (C-c, Enter, Up, Down, Escape, Tab, BTab, M-p, C-o, C-z)
+- `resize:<cols>:<rows>` — Request terminal resize
+
+## Security
+
+**No built-in auth** — rely on network-level security:
+1. Default bind: `127.0.0.1:9090` (localhost only)
+2. Access via Tailscale (recommended)
+3. Or SSH tunnel: `ssh -L 9090:localhost:9090 host`
+
+## Dependencies
+
+**Go:** `github.com/gorilla/websocket` — only external dependency. Everything else is stdlib.
+
+**React:** `@xterm/xterm`, `@xterm/addon-fit`, `@xterm/addon-web-links`, `allotment`, `react`, `react-dom`
