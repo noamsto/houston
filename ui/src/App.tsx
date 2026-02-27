@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Sidebar } from './components/Sidebar'
 import { TerminalArea } from './components/TerminalArea'
 import { useIsDesktop } from './hooks/useMediaQuery'
@@ -11,6 +11,22 @@ export default function App() {
   const layout = useLayout()
   const isDesktop = useIsDesktop()
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+
+  // Track visual viewport height so the layout shrinks when the mobile
+  // keyboard opens instead of leaving a black gap behind the terminal.
+  useEffect(() => {
+    const vv = window.visualViewport
+    if (!vv || isDesktop) return
+    const update = () => {
+      if (rootRef.current) {
+        rootRef.current.style.height = `${vv.height}px`
+      }
+    }
+    update()
+    vv.addEventListener('resize', update)
+    return () => vv.removeEventListener('resize', update)
+  }, [isDesktop])
 
   const handleSelectWindow = (target: string) => {
     layout.dispatch({ type: 'OPEN_PANE', target })
@@ -49,7 +65,7 @@ export default function App() {
   }, [handleKeyDown])
 
   return (
-    <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
+    <div ref={rootRef} style={{ display: 'flex', height: '100dvh', overflow: 'hidden' }}>
       <Sidebar
         sessions={sessions}
         connected={connected}

@@ -293,7 +293,13 @@ func (s *SessionState) ToParserResult() parser.Result {
 	} else if s.IsWorking || s.CurrentTool != "" {
 		result.Type = parser.TypeWorking
 	} else if s.IsWaiting {
-		result.Type = parser.TypeQuestion
+		// Only treat as question if there's actually a question to answer.
+		// Plain end_turn (waiting for user input) is idle/done.
+		if s.Question != "" {
+			result.Type = parser.TypeQuestion
+		} else {
+			result.Type = parser.TypeDone
+		}
 	} else {
 		result.Type = parser.TypeIdle
 	}

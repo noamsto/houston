@@ -83,6 +83,16 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
     onMeta: (m) => setMeta(m),
   })
 
+  // Show cursor for non-AI agents (regular shells, etc.)
+  const agent = meta?.agent
+  useEffect(() => {
+    const term = termRef.current
+    if (!term) return
+    const showCursor = agent === 'generic'
+    term.options.cursorBlink = showCursor
+    term.options.cursorStyle = showCursor ? 'block' : 'underline'
+  }, [agent])
+
   // Recalculate mobile terminal dimensions without remounting xterm
   const applyMobileSize = useCallback((wide: boolean) => {
     const outer = outerRef.current
@@ -225,13 +235,30 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
         const term = termRef.current
         if (!fit || !term) return
 
-        // Mobile: update terminal height to fill visual space after scaling
+        // Mobile: update terminal dimensions when container resizes
+        // (e.g. keyboard opens/closes, quick buttons expand/collapse)
         if (!isDesktop && innerRef.current) {
+          const outerW = container.clientWidth - PAD * 2
           const outerH = container.clientHeight - PAD * 2
           const s = minScaleRef.current
-          const termH = Math.round(outerH / s)
-          innerRef.current.style.height = `${termH}px`
-          termDimsRef.current = { ...termDimsRef.current, h: termH }
+          if (s < 1) {
+            // WIDE mode: recalculate height and clamp translate to keep
+            // content anchored at the bottom (no black gap above terminal)
+            const termH = Math.round(outerH / s)
+            innerRef.current.style.height = `${termH}px`
+            termDimsRef.current = { ...termDimsRef.current, h: termH }
+            // Re-anchor to bottom so keyboard doesn't leave a black gap
+            const curScale = innerRef.current.style.transform.match(/scale\(([\d.]+)\)/)
+            const sc = curScale ? parseFloat(curScale[1]) : s
+            const ty = outerH - termH * sc
+            innerRef.current.style.transform = `translate(0px, ${ty}px) scale(${sc})`
+            resetTransform(s, { w: MOBILE_TERM_WIDTH_WIDE, h: termH }, { scale: sc, tx: 0, ty })
+          } else {
+            // FIT mode: just update dimensions
+            innerRef.current.style.width = `${outerW}px`
+            innerRef.current.style.height = `${outerH}px`
+            termDimsRef.current = { w: outerW, h: outerH }
+          }
         }
 
         try {

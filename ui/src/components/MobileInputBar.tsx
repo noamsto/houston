@@ -254,6 +254,9 @@ export function MobileInputBar({ target, choices }: Props) {
               void handleSend()
             }
           }}
+          autoCapitalize="off"
+          autoCorrect="off"
+          spellCheck={false}
           placeholder="Send a message..."
           rows={1}
           style={{
