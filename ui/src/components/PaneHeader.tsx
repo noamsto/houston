@@ -4,6 +4,8 @@ interface Props {
   target: string
   meta: WSMeta | null
   onClose: () => void
+  wideMode?: boolean
+  onToggleWide?: () => void
 }
 
 const AGENT_ICONS: Record<AgentType, string> = {
@@ -23,7 +25,7 @@ function statusColor(status: ResultType | undefined): string {
   }
 }
 
-export function PaneHeader({ target, meta, onClose }: Props) {
+export function PaneHeader({ target, meta, onClose, wideMode, onToggleWide }: Props) {
   const icon = meta ? (AGENT_ICONS[meta.agent] ?? '◆') : '·'
   const color = statusColor(meta?.status)
   const modeBadge = meta?.mode === 'normal' ? 'NOR' : meta?.mode === 'insert' ? 'INS' : null
@@ -73,6 +75,30 @@ export function PaneHeader({ target, meta, onClose }: Props) {
         >
           {modeBadge}
         </span>
+      )}
+
+      {onToggleWide && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation()
+            onToggleWide()
+          }}
+          title={wideMode ? 'Fit to screen' : 'Wide terminal (~120 cols)'}
+          style={{
+            background: 'none',
+            border: '1px solid var(--border)',
+            borderRadius: 2,
+            color: wideMode ? 'var(--text-secondary)' : 'var(--text-muted)',
+            cursor: 'pointer',
+            fontSize: 9,
+            fontFamily: 'var(--font-mono)',
+            lineHeight: 1,
+            padding: '1px 3px',
+            flexShrink: 0,
+          }}
+        >
+          {wideMode ? 'WIDE' : 'FIT'}
+        </button>
       )}
 
       <button

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
@@ -29,9 +29,9 @@ function writeSnapshot(term: Terminal, data: string) {
   term.write('\x1b[2J\x1b[3J\x1b[H' + data + '\x1b[?25l\x1b[?1007l\x1b[?1l')
 }
 
-// Width of the mobile terminal container (pre-transform). Wider than the viewport
-// so FitAddon calculates ~80 columns. CSS transform scales it to fit the screen.
-const MOBILE_TERM_WIDTH = 640
+// Wide mode: ~120 columns for diffs and wide output. Fit mode: viewport width.
+const MOBILE_TERM_WIDTH_WIDE = 960
+const PAD = 6
 
 export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
   // outerRef: observed by ResizeObserver; has padding that creates visual breathing room
@@ -42,6 +42,7 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
   const fitAddonRef = useRef<FitAddon | null>(null)
   const [meta, setMeta] = useState<WSMeta | null>(null)
   const isDesktop = useIsDesktop()
+  const [wideMode, setWideMode] = useState(true) // wide by default
 
   // Mobile zoom/pan state (refs for direct DOM manipulation — no re-renders)
   const scaleRef = useRef(1)
@@ -58,6 +59,46 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
   // Cache latest output so we can replay it when xterm remounts (e.g. isDesktop changes)
   // without waiting for the server to send a new capture (it deduplicates).
   const lastOutputRef = useRef<string | null>(null)
+
+  // Recalculate mobile terminal dimensions without remounting xterm
+  const applyMobileSize = useCallback((wide: boolean) => {
+    const outer = outerRef.current
+    const inner = innerRef.current
+    const fit = fitAddonRef.current
+    const term = termRef.current
+    if (!outer || !inner || !fit || !term || isDesktop) return
+
+    const outerW = outer.clientWidth - PAD * 2
+    const outerH = outer.clientHeight - PAD * 2
+
+    if (wide) {
+      const s = outerW / MOBILE_TERM_WIDTH_WIDE
+      const termH = Math.round(outerH / s)
+      inner.style.width = `${MOBILE_TERM_WIDTH_WIDE}px`
+      inner.style.height = `${termH}px`
+      inner.style.transform = `scale(${s})`
+      scaleRef.current = s
+      minScaleRef.current = s
+      termDimsRef.current = { w: MOBILE_TERM_WIDTH_WIDE, h: termH }
+    } else {
+      inner.style.width = `${outerW}px`
+      inner.style.height = `${outerH}px`
+      inner.style.transform = 'none'
+      scaleRef.current = 1
+      minScaleRef.current = 1
+      termDimsRef.current = { w: outerW, h: outerH }
+    }
+    translateXRef.current = 0
+    translateYRef.current = 0
+
+    try {
+      fit.fit()
+      sendResize(term.cols, term.rows)
+      if (lastOutputRef.current) {
+        writeSnapshot(term, lastOutputRef.current)
+      }
+    } catch { /* fit can throw if zero-size */ }
+  }, [isDesktop, sendResize])
 
   const { sendInput, sendResize } = usePaneSocket(pane.target, {
     onOutput: (data) => {
@@ -108,24 +149,29 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
     term.loadAddon(fitAddon)
     term.loadAddon(new WebLinksAddon())
 
-    // Mobile: render terminal wider than viewport for ~80 columns.
-    // Scale it down via CSS transform so the full width is visible.
+    // Mobile: set terminal dimensions based on wide/fit mode
     if (!isDesktop) {
-      const pad = 6
-      const outerW = outerRef.current.clientWidth - pad * 2
-      const outerH = outerRef.current.clientHeight - pad * 2
-      const s = outerW / MOBILE_TERM_WIDTH
-      const termH = Math.round(outerH / s)
+      const outerW = outerRef.current.clientWidth - PAD * 2
+      const outerH = outerRef.current.clientHeight - PAD * 2
 
-      innerRef.current.style.width = `${MOBILE_TERM_WIDTH}px`
-      innerRef.current.style.height = `${termH}px`
-      innerRef.current.style.transform = `scale(${s})`
-
-      scaleRef.current = s
-      minScaleRef.current = s
+      if (wideMode) {
+        const s = outerW / MOBILE_TERM_WIDTH_WIDE
+        const termH = Math.round(outerH / s)
+        innerRef.current.style.width = `${MOBILE_TERM_WIDTH_WIDE}px`
+        innerRef.current.style.height = `${termH}px`
+        innerRef.current.style.transform = `scale(${s})`
+        scaleRef.current = s
+        minScaleRef.current = s
+        termDimsRef.current = { w: MOBILE_TERM_WIDTH_WIDE, h: termH }
+      } else {
+        innerRef.current.style.width = `${outerW}px`
+        innerRef.current.style.height = `${outerH}px`
+        scaleRef.current = 1
+        minScaleRef.current = 1
+        termDimsRef.current = { w: outerW, h: outerH }
+      }
       translateXRef.current = 0
       translateYRef.current = 0
-      termDimsRef.current = { w: MOBILE_TERM_WIDTH, h: termH }
     }
 
     term.open(innerRef.current)
@@ -352,8 +398,7 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
 
       // Mobile: update terminal height to fill visual space after scaling
       if (!isDesktop && innerRef.current) {
-        const pad = 6
-        const outerH = container.clientHeight - pad * 2
+        const outerH = container.clientHeight - PAD * 2
         const s = minScaleRef.current
         const termH = Math.round(outerH / s)
         innerRef.current.style.height = `${termH}px`
@@ -383,7 +428,17 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
       }}
       onClick={onFocus}
     >
-      <PaneHeader target={pane.target} meta={meta} onClose={onClose} />
+      <PaneHeader
+        target={pane.target}
+        meta={meta}
+        onClose={onClose}
+        wideMode={isDesktop ? undefined : wideMode}
+        onToggleWide={isDesktop ? undefined : () => {
+          const next = !wideMode
+          setWideMode(next)
+          applyMobileSize(next)
+        }}
+      />
       {/* Outer div: ResizeObserver target; background shows through as visual padding */}
       <div
         ref={outerRef}
