@@ -60,6 +60,30 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
   // without waiting for the server to send a new capture (it deduplicates).
   const lastOutputRef = useRef<string | null>(null)
 
+  const { sendInput, sendResize } = usePaneSocket(pane.target, {
+    onOutput: (data) => {
+      lastOutputRef.current = data
+      pendingOutputRef.current = data
+      if (!rafRef.current) {
+        rafRef.current = requestAnimationFrame(() => {
+          rafRef.current = 0
+          const term = termRef.current
+          const pending = pendingOutputRef.current
+          if (!term || pending === null) return
+          pendingOutputRef.current = null
+          // If user has scrolled up, defer the write to preserve their position
+          const buf = term.buffer.active
+          if (buf.viewportY < buf.baseY) {
+            deferredOutputRef.current = pending
+            return
+          }
+          writeSnapshot(term, pending)
+        })
+      }
+    },
+    onMeta: (m) => setMeta(m),
+  })
+
   // Recalculate mobile terminal dimensions without remounting xterm
   const applyMobileSize = useCallback((wide: boolean) => {
     const outer = outerRef.current
@@ -99,30 +123,6 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
       }
     } catch { /* fit can throw if zero-size */ }
   }, [isDesktop, sendResize])
-
-  const { sendInput, sendResize } = usePaneSocket(pane.target, {
-    onOutput: (data) => {
-      lastOutputRef.current = data
-      pendingOutputRef.current = data
-      if (!rafRef.current) {
-        rafRef.current = requestAnimationFrame(() => {
-          rafRef.current = 0
-          const term = termRef.current
-          const pending = pendingOutputRef.current
-          if (!term || pending === null) return
-          pendingOutputRef.current = null
-          // If user has scrolled up, defer the write to preserve their position
-          const buf = term.buffer.active
-          if (buf.viewportY < buf.baseY) {
-            deferredOutputRef.current = pending
-            return
-          }
-          writeSnapshot(term, pending)
-        })
-      }
-    },
-    onMeta: (m) => setMeta(m),
-  })
 
   // Mount xterm.js — remount when target or desktop mode changes
   useEffect(() => {

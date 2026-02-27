@@ -68,12 +68,12 @@ const primaryActions: QuickAction[] = [
   { label: '5', action: 'text', value: '5' },
   { label: 'Y', action: 'text', value: 'y' },
   { label: 'N', action: 'text', value: 'n' },
-  { label: '^C', action: 'special', value: 'C-c' },
-  { label: '⏎', action: 'special', value: 'Enter' },
 ]
 
 // Expanded rows: shown when toggle is open
 const extraActions: QuickAction[] = [
+  { label: '^C', action: 'special', value: 'C-c' },
+  { label: '⏎', action: 'special', value: 'Enter' },
   { label: '↑', action: 'special', value: 'Up' },
   { label: '↓', action: 'special', value: 'Down' },
   { label: 'Esc', action: 'special', value: 'Escape' },
