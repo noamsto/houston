@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { SessionsData, SessionWithWindows, WindowWithStatus } from '../api/types'
 
 interface WindowRowProps {
@@ -20,6 +20,7 @@ function WindowRow({ w, sessionName, onSelect, onSplit }: WindowRowProps) {
 
   return (
     <div
+      className="tree-row"
       style={{
         padding: '3px 8px 3px 24px',
         cursor: 'pointer',
@@ -34,20 +35,19 @@ function WindowRow({ w, sessionName, onSelect, onSplit }: WindowRowProps) {
           onSelect(target)
         }
       }}
-      onMouseEnter={(e) => {
-        ;(e.currentTarget as HTMLDivElement).style.background = 'var(--bg-surface)'
-      }}
-      onMouseLeave={(e) => {
-        ;(e.currentTarget as HTMLDivElement).style.background = 'transparent'
-      }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <span style={{ width: 6, height: 6, borderRadius: '50%', background: dotColor, flexShrink: 0 }} />
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {w.window.name}
+          {w.branch && w.branch !== 'main' && w.branch !== 'master' ? w.branch : w.window.name}
         </span>
       </div>
-      {w.branch && (
+      {w.branch && w.branch !== 'main' && w.branch !== 'master' && w.branch !== w.window.name && (
+        <div style={{ color: 'var(--text-muted)', fontSize: 10, paddingLeft: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {w.window.name}
+        </div>
+      )}
+      {w.branch && (w.branch === 'main' || w.branch === 'master') && w.branch !== w.window.name && (
         <div style={{ color: 'var(--text-muted)', fontSize: 10, paddingLeft: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {w.branch}
         </div>
@@ -75,6 +75,7 @@ function SessionRow({ s, onSelect, onSplit }: SessionRowProps) {
       } : { marginBottom: 2 }}
     >
       <div
+        className="tree-row"
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -87,12 +88,6 @@ function SessionRow({ s, onSelect, onSplit }: SessionRowProps) {
           fontWeight: 500,
         }}
         onClick={() => setExpanded((x) => !x)}
-        onMouseEnter={(e) => {
-          ;(e.currentTarget as HTMLDivElement).style.background = 'var(--bg-surface)'
-        }}
-        onMouseLeave={(e) => {
-          ;(e.currentTarget as HTMLDivElement).style.background = 'transparent'
-        }}
       >
         <span style={{ fontSize: 10, color: 'var(--text-muted)', width: 10 }}>
           {expanded ? '▾' : '▸'}
@@ -178,11 +173,11 @@ export function SessionTree({ sessions, onSelect, onSplit }: Props) {
     )
   }
 
-  const filtered = {
+  const filtered = useMemo(() => ({
     needs_attention: sessions.needs_attention.filter(filterSession),
     active: sessions.active.filter(filterSession),
     idle: sessions.idle.filter(filterSession),
-  }
+  }), [sessions, filter])
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>

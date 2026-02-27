@@ -115,3 +115,46 @@ aside,
       0 0 16px rgba(245, 158, 11, 0.25);
   }
 }
+
+/* Quick-action pill button states */
+.pill-btn {
+  transition: background-color 0.1s ease, transform 0.05s ease;
+}
+.pill-btn:hover {
+  background: var(--bg-header) !important;
+}
+.pill-btn:active {
+  transform: scale(0.93);
+  background: var(--border) !important;
+}
+
+/* Choice button exit animation */
+@keyframes slide-out {
+  from { opacity: 1; transform: translateY(0); }
+  to   { opacity: 0; transform: translateY(6px); }
+}
+
+/* Session/window row hover (replaces inline onMouseEnter/onMouseLeave) */
+.tree-row {
+  transition: background-color 0.1s ease;
+}
+.tree-row:hover {
+  background: var(--bg-surface);
+}
+
+/* Header icon buttons */
+.icon-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  transition: color 0.1s ease;
+}
+.icon-btn:hover {
+  color: var(--text-primary) !important;
+}
+
+/* Reconnecting banner pulse */
+@keyframes reconnect-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}

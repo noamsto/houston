@@ -197,47 +197,52 @@ func SPAHandler(uiFS fs.FS) http.Handler {
 
 // paneScore represents the priority score for a pane
 type paneScore struct {
-	info  *tmux.PaneInfo
-	index int
-	score int // Higher score = higher priority
+	info        *tmux.PaneInfo
+	index       int
+	score       int           // Higher score = higher priority
+	output      string        // cached CapturePane output
+	agent       agents.Agent  // detected agent
+	parseResult parser.Result // parsed state
 }
 
 // findBestPane selects the best pane to display for a window
 // Priority: Agent attention > Agent working > Agent idle > active > first
 func (s *Server) findBestPane(session string, windowIdx int, panes []tmux.PaneInfo) paneScore {
 	if len(panes) == 0 {
-		return paneScore{nil, 0, 0}
+		return paneScore{}
 	}
 
-	bestPane := paneScore{&panes[0], panes[0].Index, 0}
+	best := paneScore{info: &panes[0], index: panes[0].Index}
 
 	for i := range panes {
 		p := &panes[i]
-		score := 0
 
 		pane := tmux.Pane{Session: session, Window: windowIdx, Index: p.Index}
 		paneID := pane.Target()
 		output, err := s.tmux.CapturePane(pane, 100)
 		if err != nil {
+			slog.Warn("capture pane failed", "pane", paneID, "error", err)
 			continue
 		}
 
 		agent := s.registry.Detect(paneID, p.Command, output)
-		if agent.Type() != agents.AgentGeneric {
-			parseResult := getAgentState(agent, p.Path, output)
+		var parseResult parser.Result
+		score := 0
 
-			// Agent pane needing attention = highest priority
+		if agent.Type() != agents.AgentGeneric {
+			parseResult = getAgentState(agent, p.Path, output)
+
 			if parseResult.Type == parser.TypeError ||
 				parseResult.Type == parser.TypeChoice ||
 				parseResult.Type == parser.TypeQuestion {
-				score = 100 // Highest priority
+				score = 100
 			} else if parseResult.Type == parser.TypeWorking {
-				score = 50 // Working agent
+				score = 50
 			} else {
-				score = 30 // Idle/done agent
+				score = 30
 			}
 		} else {
-			// Non-agent pane: prefer active
+			parseResult = parser.Result{Type: parser.TypeIdle}
 			if p.Active {
 				score = 10
 			} else {
@@ -245,16 +250,26 @@ func (s *Server) findBestPane(session string, windowIdx int, panes []tmux.PaneIn
 			}
 		}
 
-		if score > bestPane.score {
-			bestPane = paneScore{p, p.Index, score}
+		if score > best.score {
+			best = paneScore{
+				info:        p,
+				index:       p.Index,
+				score:       score,
+				output:      output,
+				agent:       agent,
+				parseResult: parseResult,
+			}
 		}
 	}
 
-	return bestPane
+	return best
 }
 
 func (s *Server) buildSessionsData() SessionsData {
-	sessions, _ := s.tmux.ListSessions()
+	sessions, err := s.tmux.ListSessions()
+	if err != nil {
+		slog.Warn("list sessions failed", "error", err)
+	}
 	statuses := s.watcher.GetAll()
 	_ = statuses // TODO: integrate hook status per-window
 
@@ -282,7 +297,10 @@ func (s *Server) buildSessionsData() SessionsData {
 
 		for _, win := range windows {
 			// Get actual panes for this window
-			panes, _ := s.tmux.ListPanes(sess.Name, win.Index)
+			panes, err := s.tmux.ListPanes(sess.Name, win.Index)
+			if err != nil {
+				slog.Warn("list panes failed", "session", sess.Name, "window", win.Index, "error", err)
+			}
 
 			// Find best pane to display based on priority:
 			// 1. Agent pane needing attention (error/choice/question)
@@ -290,13 +308,9 @@ func (s *Server) buildSessionsData() SessionsData {
 			// 3. Agent pane that's idle/done
 			// 4. Active pane (non-agent)
 			// 5. First pane
-			var activePaneInfo *tmux.PaneInfo
-			paneIdx := 0
-			if len(panes) > 0 {
-				bestPane := s.findBestPane(sess.Name, win.Index, panes)
-				activePaneInfo = bestPane.info
-				paneIdx = bestPane.index
-			}
+			bestPane := s.findBestPane(sess.Name, win.Index, panes)
+			activePaneInfo := bestPane.info
+			paneIdx := bestPane.index
 
 			// Load worktrees on first window (lazy load)
 			if !worktreesLoaded && activePaneInfo != nil && activePaneInfo.Path != "" {
@@ -312,20 +326,14 @@ func (s *Server) buildSessionsData() SessionsData {
 			process := win.Name
 
 			pane := tmux.Pane{Session: sess.Name, Window: win.Index, Index: paneIdx}
-			paneID := pane.Target()
-			output, _ := s.tmux.CapturePane(pane, 100)
 
-			// Get pane path for agent state lookup
-			var panePath string
-			var paneCommand string
-			if activePaneInfo != nil {
-				panePath = activePaneInfo.Path
-				paneCommand = activePaneInfo.Command
+			// Use cached values from findBestPane instead of re-capturing
+			output := bestPane.output
+			agent := bestPane.agent
+			if agent == nil {
+				agent = s.registry.Detect(pane.Target(), "", "")
 			}
-
-			// Detect agent and get state
-			agent := s.registry.Detect(paneID, paneCommand, output)
-			parseResult := getAgentState(agent, panePath, output)
+			parseResult := bestPane.parseResult
 
 			// Only mark as needing attention if it's an agent window
 			isAgentWindow := agent.Type() != agents.AgentGeneric
@@ -405,7 +413,10 @@ func (s *Server) buildSessionsData() SessionsData {
 // buildAgentStripItems returns strip items for all agent windows across all sessions,
 // for the desktop pane page navigation strip.
 func (s *Server) buildAgentStripItems(activeSession string, activeWindow, activePane int) []AgentStripItem {
-	sessions, _ := s.tmux.ListSessions()
+	sessions, err := s.tmux.ListSessions()
+	if err != nil {
+		slog.Warn("list sessions failed", "error", err)
+	}
 	var items []AgentStripItem
 
 	for _, sess := range sessions {
@@ -419,7 +430,10 @@ func (s *Server) buildAgentStripItems(activeSession string, activeWindow, active
 		var worktreesLoaded bool
 
 		for _, win := range windows {
-			panes, _ := s.tmux.ListPanes(sess.Name, win.Index)
+			panes, err := s.tmux.ListPanes(sess.Name, win.Index)
+			if err != nil {
+				slog.Warn("list panes failed", "session", sess.Name, "window", win.Index, "error", err)
+			}
 			if len(panes) == 0 {
 				continue
 			}
@@ -433,23 +447,16 @@ func (s *Server) buildAgentStripItems(activeSession string, activeWindow, active
 				worktreesLoaded = true
 			}
 
-			var panePath, paneCommand string
-			if activePaneInfo != nil {
-				panePath = activePaneInfo.Path
-				paneCommand = activePaneInfo.Command
+			// Use cached agent from findBestPane; skip non-agent windows
+			agent := bestPane.agent
+			if agent == nil {
+				continue
 			}
-
-			pane := tmux.Pane{Session: sess.Name, Window: win.Index, Index: paneIdx}
-			paneID := pane.Target()
-			output, _ := s.tmux.CapturePane(pane, 50)
-
-			agent := s.registry.Detect(paneID, paneCommand, output)
-			// Skip non-agent windows
 			if agent.Type() == agents.AgentGeneric {
 				continue
 			}
 
-			parseResult := getAgentState(agent, panePath, output)
+			parseResult := bestPane.parseResult
 
 			var branch string
 			if activePaneInfo != nil {
@@ -463,6 +470,11 @@ func (s *Server) buildAgentStripItems(activeSession string, activeWindow, active
 				indicator = "working"
 			} else if parseResult.Type == parser.TypeDone {
 				indicator = "done"
+			}
+
+			var paneCommand string
+			if activePaneInfo != nil {
+				paneCommand = activePaneInfo.Command
 			}
 
 			displayName := branch
@@ -637,17 +649,16 @@ func isAllSeparator(line string) bool {
 }
 
 func parsePaneTarget(path string) (tmux.Pane, error) {
-	// Path format: /pane/session:window.pane or /pane/session:window.pane/action
 	path = strings.TrimPrefix(path, "/pane/")
-	path = strings.TrimSuffix(path, "/send-with-images")
-	path = strings.TrimSuffix(path, "/send-with-image")
-	path = strings.TrimSuffix(path, "/send")
-	path = strings.TrimSuffix(path, "/kill")
-	path = strings.TrimSuffix(path, "/respawn")
-	path = strings.TrimSuffix(path, "/kill-window")
-	path = strings.TrimSuffix(path, "/zoom")
-	path = strings.TrimSuffix(path, "/resize")
-	path = strings.TrimSuffix(path, "/ws")
+
+	// Strip known action suffixes from the end
+	if lastSlash := strings.LastIndex(path, "/"); lastSlash >= 0 {
+		suffix := path[lastSlash+1:]
+		switch suffix {
+		case "ws", "send", "send-with-images", "send-with-image", "kill", "respawn", "kill-window", "zoom", "resize":
+			path = path[:lastSlash]
+		}
+	}
 
 	// URL-decode the path (handles %2F -> / in session names)
 	decoded, err := url.PathUnescape(path)
@@ -785,8 +796,13 @@ func (s *Server) handlePaneSendWithImages(w http.ResponseWriter, r *http.Request
 		cleanupOnError = append(cleanupOnError, tmpFile.Name())
 	}
 
-	// Note: We don't clean up temp files after sending
-	// They remain in /tmp for user to reference and will be cleaned by OS
+	// Clean up temp files after 1 hour (gives user time to reference them)
+	for _, f := range tmpFiles {
+		path := f
+		time.AfterFunc(1*time.Hour, func() {
+			os.Remove(path)
+		})
+	}
 
 	// Send all image paths and text to Claude Code as a single prompt line
 	// Format: image1 image2 image3 text + Enter

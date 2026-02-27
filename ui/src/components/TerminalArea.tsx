@@ -63,11 +63,15 @@ export function TerminalArea({ layout, onMenuClick, isDesktop }: Props) {
               alignItems: 'center',
               justifyContent: 'center',
               flexDirection: 'column',
-              gap: 8,
+              gap: 16,
+              padding: 24,
             }}
           >
-            <p style={{ color: 'var(--text-muted)', fontSize: 14 }}>Select a session to start</p>
-            <p style={{ color: 'var(--text-muted)', fontSize: 12 }}>Click a window in the sidebar</p>
+            <span style={{ fontSize: 32, opacity: 0.3 }}>◆</span>
+            <p style={{ color: 'var(--text-secondary)', fontSize: 14 }}>Select a session to start</p>
+            <p style={{ color: 'var(--text-muted)', fontSize: 12 }}>
+              Click a window in the sidebar{isDesktop ? ' · Ctrl+Meta to split' : ''}
+            </p>
           </div>
         ) : (
           <SplitContainer

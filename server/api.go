@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -42,8 +43,26 @@ func (s *Server) streamAPISessionsJSON(w http.ResponseWriter, r *http.Request) {
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 
-	// Send initial data immediately
-	if err := s.sendAPISessionsEvent(w, flusher); err != nil {
+	var lastJSON []byte
+
+	send := func() error {
+		data := s.buildSessionsData()
+		jsonBytes, err := json.Marshal(data)
+		if err != nil {
+			return err
+		}
+		if bytes.Equal(jsonBytes, lastJSON) {
+			return nil
+		}
+		lastJSON = jsonBytes
+		if _, err := fmt.Fprintf(w, "data: %s\n\n", jsonBytes); err != nil {
+			return err
+		}
+		flusher.Flush()
+		return nil
+	}
+
+	if err := send(); err != nil {
 		slog.Debug("SSE sessions initial write error", "error", err)
 		return
 	}
@@ -53,26 +72,12 @@ func (s *Server) streamAPISessionsJSON(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case <-ticker.C:
-			if err := s.sendAPISessionsEvent(w, flusher); err != nil {
+			if err := send(); err != nil {
 				slog.Debug("SSE sessions write error", "error", err)
 				return
 			}
 		}
 	}
-}
-
-func (s *Server) sendAPISessionsEvent(w http.ResponseWriter, flusher http.Flusher) error {
-	data := s.buildSessionsData()
-	jsonBytes, err := json.Marshal(data)
-	if err != nil {
-		return err
-	}
-	_, err = fmt.Fprintf(w, "data: %s\n\n", jsonBytes)
-	if err != nil {
-		return err
-	}
-	flusher.Flush()
-	return nil
 }
 
 func (s *Server) handleAPIPane(w http.ResponseWriter, r *http.Request) {

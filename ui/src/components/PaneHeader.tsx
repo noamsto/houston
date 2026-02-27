@@ -6,6 +6,7 @@ interface Props {
   onClose: () => void
   wideMode?: boolean
   onToggleWide?: () => void
+  onCopy?: () => void
 }
 
 const AGENT_ICONS: Record<AgentType, string> = {
@@ -25,24 +26,49 @@ function statusColor(status: ResultType | undefined): string {
   }
 }
 
-export function PaneHeader({ target, meta, onClose, wideMode, onToggleWide }: Props) {
+export function PaneHeader({ target, meta, onClose, wideMode, onToggleWide, onCopy }: Props) {
   const icon = meta ? (AGENT_ICONS[meta.agent] ?? '◆') : '·'
   const color = statusColor(meta?.status)
   const modeBadge = meta?.mode === 'normal' ? 'NOR' : meta?.mode === 'insert' ? 'INS' : null
   // Show activity text if available, otherwise show the window portion of target
   const label = meta?.activity || (target.split(':')[1] ?? target)
+  const isMobile = !!onToggleWide // mobile passes onToggleWide, desktop doesn't
+
+  const headerBtn: React.CSSProperties = isMobile
+    ? {
+        background: 'none',
+        border: '1px solid var(--border)',
+        borderRadius: 4,
+        cursor: 'pointer',
+        fontFamily: 'var(--font-mono)',
+        fontSize: 12,
+        lineHeight: 1,
+        padding: '6px 10px',
+        flexShrink: 0,
+      }
+    : {
+        background: 'none',
+        border: '1px solid var(--border)',
+        borderRadius: 2,
+        cursor: 'pointer',
+        fontFamily: 'var(--font-mono)',
+        fontSize: 9,
+        lineHeight: 1,
+        padding: '1px 3px',
+        flexShrink: 0,
+      }
 
   return (
     <div
       style={{
         display: 'flex',
         alignItems: 'center',
-        gap: 6,
-        padding: '0 8px',
-        height: 24,
+        gap: isMobile ? 8 : 6,
+        padding: isMobile ? '0 10px' : '0 8px',
+        height: isMobile ? 36 : 24,
         background: 'var(--bg-header)',
         borderBottom: '1px solid var(--border)',
-        fontSize: 11,
+        fontSize: isMobile ? 13 : 11,
         flexShrink: 0,
         userSelect: 'none',
       }}
@@ -64,12 +90,12 @@ export function PaneHeader({ target, meta, onClose, wideMode, onToggleWide }: Pr
       {modeBadge && (
         <span
           style={{
-            fontSize: 9,
+            fontSize: isMobile ? 11 : 9,
             fontFamily: 'var(--font-mono)',
             color: 'var(--text-muted)',
             border: '1px solid var(--border)',
-            borderRadius: 2,
-            padding: '0 3px',
+            borderRadius: isMobile ? 4 : 2,
+            padding: isMobile ? '4px 6px' : '0 3px',
             flexShrink: 0,
           }}
         >
@@ -85,19 +111,27 @@ export function PaneHeader({ target, meta, onClose, wideMode, onToggleWide }: Pr
           }}
           title={wideMode ? 'Fit to screen' : 'Wide terminal (~120 cols)'}
           style={{
-            background: 'none',
-            border: '1px solid var(--border)',
-            borderRadius: 2,
+            ...headerBtn,
             color: wideMode ? 'var(--text-secondary)' : 'var(--text-muted)',
-            cursor: 'pointer',
-            fontSize: 9,
-            fontFamily: 'var(--font-mono)',
-            lineHeight: 1,
-            padding: '1px 3px',
-            flexShrink: 0,
           }}
         >
           {wideMode ? 'WIDE' : 'FIT'}
+        </button>
+      )}
+
+      {onCopy && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation()
+            onCopy()
+          }}
+          title="Copy terminal text"
+          style={{
+            ...headerBtn,
+            color: 'var(--text-muted)',
+          }}
+        >
+          CPY
         </button>
       )}
 
@@ -111,9 +145,9 @@ export function PaneHeader({ target, meta, onClose, wideMode, onToggleWide }: Pr
           border: 'none',
           color: 'var(--text-muted)',
           cursor: 'pointer',
-          fontSize: 14,
+          fontSize: isMobile ? 20 : 14,
           lineHeight: 1,
-          padding: '0 2px',
+          padding: isMobile ? '4px 6px' : '0 2px',
           flexShrink: 0,
         }}
       >

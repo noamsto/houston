@@ -73,7 +73,6 @@ const primaryActions: QuickAction[] = [
 // Expanded rows: shown when toggle is open
 const extraActions: QuickAction[] = [
   { label: '^C', action: 'special', value: 'C-c' },
-  { label: '⏎', action: 'special', value: 'Enter' },
   { label: '↑', action: 'special', value: 'Up' },
   { label: '↓', action: 'special', value: 'Down' },
   { label: 'Esc', action: 'special', value: 'Escape' },
@@ -105,7 +104,11 @@ export function MobileInputBar({ target, choices }: Props) {
 
   const handleSend = async () => {
     const line = text.trim()
-    if (!line) return
+    if (!line) {
+      // Empty input: send Enter key to the terminal
+      await sendSpecial(target, 'Enter')
+      return
+    }
     setText('')
     if (textareaRef.current) textareaRef.current.style.height = 'auto'
     await sendText(target, line)
@@ -201,6 +204,7 @@ export function MobileInputBar({ target, choices }: Props) {
           {primaryActions.map((qa) => (
             <button
               key={qa.label}
+              className="pill-btn"
               onClick={() => void handleQuickAction(qa.action, qa.value)}
               style={pillStyle}
             >
@@ -210,6 +214,7 @@ export function MobileInputBar({ target, choices }: Props) {
           {expanded && extraActions.map((qa) => (
             <button
               key={qa.label}
+              className="pill-btn"
               onClick={() => void handleQuickAction(qa.action, qa.value)}
               style={pillStyle}
             >
@@ -220,12 +225,13 @@ export function MobileInputBar({ target, choices }: Props) {
         <button
           onClick={() => setExpanded((e) => !e)}
           style={{
-            background: 'none',
-            border: 'none',
+            background: 'var(--bg-surface)',
+            border: '1px solid var(--border)',
+            borderRadius: 12,
             color: 'var(--text-muted)',
-            fontSize: 14,
+            fontSize: 16,
             cursor: 'pointer',
-            padding: '6px 4px',
+            padding: '6px 10px',
             flexShrink: 0,
           }}
         >
@@ -243,7 +249,7 @@ export function MobileInputBar({ target, choices }: Props) {
             autoGrow(e.target)
           }}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && e.shiftKey) {
+            if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault()
               void handleSend()
             }
@@ -291,13 +297,12 @@ export function MobileInputBar({ target, choices }: Props) {
 
         <button
           onClick={() => void handleSend()}
-          disabled={!text.trim()}
           style={{
-            background: text.trim() ? 'var(--accent-working)' : 'transparent',
-            border: 'none',
+            background: text.trim() ? 'var(--accent-working)' : 'var(--bg-surface)',
+            border: text.trim() ? 'none' : '1px solid var(--border)',
             borderRadius: 6,
-            color: text.trim() ? '#fff' : 'var(--text-muted)',
-            cursor: text.trim() ? 'pointer' : 'default',
+            color: text.trim() ? '#fff' : 'var(--text-secondary)',
+            cursor: 'pointer',
             fontSize: 16,
             width: 36,
             height: 36,

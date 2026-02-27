@@ -103,8 +103,13 @@ func (s *Server) paneWSReadLoop(conn *websocket.Conn, pane tmux.Pane, nudge chan
 				continue
 			}
 			if resize.Cols > 0 && resize.Rows > 0 {
-				s.tmux.ResizePane(pane, "x", resize.Cols)
-				s.tmux.ResizePane(pane, "y", resize.Rows)
+				// Resize the window (not just the pane) so tmux allows the
+				// full dimensions even when another smaller client is attached.
+				if err := s.tmux.ResizeWindow(pane.Session, pane.Window, resize.Cols, resize.Rows); err != nil {
+					slog.Debug("resize window failed, falling back to pane resize", "error", err)
+					s.tmux.ResizePane(pane, "x", resize.Cols)
+					s.tmux.ResizePane(pane, "y", resize.Rows)
+				}
 				// Signal write loop to capture immediately with new dimensions
 				select {
 				case nudge <- struct{}{}:

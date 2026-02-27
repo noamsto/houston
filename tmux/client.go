@@ -424,3 +424,11 @@ func GetBranchForPath(path string, worktrees map[string]string) string {
 
 	return strings.TrimSpace(string(out))
 }
+
+// ResizeWindow sets the absolute width and height of a tmux window.
+// This works even when resize-pane is capped by the window dimensions.
+func (c *Client) ResizeWindow(session string, window int, cols, rows int) error {
+	target := fmt.Sprintf("%s:%d", session, window)
+	cmd := exec.Command(c.tmuxPath, "resize-window", "-t", target, "-x", strconv.Itoa(cols), "-y", strconv.Itoa(rows))
+	return cmd.Run()
+}
