@@ -18,7 +18,7 @@
             pname = "houston-ui";
             version = "0.1.0";
             src = ./ui;
-            npmDepsHash = lib.fakeHash; # Replace after first failed build
+            npmDepsHash = "sha256-VbXiUUSVVP3F+a9H3l4DlVD9wC35v9rBXwY9a1tAKHo=";
             buildPhase = "npm run build";
             installPhase = "cp -r dist $out";
             # Don't run the default `npm install` install phase
@@ -29,7 +29,7 @@
             pname = "houston";
             version = "0.1.0";
             src = pkgs.lib.cleanSource ./.;
-            vendorHash = null; # Update after go mod vendor
+            vendorHash = lib.fakeHash;
 
             # Inject the pre-built React frontend before Go compiles embed.go
             preBuild = ''
