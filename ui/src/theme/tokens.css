@@ -94,6 +94,11 @@ aside,
 }
 .xterm-viewport {
   overflow-y: auto !important;
+  -webkit-overflow-scrolling: touch;
+}
+/* Allow native touch scrolling on mobile — xterm's touch handlers intercept otherwise */
+.xterm .xterm-screen {
+  touch-action: pan-y !important;
 }
 
 @keyframes attention-pulse {
