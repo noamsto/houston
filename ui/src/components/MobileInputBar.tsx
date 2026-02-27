@@ -57,7 +57,10 @@ async function sendSpecial(target: string, key: string) {
   })
 }
 
-const quickActions: { label: string; action: 'text' | 'special'; value: string }[] = [
+type QuickAction = { label: string; action: 'text' | 'special'; value: string }
+
+// Primary row: always visible
+const primaryActions: QuickAction[] = [
   { label: '1', action: 'text', value: '1' },
   { label: '2', action: 'text', value: '2' },
   { label: '3', action: 'text', value: '3' },
@@ -67,8 +70,18 @@ const quickActions: { label: string; action: 'text' | 'special'; value: string }
   { label: 'N', action: 'text', value: 'n' },
   { label: '^C', action: 'special', value: 'C-c' },
   { label: '⏎', action: 'special', value: 'Enter' },
+]
+
+// Expanded rows: shown when toggle is open
+const extraActions: QuickAction[] = [
   { label: '↑', action: 'special', value: 'Up' },
   { label: '↓', action: 'special', value: 'Down' },
+  { label: 'Esc', action: 'special', value: 'Escape' },
+  { label: 'Tab', action: 'special', value: 'Tab' },
+  { label: '⇧Tab', action: 'special', value: 'BTab' },
+  { label: 'M-p', action: 'special', value: 'M-p' },
+  { label: 'C-o', action: 'special', value: 'C-o' },
+  { label: 'C-z', action: 'special', value: 'C-z' },
 ]
 
 const pillStyle: React.CSSProperties = {
@@ -76,17 +89,17 @@ const pillStyle: React.CSSProperties = {
   border: '1px solid var(--border)',
   borderRadius: 12,
   color: 'var(--text-secondary)',
-  fontSize: 16,
+  fontSize: 14,
   fontFamily: 'var(--font-mono)',
-  padding: '8px 16px',
+  padding: '6px 12px',
   cursor: 'pointer',
   whiteSpace: 'nowrap',
-  flexShrink: 0,
 }
 
 export function MobileInputBar({ target, choices }: Props) {
   const [text, setText] = useState('')
   const [listening, setListening] = useState(false)
+  const [expanded, setExpanded] = useState(false)
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -182,26 +195,42 @@ export function MobileInputBar({ target, choices }: Props) {
         </div>
       )}
 
-      {/* Quick action pills */}
-      <div
-        style={{
-          display: 'flex',
-          gap: 6,
-          padding: '6px 8px 0',
-          overflowX: 'auto',
-          WebkitOverflowScrolling: 'touch',
-          scrollbarWidth: 'none',
-        }}
-      >
-        {quickActions.map((qa) => (
-          <button
-            key={qa.label}
-            onClick={() => void handleQuickAction(qa.action, qa.value)}
-            style={pillStyle}
-          >
-            {qa.label}
-          </button>
-        ))}
+      {/* Quick action pills — wrapping grid with expand toggle */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', padding: '6px 8px 0' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, flex: 1 }}>
+          {primaryActions.map((qa) => (
+            <button
+              key={qa.label}
+              onClick={() => void handleQuickAction(qa.action, qa.value)}
+              style={pillStyle}
+            >
+              {qa.label}
+            </button>
+          ))}
+          {expanded && extraActions.map((qa) => (
+            <button
+              key={qa.label}
+              onClick={() => void handleQuickAction(qa.action, qa.value)}
+              style={pillStyle}
+            >
+              {qa.label}
+            </button>
+          ))}
+        </div>
+        <button
+          onClick={() => setExpanded((e) => !e)}
+          style={{
+            background: 'none',
+            border: 'none',
+            color: 'var(--text-muted)',
+            fontSize: 14,
+            cursor: 'pointer',
+            padding: '6px 4px',
+            flexShrink: 0,
+          }}
+        >
+          {expanded ? '▴' : '▾'}
+        </button>
       </div>
 
       {/* Text input row */}

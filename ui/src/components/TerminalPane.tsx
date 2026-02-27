@@ -168,10 +168,17 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
     const screen = innerRef.current.querySelector('.xterm-screen') as HTMLElement | null
     const lineHeight = 13 * 1.2 // fontSize * lineHeight
 
-    let gesture: 'none' | 'scroll' | 'pinch' = 'none'
+    let gesture: 'none' | 'scroll' | 'pan' | 'pinch' = 'none'
+    // Direction detection — lock after first significant movement
+    const DIRECTION_THRESHOLD = 8 // px before locking direction
+    let dragOriginX = 0
+    let dragOriginY = 0
+    let directionLocked = false
     // Scroll state
     let scrollStartY = 0
     let scrollAcc = 0
+    // Pan state (horizontal single-finger)
+    let panLastX = 0
     // Pinch state
     let pinchStartDist = 0
     let pinchStartScale = 0
@@ -206,8 +213,13 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
     const onTouchStart = (e: TouchEvent) => {
       e.stopPropagation()
       if (e.touches.length === 1) {
-        gesture = 'scroll'
+        // Don't lock direction yet — wait for first significant movement
+        gesture = 'scroll' // tentative, may switch to 'pan'
+        directionLocked = false
+        dragOriginX = e.touches[0].clientX
+        dragOriginY = e.touches[0].clientY
         scrollStartY = e.touches[0].clientY
+        panLastX = e.touches[0].clientX
         scrollAcc = 0
       } else if (e.touches.length === 2) {
         gesture = 'pinch'
@@ -236,14 +248,32 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
       e.preventDefault()
       e.stopPropagation()
 
-      if (gesture === 'scroll' && e.touches.length === 1) {
-        const deltaY = scrollStartY - e.touches[0].clientY
-        scrollStartY = e.touches[0].clientY
-        scrollAcc += deltaY
-        const lines = Math.trunc(scrollAcc / lineHeight)
-        if (lines !== 0) {
-          scrollAcc -= lines * lineHeight
-          term.scrollLines(lines)
+      if ((gesture === 'scroll' || gesture === 'pan') && e.touches.length === 1) {
+        // Detect drag direction on first significant movement
+        if (!directionLocked) {
+          const dx = Math.abs(e.touches[0].clientX - dragOriginX)
+          const dy = Math.abs(e.touches[0].clientY - dragOriginY)
+          if (dx < DIRECTION_THRESHOLD && dy < DIRECTION_THRESHOLD) return
+          gesture = dx > dy ? 'pan' : 'scroll'
+          directionLocked = true
+        }
+
+        if (gesture === 'scroll') {
+          const deltaY = scrollStartY - e.touches[0].clientY
+          scrollStartY = e.touches[0].clientY
+          scrollAcc += deltaY
+          const lines = Math.trunc(scrollAcc / lineHeight)
+          if (lines !== 0) {
+            scrollAcc -= lines * lineHeight
+            term.scrollLines(lines)
+          }
+        } else {
+          // Horizontal pan
+          const dx = e.touches[0].clientX - panLastX
+          panLastX = e.touches[0].clientX
+          translateXRef.current += dx
+          clampPan()
+          applyTransform()
         }
       } else if (e.touches.length === 2) {
         // Switch to pinch if a second finger was added mid-gesture
