@@ -76,9 +76,9 @@ const pillStyle: React.CSSProperties = {
   border: '1px solid var(--border)',
   borderRadius: 12,
   color: 'var(--text-secondary)',
-  fontSize: 12,
+  fontSize: 14,
   fontFamily: 'var(--font-mono)',
-  padding: '4px 10px',
+  padding: '6px 14px',
   cursor: 'pointer',
   whiteSpace: 'nowrap',
   flexShrink: 0,
@@ -264,8 +264,8 @@ export function MobileInputBar({ target, choices }: Props) {
           onClick={() => void handleSend()}
           disabled={!text.trim()}
           style={{
-            background: text.trim() ? 'var(--accent-working)' : 'var(--bg-surface)',
-            border: '1px solid var(--border)',
+            background: text.trim() ? 'var(--accent-working)' : 'transparent',
+            border: 'none',
             borderRadius: 6,
             color: text.trim() ? '#fff' : 'var(--text-muted)',
             cursor: text.trim() ? 'pointer' : 'default',

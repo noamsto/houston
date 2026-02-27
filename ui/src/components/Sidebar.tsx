@@ -36,6 +36,19 @@ export function Sidebar({ sessions, connected, open, onClose, onSelectWindow, on
   if (!open) return null
 
   return (
+    <>
+    {/* Mobile backdrop: dims content + click-to-close */}
+    {!isDesktop && (
+      <div
+        onClick={onClose}
+        style={{
+          position: 'fixed',
+          inset: 0,
+          zIndex: 99,
+          background: 'rgba(0,0,0,0.75)',
+        }}
+      />
+    )}
     <aside
       style={{
         width: isDesktop ? 'var(--sidebar-width)' : '85vw',
@@ -120,5 +133,6 @@ export function Sidebar({ sessions, connected, open, onClose, onSelectWindow, on
         )}
       </div>
     </aside>
+    </>
   )
 }
