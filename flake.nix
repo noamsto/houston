@@ -29,7 +29,7 @@
             pname = "houston";
             version = "0.1.0";
             src = pkgs.lib.cleanSource ./.;
-            vendorHash = lib.fakeHash;
+            vendorHash = "sha256-0Qxw+MUYVgzgWB8vi3HBYtVXSq/btfh4ZfV/m1chNrA=";
 
             # Inject the pre-built React frontend before Go compiles embed.go
             preBuild = ''
