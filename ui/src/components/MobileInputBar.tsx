@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 
 interface Props {
   target: string
@@ -39,7 +39,7 @@ const SpeechRecognitionCtor = (window as unknown as Record<string, unknown>).Spe
   | (new () => SpeechRecognitionLike)
   | undefined
 
-async function sendLine(target: string, text: string) {
+async function sendText(target: string, text: string) {
   const body = new URLSearchParams({ input: text })
   await fetch(`/api/pane/${target}/send`, {
     method: 'POST',
@@ -48,21 +48,67 @@ async function sendLine(target: string, text: string) {
   })
 }
 
+async function sendSpecial(target: string, key: string) {
+  const body = new URLSearchParams({ input: key, special: 'true' })
+  await fetch(`/api/pane/${target}/send`, {
+    method: 'POST',
+    body,
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+  })
+}
+
+const quickActions: { label: string; action: 'text' | 'special'; value: string }[] = [
+  { label: '1', action: 'text', value: '1' },
+  { label: '2', action: 'text', value: '2' },
+  { label: '3', action: 'text', value: '3' },
+  { label: '4', action: 'text', value: '4' },
+  { label: '5', action: 'text', value: '5' },
+  { label: '^C', action: 'special', value: 'C-c' },
+  { label: '⏎', action: 'special', value: 'Enter' },
+  { label: 'Y', action: 'text', value: 'y' },
+  { label: 'N', action: 'text', value: 'n' },
+  { label: '↑', action: 'special', value: 'Up' },
+  { label: '↓', action: 'special', value: 'Down' },
+]
+
+const pillStyle: React.CSSProperties = {
+  background: 'var(--bg-surface)',
+  border: '1px solid var(--border)',
+  borderRadius: 12,
+  color: 'var(--text-secondary)',
+  fontSize: 12,
+  fontFamily: 'var(--font-mono)',
+  padding: '4px 10px',
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
+  flexShrink: 0,
+}
+
 export function MobileInputBar({ target, choices }: Props) {
   const [text, setText] = useState('')
   const [listening, setListening] = useState(false)
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   const handleSend = async () => {
     const line = text.trim()
     if (!line) return
     setText('')
-    await sendLine(target, line)
+    if (textareaRef.current) textareaRef.current.style.height = 'auto'
+    await sendText(target, line)
   }
 
   const handleChoice = async (choice: string) => {
-    await sendLine(target, choice)
+    await sendText(target, choice)
   }
+
+  const handleQuickAction = useCallback(async (action: 'text' | 'special', value: string) => {
+    if (action === 'special') {
+      await sendSpecial(target, value)
+    } else {
+      await sendText(target, value)
+    }
+  }, [target])
 
   const handleVoice = () => {
     if (!SpeechRecognitionCtor) return
@@ -90,6 +136,11 @@ export function MobileInputBar({ target, choices }: Props) {
     rec.start()
   }
 
+  const autoGrow = (el: HTMLTextAreaElement) => {
+    el.style.height = 'auto'
+    el.style.height = Math.min(el.scrollHeight, 4 * 24) + 'px'
+  }
+
   const hasSpeech = !!SpeechRecognitionCtor
 
   return (
@@ -100,6 +151,7 @@ export function MobileInputBar({ target, choices }: Props) {
         flexShrink: 0,
       }}
     >
+      {/* Agent choice buttons */}
       {choices && choices.length > 0 && (
         <div
           style={{
@@ -130,18 +182,45 @@ export function MobileInputBar({ target, choices }: Props) {
         </div>
       )}
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: 8 }}>
-        <input
-          type="text"
+      {/* Quick action pills */}
+      <div
+        style={{
+          display: 'flex',
+          gap: 6,
+          padding: '6px 8px 0',
+          overflowX: 'auto',
+          WebkitOverflowScrolling: 'touch',
+          scrollbarWidth: 'none',
+        }}
+      >
+        {quickActions.map((qa) => (
+          <button
+            key={qa.label}
+            onClick={() => void handleQuickAction(qa.action, qa.value)}
+            style={pillStyle}
+          >
+            {qa.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Text input row */}
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, padding: 8 }}>
+        <textarea
+          ref={textareaRef}
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => {
+            setText(e.target.value)
+            autoGrow(e.target)
+          }}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') {
+            if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault()
               void handleSend()
             }
           }}
           placeholder="Send a message..."
+          rows={1}
           style={{
             flex: 1,
             background: 'var(--bg-surface)',
@@ -149,8 +228,12 @@ export function MobileInputBar({ target, choices }: Props) {
             borderRadius: 6,
             padding: '6px 10px',
             color: 'var(--text-primary)',
-            fontSize: 14,
+            fontSize: 16,
+            lineHeight: '24px',
             outline: 'none',
+            resize: 'none',
+            fontFamily: 'inherit',
+            overflow: 'hidden',
           }}
         />
 

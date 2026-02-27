@@ -186,7 +186,7 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
         {/* Inner div: inset by 6px — xterm opens here; FitAddon measures this area */}
         <div
           ref={innerRef}
-          style={{ position: 'absolute', top: 6, left: 6, right: 6, bottom: 6 }}
+          style={{ position: 'absolute', top: 6, left: 6, right: 6, bottom: 6, touchAction: 'pan-y' }}
         />
       </div>
       {!isDesktop && (

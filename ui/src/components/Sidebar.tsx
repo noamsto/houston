@@ -46,6 +46,8 @@ export function Sidebar({ sessions, connected, open, onClose, onSelectWindow, on
         borderRight: '1px solid var(--border)',
         flexShrink: 0,
         position: isDesktop ? 'relative' : 'fixed',
+        top: isDesktop ? undefined : 0,
+        left: isDesktop ? undefined : 0,
         zIndex: isDesktop ? 'auto' : 100,
         height: '100%',
         display: 'flex',

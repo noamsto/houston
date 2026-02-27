@@ -10,13 +10,13 @@ export function usePaneSocket(target: string | null, callbacks: PaneSocketCallba
   const wsRef = useRef<WebSocket | null>(null)
   const callbacksRef = useRef(callbacks)
   const [connected, setConnected] = useState(false)
+  const retriesRef = useRef(0)
 
   // Keep callbacks ref up-to-date without triggering reconnect
   callbacksRef.current = callbacks
 
   const sendInput = useCallback((data: string) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
-      // data field must be an embedded JSON object (json.RawMessage on the Go side)
       wsRef.current.send(JSON.stringify({ type: 'input', data: { data } }))
     }
   }, [])
@@ -30,41 +30,74 @@ export function usePaneSocket(target: string | null, callbacks: PaneSocketCallba
   useEffect(() => {
     if (!target) return
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const wsUrl = `${protocol}//${window.location.host}/api/pane/${target}/ws`
+    let cancelled = false
+    let reconnectTimer: ReturnType<typeof setTimeout>
 
-    const ws = new WebSocket(wsUrl)
-    wsRef.current = ws
+    function connect() {
+      if (cancelled) return
 
-    ws.onopen = () => setConnected(true)
-    ws.onclose = () => setConnected(false)
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      const wsUrl = `${protocol}//${window.location.host}/api/pane/${target}/ws`
 
-    ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data as string)
-        // msg.data is already a parsed object (json.RawMessage embeds as JSON, not a string)
-        switch (msg.type) {
-          case 'output': {
-            const output = msg.data as WSOutput
-            callbacksRef.current.onOutput(output.data)
-            break
+      const ws = new WebSocket(wsUrl)
+      wsRef.current = ws
+
+      ws.onopen = () => {
+        setConnected(true)
+        retriesRef.current = 0
+      }
+
+      ws.onclose = () => {
+        setConnected(false)
+        wsRef.current = null
+        if (cancelled) return
+        // Exponential backoff: 500ms, 1s, 2s, 4s, capped at 5s
+        const delay = Math.min(500 * 2 ** retriesRef.current, 5000)
+        retriesRef.current++
+        reconnectTimer = setTimeout(connect, delay)
+      }
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data as string)
+          switch (msg.type) {
+            case 'output': {
+              const output = msg.data as WSOutput
+              callbacksRef.current.onOutput(output.data)
+              break
+            }
+            case 'meta': {
+              const meta = msg.data as WSMeta
+              callbacksRef.current.onMeta(meta)
+              break
+            }
           }
-          case 'meta': {
-            const meta = msg.data as WSMeta
-            callbacksRef.current.onMeta(meta)
-            break
-          }
+        } catch (e) {
+          console.error('Failed to parse WS message:', e)
         }
-      } catch (e) {
-        console.error('Failed to parse WS message:', e)
       }
     }
 
+    connect()
+
+    // Reconnect immediately when tab becomes visible again
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible' && wsRef.current?.readyState !== WebSocket.OPEN) {
+        clearTimeout(reconnectTimer)
+        retriesRef.current = 0
+        connect()
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+
     return () => {
-      ws.close()
+      cancelled = true
+      clearTimeout(reconnectTimer)
+      document.removeEventListener('visibilitychange', onVisibility)
+      wsRef.current?.close()
       wsRef.current = null
     }
-  }, [target]) // Reconnect when target changes
+  }, [target])
 
   return { connected, sendInput, sendResize }
 }
