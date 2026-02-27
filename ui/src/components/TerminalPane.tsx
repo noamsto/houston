@@ -127,8 +127,49 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
     }
     viewport?.addEventListener('scroll', onViewportScroll)
 
+    // Mobile touch scrolling — xterm.js's internal Gesture class adds non-passive
+    // touch listeners on document that call preventDefault(), blocking native scroll.
+    // We intercept touch events on the screen element, stop propagation so xterm's
+    // Gesture handler never sees them, and scroll manually via term.scrollLines().
+    const screen = innerRef.current.querySelector('.xterm-screen') as HTMLElement | null
+    const lineHeight = 13 * 1.2 // fontSize * lineHeight
+    let touchStartY = 0
+    let scrollAccumulator = 0
+
+    const onTouchStart = (e: TouchEvent) => {
+      touchStartY = e.touches[0].clientY
+      scrollAccumulator = 0
+      e.stopPropagation()
+    }
+    const onTouchMove = (e: TouchEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      const deltaY = touchStartY - e.touches[0].clientY
+      touchStartY = e.touches[0].clientY
+      scrollAccumulator += deltaY
+      const lines = Math.trunc(scrollAccumulator / lineHeight)
+      if (lines !== 0) {
+        scrollAccumulator -= lines * lineHeight
+        term.scrollLines(lines)
+      }
+    }
+    const onTouchEnd = (e: TouchEvent) => {
+      e.stopPropagation()
+    }
+
+    if (!isDesktop && screen) {
+      screen.addEventListener('touchstart', onTouchStart, { passive: true })
+      screen.addEventListener('touchmove', onTouchMove, { passive: false })
+      screen.addEventListener('touchend', onTouchEnd, { passive: true })
+    }
+
     return () => {
       viewport?.removeEventListener('scroll', onViewportScroll)
+      if (screen) {
+        screen.removeEventListener('touchstart', onTouchStart)
+        screen.removeEventListener('touchmove', onTouchMove)
+        screen.removeEventListener('touchend', onTouchEnd)
+      }
       cancelAnimationFrame(rafRef.current)
       rafRef.current = 0
       pendingOutputRef.current = null
