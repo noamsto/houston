@@ -54,6 +54,7 @@ body,
   background: var(--bg-base);
   color: var(--text-primary);
   font-family: var(--font-ui);
+  overscroll-behavior: none;
 }
 
 /* UI transitions — buttons and sidebar only, never inputs or terminal */
