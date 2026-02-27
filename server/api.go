@@ -12,7 +12,6 @@ import (
 	"github.com/noamsto/houston/agents"
 	"github.com/noamsto/houston/agents/claude"
 	"github.com/noamsto/houston/tmux"
-	"github.com/noamsto/houston/views"
 )
 
 func (s *Server) handleAPISessions(w http.ResponseWriter, r *http.Request) {
@@ -136,7 +135,7 @@ func (s *Server) handlePaneJSON(w http.ResponseWriter, r *http.Request, pane tmu
 
 	width, height, _ := s.tmux.GetPaneSize(pane)
 
-	data := views.PaneData{
+	data := PaneData{
 		Pane:        pane,
 		Output:      agent.FilterStatusBar(capture.Output),
 		ParseResult: parseResult,
@@ -155,7 +154,7 @@ func (s *Server) handlePaneJSON(w http.ResponseWriter, r *http.Request, pane tmu
 func (s *Server) handleAPIOpenCodeSessions(w http.ResponseWriter, r *http.Request) {
 	if s.ocManager == nil {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(views.OpenCodeData{})
+		json.NewEncoder(w).Encode(OpenCodeData{})
 		return
 	}
 

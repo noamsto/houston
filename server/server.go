@@ -26,7 +26,6 @@ import (
 	"github.com/noamsto/houston/parser"
 	"github.com/noamsto/houston/status"
 	"github.com/noamsto/houston/tmux"
-	"github.com/noamsto/houston/views"
 )
 
 // getAgentState gets state from the detected agent.
@@ -74,7 +73,7 @@ type Server struct {
 	watcher  *status.Watcher
 	registry *agents.Registry
 	font     FontController
-	uiFS     fs.FS // embedded React SPA (nil = use legacy templ handlers)
+	uiFS     fs.FS // embedded React SPA
 	mu       sync.RWMutex
 
 	// Track when sessions last had activity (for keeping recently-active in Active section)
@@ -103,8 +102,7 @@ type Config struct {
 	OpenCodeURL     string // Static URL (if set, skip discovery)
 	OpenCodePorts   []int  // Ports to scan (default: 4096-4100)
 
-	// UIFS is the embedded React SPA filesystem. When set, serves the SPA at /.
-	// When nil, falls back to the legacy templ handlers.
+	// UIFS is the embedded React SPA filesystem.
 	UIFS fs.FS
 }
 
@@ -161,8 +159,6 @@ func New(cfg Config) (*Server, error) {
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-
-	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
 
 	if s.uiFS != nil {
 		mux.Handle("/", SPAHandler(s.uiFS))
@@ -257,16 +253,16 @@ func (s *Server) findBestPane(session string, windowIdx int, panes []tmux.PaneIn
 	return bestPane
 }
 
-func (s *Server) buildSessionsData() views.SessionsData {
+func (s *Server) buildSessionsData() SessionsData {
 	sessions, _ := s.tmux.ListSessions()
 	statuses := s.watcher.GetAll()
 	_ = statuses // TODO: integrate hook status per-window
 
 	// Initialize slices to empty (not nil) so JSON serializes as [] not null.
-	data := views.SessionsData{
-		NeedsAttention: []views.SessionWithWindows{},
-		Active:         []views.SessionWithWindows{},
-		Idle:           []views.SessionWithWindows{},
+	data := SessionsData{
+		NeedsAttention: []SessionWithWindows{},
+		Active:         []SessionWithWindows{},
+		Idle:           []SessionWithWindows{},
 	}
 
 	for _, sess := range sessions {
@@ -276,7 +272,7 @@ func (s *Server) buildSessionsData() views.SessionsData {
 			continue
 		}
 
-		sessionData := views.SessionWithWindows{
+		sessionData := SessionWithWindows{
 			Session: sess,
 		}
 
@@ -344,7 +340,7 @@ func (s *Server) buildSessionsData() views.SessionsData {
 			}
 			preview := s.getPreviewLines(agent, output, previewLines)
 
-			windowStatus := views.WindowWithStatus{
+			windowStatus := WindowWithStatus{
 				Window:         win,
 				Pane:           pane,
 				ParseResult:    parseResult,
@@ -408,9 +404,9 @@ func (s *Server) buildSessionsData() views.SessionsData {
 
 // buildAgentStripItems returns strip items for all agent windows across all sessions,
 // for the desktop pane page navigation strip.
-func (s *Server) buildAgentStripItems(activeSession string, activeWindow, activePane int) []views.AgentStripItem {
+func (s *Server) buildAgentStripItems(activeSession string, activeWindow, activePane int) []AgentStripItem {
 	sessions, _ := s.tmux.ListSessions()
-	var items []views.AgentStripItem
+	var items []AgentStripItem
 
 	for _, sess := range sessions {
 		windows, err := s.tmux.ListWindows(sess.Name)
@@ -477,7 +473,7 @@ func (s *Server) buildAgentStripItems(activeSession string, activeWindow, active
 				displayName = win.Name
 			}
 
-			items = append(items, views.AgentStripItem{
+			items = append(items, AgentStripItem{
 				Session:   sess.Name,
 				Window:    win.Index,
 				Pane:      paneIdx,
@@ -523,7 +519,7 @@ func (s *Server) getPreviewLines(agent agents.Agent, output string, n int) []str
 
 // windowActivityScore returns a score for sorting windows by activity
 // Higher score = more important (should appear first)
-func windowActivityScore(win views.WindowWithStatus) int {
+func windowActivityScore(win WindowWithStatus) int {
 	if win.NeedsAttention {
 		return 4 // Highest priority - needs user attention
 	}
@@ -884,20 +880,20 @@ func (s *Server) handlePaneZoom(w http.ResponseWriter, r *http.Request, pane tmu
 
 // OpenCode handlers
 
-func (s *Server) buildOpenCodeData(ctx context.Context) views.OpenCodeData {
+func (s *Server) buildOpenCodeData(ctx context.Context) OpenCodeData {
 	states := s.ocManager.GetAllSessions(ctx)
 	servers := s.ocDiscovery.GetServers()
 
 	// Initialize slices to empty (not nil) so JSON serializes as [] not null.
-	data := views.OpenCodeData{
-		NeedsAttention: []views.OpenCodeSession{},
-		Active:         []views.OpenCodeSession{},
-		Idle:           []views.OpenCodeSession{},
+	data := OpenCodeData{
+		NeedsAttention: []OpenCodeSession{},
+		Active:         []OpenCodeSession{},
+		Idle:           []OpenCodeSession{},
 		Servers:        servers,
 	}
 
 	for _, state := range states {
-		ocSession := views.OpenCodeSession{
+		ocSession := OpenCodeSession{
 			State: state,
 		}
 

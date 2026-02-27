@@ -2,13 +2,11 @@ root = "."
 tmp_dir = "tmp"
 
 [build]
-pre_cmd = ["templ generate", "npm run build --prefix ui"]
+pre_cmd = ["npm run build --prefix ui"]
 cmd = "go build -o ./tmp/houston ."
 full_bin = "./tmp/houston -addr ${HOUSTON_ADDR:-0.0.0.0:${HOUSTON_PORT}}"
-include_ext = ["go", "tpl", "tmpl", "templ", "html", "ts", "tsx", "css"]
-exclude_regex = [".*_templ.go"]
+include_ext = ["go", "ts", "tsx", "css"]
 exclude_dir = ["tmp", "vendor", ".git", ".worktrees", "node_modules", "ui/dist"]
-exclude_file = ["views/views_templ.go"]
 delay = 500
 
 [log]

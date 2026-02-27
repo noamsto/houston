@@ -1,4 +1,4 @@
-package views
+package server
 
 import (
 	"github.com/noamsto/houston/agents"
