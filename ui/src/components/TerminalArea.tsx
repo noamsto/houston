@@ -85,8 +85,8 @@ export function TerminalArea({ layout, sessions, onMenuClick, isDesktop }: Props
     border: 'none',
     color: 'var(--text-secondary)',
     cursor: 'pointer',
-    fontSize: 16,
-    padding: '0 4px',
+    fontSize: 20,
+    padding: '4px 10px',
     lineHeight: 1,
   }
 
