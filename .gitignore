@@ -8,6 +8,10 @@ tmp/
 *.swp
 *~
 
+# Screenshots
+*.jpeg
+*.png
+
 # Claude Code
 .claude/
 .playwright-mcp/
