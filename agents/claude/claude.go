@@ -41,10 +41,6 @@ func (a *Agent) GetStateFromFiles(cwd string) (*agents.AgentState, error) {
 	}, nil
 }
 
-func (a *Agent) FilterStatusBar(output string) string {
-	return FilterStatusBar(output)
-}
-
 func (a *Agent) ExtractStatusLine(output string) string {
 	return ExtractStatusLine(output)
 }

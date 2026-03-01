@@ -33,9 +33,6 @@ type Agent interface {
 	// cwd is the pane's working directory used to locate relevant files.
 	GetStateFromFiles(cwd string) (*AgentState, error)
 
-	// FilterStatusBar removes agent-specific status bar elements from output.
-	FilterStatusBar(output string) string
-
 	// ExtractStatusLine extracts the agent's status line with ANSI colors intact.
 	ExtractStatusLine(output string) string
 

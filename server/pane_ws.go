@@ -156,8 +156,6 @@ func (s *Server) paneWSWriteLoop(conn *websocket.Conn, pane tmux.Pane, nudge <-c
 		paneID := pane.Target()
 		agent := s.registry.Detect(paneID, paneCommand, capture.Output)
 		parseResult := getAgentState(agent, panePath, capture.Output)
-		filteredOutput := agent.FilterStatusBar(capture.Output)
-
 		// Build metadata
 		meta := WSMeta{
 			Agent:    agent.Type(),
@@ -181,9 +179,9 @@ func (s *Server) paneWSWriteLoop(conn *websocket.Conn, pane tmux.Pane, nudge <-c
 		meta.Status = resultTypeToString(parseResult.Type)
 
 		// Send output if changed
-		if filteredOutput != lastOutput {
-			lastOutput = filteredOutput
-			outputJSON, _ := json.Marshal(WSOutput{Data: filteredOutput})
+		if capture.Output != lastOutput {
+			lastOutput = capture.Output
+			outputJSON, _ := json.Marshal(WSOutput{Data: capture.Output})
 			msg, _ := json.Marshal(WSMessage{Type: "output", Data: outputJSON})
 			if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
 				return

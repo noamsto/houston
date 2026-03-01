@@ -142,7 +142,7 @@ func (s *Server) handlePaneJSON(w http.ResponseWriter, r *http.Request, pane tmu
 
 	data := PaneData{
 		Pane:        pane,
-		Output:      agent.FilterStatusBar(capture.Output),
+		Output:      capture.Output,
 		ParseResult: parseResult,
 		Windows:     windows,
 		Panes:       paneInfos,

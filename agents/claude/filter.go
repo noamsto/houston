@@ -7,52 +7,6 @@ import (
 	"github.com/noamsto/houston/parser"
 )
 
-// StatusIndicators contains patterns that identify Claude's status bar elements.
-var StatusIndicators = []string{
-	"-- INSERT --", "-- NORMAL --", // vim mode
-	"🤖", "📊", "⏱️", "💬", // Claude stats
-	"❄", "📂", // env/path indicators
-	"accept edits", // edit acceptance hint
-}
-
-// IsStatusLine checks if a line is part of Claude's status bar.
-func IsStatusLine(line string) bool {
-	trimmed := strings.TrimSpace(line)
-	if trimmed == "" {
-		return false
-	}
-
-	// Horizontal separator lines (─────)
-	// Use rune count for proper Unicode handling
-	runeCount := len([]rune(trimmed))
-	dashCount := strings.Count(trimmed, "─")
-	if runeCount > 10 && dashCount > runeCount/2 {
-		return true
-	}
-
-	for _, indicator := range StatusIndicators {
-		if strings.Contains(line, indicator) {
-			return true
-		}
-	}
-
-	return false
-}
-
-// FilterStatusBar removes status bar lines from output, keeping content.
-func FilterStatusBar(output string) string {
-	lines := strings.Split(output, "\n")
-	var filtered []string
-
-	for _, line := range lines {
-		if !IsStatusLine(line) {
-			filtered = append(filtered, line)
-		}
-	}
-
-	return strings.Join(filtered, "\n")
-}
-
 // DetectMode checks for INSERT or NORMAL mode in the output.
 func DetectMode(output string) parser.Mode {
 	lines := strings.Split(output, "\n")

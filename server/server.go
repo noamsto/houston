@@ -500,10 +500,8 @@ func (s *Server) buildAgentStripItems(activeSession string, activeWindow, active
 
 // getPreviewLines extracts the last n non-empty lines from output, using agent-specific filtering
 // Note: Preview lines in window cards are now only used as fallback - action bar uses SSE for live data
-func (s *Server) getPreviewLines(agent agents.Agent, output string, n int) []string {
-	// Filter output using agent-specific status bar handling
-	filtered := agent.FilterStatusBar(output)
-	lines := strings.Split(filtered, "\n")
+func (s *Server) getPreviewLines(_ agents.Agent, output string, n int) []string {
+	lines := strings.Split(output, "\n")
 	var result []string
 
 	// Work backwards to find non-empty lines

@@ -37,10 +37,6 @@ func (a *Agent) GetStateFromFiles(_ string) (*agents.AgentState, error) {
 	return &state, nil
 }
 
-func (a *Agent) FilterStatusBar(output string) string {
-	return output // No filtering for generic
-}
-
 func (a *Agent) ExtractStatusLine(_ string) string {
 	return "" // No status line for generic
 }
