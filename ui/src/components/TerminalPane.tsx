@@ -97,6 +97,14 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
     })
   }
 
+  // Focus the xterm textarea when this pane becomes the active one (desktop only).
+  // Without this, switching sessions leaves keyboard focus elsewhere and typing does nothing.
+  useEffect(() => {
+    if (isFocused && isDesktop) {
+      termRef.current?.focus()
+    }
+  }, [isFocused, isDesktop])
+
   // Show cursor for non-AI agents (regular shells, etc.)
   const agent = meta?.agent
   useEffect(() => {
@@ -216,6 +224,7 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
       if (lastOutputRef.current) {
         writeSnapshot(term, lastOutputRef.current)
       }
+      if (isDesktop) term.focus()
       setTermMounted(true)
     })
 
