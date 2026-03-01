@@ -98,7 +98,8 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
   }
 
   // Focus the xterm textarea when this pane becomes the active one (desktop only).
-  // Without this, switching sessions leaves keyboard focus elsewhere and typing does nothing.
+  // No resize here — houston isn't a real tmux client (just capture-pane + send-keys),
+  // so resizing is an uninvited side effect. Use the manual ⊞ button instead.
   useEffect(() => {
     if (isFocused && isDesktop) {
       termRef.current?.focus()
@@ -140,14 +141,10 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
 
     if (wide) {
       const minS = outerW / MOBILE_TERM_WIDTH_WIDE
-      const termH = Math.round(outerH / minS)
       inner.style.width = `${MOBILE_TERM_WIDTH_WIDE}px`
-      inner.style.height = `${termH}px`
-      // Start zoomed in at bottom-left: scale 1.0, positioned so bottom edge aligns
-      const initS = 1
-      const initTY = outerH - termH * initS
-      inner.style.transform = `translate(0px, ${initTY}px) scale(${initS})`
-      resetTransform(minS, { w: MOBILE_TERM_WIDTH_WIDE, h: termH }, { scale: initS, tx: 0, ty: initTY })
+      inner.style.height = `${outerH}px`
+      inner.style.transform = 'translate(0px, 0px) scale(1)'
+      resetTransform(minS, { w: MOBILE_TERM_WIDTH_WIDE, h: outerH }, { scale: 1, tx: 0, ty: 0 })
     } else {
       inner.style.width = `${outerW}px`
       inner.style.height = `${outerH}px`
@@ -196,14 +193,10 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
 
       if (wideMode) {
         const minS = outerW / MOBILE_TERM_WIDTH_WIDE
-        const termH = Math.round(outerH / minS)
         innerRef.current.style.width = `${MOBILE_TERM_WIDTH_WIDE}px`
-        innerRef.current.style.height = `${termH}px`
-        // Start zoomed in at bottom-left
-        const initS = 1
-        const initTY = outerH - termH * initS
-        innerRef.current.style.transform = `translate(0px, ${initTY}px) scale(${initS})`
-        resetTransform(minS, { w: MOBILE_TERM_WIDTH_WIDE, h: termH }, { scale: initS, tx: 0, ty: initTY })
+        innerRef.current.style.height = `${outerH}px`
+        innerRef.current.style.transform = 'translate(0px, 0px) scale(1)'
+        resetTransform(minS, { w: MOBILE_TERM_WIDTH_WIDE, h: outerH }, { scale: 1, tx: 0, ty: 0 })
       } else {
         innerRef.current.style.width = `${outerW}px`
         innerRef.current.style.height = `${outerH}px`
@@ -215,6 +208,7 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
 
     termRef.current = term
     fitAddonRef.current = fitAddon
+    console.debug('[input] xterm mounted — isDesktop:', isDesktop, 'disableStdin:', term.options.disableStdin, 'target:', pane.target)
 
     // Defer initial fit so the DOM has its final layout before measuring.
     // Also replay cached output — when isDesktop changes, xterm remounts but the
@@ -229,7 +223,12 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
     })
 
     if (isDesktop) {
-      term.onData((data) => sendInput(data))
+      term.onData((data) => {
+        console.debug('[input] xterm onData:', JSON.stringify(data))
+        sendInput(data)
+      })
+    } else {
+      console.debug('[input] skipped onData registration (mobile mode)')
     }
 
     // When user scrolls back to bottom, apply any deferred output
@@ -289,17 +288,13 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
           const outerH = container.clientHeight - PAD * 2
           const s = minScaleRef.current
           if (s < 1) {
-            // WIDE mode: recalculate height and clamp translate to keep
-            // content anchored at the bottom (no black gap above terminal)
-            const termH = Math.round(outerH / s)
-            innerRef.current.style.height = `${termH}px`
-            termDimsRef.current = { ...termDimsRef.current, h: termH }
-            // Re-anchor to bottom so keyboard doesn't leave a black gap
+            // WIDE mode: update height to match viewport, keep current scale
+            innerRef.current.style.height = `${outerH}px`
+            termDimsRef.current = { ...termDimsRef.current, h: outerH }
             const curScale = innerRef.current.style.transform.match(/scale\(([\d.]+)\)/)
-            const sc = curScale ? parseFloat(curScale[1]) : s
-            const ty = outerH - termH * sc
-            innerRef.current.style.transform = `translate(0px, ${ty}px) scale(${sc})`
-            resetTransform(s, { w: MOBILE_TERM_WIDTH_WIDE, h: termH }, { scale: sc, tx: 0, ty })
+            const sc = curScale ? parseFloat(curScale[1]) : 1
+            innerRef.current.style.transform = `translate(0px, 0px) scale(${sc})`
+            resetTransform(s, { w: MOBILE_TERM_WIDTH_WIDE, h: outerH }, { scale: sc, tx: 0, ty: 0 })
           } else {
             // FIT mode: just update dimensions
             innerRef.current.style.width = `${outerW}px`
@@ -310,9 +305,9 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
 
         try {
           fit.fit()
-          // Only resize tmux in mobile fit mode — desktop and wide mode
-          // leave the pane at the user's terminal size to avoid conflicts
-          // with other clients (e.g. Kitty) viewing the same session.
+          // Only auto-resize tmux in mobile fit mode.
+          // Desktop resize is triggered on pane focus or manual button
+          // to avoid fighting with other clients (e.g. Kitty).
           if (!isDesktop && minScaleRef.current >= 1) {
             sendResize(term.cols, term.rows)
           }
@@ -338,7 +333,16 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
         outline: isFocused ? '1px solid var(--accent-working)' : 'none',
         outlineOffset: -1,
       }}
-      onClick={onFocus}
+      onClick={() => {
+        onFocus()
+        // After onFocus, ensure xterm gets keyboard focus
+        const term = termRef.current
+        if (term && isDesktop) {
+          term.focus()
+          const ta = innerRef.current?.querySelector('textarea')
+          console.debug('[input] pane clicked — textarea active:', document.activeElement === ta, 'WS connected:', connected)
+        }
+      }}
     >
       {isDesktop && (
         <PaneHeader
@@ -346,6 +350,16 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
           meta={meta}
           connected={connected}
           onClose={onClose}
+          onResize={() => {
+            const term = termRef.current
+            const fit = fitAddonRef.current
+            if (term && fit) {
+              try {
+                fit.fit()
+                sendResize(term.cols, term.rows)
+              } catch { /* */ }
+            }
+          }}
         />
       )}
       {/* Outer div: ResizeObserver target; background shows through as visual padding */}

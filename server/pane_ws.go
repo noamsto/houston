@@ -37,6 +37,7 @@ type WSMeta struct {
 	Suggestion string           `json:"suggestion,omitempty"`
 	StatusLine string           `json:"status_line,omitempty"`
 	Activity   string           `json:"activity,omitempty"`
+	WindowName string           `json:"window_name,omitempty"`
 }
 
 type WSInput struct {
@@ -157,7 +158,7 @@ func (s *Server) paneWSWriteLoop(conn *websocket.Conn, pane tmux.Pane, nudge <-c
 	var lastMeta WSMeta
 	var captureFailures int
 
-	// Get initial pane info for agent detection
+	// Get initial pane info for agent detection and window name for header
 	panes, _ := s.tmux.ListPanes(pane.Session, pane.Window)
 	var panePath, paneCommand string
 	for _, p := range panes {
@@ -165,6 +166,15 @@ func (s *Server) paneWSWriteLoop(conn *websocket.Conn, pane tmux.Pane, nudge <-c
 			panePath = p.Path
 			paneCommand = p.Command
 			break
+		}
+	}
+	var windowName string
+	if windows, err := s.tmux.ListWindows(pane.Session); err == nil {
+		for _, w := range windows {
+			if w.Index == pane.Window {
+				windowName = w.Name
+				break
+			}
 		}
 	}
 
@@ -199,9 +209,10 @@ func (s *Server) paneWSWriteLoop(conn *websocket.Conn, pane tmux.Pane, nudge <-c
 		parseResult := getAgentState(agent, panePath, capture.Output)
 		// Build metadata
 		meta := WSMeta{
-			Agent:    agent.Type(),
-			Mode:     modeToString(parseResult.Mode),
-			Activity: parseResult.Activity,
+			Agent:      agent.Type(),
+			Mode:       modeToString(parseResult.Mode),
+			Activity:   parseResult.Activity,
+			WindowName: windowName,
 		}
 
 		if len(parseResult.Choices) > 0 {
@@ -248,6 +259,7 @@ func metaEqual(a, b WSMeta) bool {
 		a.Suggestion == b.Suggestion &&
 		a.StatusLine == b.StatusLine &&
 		a.Activity == b.Activity &&
+		a.WindowName == b.WindowName &&
 		slices.Equal(a.Choices, b.Choices)
 }
 

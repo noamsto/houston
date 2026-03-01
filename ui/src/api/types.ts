@@ -125,6 +125,7 @@ export interface WSMeta {
   suggestion?: string
   status_line?: string
   activity?: string
+  window_name?: string
 }
 
 export interface WSInput {
