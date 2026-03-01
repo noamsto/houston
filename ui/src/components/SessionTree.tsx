@@ -1,5 +1,11 @@
 import { useMemo, useState } from 'react'
-import type { SessionsData, SessionWithWindows, WindowWithStatus } from '../api/types'
+import type { AgentType, SessionsData, SessionWithWindows, WindowWithStatus } from '../api/types'
+
+const AGENT_ICONS: Record<AgentType, string> = {
+  'claude-code': '✦',
+  'amp': '⚡',
+  'generic': '',
+}
 
 interface WindowRowProps {
   w: WindowWithStatus
@@ -10,13 +16,20 @@ interface WindowRowProps {
 
 function WindowRow({ w, sessionName, onSelect, onSplit }: WindowRowProps) {
   const target = `${sessionName}:${w.window.index}.${w.pane.index}`
-  const { type } = w.parse_result
+  const { type, activity } = w.parse_result
+  const agentIcon = AGENT_ICONS[w.agent_type] || ''
 
   const dotColor =
     w.needs_attention ? 'var(--accent-attention)' :
     type === 'working' ? 'var(--accent-working)' :
     type === 'done'    ? 'var(--accent-done)' :
                          'var(--accent-idle)'
+
+  const statusLabel =
+    type === 'error'    ? 'Error' :
+    type === 'question' ? 'Waiting for input' :
+    type === 'choice'   ? 'Waiting for choice' :
+    activity || null
 
   return (
     <div
@@ -38,10 +51,16 @@ function WindowRow({ w, sessionName, onSelect, onSplit }: WindowRowProps) {
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <span style={{ width: 6, height: 6, borderRadius: '50%', background: dotColor, flexShrink: 0 }} />
+        {agentIcon && <span style={{ flexShrink: 0, fontSize: 10, color: dotColor }}>{agentIcon}</span>}
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {w.branch && w.branch !== 'main' && w.branch !== 'master' ? w.branch : w.window.name}
         </span>
       </div>
+      {statusLabel && (
+        <div style={{ color: dotColor, fontSize: 10, paddingLeft: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {statusLabel}
+        </div>
+      )}
       {w.branch && w.branch !== 'main' && w.branch !== 'master' && w.branch !== w.window.name && (
         <div style={{ color: 'var(--text-muted)', fontSize: 10, paddingLeft: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {w.window.name}

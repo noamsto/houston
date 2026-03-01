@@ -250,7 +250,7 @@ export function MobileInputBar({ target, choices }: Props) {
             autoGrow(e.target)
           }}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
+            if (e.key === 'Enter' && e.shiftKey) {
               e.preventDefault()
               void handleSend()
             }

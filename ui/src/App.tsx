@@ -4,10 +4,12 @@ import { TerminalArea } from './components/TerminalArea'
 import { useIsDesktop } from './hooks/useMediaQuery'
 import { useLayout } from './hooks/useLayout'
 import { useSessionsStream } from './hooks/useSessionsStream'
+import { useAttentionNotifications } from './hooks/useAttentionNotifications'
 import './theme/tokens.css'
 
 export default function App() {
   const { sessions, connected } = useSessionsStream()
+  useAttentionNotifications(sessions)
   const layout = useLayout()
   const isDesktop = useIsDesktop()
   const [sidebarOpen, setSidebarOpen] = useState(false)
