@@ -57,6 +57,14 @@ func (s *Server) handlePaneWS(w http.ResponseWriter, r *http.Request, pane tmux.
 
 	slog.Info("pane websocket connected", "target", pane.Target())
 
+	// Keepalive: send pings every 30s, expect pong within 10s.
+	// Mobile OSes silently kill idle TCP connections; without this
+	// the server holds dead connections until the next write fails.
+	conn.SetPongHandler(func(string) error {
+		return conn.SetReadDeadline(time.Now().Add(45 * time.Second))
+	})
+	_ = conn.SetReadDeadline(time.Now().Add(45 * time.Second))
+
 	// nudge signals the write loop to capture immediately after input
 	nudge := make(chan struct{}, 1)
 
@@ -121,11 +129,15 @@ func (s *Server) paneWSReadLoop(conn *websocket.Conn, pane tmux.Pane, nudge chan
 }
 
 func (s *Server) paneWSWriteLoop(conn *websocket.Conn, pane tmux.Pane, nudge <-chan struct{}) {
-	ticker := time.NewTicker(200 * time.Millisecond)
-	defer ticker.Stop()
+	captureTicker := time.NewTicker(200 * time.Millisecond)
+	defer captureTicker.Stop()
+
+	pingTicker := time.NewTicker(30 * time.Second)
+	defer pingTicker.Stop()
 
 	var lastOutput string
 	var lastMeta WSMeta
+	var captureFailures int
 
 	// Get initial pane info for agent detection
 	panes, _ := s.tmux.ListPanes(pane.Session, pane.Window)
@@ -140,17 +152,28 @@ func (s *Server) paneWSWriteLoop(conn *websocket.Conn, pane tmux.Pane, nudge <-c
 
 	for {
 		select {
-		case <-ticker.C:
+		case <-captureTicker.C:
 		case <-nudge:
 			// Brief pause to let the process update its output after receiving input
 			time.Sleep(50 * time.Millisecond)
-			ticker.Reset(200 * time.Millisecond)
+			captureTicker.Reset(200 * time.Millisecond)
+		case <-pingTicker.C:
+			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return
+			}
+			continue
 		}
 		capture, err := s.tmux.CapturePaneWithMode(pane, 500)
 		if err != nil {
-			slog.Debug("capture failed", "error", err)
-			return
+			captureFailures++
+			if captureFailures >= 50 {
+				slog.Debug("capture failed too many times, closing", "target", pane.Target(), "error", err)
+				return
+			}
+			slog.Debug("capture failed, will retry", "target", pane.Target(), "error", err, "failures", captureFailures)
+			continue
 		}
+		captureFailures = 0
 
 		// Detect agent and parse state
 		paneID := pane.Target()
