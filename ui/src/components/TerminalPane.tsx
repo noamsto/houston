@@ -63,7 +63,7 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
   // state before the previous write completes yields stale results.
   const writingRef = useRef(false)
 
-  const { sendInput, sendResize } = usePaneSocket(pane.target, {
+  const { connected, sendInput, sendResize } = usePaneSocket(pane.target, {
     onOutput: (data) => {
       lastOutputRef.current = data
       pendingOutputRef.current = data
@@ -310,9 +310,10 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
 
         try {
           fit.fit()
-          // Only resize tmux in desktop or mobile fit mode — wide mode
-          // leaves the pane at the user's terminal size to avoid conflicts.
-          if (isDesktop || minScaleRef.current >= 1) {
+          // Only resize tmux in mobile fit mode — desktop and wide mode
+          // leave the pane at the user's terminal size to avoid conflicts
+          // with other clients (e.g. Kitty) viewing the same session.
+          if (!isDesktop && minScaleRef.current >= 1) {
             sendResize(term.cols, term.rows)
           }
         } catch {
@@ -343,6 +344,7 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
         <PaneHeader
           target={pane.target}
           meta={meta}
+          connected={connected}
           onClose={onClose}
         />
       )}

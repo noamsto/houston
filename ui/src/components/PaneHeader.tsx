@@ -3,6 +3,7 @@ import type { AgentType, ResultType, WSMeta } from '../api/types'
 interface Props {
   target: string
   meta: WSMeta | null
+  connected: boolean
   onClose: () => void
 }
 
@@ -23,9 +24,9 @@ function statusColor(status: ResultType | undefined): string {
   }
 }
 
-export function PaneHeader({ target, meta, onClose }: Props) {
+export function PaneHeader({ target, meta, connected, onClose }: Props) {
   const icon = meta ? (AGENT_ICONS[meta.agent] ?? '◆') : '·'
-  const color = statusColor(meta?.status)
+  const color = connected ? statusColor(meta?.status) : 'var(--accent-error)'
   const modeBadge = meta?.mode === 'normal' ? 'NOR' : meta?.mode === 'insert' ? 'INS' : null
   const label = meta?.activity || (target.split(':')[1] ?? target)
 
