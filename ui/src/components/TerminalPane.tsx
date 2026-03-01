@@ -339,17 +339,13 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
       }}
       onClick={onFocus}
     >
-      <PaneHeader
-        target={pane.target}
-        meta={meta}
-        onClose={onClose}
-        wideMode={isDesktop ? undefined : wideMode}
-        onToggleWide={isDesktop ? undefined : () => {
-          const next = !wideMode
-          setWideMode(next)
-          applyMobileSize(next)
-        }}
-      />
+      {isDesktop && (
+        <PaneHeader
+          target={pane.target}
+          meta={meta}
+          onClose={onClose}
+        />
+      )}
       {/* Outer div: ResizeObserver target; background shows through as visual padding */}
       <div
         ref={outerRef}
@@ -377,6 +373,12 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
         <MobileInputBar
           target={pane.target}
           choices={meta?.choices}
+          wideMode={wideMode}
+          onToggleWide={() => {
+            const next = !wideMode
+            setWideMode(next)
+            applyMobileSize(next)
+          }}
         />
       )}
     </div>

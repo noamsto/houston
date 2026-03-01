@@ -3,6 +3,8 @@ import { useCallback, useRef, useState } from 'react'
 interface Props {
   target: string
   choices?: string[]
+  wideMode: boolean
+  onToggleWide: () => void
 }
 
 // Web Speech API types (not in TS lib by default)
@@ -96,7 +98,7 @@ const pillStyle: React.CSSProperties = {
   whiteSpace: 'nowrap',
 }
 
-export function MobileInputBar({ target, choices }: Props) {
+export function MobileInputBar({ target, choices, wideMode, onToggleWide }: Props) {
   const [text, setText] = useState('')
   const [listening, setListening] = useState(false)
   const [expanded, setExpanded] = useState(false)
@@ -202,6 +204,17 @@ export function MobileInputBar({ target, choices }: Props) {
       {/* Quick action pills — wrapping grid with expand toggle */}
       <div style={{ display: 'flex', alignItems: 'flex-start', padding: '6px 8px 0' }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, flex: 1 }}>
+          <button
+            className="pill-btn"
+            onClick={onToggleWide}
+            style={{
+              ...pillStyle,
+              color: wideMode ? 'var(--text-secondary)' : 'var(--text-muted)',
+              borderColor: wideMode ? 'var(--text-secondary)' : 'var(--border)',
+            }}
+          >
+            {wideMode ? 'WIDE' : 'FIT'}
+          </button>
           {primaryActions.map((qa) => (
             <button
               key={qa.label}

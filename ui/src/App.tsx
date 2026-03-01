@@ -79,6 +79,7 @@ export default function App() {
       />
       <TerminalArea
         layout={layout}
+        sessions={sessions}
         onMenuClick={() => setSidebarOpen(true)}
         isDesktop={isDesktop}
       />
