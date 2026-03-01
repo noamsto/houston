@@ -47,7 +47,7 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
   const [wideMode, setWideMode] = useState(true) // wide by default
   const [termMounted, setTermMounted] = useState(false)
 
-  const { minScaleRef, termDimsRef, resetTransform } = useTouchGestures(
+  const { minScaleRef, termDimsRef, translateXRef, resetTransform } = useTouchGestures(
     innerRef, outerRef, termRef, !isDesktop && termMounted,
   )
 
@@ -126,9 +126,6 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
     try {
       fit.fit()
       if (!wide) sendResize(term.cols, term.rows)
-      if (lastSeedRef.current) {
-        writeSnapshot(term, lastSeedRef.current)
-      }
     } catch { /* fit can throw if zero-size */ }
   }, [isDesktop, sendResize, resetTransform])
 
@@ -236,13 +233,14 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
           const outerH = container.clientHeight - PAD * 2
           const s = minScaleRef.current
           if (s < 1) {
-            // WIDE mode: update height to match viewport, keep current scale
+            // WIDE mode: update height to match viewport, keep current scale and pan
             innerRef.current.style.height = `${outerH}px`
             termDimsRef.current = { ...termDimsRef.current, h: outerH }
             const curScale = innerRef.current.style.transform.match(/scale\(([\d.]+)\)/)
             const sc = curScale ? parseFloat(curScale[1]) : 1
-            innerRef.current.style.transform = `translate(0px, 0px) scale(${sc})`
-            resetTransform(s, { w: MOBILE_TERM_WIDTH_WIDE, h: outerH }, { scale: sc, tx: 0, ty: 0 })
+            const tx = translateXRef.current
+            innerRef.current.style.transform = `translate(${tx}px, 0px) scale(${sc})`
+            resetTransform(s, { w: MOBILE_TERM_WIDTH_WIDE, h: outerH }, { scale: sc, tx, ty: 0 })
           } else {
             // FIT mode: just update dimensions
             innerRef.current.style.width = `${outerW}px`
@@ -270,7 +268,7 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
       clearTimeout(debounceTimer)
       ro.disconnect()
     }
-  }, [sendResize, isDesktop, minScaleRef, resetTransform, termDimsRef])
+  }, [sendResize, isDesktop, minScaleRef, resetTransform, termDimsRef, translateXRef])
 
   return (
     <div
