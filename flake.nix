@@ -10,12 +10,12 @@
 
   outputs = inputs@{ flake-parts, ... }:
     flake-parts.lib.mkFlake { inherit inputs; } {
+      imports = [ inputs.git-hooks-nix.flakeModule ];
+
       systems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
 
-      perSystem = { pkgs, lib, ... }:
+      perSystem = { config, pkgs, lib, ... }:
         let
-          # Build the React frontend with npm
-          # To get the npmDepsHash run: nix build 2>&1 | grep "got:" | head -1
           ui = pkgs.buildNpmPackage {
             pname = "houston-ui";
             version = "0.1.0";
@@ -23,17 +23,35 @@
             npmDepsHash = "sha256-VbXiUUSVVP3F+a9H3l4DlVD9wC35v9rBXwY9a1tAKHo=";
             buildPhase = "npm run build";
             installPhase = "cp -r dist $out";
-            # Don't run the default `npm install` install phase
             dontNpmInstall = true;
           };
         in {
+          pre-commit.settings.hooks = {
+            golangci-lint.enable = true;
+
+            eslint-frontend = {
+              enable = true;
+              name = "eslint (frontend)";
+              entry = "bash -c 'cd ui && npx eslint .'";
+              files = "^ui/.*\\.(ts|tsx)$";
+              pass_filenames = false;
+            };
+
+            typecheck-frontend = {
+              enable = true;
+              name = "tsc (frontend)";
+              entry = "bash -c 'cd ui && npx tsc -b'";
+              files = "^ui/.*\\.(ts|tsx)$";
+              pass_filenames = false;
+            };
+          };
+
           packages.default = pkgs.buildGoModule {
             pname = "houston";
             version = "0.1.0";
             src = pkgs.lib.cleanSource ./.;
             vendorHash = "sha256-0Qxw+MUYVgzgWB8vi3HBYtVXSq/btfh4ZfV/m1chNrA=";
 
-            # Inject the pre-built React frontend before Go compiles embed.go
             preBuild = ''
               mkdir -p ui/dist
               cp -r ${ui}/* ui/dist/
@@ -58,9 +76,10 @@
               tmux
               nodejs
               nodePackages.npm
-            ];
+            ] ++ config.pre-commit.settings.enabledPackages;
 
             shellHook = ''
+              ${config.pre-commit.shellHook}
               echo "houston dev shell"
             '';
           };
