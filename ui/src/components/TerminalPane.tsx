@@ -93,6 +93,18 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
     term.options.cursorStyle = showCursor ? 'block' : 'underline'
   }, [agent])
 
+  // Sync xterm theme when light/dark mode toggles
+  useEffect(() => {
+    const term = termRef.current
+    if (!term) return
+    const observer = new MutationObserver(() => {
+      const isLight = document.documentElement.classList.contains('light')
+      term.options.theme = isLight ? lightTheme : darkTheme
+    })
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
+    return () => observer.disconnect()
+  }, [termMounted])
+
   // Recalculate mobile terminal dimensions without remounting xterm
   const applyMobileSize = useCallback((wide: boolean) => {
     const outer = outerRef.current
@@ -297,17 +309,6 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
           const next = !wideMode
           setWideMode(next)
           applyMobileSize(next)
-        }}
-        onCopy={isDesktop ? undefined : () => {
-          const term = termRef.current
-          if (!term) return
-          const buf = term.buffer.active
-          let text = ''
-          for (let i = 0; i < buf.length; i++) {
-            const line = buf.getLine(i)
-            if (line) text += line.translateToString(true) + '\n'
-          }
-          navigator.clipboard.writeText(text.trimEnd())
         }}
       />
       {/* Outer div: ResizeObserver target; background shows through as visual padding */}

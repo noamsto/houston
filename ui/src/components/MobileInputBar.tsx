@@ -78,9 +78,10 @@ const extraActions: QuickAction[] = [
   { label: 'Esc', action: 'special', value: 'Escape' },
   { label: 'Tab', action: 'special', value: 'Tab' },
   { label: '⇧Tab', action: 'special', value: 'BTab' },
-  { label: 'M-p', action: 'special', value: 'M-p' },
-  { label: 'C-o', action: 'special', value: 'C-o' },
-  { label: 'C-z', action: 'special', value: 'C-z' },
+  { label: 'A-p', action: 'special', value: 'M-p' },
+  { label: '^O', action: 'special', value: 'C-o' },
+  { label: '^Z', action: 'special', value: 'C-z' },
+  { label: '/copy', action: 'text', value: '/copy' },
 ]
 
 const pillStyle: React.CSSProperties = {

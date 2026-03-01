@@ -6,7 +6,6 @@ interface Props {
   onClose: () => void
   wideMode?: boolean
   onToggleWide?: () => void
-  onCopy?: () => void
 }
 
 const AGENT_ICONS: Record<AgentType, string> = {
@@ -26,7 +25,7 @@ function statusColor(status: ResultType | undefined): string {
   }
 }
 
-export function PaneHeader({ target, meta, onClose, wideMode, onToggleWide, onCopy }: Props) {
+export function PaneHeader({ target, meta, onClose, wideMode, onToggleWide }: Props) {
   const icon = meta ? (AGENT_ICONS[meta.agent] ?? '◆') : '·'
   const color = statusColor(meta?.status)
   const modeBadge = meta?.mode === 'normal' ? 'NOR' : meta?.mode === 'insert' ? 'INS' : null
@@ -116,22 +115,6 @@ export function PaneHeader({ target, meta, onClose, wideMode, onToggleWide, onCo
           }}
         >
           {wideMode ? 'WIDE' : 'FIT'}
-        </button>
-      )}
-
-      {onCopy && (
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            onCopy()
-          }}
-          title="Copy terminal text"
-          style={{
-            ...headerBtn,
-            color: 'var(--text-muted)',
-          }}
-        >
-          CPY
         </button>
       )}
 
