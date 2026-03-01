@@ -182,6 +182,17 @@ go build -o houston .
 
 **Important:** `air` watches `.go` files but not `ui/dist`. After `just ui-build`, touch `embed.go` to trigger a Go rebuild, or restart `just dev`.
 
+### Pre-commit Hooks
+
+Managed by `git-hooks.nix`. Auto-installed on `nix develop` / `direnv reload`.
+
+- **golangci-lint** — runs on staged `.go` files
+- **eslint** — runs `npx eslint .` in `ui/` when `.ts`/`.tsx` files change
+- **tsc** — runs `tsc -b` in `ui/` when `.ts`/`.tsx` files change
+
+Run all hooks manually: `pre-commit run -a`
+Skip hooks: `git commit --no-verify`
+
 ### Vite Proxy
 
 The Vite dev server (`ui/vite.config.ts`) proxies `/api` to `http://localhost:9090`. Change the target port if your Go backend runs on a different port.
