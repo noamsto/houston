@@ -256,7 +256,18 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
       fitAddonRef.current = null
       setTermMounted(false)
     }
-  }, [pane.target, isDesktop]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isDesktop]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Reset output state when switching pane targets — xterm stays mounted (no blink),
+  // old content remains visible until the new WS connection delivers fresh output.
+  useEffect(() => {
+    cancelAnimationFrame(rafRef.current)
+    rafRef.current = 0
+    lastOutputRef.current = null
+    pendingOutputRef.current = null
+    deferredOutputRef.current = null
+    writingRef.current = false
+  }, [pane.target])
 
   // Resize observer — refit when outer container dimensions change
   useEffect(() => {
