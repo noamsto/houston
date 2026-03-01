@@ -19,15 +19,16 @@ interface Props {
   onClose: () => void
 }
 
-/** Write a full-screen snapshot into an xterm instance. */
-function writeSnapshot(term: Terminal, data: string) {
+/** Write a full-screen snapshot into an xterm instance.
+ *  Returns via callback when the write has been fully processed by xterm. */
+function writeSnapshot(term: Terminal, data: string, onDone?: () => void) {
   // \x1b[2J   clear visible screen  (no stale lines from previous write)
   // \x1b[3J   clear scrollback       (always reflects latest capture)
   // \x1b[H    home cursor
   // \x1b[?25l hide xterm cursor      (tmux capture renders the real one)
   // \x1b[?1007l disable alt-scroll   \  prevent wheel→arrow forwarding
   // \x1b[?1l  disable app-cursor-keys/  while keeping viewport scroll
-  term.write('\x1b[2J\x1b[3J\x1b[H' + data + '\x1b[?25l\x1b[?1007l\x1b[?1l')
+  term.write('\x1b[2J\x1b[3J\x1b[H' + data + '\x1b[?25l\x1b[?1007l\x1b[?1l', onDone)
 }
 
 // Wide mode: ~120 columns for diffs and wide output. Fit mode: viewport width.
@@ -58,30 +59,43 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
   // Cache latest output so we can replay it when xterm remounts (e.g. isDesktop changes)
   // without waiting for the server to send a new capture (it deduplicates).
   const lastOutputRef = useRef<string | null>(null)
+  // Track whether xterm is mid-write — term.write() is async; checking buffer
+  // state before the previous write completes yields stale results.
+  const writingRef = useRef(false)
 
   const { sendInput, sendResize } = usePaneSocket(pane.target, {
     onOutput: (data) => {
       lastOutputRef.current = data
       pendingOutputRef.current = data
-      if (!rafRef.current) {
-        rafRef.current = requestAnimationFrame(() => {
-          rafRef.current = 0
-          const term = termRef.current
-          const pending = pendingOutputRef.current
-          if (!term || pending === null) return
-          pendingOutputRef.current = null
-          // If user has scrolled up, defer the write to preserve their position
-          const buf = term.buffer.active
-          if (buf.viewportY < buf.baseY) {
-            deferredOutputRef.current = pending
-            return
-          }
-          writeSnapshot(term, pending)
-        })
-      }
+      scheduleFlush()
     },
     onMeta: (m) => setMeta(m),
   })
+
+  function scheduleFlush() {
+    if (rafRef.current || writingRef.current) return
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = 0
+      const term = termRef.current
+      const pending = pendingOutputRef.current
+      if (!term || pending === null || writingRef.current) return
+      pendingOutputRef.current = null
+      // If user has scrolled up, defer the write to preserve their position
+      const buf = term.buffer.active
+      if (buf.viewportY < buf.baseY) {
+        deferredOutputRef.current = pending
+        return
+      }
+      writingRef.current = true
+      writeSnapshot(term, pending, () => {
+        writingRef.current = false
+        // If new output arrived during the write, schedule another flush
+        if (pendingOutputRef.current !== null) {
+          scheduleFlush()
+        }
+      })
+    })
+  }
 
   // Show cursor for non-AI agents (regular shells, etc.)
   const agent = meta?.agent
@@ -214,9 +228,9 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
     const onViewportScroll = () => {
       const buf = term.buffer.active
       if (buf.viewportY >= buf.baseY && deferredOutputRef.current !== null) {
-        const data = deferredOutputRef.current
+        pendingOutputRef.current = deferredOutputRef.current
         deferredOutputRef.current = null
-        writeSnapshot(term, data)
+        scheduleFlush()
       }
     }
     viewport?.addEventListener('scroll', onViewportScroll)
@@ -227,6 +241,7 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
       rafRef.current = 0
       pendingOutputRef.current = null
       deferredOutputRef.current = null
+      writingRef.current = false
       term.dispose()
       termRef.current = null
       fitAddonRef.current = null

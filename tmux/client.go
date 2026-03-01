@@ -2,12 +2,16 @@
 package tmux
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// cmdTimeout is the maximum time any single tmux command is allowed to run.
+const cmdTimeout = 5 * time.Second
 
 type Session struct {
 	Name         string    `json:"name"`
@@ -65,6 +69,20 @@ func NewClient() *Client {
 	return &Client{tmuxPath: "tmux"}
 }
 
+// output runs a tmux command with a timeout and returns its stdout.
+func (c *Client) output(args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), cmdTimeout)
+	defer cancel()
+	return exec.CommandContext(ctx, c.tmuxPath, args...).Output()
+}
+
+// run runs a tmux command with a timeout, discarding output.
+func (c *Client) run(args ...string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), cmdTimeout)
+	defer cancel()
+	return exec.CommandContext(ctx, c.tmuxPath, args...).Run()
+}
+
 func parseSessionLine(line string) (Session, error) {
 	parts := strings.Split(line, "|")
 	if len(parts) != 5 {
@@ -86,10 +104,8 @@ func parseSessionLine(line string) (Session, error) {
 }
 
 func (c *Client) ListSessions() ([]Session, error) {
-	cmd := exec.Command(c.tmuxPath, "list-sessions", "-F",
+	out, err := c.output("list-sessions", "-F",
 		"#{session_name}|#{session_created}|#{session_windows}|#{session_attached}|#{session_activity}")
-
-	out, err := cmd.Output()
 	if err != nil {
 		if strings.Contains(err.Error(), "no server running") {
 			return nil, nil
@@ -113,10 +129,8 @@ func (c *Client) ListSessions() ([]Session, error) {
 }
 
 func (c *Client) ListWindows(session string) ([]Window, error) {
-	cmd := exec.Command(c.tmuxPath, "list-windows", "-t", session, "-F",
+	out, err := c.output("list-windows", "-t", session, "-F",
 		"#{window_index}|#{window_name}|#{window_active}|#{window_panes}|#{window_activity}|#{pane_current_path}")
-
-	out, err := cmd.Output()
 	if err != nil {
 		return nil, err
 	}
@@ -170,10 +184,8 @@ func (c *Client) ListWindows(session string) ([]Window, error) {
 
 func (c *Client) ListPanes(session string, window int) ([]PaneInfo, error) {
 	target := fmt.Sprintf("%s:%d", session, window)
-	cmd := exec.Command(c.tmuxPath, "list-panes", "-t", target, "-F",
+	out, err := c.output("list-panes", "-t", target, "-F",
 		"#{pane_index}|#{pane_active}|#{pane_current_command}|#{pane_current_path}|#{pane_title}")
-
-	out, err := cmd.Output()
 	if err != nil {
 		return nil, err
 	}
@@ -225,13 +237,11 @@ func (c *Client) CapturePane(p Pane, lines int) (string, error) {
 }
 
 func (c *Client) CapturePaneWithMode(p Pane, lines int) (CaptureResult, error) {
-	cmd := exec.Command(c.tmuxPath, "capture-pane",
+	out, err := c.output("capture-pane",
 		"-t", p.Target(),
 		"-p",
 		"-e", // Include ANSI escape sequences (colors)
 		"-S", fmt.Sprintf("-%d", lines))
-
-	out, err := cmd.Output()
 	if err != nil {
 		return CaptureResult{}, fmt.Errorf("capture-pane failed: %w", err)
 	}
@@ -254,33 +264,26 @@ func (c *Client) CapturePaneWithMode(p Pane, lines int) (CaptureResult, error) {
 
 func (c *Client) SendKeys(p Pane, keys string, enter bool) error {
 	// Use -l for literal text to avoid interpreting special characters
-	args := []string{"send-keys", "-t", p.Target(), "-l", keys}
-	cmd := exec.Command(c.tmuxPath, args...)
-	if err := cmd.Run(); err != nil {
+	if err := c.run("send-keys", "-t", p.Target(), "-l", keys); err != nil {
 		return err
 	}
 
 	// Send Enter separately (not literal)
 	if enter {
-		cmd = exec.Command(c.tmuxPath, "send-keys", "-t", p.Target(), "Enter")
-		return cmd.Run()
+		return c.run("send-keys", "-t", p.Target(), "Enter")
 	}
 	return nil
 }
 
 func (c *Client) SendSpecialKey(p Pane, key string) error {
-	cmd := exec.Command(c.tmuxPath, "send-keys", "-t", p.Target(), key)
-	return cmd.Run()
+	return c.run("send-keys", "-t", p.Target(), key)
 }
 
 // GetPaneLocation finds the window and pane index for a given pane ID
 // Returns window index, pane index, and error
 func (c *Client) GetPaneLocation(session string, paneID int) (int, int, error) {
-	// List all panes in session with their IDs
-	cmd := exec.Command(c.tmuxPath, "list-panes", "-s", "-t", session, "-F",
+	out, err := c.output("list-panes", "-s", "-t", session, "-F",
 		"#{pane_id}|#{window_index}|#{pane_index}")
-
-	out, err := cmd.Output()
 	if err != nil {
 		return 0, 0, err
 	}
@@ -306,22 +309,18 @@ func (c *Client) GetPaneLocation(session string, paneID int) (int, int, error) {
 
 // KillPane closes a pane
 func (c *Client) KillPane(p Pane) error {
-	cmd := exec.Command(c.tmuxPath, "kill-pane", "-t", p.Target())
-	return cmd.Run()
+	return c.run("kill-pane", "-t", p.Target())
 }
 
 // RespawnPane kills the current process and respawns the pane
 func (c *Client) RespawnPane(p Pane) error {
-	// -k flag kills the current process first
-	cmd := exec.Command(c.tmuxPath, "respawn-pane", "-k", "-t", p.Target())
-	return cmd.Run()
+	return c.run("respawn-pane", "-k", "-t", p.Target())
 }
 
 // KillWindow closes a window
 func (c *Client) KillWindow(session string, window int) error {
 	target := fmt.Sprintf("%s:%d", session, window)
-	cmd := exec.Command(c.tmuxPath, "kill-window", "-t", target)
-	return cmd.Run()
+	return c.run("kill-window", "-t", target)
 }
 
 // ResizePane resizes a pane by the given adjustment in lines/columns.
@@ -331,21 +330,17 @@ func (c *Client) ResizePane(p Pane, direction string, adjustment int) error {
 	if adjustment <= 0 {
 		adjustment = 5
 	}
-	flag := "-" + direction
-	cmd := exec.Command(c.tmuxPath, "resize-pane", "-t", p.Target(), flag, strconv.Itoa(adjustment))
-	return cmd.Run()
+	return c.run("resize-pane", "-t", p.Target(), "-"+direction, strconv.Itoa(adjustment))
 }
 
 // ZoomPane toggles zoom on a pane (maximizes/restores).
 func (c *Client) ZoomPane(p Pane) error {
-	cmd := exec.Command(c.tmuxPath, "resize-pane", "-t", p.Target(), "-Z")
-	return cmd.Run()
+	return c.run("resize-pane", "-t", p.Target(), "-Z")
 }
 
 // GetPaneSize returns the width and height of a pane.
 func (c *Client) GetPaneSize(p Pane) (width, height int, err error) {
-	cmd := exec.Command(c.tmuxPath, "display-message", "-t", p.Target(), "-p", "#{pane_width}x#{pane_height}")
-	out, err := cmd.Output()
+	out, err := c.output("display-message", "-t", p.Target(), "-p", "#{pane_width}x#{pane_height}")
 	if err != nil {
 		return 0, 0, err
 	}
@@ -429,6 +424,5 @@ func GetBranchForPath(path string, worktrees map[string]string) string {
 // This works even when resize-pane is capped by the window dimensions.
 func (c *Client) ResizeWindow(session string, window int, cols, rows int) error {
 	target := fmt.Sprintf("%s:%d", session, window)
-	cmd := exec.Command(c.tmuxPath, "resize-window", "-t", target, "-x", strconv.Itoa(cols), "-y", strconv.Itoa(rows))
-	return cmd.Run()
+	return c.run("resize-window", "-t", target, "-x", strconv.Itoa(cols), "-y", strconv.Itoa(rows))
 }

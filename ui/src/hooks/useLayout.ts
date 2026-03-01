@@ -33,6 +33,18 @@ function genId() {
   return `pane-${nextId++}`
 }
 
+/** Ensure nextId is higher than any existing pane ID to prevent collisions
+ *  after page reload (counter resets to 1 but localStorage has old IDs). */
+function syncNextId(panes: PaneInstance[]) {
+  for (const p of panes) {
+    const m = p.id.match(/^pane-(\d+)$/)
+    if (m) {
+      const n = parseInt(m[1], 10)
+      if (n >= nextId) nextId = n + 1
+    }
+  }
+}
+
 function layoutReducer(state: LayoutState, action: LayoutAction): LayoutState {
   switch (action.type) {
     case 'OPEN_PANE': {
@@ -130,7 +142,11 @@ const STORAGE_KEY = 'houston-layout'
 function loadState(): LayoutState {
   try {
     const saved = localStorage.getItem(STORAGE_KEY)
-    if (saved) return JSON.parse(saved) as LayoutState
+    if (saved) {
+      const state = JSON.parse(saved) as LayoutState
+      syncNextId(state.panes)
+      return state
+    }
   } catch {
     // ignore
   }
