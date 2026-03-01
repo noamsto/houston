@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -53,9 +54,25 @@ func (s *Server) handlePaneWS(w http.ResponseWriter, r *http.Request, pane tmux.
 		slog.Error("websocket upgrade failed", "error", err)
 		return
 	}
-	defer func() { _ = conn.Close() }()
 
 	slog.Info("pane websocket connected", "target", pane.Target())
+
+	// Save original window size so we can restore it when this client disconnects.
+	// resize-window overrides tmux's automatic sizing, which breaks other clients
+	// (e.g. Kitty) viewing the same session.
+	origW, origH, sizeErr := s.tmux.GetWindowSize(pane.Session, pane.Window)
+	var didResize atomic.Bool
+
+	defer func() {
+		_ = conn.Close()
+		if didResize.Load() && sizeErr == nil {
+			if err := s.tmux.ResizeWindow(pane.Session, pane.Window, origW, origH); err != nil {
+				slog.Debug("failed to restore window size", "error", err)
+			} else {
+				slog.Info("restored window size", "target", pane.Target(), "width", origW, "height", origH)
+			}
+		}
+	}()
 
 	// Keepalive: send pings every 30s, expect pong within 10s.
 	// Mobile OSes silently kill idle TCP connections; without this
@@ -68,11 +85,11 @@ func (s *Server) handlePaneWS(w http.ResponseWriter, r *http.Request, pane tmux.
 	// nudge signals the write loop to capture immediately after input
 	nudge := make(chan struct{}, 1)
 
-	go s.paneWSReadLoop(conn, pane, nudge)
+	go s.paneWSReadLoop(conn, pane, nudge, &didResize)
 	s.paneWSWriteLoop(conn, pane, nudge)
 }
 
-func (s *Server) paneWSReadLoop(conn *websocket.Conn, pane tmux.Pane, nudge chan<- struct{}) {
+func (s *Server) paneWSReadLoop(conn *websocket.Conn, pane tmux.Pane, nudge chan<- struct{}, didResize *atomic.Bool) {
 	defer func() { _ = conn.Close() }()
 
 	for {
@@ -118,6 +135,7 @@ func (s *Server) paneWSReadLoop(conn *websocket.Conn, pane tmux.Pane, nudge chan
 					_ = s.tmux.ResizePane(pane, "x", resize.Cols)
 					_ = s.tmux.ResizePane(pane, "y", resize.Rows)
 				}
+				didResize.Store(true)
 				// Signal write loop to capture immediately with new dimensions
 				select {
 				case nudge <- struct{}{}:

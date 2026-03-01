@@ -420,6 +420,22 @@ func GetBranchForPath(path string, worktrees map[string]string) string {
 	return strings.TrimSpace(string(out))
 }
 
+// GetWindowSize returns the width and height of a tmux window.
+func (c *Client) GetWindowSize(session string, window int) (width, height int, err error) {
+	target := fmt.Sprintf("%s:%d", session, window)
+	out, err := c.output("display-message", "-t", target, "-p", "#{window_width}x#{window_height}")
+	if err != nil {
+		return 0, 0, err
+	}
+	parts := strings.Split(strings.TrimSpace(string(out)), "x")
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("unexpected output format: %s", string(out))
+	}
+	width, _ = strconv.Atoi(parts[0])
+	height, _ = strconv.Atoi(parts[1])
+	return width, height, nil
+}
+
 // ResizeWindow sets the absolute width and height of a tmux window.
 // This works even when resize-pane is capped by the window dimensions.
 func (c *Client) ResizeWindow(session string, window int, cols, rows int) error {
