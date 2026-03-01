@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
-	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -56,41 +55,153 @@ func (s *Server) handlePaneWS(w http.ResponseWriter, r *http.Request, pane tmux.
 		return
 	}
 
-	slog.Info("pane websocket connected", "target", pane.Target())
+	// Look up tmux pane ID (%N format) for control mode routing
+	paneID, err := s.tmux.GetPaneID(pane)
+	if err != nil {
+		slog.Error("failed to get pane ID", "target", pane.Target(), "error", err)
+		_ = conn.Close()
+		return
+	}
 
-	// Save original window size so we can restore it when this client disconnects.
-	// resize-window overrides tmux's automatic sizing, which breaks other clients
-	// (e.g. Kitty) viewing the same session.
-	origW, origH, sizeErr := s.tmux.GetWindowSize(pane.Session, pane.Window)
-	var didResize atomic.Bool
+	// Get or create control client for this session (ref-counted)
+	cc, err := s.controlMgr.GetClient(pane.Session)
+	if err != nil {
+		slog.Error("failed to get control client", "session", pane.Session, "error", err)
+		_ = conn.Close()
+		return
+	}
+
+	slog.Info("pane websocket connected (control mode)", "target", pane.Target(), "paneID", paneID)
+
+	// Subscribe BEFORE capture so we buffer any output that arrives during seed
+	outputCh := cc.Subscribe(paneID)
 
 	defer func() {
 		_ = conn.Close()
-		if didResize.Load() && sizeErr == nil {
-			if err := s.tmux.ResizeWindow(pane.Session, pane.Window, origW, origH); err != nil {
-				slog.Debug("failed to restore window size", "error", err)
-			} else {
-				slog.Info("restored window size", "target", pane.Target(), "width", origW, "height", origH)
-			}
-		}
+		cc.Unsubscribe(paneID, outputCh)
+		s.controlMgr.ReleaseClient(pane.Session)
 	}()
 
-	// Keepalive: send pings every 30s, expect pong within 10s.
-	// Mobile OSes silently kill idle TCP connections; without this
-	// the server holds dead connections until the next write fails.
+	// Keepalive
 	conn.SetPongHandler(func(string) error {
 		return conn.SetReadDeadline(time.Now().Add(45 * time.Second))
 	})
 	_ = conn.SetReadDeadline(time.Now().Add(45 * time.Second))
 
-	// nudge signals the write loop to capture immediately after input
-	nudge := make(chan struct{}, 1)
+	// Seed: send current pane state as initial snapshot
+	if seedOutput, err := s.tmux.CapturePaneWithMode(pane, 500); err == nil && seedOutput.Output != "" {
+		outputJSON, _ := json.Marshal(WSOutput{Data: seedOutput.Output})
+		msg, _ := json.Marshal(WSMessage{Type: "seed", Data: outputJSON})
+		if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+			return
+		}
+	}
 
-	go s.paneWSReadLoop(conn, pane, nudge, &didResize)
-	s.paneWSWriteLoop(conn, pane, nudge)
+	// Drain any buffered incremental output that arrived during the seed capture
+drainLoop:
+	for {
+		select {
+		case data := <-outputCh:
+			outputJSON, _ := json.Marshal(WSOutput{Data: string(data)})
+			msg, _ := json.Marshal(WSMessage{Type: "output", Data: outputJSON})
+			if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+				return
+			}
+		default:
+			break drainLoop
+		}
+	}
+
+	go s.paneWSReadLoop(conn, cc, paneID)
+	s.paneWSWriteLoop(conn, cc, pane, outputCh)
 }
 
-func (s *Server) paneWSReadLoop(conn *websocket.Conn, pane tmux.Pane, nudge chan<- struct{}, didResize *atomic.Bool) {
+func (s *Server) paneWSWriteLoop(conn *websocket.Conn, cc *tmux.ControlClient, pane tmux.Pane, outputCh <-chan []byte) {
+	metaTicker := time.NewTicker(1 * time.Second)
+	defer metaTicker.Stop()
+
+	pingTicker := time.NewTicker(30 * time.Second)
+	defer pingTicker.Stop()
+
+	var lastMeta WSMeta
+
+	// Fetch initial pane info for agent detection
+	panes, _ := s.tmux.ListPanes(pane.Session, pane.Window)
+	var panePath, paneCommand string
+	for _, p := range panes {
+		if p.Index == pane.Index {
+			panePath = p.Path
+			paneCommand = p.Command
+			break
+		}
+	}
+	var windowName string
+	if windows, err := s.tmux.ListWindows(pane.Session); err == nil {
+		for _, w := range windows {
+			if w.Index == pane.Window {
+				windowName = w.Name
+				break
+			}
+		}
+	}
+
+	for {
+		select {
+		case data := <-outputCh:
+			outputJSON, _ := json.Marshal(WSOutput{Data: string(data)})
+			msg, _ := json.Marshal(WSMessage{Type: "output", Data: outputJSON})
+			if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+				return
+			}
+
+		case <-metaTicker.C:
+			// Agent detection via capture-pane (side channel for state parsing)
+			capture, err := s.tmux.CapturePaneWithMode(pane, 500)
+			if err != nil {
+				continue
+			}
+			agent := s.registry.Detect(pane.Target(), paneCommand, capture.Output)
+			parseResult := getAgentState(agent, panePath, capture.Output)
+
+			meta := WSMeta{
+				Agent:      agent.Type(),
+				Mode:       modeToString(parseResult.Mode),
+				Activity:   parseResult.Activity,
+				WindowName: windowName,
+			}
+			if len(parseResult.Choices) > 0 {
+				meta.Choices = parseResult.Choices
+			}
+			statusLine := agent.ExtractStatusLine(capture.Output)
+			if statusLine != "" {
+				meta.StatusLine = statusLine
+			}
+			if agent.Type() == agents.AgentClaudeCode {
+				meta.Suggestion = claude.ExtractSuggestion(capture.Output)
+			}
+			meta.Status = resultTypeToString(parseResult.Type)
+
+			if !metaEqual(meta, lastMeta) {
+				lastMeta = meta
+				metaJSON, _ := json.Marshal(meta)
+				msg, _ := json.Marshal(WSMessage{Type: "meta", Data: metaJSON})
+				if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+					return
+				}
+			}
+
+		case <-pingTicker.C:
+			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return
+			}
+
+		case <-cc.Done():
+			return
+		}
+	}
+}
+
+func (s *Server) paneWSReadLoop(conn *websocket.Conn, cc *tmux.ControlClient, paneID string) {
 	defer func() { _ = conn.Close() }()
 
 	for {
@@ -114,13 +225,8 @@ func (s *Server) paneWSReadLoop(conn *websocket.Conn, pane tmux.Pane, nudge chan
 			if err := json.Unmarshal(msg.Data, &input); err != nil {
 				continue
 			}
-			if err := s.tmux.SendKeys(pane, input.Data, false); err != nil {
+			if err := cc.SendKeys(paneID, input.Data); err != nil {
 				slog.Error("send keys failed", "error", err)
-			}
-			// Signal write loop to capture immediately
-			select {
-			case nudge <- struct{}{}:
-			default:
 			}
 
 		case "resize":
@@ -129,124 +235,9 @@ func (s *Server) paneWSReadLoop(conn *websocket.Conn, pane tmux.Pane, nudge chan
 				continue
 			}
 			if resize.Cols > 0 && resize.Rows > 0 {
-				// Resize the window (not just the pane) so tmux allows the
-				// full dimensions even when another smaller client is attached.
-				if err := s.tmux.ResizeWindow(pane.Session, pane.Window, resize.Cols, resize.Rows); err != nil {
-					slog.Debug("resize window failed, falling back to pane resize", "error", err)
-					_ = s.tmux.ResizePane(pane, "x", resize.Cols)
-					_ = s.tmux.ResizePane(pane, "y", resize.Rows)
+				if err := cc.SetClientSize(resize.Cols, resize.Rows); err != nil {
+					slog.Debug("set client size failed", "error", err)
 				}
-				didResize.Store(true)
-				// Signal write loop to capture immediately with new dimensions
-				select {
-				case nudge <- struct{}{}:
-				default:
-				}
-			}
-		}
-	}
-}
-
-func (s *Server) paneWSWriteLoop(conn *websocket.Conn, pane tmux.Pane, nudge <-chan struct{}) {
-	captureTicker := time.NewTicker(200 * time.Millisecond)
-	defer captureTicker.Stop()
-
-	pingTicker := time.NewTicker(30 * time.Second)
-	defer pingTicker.Stop()
-
-	var lastOutput string
-	var lastMeta WSMeta
-	var captureFailures int
-
-	// Get initial pane info for agent detection and window name for header
-	panes, _ := s.tmux.ListPanes(pane.Session, pane.Window)
-	var panePath, paneCommand string
-	for _, p := range panes {
-		if p.Index == pane.Index {
-			panePath = p.Path
-			paneCommand = p.Command
-			break
-		}
-	}
-	var windowName string
-	if windows, err := s.tmux.ListWindows(pane.Session); err == nil {
-		for _, w := range windows {
-			if w.Index == pane.Window {
-				windowName = w.Name
-				break
-			}
-		}
-	}
-
-	for {
-		select {
-		case <-captureTicker.C:
-		case <-nudge:
-			// Brief pause to let the process update its output after receiving input
-			time.Sleep(50 * time.Millisecond)
-			captureTicker.Reset(200 * time.Millisecond)
-		case <-pingTicker.C:
-			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-				return
-			}
-			continue
-		}
-		capture, err := s.tmux.CapturePaneWithMode(pane, 500)
-		if err != nil {
-			captureFailures++
-			if captureFailures >= 50 {
-				slog.Debug("capture failed too many times, closing", "target", pane.Target(), "error", err)
-				return
-			}
-			slog.Debug("capture failed, will retry", "target", pane.Target(), "error", err, "failures", captureFailures)
-			continue
-		}
-		captureFailures = 0
-
-		// Detect agent and parse state
-		paneID := pane.Target()
-		agent := s.registry.Detect(paneID, paneCommand, capture.Output)
-		parseResult := getAgentState(agent, panePath, capture.Output)
-		// Build metadata
-		meta := WSMeta{
-			Agent:      agent.Type(),
-			Mode:       modeToString(parseResult.Mode),
-			Activity:   parseResult.Activity,
-			WindowName: windowName,
-		}
-
-		if len(parseResult.Choices) > 0 {
-			meta.Choices = parseResult.Choices
-		}
-
-		statusLine := agent.ExtractStatusLine(capture.Output)
-		if statusLine != "" {
-			meta.StatusLine = statusLine
-		}
-
-		if agent.Type() == agents.AgentClaudeCode {
-			meta.Suggestion = claude.ExtractSuggestion(capture.Output)
-		}
-
-		meta.Status = resultTypeToString(parseResult.Type)
-
-		// Send output if changed
-		if capture.Output != lastOutput {
-			lastOutput = capture.Output
-			outputJSON, _ := json.Marshal(WSOutput{Data: capture.Output})
-			msg, _ := json.Marshal(WSMessage{Type: "output", Data: outputJSON})
-			if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
-				return
-			}
-		}
-
-		// Send meta if changed
-		if !metaEqual(meta, lastMeta) {
-			lastMeta = meta
-			metaJSON, _ := json.Marshal(meta)
-			msg, _ := json.Marshal(WSMessage{Type: "meta", Data: metaJSON})
-			if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
-				return
 			}
 		}
 	}

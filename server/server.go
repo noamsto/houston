@@ -69,11 +69,12 @@ func getAgentState(agent agents.Agent, panePath, terminalOutput string) parser.R
 const recentActivityTTL = 2 * time.Minute
 
 type Server struct {
-	tmux     *tmux.Client
-	watcher  *status.Watcher
-	registry *agents.Registry
-	font     FontController
-	uiFS     fs.FS // embedded React SPA
+	tmux       *tmux.Client
+	controlMgr *tmux.ControlManager
+	watcher    *status.Watcher
+	registry   *agents.Registry
+	font       FontController
+	uiFS       fs.FS // embedded React SPA
 
 	// Track when sessions last had activity (for keeping recently-active in Active section)
 	lastActivity   map[string]time.Time // session name -> last working timestamp
@@ -114,6 +115,7 @@ func New(cfg Config) (*Server, error) {
 
 	s := &Server{
 		tmux:         tmux.NewClient(),
+		controlMgr:   tmux.NewControlManager(),
 		watcher:      status.NewWatcher(cfg.StatusDir),
 		registry:     registry,
 		font:         cfg.FontController,
