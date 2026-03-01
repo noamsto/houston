@@ -51,55 +51,26 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
     innerRef, outerRef, termRef, !isDesktop && termMounted,
   )
 
-  // Pending output for RAF-deferred rendering — coalesces rapid updates into one frame
-  const pendingOutputRef = useRef<string | null>(null)
-  const rafRef = useRef<number>(0)
-  // Deferred output: saved when user is scrolled up, applied when they scroll back to bottom
-  const deferredOutputRef = useRef<string | null>(null)
-  // Cache latest output so we can replay it when xterm remounts (e.g. isDesktop changes)
-  // without waiting for the server to send a new capture (it deduplicates).
-  const lastOutputRef = useRef<string | null>(null)
-  // Track whether xterm is mid-write — term.write() is async; checking buffer
-  // state before the previous write completes yields stale results.
-  const writingRef = useRef(false)
+  // Cache last seed so we can replay it when xterm remounts (e.g. isDesktop changes)
+  // without waiting for the server to send a fresh seed.
+  const lastSeedRef = useRef<string | null>(null)
 
   const { connected, sendInput, sendResize } = usePaneSocket(pane.target, {
+    onSeed: (data) => {
+      lastSeedRef.current = data
+      const term = termRef.current
+      if (!term) return
+      writeSnapshot(term, data)
+    },
     onOutput: (data) => {
-      lastOutputRef.current = data
-      pendingOutputRef.current = data
-      scheduleFlush()
+      const term = termRef.current
+      if (!term) return
+      term.write(data)
     },
     onMeta: (m) => setMeta(m),
   })
 
-  function scheduleFlush() {
-    if (rafRef.current || writingRef.current) return
-    rafRef.current = requestAnimationFrame(() => {
-      rafRef.current = 0
-      const term = termRef.current
-      const pending = pendingOutputRef.current
-      if (!term || pending === null || writingRef.current) return
-      pendingOutputRef.current = null
-      // If user has scrolled up, defer the write to preserve their position
-      const buf = term.buffer.active
-      if (buf.viewportY < buf.baseY) {
-        deferredOutputRef.current = pending
-        return
-      }
-      writingRef.current = true
-      writeSnapshot(term, pending, () => {
-        writingRef.current = false
-        // If new output arrived during the write, schedule another flush
-        if (pendingOutputRef.current !== null) {
-          scheduleFlush()
-        }
-      })
-    })
-  }
-
   // Focus the xterm textarea when this pane becomes the active one (desktop only).
-  // No resize here — houston isn't a real tmux client (just capture-pane + send-keys),
-  // so resizing is an uninvited side effect. Use the manual ⊞ button instead.
   useEffect(() => {
     if (isFocused && isDesktop) {
       termRef.current?.focus()
@@ -155,8 +126,8 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
     try {
       fit.fit()
       if (!wide) sendResize(term.cols, term.rows)
-      if (lastOutputRef.current) {
-        writeSnapshot(term, lastOutputRef.current)
+      if (lastSeedRef.current) {
+        writeSnapshot(term, lastSeedRef.current)
       }
     } catch { /* fit can throw if zero-size */ }
   }, [isDesktop, sendResize, resetTransform])
@@ -173,12 +144,12 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
       lineHeight: 1.2,
       cursorBlink: false,
       disableStdin: !isDesktop,
-      // convertEol: make \n behave as \r\n so lines start at column 0.
-      // tmux capture-pane uses \n separators; without this, cursor stays at
-      // the same column after each newline, causing text to "float".
+      // convertEol: make \n behave as \r\n so capture-pane seed lines start at column 0.
+      // Seed data (capture-pane -e) uses \n separators; incremental data from control mode
+      // already has proper \r\n. The double-CR for \r\n is harmless (carriage return is idempotent).
       convertEol: true,
-      // 500 lines matches the tmux capture depth so the user can scroll up through history.
-      // \x1b[3J clears old scrollback on each write so it always reflects the latest capture.
+      // 500 lines matches the tmux capture depth so the user can scroll through history.
+      // writeSnapshot clears scrollback on each seed so it always reflects the latest state.
       scrollback: 500,
     })
 
@@ -211,12 +182,12 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
     console.debug('[input] xterm mounted — isDesktop:', isDesktop, 'disableStdin:', term.options.disableStdin, 'target:', pane.target)
 
     // Defer initial fit so the DOM has its final layout before measuring.
-    // Also replay cached output — when isDesktop changes, xterm remounts but the
-    // WS server won't re-send output that hasn't changed since the last send.
+    // Replay cached seed — when isDesktop changes, xterm remounts but the
+    // WS server won't re-send a seed if the pane hasn't changed.
     requestAnimationFrame(() => {
       fitAddon.fit()
-      if (lastOutputRef.current) {
-        writeSnapshot(term, lastOutputRef.current)
+      if (lastSeedRef.current) {
+        writeSnapshot(term, lastSeedRef.current)
       }
       if (isDesktop) term.focus()
       setTermMounted(true)
@@ -231,25 +202,7 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
       console.debug('[input] skipped onData registration (mobile mode)')
     }
 
-    // When user scrolls back to bottom, apply any deferred output
-    const viewport = innerRef.current.querySelector('.xterm-viewport')
-    const onViewportScroll = () => {
-      const buf = term.buffer.active
-      if (buf.viewportY >= buf.baseY && deferredOutputRef.current !== null) {
-        pendingOutputRef.current = deferredOutputRef.current
-        deferredOutputRef.current = null
-        scheduleFlush()
-      }
-    }
-    viewport?.addEventListener('scroll', onViewportScroll)
-
     return () => {
-      viewport?.removeEventListener('scroll', onViewportScroll)
-      cancelAnimationFrame(rafRef.current)
-      rafRef.current = 0
-      pendingOutputRef.current = null
-      deferredOutputRef.current = null
-      writingRef.current = false
       term.dispose()
       termRef.current = null
       fitAddonRef.current = null
@@ -257,15 +210,10 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
     }
   }, [isDesktop]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Reset output state when switching pane targets — xterm stays mounted (no blink),
-  // old content remains visible until the new WS connection delivers fresh output.
+  // Reset seed cache when switching pane targets — old content remains visible
+  // until the new WS connection delivers a fresh seed.
   useEffect(() => {
-    cancelAnimationFrame(rafRef.current)
-    rafRef.current = 0
-    lastOutputRef.current = null
-    pendingOutputRef.current = null
-    deferredOutputRef.current = null
-    writingRef.current = false
+    lastSeedRef.current = null
   }, [pane.target])
 
   // Resize observer — refit when outer container dimensions change

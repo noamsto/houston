@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { WSMeta, WSOutput } from '../api/types'
 
 interface PaneSocketCallbacks {
-  onOutput: (data: string) => void
+  onSeed: (data: string) => void    // full snapshot — write via writeSnapshot
+  onOutput: (data: string) => void  // incremental terminal data — write via term.write
   onMeta: (meta: WSMeta) => void
 }
 
@@ -74,6 +75,11 @@ export function usePaneSocket(target: string | null, callbacks: PaneSocketCallba
         try {
           const msg = JSON.parse(event.data as string)
           switch (msg.type) {
+            case 'seed': {
+              const output = msg.data as WSOutput
+              callbacksRef.current.onSeed(output.data)
+              break
+            }
             case 'output': {
               const output = msg.data as WSOutput
               callbacksRef.current.onOutput(output.data)
