@@ -204,6 +204,16 @@ export function MobileInputBar({ target, choices, wideMode, onToggleWide }: Prop
       {/* Quick action pills — wrapping grid with expand toggle */}
       <div style={{ display: 'flex', alignItems: 'flex-start', padding: '6px 8px 0' }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, flex: 1 }}>
+          {primaryActions.map((qa) => (
+            <button
+              key={qa.label}
+              className="pill-btn"
+              onClick={() => void handleQuickAction(qa.action, qa.value)}
+              style={pillStyle}
+            >
+              {qa.label}
+            </button>
+          ))}
           <button
             className="pill-btn"
             onClick={onToggleWide}
@@ -215,16 +225,6 @@ export function MobileInputBar({ target, choices, wideMode, onToggleWide }: Prop
           >
             {wideMode ? 'WIDE' : 'FIT'}
           </button>
-          {primaryActions.map((qa) => (
-            <button
-              key={qa.label}
-              className="pill-btn"
-              onClick={() => void handleQuickAction(qa.action, qa.value)}
-              style={pillStyle}
-            >
-              {qa.label}
-            </button>
-          ))}
           {expanded && extraActions.map((qa) => (
             <button
               key={qa.label}
