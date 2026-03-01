@@ -135,7 +135,7 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
 
     try {
       fit.fit()
-      sendResize(term.cols, term.rows)
+      if (!wide) sendResize(term.cols, term.rows)
       if (lastOutputRef.current) {
         writeSnapshot(term, lastOutputRef.current)
       }
@@ -275,7 +275,11 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
 
         try {
           fit.fit()
-          sendResize(term.cols, term.rows)
+          // Only resize tmux in desktop or mobile fit mode — wide mode
+          // leaves the pane at the user's terminal size to avoid conflicts.
+          if (isDesktop || minScaleRef.current >= 1) {
+            sendResize(term.cols, term.rows)
+          }
         } catch {
           // fit() can throw if the container is hidden or has zero size
         }
