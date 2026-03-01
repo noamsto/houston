@@ -64,13 +64,13 @@ func (cc *ControlClient) Start() error {
 	cc.stdin = master // write commands to PTY master
 
 	if err := cc.cmd.Start(); err != nil {
-		master.Close()
-		slave.Close()
+		_ = master.Close()
+		_ = slave.Close()
 		return fmt.Errorf("start tmux -CC: %w", err)
 	}
 
 	// Close slave in parent — child inherited it
-	slave.Close()
+	_ = slave.Close()
 	cc.ptySlave = nil
 
 	go cc.readLoop(bufio.NewReader(master))
@@ -243,7 +243,7 @@ func (cc *ControlClient) Close() error {
 	cc.stdinMu.Unlock()
 
 	if cc.ptyMaster != nil {
-		cc.ptyMaster.Close()
+		_ = cc.ptyMaster.Close()
 	}
 	return cc.cmd.Wait()
 }

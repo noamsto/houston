@@ -67,7 +67,7 @@ func (m *ControlManager) ReleaseClient(session string) {
 	mc.refCount--
 	if mc.refCount <= 0 {
 		delete(m.clients, session)
-		go mc.client.Close()
+		go func() { _ = mc.client.Close() }()
 		slog.Info("closed control client (no more subscribers)", "session", session)
 	}
 }

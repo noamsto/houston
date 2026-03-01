@@ -19,7 +19,7 @@ func TestControlClientIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create test session: %v", err)
 	}
-	defer client.run("kill-session", "-t", session)
+	defer func() { _ = client.run("kill-session", "-t", session) }()
 
 	// Get the pane ID
 	out, err := client.output("display-message", "-t", session, "-p", "#{pane_id}")
@@ -33,7 +33,7 @@ func TestControlClientIntegration(t *testing.T) {
 	if err := cc.Start(); err != nil {
 		t.Fatalf("failed to start control client: %v", err)
 	}
-	defer cc.Close()
+	defer func() { _ = cc.Close() }()
 
 	// Subscribe to pane output
 	ch := cc.Subscribe(paneID)

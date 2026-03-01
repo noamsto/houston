@@ -9,6 +9,7 @@ import (
 )
 
 // openPTY opens a pseudo-terminal pair (master, slave).
+// Echo is disabled so command input doesn't interleave with tmux output.
 func openPTY() (master, slave *os.File, err error) {
 	master, err = os.OpenFile("/dev/ptmx", os.O_RDWR|syscall.O_NOCTTY, 0)
 	if err != nil {
@@ -17,7 +18,7 @@ func openPTY() (master, slave *os.File, err error) {
 
 	defer func() {
 		if err != nil {
-			master.Close()
+			_ = master.Close()
 		}
 	}()
 
@@ -37,6 +38,19 @@ func openPTY() (master, slave *os.File, err error) {
 	slave, err = os.OpenFile(slavePath, os.O_RDWR|syscall.O_NOCTTY, 0)
 	if err != nil {
 		return nil, nil, fmt.Errorf("open %s: %w", slavePath, err)
+	}
+
+	// Disable ECHO so our commands written to master aren't echoed back,
+	// which would interleave with tmux's control mode output and corrupt it.
+	var attr syscall.Termios
+	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, slave.Fd(), syscall.TCGETS, uintptr(unsafe.Pointer(&attr))); errno != 0 {
+		_ = slave.Close()
+		return nil, nil, fmt.Errorf("TCGETS: %w", errno)
+	}
+	attr.Lflag &^= syscall.ECHO | syscall.ECHOE | syscall.ECHOK | syscall.ECHONL
+	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, slave.Fd(), syscall.TCSETS, uintptr(unsafe.Pointer(&attr))); errno != 0 {
+		_ = slave.Close()
+		return nil, nil, fmt.Errorf("TCSETS: %w", errno)
 	}
 
 	return master, slave, nil

@@ -17,7 +17,7 @@ func TestControlManagerGetClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create test session: %v", err)
 	}
-	defer client.run("kill-session", "-t", session)
+	defer func() { _ = client.run("kill-session", "-t", session) }()
 
 	mgr := NewControlManager()
 	defer mgr.Close()
