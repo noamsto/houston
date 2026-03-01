@@ -130,7 +130,7 @@ func ReadLastMessages(path string, n int) ([]Message, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening session file: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var messages []Message
 	scanner := bufio.NewScanner(f)
@@ -184,10 +184,7 @@ func GetSessionState(messages []Message) SessionState {
 		}
 	}
 
-	startIdx := len(messages) - 20
-	if startIdx < 0 {
-		startIdx = 0
-	}
+	startIdx := max(len(messages)-20, 0)
 
 	for i := startIdx; i < len(messages); i++ {
 		msg := messages[i]
@@ -196,7 +193,8 @@ func GetSessionState(messages []Message) SessionState {
 			state.LastActivity = msg.Timestamp
 		}
 
-		if msg.Type == "assistant" {
+		switch msg.Type {
+		case "assistant":
 			blocks := parseContentBlocks(msg.Message.Content)
 
 			for _, block := range blocks {
@@ -220,13 +218,14 @@ func GetSessionState(messages []Message) SessionState {
 				}
 			}
 
-			if msg.Message.StopReason == "tool_use" {
+			switch msg.Message.StopReason {
+			case "tool_use":
 				state.IsWorking = true
-			} else if msg.Message.StopReason == "end_turn" {
+			case "end_turn":
 				state.IsWaiting = true
 				state.IsWorking = false
 			}
-		} else if msg.Type == "user" {
+		case "user":
 			if hasToolResultFor(msg.Message.Content, state.PendingToolUseID) {
 				state.PendingToolUseID = ""
 				state.PendingToolName = ""

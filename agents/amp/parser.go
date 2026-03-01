@@ -31,10 +31,9 @@ var (
 	// Match question patterns
 	questionPattern = regexp.MustCompile(`(?m)^(.+\?)\s*$`)
 
-	// Match Amp choice lines: "‣ Yes" (selected) or "  Allow All" (not selected)
-	// Amp uses ‣ (U+2023) for selected item, spaces for others
-	ampChoiceSelectedPattern   = regexp.MustCompile(`^[│\s]*‣\s+(.+?)\s*[│]?\s*$`)
-	ampChoiceUnselectedPattern = regexp.MustCompile(`^[│\s]{2,}([A-Z][a-zA-Z\s]+?)\s*[│]?\s*$`)
+	// Match Amp choice lines: "‣ Yes" (selected)
+	// Amp uses ‣ (U+2023) for selected item
+	ampChoiceSelectedPattern = regexp.MustCompile(`^[│\s]*‣\s+(.+?)\s*[│]?\s*$`)
 
 	// Match numbered choices (Claude style, kept for compatibility)
 	numberedChoicePattern = regexp.MustCompile(`(?m)^\s*[❯>\-\*]?\s*([0-9]+)[.)\]]\s+(.+)$`)

@@ -53,7 +53,7 @@ func (s *Server) handlePaneWS(w http.ResponseWriter, r *http.Request, pane tmux.
 		slog.Error("websocket upgrade failed", "error", err)
 		return
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	slog.Info("pane websocket connected", "target", pane.Target())
 
@@ -65,7 +65,7 @@ func (s *Server) handlePaneWS(w http.ResponseWriter, r *http.Request, pane tmux.
 }
 
 func (s *Server) paneWSReadLoop(conn *websocket.Conn, pane tmux.Pane, nudge chan<- struct{}) {
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	for {
 		_, msgBytes, err := conn.ReadMessage()
@@ -107,8 +107,8 @@ func (s *Server) paneWSReadLoop(conn *websocket.Conn, pane tmux.Pane, nudge chan
 				// full dimensions even when another smaller client is attached.
 				if err := s.tmux.ResizeWindow(pane.Session, pane.Window, resize.Cols, resize.Rows); err != nil {
 					slog.Debug("resize window failed, falling back to pane resize", "error", err)
-					s.tmux.ResizePane(pane, "x", resize.Cols)
-					s.tmux.ResizePane(pane, "y", resize.Rows)
+					_ = s.tmux.ResizePane(pane, "x", resize.Cols)
+					_ = s.tmux.ResizePane(pane, "y", resize.Rows)
 				}
 				// Signal write loop to capture immediately with new dimensions
 				select {

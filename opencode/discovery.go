@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 )
@@ -61,7 +62,7 @@ func ReadDiscoveryFiles() []DiscoveredServer {
 		// Verify process is still running
 		if !isProcessRunning(srv.PID) {
 			// Clean up stale file
-			os.Remove(filepath.Join(dir, entry.Name()))
+			_ = os.Remove(filepath.Join(dir, entry.Name()))
 			continue
 		}
 
@@ -161,15 +162,7 @@ func (d *Discovery) Scan(ctx context.Context) []*Server {
 		// Also scan default ports as fallback
 		for _, port := range d.ports {
 			url := fmt.Sprintf("http://%s:%d", d.hostname, port)
-			// Avoid duplicates
-			found := false
-			for _, u := range urls {
-				if u == url {
-					found = true
-					break
-				}
-			}
-			if !found {
+			if !slices.Contains(urls, url) {
 				urls = append(urls, url)
 			}
 		}

@@ -74,7 +74,6 @@ type Server struct {
 	registry *agents.Registry
 	font     FontController
 	uiFS     fs.FS // embedded React SPA
-	mu       sync.RWMutex
 
 	// Track when sessions last had activity (for keeping recently-active in Active section)
 	lastActivity   map[string]time.Time // session name -> last working timestamp
@@ -232,13 +231,12 @@ func (s *Server) findBestPane(session string, windowIdx int, panes []tmux.PaneIn
 		if agent.Type() != agents.AgentGeneric {
 			parseResult = getAgentState(agent, p.Path, output)
 
-			if parseResult.Type == parser.TypeError ||
-				parseResult.Type == parser.TypeChoice ||
-				parseResult.Type == parser.TypeQuestion {
+			switch parseResult.Type {
+			case parser.TypeError, parser.TypeChoice, parser.TypeQuestion:
 				score = 100
-			} else if parseResult.Type == parser.TypeWorking {
+			case parser.TypeWorking:
 				score = 50
-			} else {
+			default:
 				score = 30
 			}
 		} else {
@@ -464,11 +462,12 @@ func (s *Server) buildAgentStripItems(activeSession string, activeWindow, active
 			}
 
 			indicator := "idle"
-			if parseResult.Type == parser.TypeError || parseResult.Type == parser.TypeChoice || parseResult.Type == parser.TypeQuestion {
+			switch parseResult.Type {
+			case parser.TypeError, parser.TypeChoice, parser.TypeQuestion:
 				indicator = "attention"
-			} else if parseResult.Type == parser.TypeWorking {
+			case parser.TypeWorking:
 				indicator = "working"
-			} else if parseResult.Type == parser.TypeDone {
+			case parser.TypeDone:
 				indicator = "done"
 			}
 
@@ -680,10 +679,10 @@ func parsePaneTarget(path string) (tmux.Pane, error) {
 
 	dotIdx := strings.Index(rest, ".")
 	if dotIdx == -1 {
-		fmt.Sscanf(rest, "%d", &window)
+		_, _ = fmt.Sscanf(rest, "%d", &window)
 	} else {
-		fmt.Sscanf(rest[:dotIdx], "%d", &window)
-		fmt.Sscanf(rest[dotIdx+1:], "%d", &pane)
+		_, _ = fmt.Sscanf(rest[:dotIdx], "%d", &window)
+		_, _ = fmt.Sscanf(rest[dotIdx+1:], "%d", &pane)
 	}
 
 	return tmux.Pane{Session: session, Window: window, Index: pane}, nil
@@ -696,7 +695,7 @@ func (s *Server) handlePaneSend(w http.ResponseWriter, r *http.Request, pane tmu
 		return
 	}
 
-	r.ParseForm()
+	_ = r.ParseForm()
 	input := r.FormValue("input")
 	special := r.FormValue("special") == "true"
 	noEnter := r.FormValue("noenter") == "true"
@@ -759,7 +758,7 @@ func (s *Server) handlePaneSendWithImages(w http.ResponseWriter, r *http.Request
 			slog.Error("failed to decode base64 image", "error", err, "index", i)
 			// Clean up any files created so far on error
 			for _, f := range cleanupOnError {
-				os.Remove(f)
+				_ = os.Remove(f)
 			}
 			http.Error(w, fmt.Sprintf("invalid image data at index %d", i), http.StatusBadRequest)
 			return
@@ -773,7 +772,7 @@ func (s *Server) handlePaneSendWithImages(w http.ResponseWriter, r *http.Request
 			slog.Error("failed to create temp file", "error", err, "index", i)
 			// Clean up any files created so far on error
 			for _, f := range cleanupOnError {
-				os.Remove(f)
+				_ = os.Remove(f)
 			}
 			http.Error(w, "failed to save image", http.StatusInternalServerError)
 			return
@@ -781,16 +780,16 @@ func (s *Server) handlePaneSendWithImages(w http.ResponseWriter, r *http.Request
 
 		if _, err := tmpFile.Write(imageData); err != nil {
 			slog.Error("failed to write image", "error", err, "index", i)
-			tmpFile.Close()
-			os.Remove(tmpFile.Name())
+			_ = tmpFile.Close()
+			_ = os.Remove(tmpFile.Name())
 			// Clean up any files created so far on error
 			for _, f := range cleanupOnError {
-				os.Remove(f)
+				_ = os.Remove(f)
 			}
 			http.Error(w, "failed to save image", http.StatusInternalServerError)
 			return
 		}
-		tmpFile.Close()
+		_ = tmpFile.Close()
 
 		tmpFiles = append(tmpFiles, tmpFile.Name())
 		cleanupOnError = append(cleanupOnError, tmpFile.Name())
@@ -800,7 +799,7 @@ func (s *Server) handlePaneSendWithImages(w http.ResponseWriter, r *http.Request
 	for _, f := range tmpFiles {
 		path := f
 		time.AfterFunc(1*time.Hour, func() {
-			os.Remove(path)
+			_ = os.Remove(path)
 		})
 	}
 
@@ -980,7 +979,7 @@ func (s *Server) handleOpenCodeSession(w http.ResponseWriter, r *http.Request) {
 
 	// Return JSON
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(state)
+	_ = json.NewEncoder(w).Encode(state)
 }
 
 func (s *Server) handleOpenCodeSend(w http.ResponseWriter, r *http.Request, serverURL, sessionID string) {
@@ -989,7 +988,7 @@ func (s *Server) handleOpenCodeSend(w http.ResponseWriter, r *http.Request, serv
 		return
 	}
 
-	r.ParseForm()
+	_ = r.ParseForm()
 	text := r.FormValue("input")
 
 	if text == "" {

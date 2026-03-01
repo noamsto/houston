@@ -14,7 +14,7 @@ func TestClient_Health(t *testing.T) {
 		if r.URL.Path != "/global/health" {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
-		json.NewEncoder(w).Encode(HealthResponse{
+		_ = json.NewEncoder(w).Encode(HealthResponse{
 			Healthy: true,
 			Version: "1.0.0",
 		})
@@ -40,7 +40,7 @@ func TestClient_ListSessions(t *testing.T) {
 		if r.URL.Path != "/session" {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
-		json.NewEncoder(w).Encode([]Session{
+		_ = json.NewEncoder(w).Encode([]Session{
 			{
 				ID:        "sess-1",
 				Title:     "Test Session",
@@ -74,7 +74,7 @@ func TestClient_GetSessionStatus(t *testing.T) {
 		if r.URL.Path != "/session/status" {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
-		json.NewEncoder(w).Encode(map[string]SessionStatus{
+		_ = json.NewEncoder(w).Encode(map[string]SessionStatus{
 			"sess-1": {Status: "idle", SessionID: "sess-1"},
 			"sess-2": {Status: "busy", SessionID: "sess-2"},
 		})
@@ -107,7 +107,7 @@ func TestClient_SendPromptAsync(t *testing.T) {
 		if r.Method != http.MethodPost {
 			t.Errorf("expected POST, got %s", r.Method)
 		}
-		json.NewDecoder(r.Body).Decode(&receivedBody)
+		_ = json.NewDecoder(r.Body).Decode(&receivedBody)
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer server.Close()
@@ -133,7 +133,7 @@ func TestClient_SendPromptAsync(t *testing.T) {
 func TestIsAvailable(t *testing.T) {
 	// Test available server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(HealthResponse{Healthy: true, Version: "1.0.0"})
+		_ = json.NewEncoder(w).Encode(HealthResponse{Healthy: true, Version: "1.0.0"})
 	}))
 	defer server.Close()
 

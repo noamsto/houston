@@ -23,7 +23,7 @@ func (s *Server) handleAPISessions(w http.ResponseWriter, r *http.Request) {
 
 	data := s.buildSessionsData()
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(data)
+	_ = json.NewEncoder(w).Encode(data)
 }
 
 func (s *Server) streamAPISessionsJSON(w http.ResponseWriter, r *http.Request) {
@@ -37,7 +37,7 @@ func (s *Server) streamAPISessionsJSON(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
-	fmt.Fprintf(w, ": connected\n\n")
+	_, _ = fmt.Fprintf(w, ": connected\n\n")
 	flusher.Flush()
 
 	ticker := time.NewTicker(3 * time.Second)
@@ -153,13 +153,13 @@ func (s *Server) handlePaneJSON(w http.ResponseWriter, r *http.Request, pane tmu
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(data)
+	_ = json.NewEncoder(w).Encode(data)
 }
 
 func (s *Server) handleAPIOpenCodeSessions(w http.ResponseWriter, r *http.Request) {
 	if s.ocManager == nil {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(OpenCodeData{})
+		_ = json.NewEncoder(w).Encode(OpenCodeData{})
 		return
 	}
 
@@ -170,7 +170,7 @@ func (s *Server) handleAPIOpenCodeSessions(w http.ResponseWriter, r *http.Reques
 
 	data := s.buildOpenCodeData(r.Context())
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(data)
+	_ = json.NewEncoder(w).Encode(data)
 }
 
 func (s *Server) streamAPIOpenCodeJSON(w http.ResponseWriter, r *http.Request) {
@@ -184,7 +184,7 @@ func (s *Server) streamAPIOpenCodeJSON(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
-	fmt.Fprintf(w, ": connected\n\n")
+	_, _ = fmt.Fprintf(w, ": connected\n\n")
 	flusher.Flush()
 
 	ticker := time.NewTicker(5 * time.Second)

@@ -140,7 +140,7 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
         writeSnapshot(term, lastOutputRef.current)
       }
     } catch { /* fit can throw if zero-size */ }
-  }, [isDesktop, sendResize])
+  }, [isDesktop, sendResize, resetTransform])
 
   // Mount xterm.js — remount when target or desktop mode changes
   useEffect(() => {
@@ -193,7 +193,6 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
 
     termRef.current = term
     fitAddonRef.current = fitAddon
-    setTermMounted(true)
 
     // Defer initial fit so the DOM has its final layout before measuring.
     // Also replay cached output — when isDesktop changes, xterm remounts but the
@@ -203,6 +202,7 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
       if (lastOutputRef.current) {
         writeSnapshot(term, lastOutputRef.current)
       }
+      setTermMounted(true)
     })
 
     if (isDesktop) {
@@ -287,7 +287,7 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
       clearTimeout(debounceTimer)
       ro.disconnect()
     }
-  }, [sendResize, isDesktop])
+  }, [sendResize, isDesktop, minScaleRef, resetTransform, termDimsRef])
 
   return (
     <div

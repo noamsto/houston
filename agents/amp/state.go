@@ -43,7 +43,7 @@ type WorkspaceTree struct {
 type Message struct {
 	Role      string        `json:"role"`
 	MessageID int           `json:"messageId"`
-	Content   []interface{} `json:"content"`
+	Content   []any `json:"content"`
 	State     MessageState  `json:"state"`
 	Usage     Usage         `json:"usage"`
 }
@@ -264,9 +264,5 @@ func isWaitingForInput(msg Message) bool {
 	// Check message age - if completed recently, might be waiting
 	// This is a heuristic; actual detection may need more context
 	msgTime := time.UnixMilli(0) // Would need timestamp from message
-	if time.Since(msgTime) < 5*time.Minute {
-		return true
-	}
-
-	return false
+	return time.Since(msgTime) < 5*time.Minute
 }

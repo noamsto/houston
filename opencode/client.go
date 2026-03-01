@@ -33,7 +33,7 @@ func (c *Client) Health(ctx context.Context) (*HealthResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var health HealthResponse
 	if err := json.NewDecoder(resp.Body).Decode(&health); err != nil {
@@ -48,7 +48,7 @@ func (c *Client) ListSessions(ctx context.Context) ([]Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var sessions []Session
 	if err := json.NewDecoder(resp.Body).Decode(&sessions); err != nil {
@@ -63,7 +63,7 @@ func (c *Client) GetSession(ctx context.Context, id string) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var session Session
 	if err := json.NewDecoder(resp.Body).Decode(&session); err != nil {
@@ -78,7 +78,7 @@ func (c *Client) GetSessionStatus(ctx context.Context) (map[string]SessionStatus
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var statuses map[string]SessionStatus
 	if err := json.NewDecoder(resp.Body).Decode(&statuses); err != nil {
@@ -98,7 +98,7 @@ func (c *Client) GetMessages(ctx context.Context, sessionID string, limit int) (
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var messages []MessageWithParts
 	if err := json.NewDecoder(resp.Body).Decode(&messages); err != nil {
@@ -113,7 +113,7 @@ func (c *Client) GetTodos(ctx context.Context, sessionID string) ([]Todo, error)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var todos []Todo
 	if err := json.NewDecoder(resp.Body).Decode(&todos); err != nil {
@@ -128,7 +128,7 @@ func (c *Client) SendPrompt(ctx context.Context, sessionID string, req PromptReq
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var msg MessageWithParts
 	if err := json.NewDecoder(resp.Body).Decode(&msg); err != nil {
@@ -143,7 +143,7 @@ func (c *Client) SendPromptAsync(ctx context.Context, sessionID string, req Prom
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	return nil
 }
 
@@ -153,13 +153,13 @@ func (c *Client) AbortSession(ctx context.Context, sessionID string) error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	return nil
 }
 
 // CreateSession creates a new session.
 func (c *Client) CreateSession(ctx context.Context, title string, parentID *string) (*Session, error) {
-	body := map[string]interface{}{}
+	body := map[string]any{}
 	if title != "" {
 		body["title"] = title
 	}
@@ -171,7 +171,7 @@ func (c *Client) CreateSession(ctx context.Context, title string, parentID *stri
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var session Session
 	if err := json.NewDecoder(resp.Body).Decode(&session); err != nil {
@@ -191,7 +191,7 @@ func (c *Client) DeleteSession(ctx context.Context, sessionID string) error {
 	if err != nil {
 		return fmt.Errorf("delete session: %w", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("delete session failed: %s", resp.Status)
@@ -205,7 +205,7 @@ func (c *Client) GetAgents(ctx context.Context) ([]Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var agents []Agent
 	if err := json.NewDecoder(resp.Body).Decode(&agents); err != nil {
@@ -220,7 +220,7 @@ func (c *Client) GetCurrentProject(ctx context.Context) (*Project, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var project Project
 	if err := json.NewDecoder(resp.Body).Decode(&project); err != nil {
@@ -248,14 +248,14 @@ func (c *Client) SubscribeEvents(ctx context.Context) (<-chan Event, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return nil, fmt.Errorf("event stream returned %s", resp.Status)
 	}
 
 	events := make(chan Event, 100)
 
 	go func() {
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		defer close(events)
 
 		reader := bufio.NewReader(resp.Body)
@@ -270,17 +270,14 @@ func (c *Client) SubscribeEvents(ctx context.Context) (<-chan Event, error) {
 
 			line, err := reader.ReadString('\n')
 			if err != nil {
-				if err != io.EOF {
-					// Log error but don't send to channel
-				}
-				return
+					return
 			}
 
 			line = strings.TrimSpace(line)
 
 			// SSE format: "data: {...}"
-			if strings.HasPrefix(line, "data: ") {
-				eventData.WriteString(strings.TrimPrefix(line, "data: "))
+			if data, ok := strings.CutPrefix(line, "data: "); ok {
+				eventData.WriteString(data)
 			} else if line == "" && eventData.Len() > 0 {
 				// Empty line = end of event
 				var event Event
@@ -314,7 +311,7 @@ func (c *Client) get(ctx context.Context, path string) (*http.Response, error) {
 
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return nil, fmt.Errorf("request %s failed: %s - %s", path, resp.Status, string(body))
 	}
 
@@ -322,7 +319,7 @@ func (c *Client) get(ctx context.Context, path string) (*http.Response, error) {
 }
 
 // post performs a POST request with JSON body.
-func (c *Client) post(ctx context.Context, path string, body interface{}) (*http.Response, error) {
+func (c *Client) post(ctx context.Context, path string, body any) (*http.Response, error) {
 	var bodyReader io.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
@@ -346,7 +343,7 @@ func (c *Client) post(ctx context.Context, path string, body interface{}) (*http
 
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return nil, fmt.Errorf("request %s failed: %s - %s", path, resp.Status, string(body))
 	}
 

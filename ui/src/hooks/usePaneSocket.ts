@@ -13,7 +13,9 @@ export function usePaneSocket(target: string | null, callbacks: PaneSocketCallba
   const retriesRef = useRef(0)
 
   // Keep callbacks ref up-to-date without triggering reconnect
-  callbacksRef.current = callbacks
+  useEffect(() => {
+    callbacksRef.current = callbacks
+  })
 
   const sendInput = useCallback((data: string) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {

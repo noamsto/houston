@@ -121,7 +121,7 @@ func TestWatcherGetAll(t *testing.T) {
 	dir := t.TempDir()
 
 	// Write old format
-	os.WriteFile(filepath.Join(dir, "session1"), []byte("idle"), 0644)
+	_ = os.WriteFile(filepath.Join(dir, "session1"), []byte("idle"), 0644)
 
 	// Write new JSON format
 	data := statusFile{
@@ -130,7 +130,7 @@ func TestWatcherGetAll(t *testing.T) {
 		Timestamp:   time.Now().Unix(),
 	}
 	jsonData, _ := json.Marshal(data)
-	os.WriteFile(filepath.Join(dir, "session2.json"), jsonData, 0644)
+	_ = os.WriteFile(filepath.Join(dir, "session2.json"), jsonData, 0644)
 
 	w := NewWatcher(dir)
 	statuses := w.GetAll()

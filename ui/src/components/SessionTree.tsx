@@ -160,24 +160,25 @@ interface Props {
 export function SessionTree({ sessions, onSelect, onSplit }: Props) {
   const [filter, setFilter] = useState('')
 
-  const filterSession = (s: SessionWithWindows) => {
-    if (!filter) return true
-    const q = filter.toLowerCase()
-    return (
-      s.session.name.toLowerCase().includes(q) ||
-      s.windows.some(
-        (w) =>
-          w.window.name.toLowerCase().includes(q) ||
-          w.branch.toLowerCase().includes(q),
+  const filtered = useMemo(() => {
+    const match = (s: SessionWithWindows) => {
+      if (!filter) return true
+      const q = filter.toLowerCase()
+      return (
+        s.session.name.toLowerCase().includes(q) ||
+        s.windows.some(
+          (w) =>
+            w.window.name.toLowerCase().includes(q) ||
+            w.branch.toLowerCase().includes(q),
+        )
       )
-    )
-  }
-
-  const filtered = useMemo(() => ({
-    needs_attention: sessions.needs_attention.filter(filterSession),
-    active: sessions.active.filter(filterSession),
-    idle: sessions.idle.filter(filterSession),
-  }), [sessions, filter])
+    }
+    return {
+      needs_attention: sessions.needs_attention.filter(match),
+      active: sessions.active.filter(match),
+      idle: sessions.idle.filter(match),
+    }
+  }, [sessions, filter])
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
