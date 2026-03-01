@@ -140,11 +140,14 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
 
     if (wide) {
       const minS = outerW / MOBILE_TERM_WIDTH_WIDE
+      const termH = Math.round(outerH / minS)
       inner.style.width = `${MOBILE_TERM_WIDTH_WIDE}px`
-      inner.style.height = `${outerH}px`
-      // No vertical offset — terminal height matches viewport at scale 1.0
-      inner.style.transform = 'scale(1)'
-      resetTransform(minS, { w: MOBILE_TERM_WIDTH_WIDE, h: outerH })
+      inner.style.height = `${termH}px`
+      // Start zoomed in at bottom-left: scale 1.0, positioned so bottom edge aligns
+      const initS = 1
+      const initTY = outerH - termH * initS
+      inner.style.transform = `translate(0px, ${initTY}px) scale(${initS})`
+      resetTransform(minS, { w: MOBILE_TERM_WIDTH_WIDE, h: termH }, { scale: initS, tx: 0, ty: initTY })
     } else {
       inner.style.width = `${outerW}px`
       inner.style.height = `${outerH}px`
@@ -193,11 +196,14 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
 
       if (wideMode) {
         const minS = outerW / MOBILE_TERM_WIDTH_WIDE
+        const termH = Math.round(outerH / minS)
         innerRef.current.style.width = `${MOBILE_TERM_WIDTH_WIDE}px`
-        innerRef.current.style.height = `${outerH}px`
-        // No vertical offset — terminal height matches viewport at scale 1.0
-        innerRef.current.style.transform = 'scale(1)'
-        resetTransform(minS, { w: MOBILE_TERM_WIDTH_WIDE, h: outerH })
+        innerRef.current.style.height = `${termH}px`
+        // Start zoomed in at bottom-left
+        const initS = 1
+        const initTY = outerH - termH * initS
+        innerRef.current.style.transform = `translate(0px, ${initTY}px) scale(${initS})`
+        resetTransform(minS, { w: MOBILE_TERM_WIDTH_WIDE, h: termH }, { scale: initS, tx: 0, ty: initTY })
       } else {
         innerRef.current.style.width = `${outerW}px`
         innerRef.current.style.height = `${outerH}px`
@@ -283,9 +289,17 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
           const outerH = container.clientHeight - PAD * 2
           const s = minScaleRef.current
           if (s < 1) {
-            // WIDE mode: update height to match viewport (all rows visible at scale 1.0)
-            innerRef.current.style.height = `${outerH}px`
-            termDimsRef.current = { ...termDimsRef.current, h: outerH }
+            // WIDE mode: recalculate height and clamp translate to keep
+            // content anchored at the bottom (no black gap above terminal)
+            const termH = Math.round(outerH / s)
+            innerRef.current.style.height = `${termH}px`
+            termDimsRef.current = { ...termDimsRef.current, h: termH }
+            // Re-anchor to bottom so keyboard doesn't leave a black gap
+            const curScale = innerRef.current.style.transform.match(/scale\(([\d.]+)\)/)
+            const sc = curScale ? parseFloat(curScale[1]) : s
+            const ty = outerH - termH * sc
+            innerRef.current.style.transform = `translate(0px, ${ty}px) scale(${sc})`
+            resetTransform(s, { w: MOBILE_TERM_WIDTH_WIDE, h: termH }, { scale: sc, tx: 0, ty })
           } else {
             // FIT mode: just update dimensions
             innerRef.current.style.width = `${outerW}px`
