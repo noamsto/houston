@@ -262,6 +262,15 @@ func (c *Client) CapturePaneWithMode(p Pane, lines int) (CaptureResult, error) {
 
 
 
+// GetPaneID returns the tmux pane ID (e.g. "%42") for a given pane target.
+func (c *Client) GetPaneID(p Pane) (string, error) {
+	out, err := c.output("display-message", "-t", p.Target(), "-p", "#{pane_id}")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 func (c *Client) SendKeys(p Pane, keys string, enter bool) error {
 	// Use -l for literal text to avoid interpreting special characters
 	if err := c.run("send-keys", "-t", p.Target(), "-l", keys); err != nil {
