@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"slices"
@@ -78,9 +79,24 @@ func (s *Server) handlePaneWS(w http.ResponseWriter, r *http.Request, pane tmux.
 
 	slog.Info("pane websocket connected (control mode)", "target", pane.Target(), "paneID", paneID)
 
+	// Pause %output for this pane before subscribing so no stale events
+	// enter the channel while we capture and send the seed snapshot.
+	paused := false
+	pauseCmd := fmt.Sprintf("refresh-client -A %s:pause", paneID)
+	if _, err := cc.RunCommand(pauseCmd); err == nil {
+		paused = true
+	} else {
+		slog.Debug("pause pane failed, proceeding without", "paneID", paneID, "error", err)
+	}
+
 	outputCh := cc.Subscribe(paneID)
 
 	defer func() {
+		// Ensure pane is resumed if we exit before the explicit continue
+		if paused {
+			continueCmd := fmt.Sprintf("refresh-client -A %s:continue", paneID)
+			_, _ = cc.RunCommand(continueCmd)
+		}
 		_ = conn.Close()
 		cc.Unsubscribe(paneID, outputCh)
 		s.controlMgr.ReleaseClient(pane.Session)
@@ -104,6 +120,7 @@ func (s *Server) handlePaneWS(w http.ResponseWriter, r *http.Request, pane tmux.
 
 	// Seed: capture-pane provides scrollback history and initial visible content.
 	// This is a visual-only snapshot (no terminal state like modes/scroll regions).
+	// Pane is paused so no %output races with this seed.
 	if seedOutput, err := s.tmux.CapturePane(pane, 500); err == nil && seedOutput != "" {
 		outputJSON, _ := json.Marshal(WSOutput{Data: seedOutput})
 		msg, _ := json.Marshal(WSMessage{Type: "seed", Data: outputJSON})
@@ -113,10 +130,19 @@ func (s *Server) handlePaneWS(w http.ResponseWriter, r *http.Request, pane tmux.
 	}
 
 	// Force the TUI to redraw via SIGWINCH (resize pane to same dimensions).
-	// The redraw arrives through %output with correct terminal state, replacing
-	// the seed's visible area. Scrollback from the seed is preserved.
+	// While paused, the redraw output is buffered by tmux and will be
+	// delivered when we continue — giving the client a clean seed+redraw sequence.
 	if err := s.tmux.ForceRedraw(pane); err != nil {
 		slog.Debug("force redraw failed", "target", pane.Target(), "error", err)
+	}
+
+	// Resume %output delivery — buffered events (including any SIGWINCH redraw) flow
+	if paused {
+		continueCmd := fmt.Sprintf("refresh-client -A %s:continue", paneID)
+		if _, err := cc.RunCommand(continueCmd); err != nil {
+			slog.Debug("continue pane failed", "paneID", paneID, "error", err)
+		}
+		paused = false
 	}
 
 	go s.paneWSReadLoop(conn, cc, paneID)

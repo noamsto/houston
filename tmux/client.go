@@ -382,8 +382,7 @@ func (c *Client) ZoomPane(p Pane) error {
 }
 
 // ForceRedraw sends SIGWINCH to the pane's foreground process by resizing
-// to the current dimensions. This is a no-op visually but forces TUI apps
-// to redraw, re-establishing correct terminal state.
+// to the current dimensions. This forces TUI apps to redraw.
 func (c *Client) ForceRedraw(p Pane) error {
 	w, h, err := c.GetPaneSize(p)
 	if err != nil {

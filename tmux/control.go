@@ -19,7 +19,10 @@ const (
 	EventSessionChanged
 	EventSessionsChanged
 	EventPaneModeChanged
-	EventData // non-notification line (command response body, etc.)
+	EventPause          // %pause %N — pane output paused (flow control)
+	EventContinue       // %continue %N — pane output resumed
+	EventExtendedOutput // %extended-output %N delay : data (flow control variant of %output)
+	EventData           // non-notification line (command response body, etc.)
 )
 
 // ControlEvent is a parsed control mode line.
@@ -54,6 +57,12 @@ func ParseControlLine(line string) ControlEvent {
 		return parseSessionChanged(line)
 	case strings.HasPrefix(line, "%pane-mode-changed "):
 		return parsePaneModeChanged(line)
+	case strings.HasPrefix(line, "%pause "):
+		return parsePaneNotification(line, "%pause ", EventPause)
+	case strings.HasPrefix(line, "%continue "):
+		return parsePaneNotification(line, "%continue ", EventContinue)
+	case strings.HasPrefix(line, "%extended-output "):
+		return parseExtendedOutput(line)
 	default:
 		return ControlEvent{Type: EventData, Data: line}
 	}
@@ -119,4 +128,27 @@ func parsePaneModeChanged(line string) ControlEvent {
 		paneID = fields[1]
 	}
 	return ControlEvent{Type: EventPaneModeChanged, PaneID: paneID}
+}
+
+func parsePaneNotification(line, prefix string, eventType ControlEventType) ControlEvent {
+	// "%pause %0" or "%continue %0"
+	rest := strings.TrimSpace(line[len(prefix):])
+	return ControlEvent{Type: eventType, PaneID: rest}
+}
+
+func parseExtendedOutput(line string) ControlEvent {
+	// "%extended-output %0 1234 : abcdef"
+	rest := line[len("%extended-output "):]
+	spaceIdx := strings.IndexByte(rest, ' ')
+	if spaceIdx < 0 {
+		return ControlEvent{Type: EventExtendedOutput, PaneID: rest}
+	}
+	paneID := rest[:spaceIdx]
+	// Skip delay field, find " : " separator
+	colonIdx := strings.Index(rest[spaceIdx:], " : ")
+	if colonIdx < 0 {
+		return ControlEvent{Type: EventExtendedOutput, PaneID: paneID}
+	}
+	data := UnescapeOctal(rest[spaceIdx+colonIdx+3:])
+	return ControlEvent{Type: EventExtendedOutput, PaneID: paneID, Data: data}
 }

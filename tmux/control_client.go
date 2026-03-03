@@ -104,8 +104,11 @@ func (cc *ControlClient) readLoop(r *bufio.Reader) {
 		event := ParseControlLine(line)
 
 		switch event.Type {
-		case EventOutput:
+		case EventOutput, EventExtendedOutput:
 			cc.dispatch(event.PaneID, []byte(event.Data))
+
+		case EventPause, EventContinue:
+			slog.Debug("control mode flow control", "session", cc.session, "event", event.Type, "paneID", event.PaneID)
 
 		case EventBegin:
 			inBlock = true

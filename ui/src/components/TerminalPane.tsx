@@ -20,42 +20,24 @@ interface Props {
   onClose: () => void
 }
 
-/** Write a capture-pane snapshot for scrollback + initial visual content.
- *  The SIGWINCH redraw via %output will replace the visible area with
- *  correctly-stated terminal data; scrollback from this seed is preserved. */
+/** Write a capture-pane snapshot into xterm.js.
+ *  Clears scrollback + viewport via escape sequences (NOT term.reset() which
+ *  would destroy terminal modes that the program set up before we connected).
+ *  Content flows sequentially — natural scrolling moves earlier lines into
+ *  the scrollback buffer, leaving the last term.rows lines visible. */
 function writeSnapshot(term: Terminal, data: string, onDone?: () => void) {
   term.options.convertEol = true
 
   const lines = data.split('\n')
   if (lines[lines.length - 1] === '') lines.pop()
 
-  const H = term.rows
-  let scrollPart: string
-  let visiblePart: string
-
-  if (lines.length > H) {
-    // Scrollback lines scroll through naturally, then we clear the viewport
-    // and write the visible portion fresh from (1,1). This decouples visible
-    // positioning from scrollback line count — no off-by-one possible.
-    scrollPart = lines.slice(0, lines.length - H).join('\n') + '\n'
-    visiblePart = lines.slice(lines.length - H).join('\n')
-  } else {
-    scrollPart = ''
-    visiblePart = lines.join('\n')
-  }
-
-  // 1. Clear scrollback + viewport, home cursor
-  // 2. Write scrollback (scrolls through, populating scrollback buffer)
-  // 3. Clear viewport + home cursor (erase scrollback residue)
-  // 4. Write visible content from (1,1) — always correctly positioned
-  // 5. Hide cursor (SIGWINCH redraw restores it at the correct position)
-  const payload =
-    '\x1b[3J\x1b[2J\x1b[H' +
-    scrollPart +
-    '\x1b[2J\x1b[H\x1b[?25l' +
-    visiblePart
-
-  term.write(payload, () => {
+  // \x1b[?25l — hide cursor (program output will restore it)
+  // \x1b[2J   — clear viewport (doesn't affect terminal modes)
+  // \x1b[H    — cursor to (1,1)
+  // NOTE: \x1b[3J (clear scrollback) intentionally omitted — it shifts the
+  // viewport offset in xterm.js, causing content to render one line below.
+  // Old scrollback is cleaned up by term.clear() on pane target switch.
+  term.write('\x1b[?25l\x1b[2J\x1b[H' + lines.join('\n'), () => {
     term.options.convertEol = false
     onDone?.()
   })
@@ -64,8 +46,9 @@ function writeSnapshot(term: Terminal, data: string, onDone?: () => void) {
 // Wide mode: ~120 columns for diffs and wide output. Fit mode: viewport width.
 const MOBILE_TERM_WIDTH_WIDE = 960
 const PAD = 6
-// Height in px to clip from bottom on mobile for claude-code (hides input box: separator + mode + prompt)
-const CLAUDE_INPUT_CLIP_PX = 48
+// Rows to clip from bottom on mobile for claude-code input area
+// (status line + mode line + prompt). The ──── separator stays visible.
+const CLAUDE_INPUT_CLIP_ROWS = 3
 
 export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
   // outerRef: observed by ResizeObserver; has padding that creates visual breathing room
@@ -81,6 +64,9 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
     () => !window.matchMedia('(min-width: 1024px)').matches,
   )
   const [termMounted, setTermMounted] = useState(false)
+  // Terminal cell height in px — used to compute dynamic clip for mobile.
+  // State (not ref) so the render picks up changes for clipPath/marginTop.
+  const [cellHeight, setCellHeight] = useState(0)
 
   // Track browser zoom via devicePixelRatio — skip refit on zoom to preserve columns
   const dprRef = useRef(window.devicePixelRatio)
@@ -89,6 +75,12 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
   const { minScaleRef, termDimsRef, translateXRef, resetTransform } = useTouchGestures(
     innerRef, outerRef, termRef, !isDesktop && termMounted,
   )
+
+  // Buffer %output writes and flush once per animation frame to prevent
+  // visual tearing from mid-update renders (e.g. erase + redraw arriving
+  // as separate WS messages within the same frame).
+  const outputBufRef = useRef('')
+  const rafIdRef = useRef(0)
 
   // Cache last seed so we can replay it when xterm remounts (e.g. isDesktop changes)
   // without waiting for the server to send a fresh seed.
@@ -104,16 +96,42 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
   const applyDimsAndSeed = (term: Terminal, cols: number, rows: number) => {
     paneDimsRef.current = { cols, rows }
     term.resize(cols, rows)
-    // Size inner container to match terminal pixel needs so outer can scroll
     const inner = innerRef.current
+    const outer = outerRef.current
     if (inner) {
       requestAnimationFrame(() => {
         const screen = inner.querySelector('.xterm-screen') as HTMLElement | null
-        if (screen) {
-          inner.style.width = `${screen.offsetWidth}px`
-          inner.style.height = `${screen.offsetHeight}px`
-          inner.style.right = 'auto'
-          inner.style.bottom = 'auto'
+        if (!screen) return
+        const screenW = screen.offsetWidth
+        const screenH = screen.offsetHeight
+        inner.style.right = 'auto'
+        inner.style.bottom = 'auto'
+
+        if (!isDesktop && outer) {
+          // Mobile: apply wide/fit scaling after server dims arrive
+          const outerW = outer.clientWidth - PAD * 2
+          inner.style.width = `${screenW}px`
+          inner.style.height = `${screenH}px`
+          if (wideMode) {
+            // Wide: natural size, user zooms/scrolls via gestures
+            const minS = outerW / screenW
+            inner.style.transform = 'translate(0px, 0px) scale(1)'
+            resetTransform(minS, { w: screenW, h: screenH }, { scale: 1, tx: 0, ty: 0 })
+          } else {
+            // Fit: scale down to viewport width
+            const scale = outerW / screenW
+            inner.style.transform = `translate(0px, 0px) scale(${scale})`
+            resetTransform(scale, { w: screenW, h: screenH }, { scale, tx: 0, ty: 0 })
+          }
+        } else {
+          // Desktop: just size inner to match terminal
+          inner.style.width = `${screenW}px`
+          inner.style.height = `${screenH}px`
+        }
+
+        // Recompute cell height for mobile clip calculation
+        if (term.rows > 0) {
+          setCellHeight(screenH / term.rows)
         }
       })
     }
@@ -152,7 +170,15 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
     onOutput: (data) => {
       const term = termRef.current
       if (!term) return
-      term.write(data)
+      outputBufRef.current += data
+      if (!rafIdRef.current) {
+        rafIdRef.current = requestAnimationFrame(() => {
+          rafIdRef.current = 0
+          const buf = outputBufRef.current
+          outputBufRef.current = ''
+          term.write(buf)
+        })
+      }
     },
     onMeta: (m) => setMeta(m),
   })
@@ -197,6 +223,29 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
     const outerW = outer.clientWidth - PAD * 2
     const outerH = outer.clientHeight - PAD * 2
 
+    if (paneDimsRef.current) {
+      // Server controls terminal dimensions — just change CSS transform
+      const screen = inner.querySelector('.xterm-screen') as HTMLElement | null
+      if (!screen) return
+      const screenW = screen.offsetWidth
+      const screenH = screen.offsetHeight
+      inner.style.width = `${screenW}px`
+      inner.style.height = `${screenH}px`
+      if (wide) {
+        // Wide: natural size, user zooms/scrolls via gestures
+        const minS = outerW / screenW
+        inner.style.transform = 'translate(0px, 0px) scale(1)'
+        resetTransform(minS, { w: screenW, h: screenH }, { scale: 1, tx: 0, ty: 0 })
+      } else {
+        // Fit: scale down to viewport width
+        const scale = outerW / screenW
+        inner.style.transform = `translate(0px, 0px) scale(${scale})`
+        resetTransform(scale, { w: screenW, h: screenH }, { scale, tx: 0, ty: 0 })
+      }
+      return
+    }
+
+    // No server dims — FitAddon controls terminal size
     if (wide) {
       const minS = outerW / MOBILE_TERM_WIDTH_WIDE
       inner.style.width = `${MOBILE_TERM_WIDTH_WIDE}px`
@@ -210,12 +259,10 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
       resetTransform(1, { w: outerW, h: outerH })
     }
 
-    if (!paneDimsRef.current) {
-      try {
-        fit.fit()
-        sendResize(term.cols, term.rows)
-      } catch { /* fit can throw if zero-size */ }
-    }
+    try {
+      fit.fit()
+      sendResize(term.cols, term.rows)
+    } catch { /* fit can throw if zero-size */ }
   }, [isDesktop, sendResize, resetTransform])
 
   // Mount xterm.js — remount when target or desktop mode changes
@@ -282,6 +329,11 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
       if (!paneDimsRef.current) {
         fitAddon.fit()
       }
+      // Compute cell height from rendered terminal for dynamic clip calculation
+      const screen = innerRef.current?.querySelector('.xterm-screen') as HTMLElement | null
+      if (screen && term.rows > 0) {
+        setCellHeight(screen.clientHeight / term.rows)
+      }
       console.debug('[resize] initial mount — cols:', term.cols, 'rows:', term.rows, 'innerW:', innerRef.current?.clientWidth, 'outerW:', outerRef.current?.clientWidth)
       sendResize(term.cols, term.rows)
       if (isDesktop && innerRef.current) {
@@ -295,6 +347,9 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
     })
 
     if (isDesktop) {
+      // Ensure xterm.js handles all keys (including Escape) instead of
+      // letting the browser consume them.
+      term.attachCustomKeyEventHandler(() => true)
       term.onData((data) => {
         console.debug('[input] xterm onData:', JSON.stringify(data))
         sendInput(data)
@@ -304,6 +359,9 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
     }
 
     return () => {
+      if (rafIdRef.current) cancelAnimationFrame(rafIdRef.current)
+      rafIdRef.current = 0
+      outputBufRef.current = ''
       term.dispose()
       termRef.current = null
       fitAddonRef.current = null
@@ -468,7 +526,7 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
           }}
         />
       )}
-      {/* Outer div: ResizeObserver target; background shows through as visual padding */}
+      {/* Outer div: ResizeObserver target; has padding that creates visual breathing room */}
       <div
         ref={outerRef}
         style={{
@@ -477,10 +535,11 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
           minHeight: 0,
           position: 'relative',
           background: 'var(--bg-terminal)',
-          // On mobile, clip claude-code's input box (separator + mode line + prompt).
-          // clip-path is visual only — doesn't affect layout or ResizeObserver measurements.
-          clipPath: !isDesktop && meta?.agent === 'claude-code'
-            ? `inset(0 0 ${CLAUDE_INPUT_CLIP_PX}px 0)`
+          // On mobile, clip claude-code's input area (status + mode + prompt).
+          // Computed from actual cell height so it adapts to any font/zoom.
+          // MobileInputBar uses negative margin to overlap the clipped zone.
+          clipPath: !isDesktop && meta?.agent === 'claude-code' && cellHeight > 0
+            ? `inset(0 0 ${Math.round(cellHeight * CLAUDE_INPUT_CLIP_ROWS)}px 0)`
             : undefined,
         }}
       >
@@ -501,16 +560,25 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
         />
       </div>
       {!isDesktop && (
-        <MobileInputBar
-          target={pane.target}
-          choices={meta?.choices}
-          wideMode={wideMode}
-          onToggleWide={() => {
-            const next = !wideMode
-            setWideMode(next)
-            applyMobileSize(next)
-          }}
-        />
+        <div style={{
+          // Pull input bar up to overlap the clipped zone so there's no gap
+          marginTop: meta?.agent === 'claude-code' && cellHeight > 0
+            ? -Math.round(cellHeight * CLAUDE_INPUT_CLIP_ROWS)
+            : undefined,
+          position: 'relative',
+          zIndex: 1,
+        }}>
+          <MobileInputBar
+            target={pane.target}
+            choices={meta?.choices}
+            wideMode={wideMode}
+            onToggleWide={() => {
+              const next = !wideMode
+              setWideMode(next)
+              applyMobileSize(next)
+            }}
+          />
+        </div>
       )}
     </div>
   )
