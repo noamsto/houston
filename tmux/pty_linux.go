@@ -40,14 +40,17 @@ func openPTY() (master, slave *os.File, err error) {
 		return nil, nil, fmt.Errorf("open %s: %w", slavePath, err)
 	}
 
-	// Disable ECHO so our commands written to master aren't echoed back,
-	// which would interleave with tmux's control mode output and corrupt it.
+	// Put PTY in near-raw mode so bytes pass through unmodified:
+	// - ECHO off:  prevent command echo interleaving with control mode output
+	// - ICRNL off: prevent CR→NL conversion on input (breaks send-keys with \r)
+	// - OPOST off: prevent NL→CR+NL conversion on output (simplifies read loop)
 	var attr syscall.Termios
 	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, slave.Fd(), syscall.TCGETS, uintptr(unsafe.Pointer(&attr))); errno != 0 {
 		_ = slave.Close()
 		return nil, nil, fmt.Errorf("TCGETS: %w", errno)
 	}
 	attr.Lflag &^= syscall.ECHO | syscall.ECHOE | syscall.ECHOK | syscall.ECHONL
+	attr.Iflag &^= syscall.ICRNL
 	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, slave.Fd(), syscall.TCSETS, uintptr(unsafe.Pointer(&attr))); errno != 0 {
 		_ = slave.Close()
 		return nil, nil, fmt.Errorf("TCSETS: %w", errno)

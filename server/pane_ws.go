@@ -48,6 +48,11 @@ type WSResize struct {
 	Rows int `json:"rows"`
 }
 
+type WSDims struct {
+	Cols int `json:"cols"`
+	Rows int `json:"rows"`
+}
+
 func (s *Server) handlePaneWS(w http.ResponseWriter, r *http.Request, pane tmux.Pane) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -73,7 +78,6 @@ func (s *Server) handlePaneWS(w http.ResponseWriter, r *http.Request, pane tmux.
 
 	slog.Info("pane websocket connected (control mode)", "target", pane.Target(), "paneID", paneID)
 
-	// Subscribe BEFORE capture so we buffer any output that arrives during seed
 	outputCh := cc.Subscribe(paneID)
 
 	defer func() {
@@ -88,28 +92,31 @@ func (s *Server) handlePaneWS(w http.ResponseWriter, r *http.Request, pane tmux.
 	})
 	_ = conn.SetReadDeadline(time.Now().Add(45 * time.Second))
 
-	// Seed: send current pane state as initial snapshot
-	if seedOutput, err := s.tmux.CapturePaneWithMode(pane, 500); err == nil && seedOutput.Output != "" {
-		outputJSON, _ := json.Marshal(WSOutput{Data: seedOutput.Output})
+	// Send pane dimensions so the frontend can resize xterm.js to match.
+	// Absolute cursor positions in %output depend on matching dimensions.
+	if w, h, err := s.tmux.GetPaneSize(pane); err == nil && w > 0 && h > 0 {
+		dimsJSON, _ := json.Marshal(WSDims{Cols: w, Rows: h})
+		dimsMsg, _ := json.Marshal(WSMessage{Type: "dims", Data: dimsJSON})
+		if err := conn.WriteMessage(websocket.TextMessage, dimsMsg); err != nil {
+			return
+		}
+	}
+
+	// Seed: capture-pane provides scrollback history and initial visible content.
+	// This is a visual-only snapshot (no terminal state like modes/scroll regions).
+	if seedOutput, err := s.tmux.CapturePane(pane, 500); err == nil && seedOutput != "" {
+		outputJSON, _ := json.Marshal(WSOutput{Data: seedOutput})
 		msg, _ := json.Marshal(WSMessage{Type: "seed", Data: outputJSON})
 		if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
 			return
 		}
 	}
 
-	// Drain any buffered incremental output that arrived during the seed capture
-drainLoop:
-	for {
-		select {
-		case data := <-outputCh:
-			outputJSON, _ := json.Marshal(WSOutput{Data: string(data)})
-			msg, _ := json.Marshal(WSMessage{Type: "output", Data: outputJSON})
-			if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
-				return
-			}
-		default:
-			break drainLoop
-		}
+	// Force the TUI to redraw via SIGWINCH (resize pane to same dimensions).
+	// The redraw arrives through %output with correct terminal state, replacing
+	// the seed's visible area. Scrollback from the seed is preserved.
+	if err := s.tmux.ForceRedraw(pane); err != nil {
+		slog.Debug("force redraw failed", "target", pane.Target(), "error", err)
 	}
 
 	go s.paneWSReadLoop(conn, cc, paneID)
@@ -117,13 +124,63 @@ drainLoop:
 }
 
 func (s *Server) paneWSWriteLoop(conn *websocket.Conn, cc *tmux.ControlClient, pane tmux.Pane, outputCh <-chan []byte) {
-	metaTicker := time.NewTicker(1 * time.Second)
-	defer metaTicker.Stop()
-
 	pingTicker := time.NewTicker(30 * time.Second)
 	defer pingTicker.Stop()
 
+	// Meta polling runs in its own goroutine so capture-pane calls
+	// never block output delivery to the WebSocket client.
+	metaCh := make(chan WSMeta, 1)
+	go s.metaPollLoop(pane, cc.Done(), metaCh)
+
 	var lastMeta WSMeta
+
+	for {
+		select {
+		case data := <-outputCh:
+			// Coalesce: drain all buffered chunks into one write
+			// to keep the channel drained and reduce WS round-trips.
+			buf := append([]byte(nil), data...)
+			for {
+				select {
+				case more := <-outputCh:
+					buf = append(buf, more...)
+				default:
+					goto send
+				}
+			}
+		send:
+			outputJSON, _ := json.Marshal(WSOutput{Data: string(buf)})
+			msg, _ := json.Marshal(WSMessage{Type: "output", Data: outputJSON})
+			if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+				return
+			}
+
+		case meta := <-metaCh:
+			if !metaEqual(meta, lastMeta) {
+				lastMeta = meta
+				metaJSON, _ := json.Marshal(meta)
+				msg, _ := json.Marshal(WSMessage{Type: "meta", Data: metaJSON})
+				if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+					return
+				}
+			}
+
+		case <-pingTicker.C:
+			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return
+			}
+
+		case <-cc.Done():
+			return
+		}
+	}
+}
+
+// metaPollLoop runs agent detection in its own goroutine, sending
+// results to metaCh. Exits when done closes.
+func (s *Server) metaPollLoop(pane tmux.Pane, done <-chan struct{}, metaCh chan<- WSMeta) {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
 
 	// Fetch initial pane info for agent detection
 	panes, _ := s.tmux.ListPanes(pane.Session, pane.Window)
@@ -147,15 +204,7 @@ func (s *Server) paneWSWriteLoop(conn *websocket.Conn, cc *tmux.ControlClient, p
 
 	for {
 		select {
-		case data := <-outputCh:
-			outputJSON, _ := json.Marshal(WSOutput{Data: string(data)})
-			msg, _ := json.Marshal(WSMessage{Type: "output", Data: outputJSON})
-			if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
-				return
-			}
-
-		case <-metaTicker.C:
-			// Agent detection via capture-pane (side channel for state parsing)
+		case <-ticker.C:
 			capture, err := s.tmux.CapturePaneWithMode(pane, 500)
 			if err != nil {
 				continue
@@ -181,21 +230,12 @@ func (s *Server) paneWSWriteLoop(conn *websocket.Conn, cc *tmux.ControlClient, p
 			}
 			meta.Status = resultTypeToString(parseResult.Type)
 
-			if !metaEqual(meta, lastMeta) {
-				lastMeta = meta
-				metaJSON, _ := json.Marshal(meta)
-				msg, _ := json.Marshal(WSMessage{Type: "meta", Data: metaJSON})
-				if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
-					return
-				}
+			select {
+			case metaCh <- meta:
+			default:
 			}
 
-		case <-pingTicker.C:
-			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-				return
-			}
-
-		case <-cc.Done():
+		case <-done:
 			return
 		}
 	}
@@ -230,15 +270,8 @@ func (s *Server) paneWSReadLoop(conn *websocket.Conn, cc *tmux.ControlClient, pa
 			}
 
 		case "resize":
-			var resize WSResize
-			if err := json.Unmarshal(msg.Data, &resize); err != nil {
-				continue
-			}
-			if resize.Cols > 0 && resize.Rows > 0 {
-				if err := cc.SetClientSize(resize.Cols, resize.Rows); err != nil {
-					slog.Debug("set client size failed", "error", err)
-				}
-			}
+			// No-op: CC client size is fixed at 400x200 (set on connect).
+			// kitty controls actual pane dimensions via window-size=latest.
 		}
 	}
 }

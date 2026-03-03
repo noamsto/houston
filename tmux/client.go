@@ -224,8 +224,12 @@ func (c *Client) ListPanes(session string, window int) ([]PaneInfo, error) {
 // CaptureResult holds the captured pane output and detected mode
 type CaptureResult struct {
 	Output     string `json:"output"`
-	Mode       string `json:"mode"`        // "insert", "normal", or ""
-	StatusLine string `json:"status_line"` // Full status line with ANSI colors intact
+	CursorX    int    `json:"cursor_x"`     // 0-indexed cursor column in visible area
+	CursorY    int    `json:"cursor_y"`     // 0-indexed cursor row in visible area
+	PaneWidth  int    `json:"pane_width"`   // visible columns in the pane
+	PaneHeight int    `json:"pane_height"`  // visible rows in the pane
+	Mode       string `json:"mode"`         // "insert", "normal", or ""
+	StatusLine string `json:"status_line"`  // Full status line with ANSI colors intact
 }
 
 func (c *Client) CapturePane(p Pane, lines int) (string, error) {
@@ -241,6 +245,7 @@ func (c *Client) CapturePaneWithMode(p Pane, lines int) (CaptureResult, error) {
 		"-t", p.Target(),
 		"-p",
 		"-e", // Include ANSI escape sequences (colors)
+		"-N", // Preserve trailing blank lines (deterministic line count)
 		"-S", fmt.Sprintf("-%d", lines))
 	if err != nil {
 		return CaptureResult{}, fmt.Errorf("capture-pane failed: %w", err)
@@ -250,9 +255,25 @@ func (c *Client) CapturePaneWithMode(p Pane, lines int) (CaptureResult, error) {
 	// Convert ESC symbol (␛, U+241B) to actual ESC character (\x1b) for ANSI processing
 	raw = strings.ReplaceAll(raw, "␛", "\x1b")
 
+	// Get cursor position and pane dimensions so seeds can sync xterm.js cursor
+	var cursorX, cursorY, paneWidth, paneHeight int
+	if cursorOut, err := c.output("display-message", "-t", p.Target(), "-p", "#{cursor_x},#{cursor_y},#{pane_width},#{pane_height}"); err == nil {
+		parts := strings.Split(strings.TrimSpace(string(cursorOut)), ",")
+		if len(parts) == 4 {
+			cursorX, _ = strconv.Atoi(parts[0])
+			cursorY, _ = strconv.Atoi(parts[1])
+			paneWidth, _ = strconv.Atoi(parts[2])
+			paneHeight, _ = strconv.Atoi(parts[3])
+		}
+	}
+
 	// Return raw output - agent-specific filtering done by caller
 	return CaptureResult{
 		Output:     raw,
+		CursorX:    cursorX,
+		CursorY:    cursorY,
+		PaneWidth:  paneWidth,
+		PaneHeight: paneHeight,
 		Mode:       "", // Agent-specific; set by caller
 		StatusLine: "", // Agent-specific; set by caller
 	}, nil
@@ -269,6 +290,19 @@ func (c *Client) GetPaneID(p Pane) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// SendRawKeys sends literal text to a pane using hex encoding (-H).
+// This safely passes any byte including control characters.
+func (c *Client) SendRawKeys(p Pane, text string) error {
+	var hexBytes strings.Builder
+	for i := 0; i < len(text); i++ {
+		if i > 0 {
+			hexBytes.WriteByte(' ')
+		}
+		fmt.Fprintf(&hexBytes, "%02x", text[i])
+	}
+	return c.run("send-keys", "-t", p.Target(), "-H", hexBytes.String())
 }
 
 func (c *Client) SendKeys(p Pane, keys string, enter bool) error {
@@ -345,6 +379,17 @@ func (c *Client) ResizePane(p Pane, direction string, adjustment int) error {
 // ZoomPane toggles zoom on a pane (maximizes/restores).
 func (c *Client) ZoomPane(p Pane) error {
 	return c.run("resize-pane", "-t", p.Target(), "-Z")
+}
+
+// ForceRedraw sends SIGWINCH to the pane's foreground process by resizing
+// to the current dimensions. This is a no-op visually but forces TUI apps
+// to redraw, re-establishing correct terminal state.
+func (c *Client) ForceRedraw(p Pane) error {
+	w, h, err := c.GetPaneSize(p)
+	if err != nil {
+		return err
+	}
+	return c.run("resize-pane", "-t", p.Target(), "-x", strconv.Itoa(w), "-y", strconv.Itoa(h))
 }
 
 // GetPaneSize returns the width and height of a pane.

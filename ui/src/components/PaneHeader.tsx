@@ -6,6 +6,8 @@ interface Props {
   connected: boolean
   onClose: () => void
   onResize?: () => void
+  wideMode?: boolean
+  onToggleWide?: () => void
 }
 
 const AGENT_ICONS: Record<AgentType, string> = {
@@ -25,7 +27,7 @@ function statusColor(status: ResultType | undefined): string {
   }
 }
 
-export function PaneHeader({ target, meta, connected, onClose, onResize }: Props) {
+export function PaneHeader({ target, meta, connected, onClose, onResize, wideMode, onToggleWide }: Props) {
   const icon = meta ? (AGENT_ICONS[meta.agent] ?? '◆') : '·'
   const color = connected ? statusColor(meta?.status) : 'var(--accent-error)'
   const modeBadge = meta?.mode === 'normal' ? 'NOR' : meta?.mode === 'insert' ? 'INS' : null
@@ -96,6 +98,30 @@ export function PaneHeader({ target, meta, connected, onClose, onResize }: Props
         >
           {modeBadge}
         </span>
+      )}
+
+      {onToggleWide && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation()
+            onToggleWide()
+          }}
+          title={wideMode ? 'Switch to fit viewport' : 'Switch to wide mode (120 cols)'}
+          style={{
+            background: 'none',
+            border: '1px solid var(--border)',
+            borderRadius: 2,
+            color: 'var(--text-muted)',
+            cursor: 'pointer',
+            fontSize: 9,
+            fontFamily: 'var(--font-mono)',
+            lineHeight: 1,
+            padding: '0 3px',
+            flexShrink: 0,
+          }}
+        >
+          {wideMode ? 'WIDE' : 'FIT'}
+        </button>
       )}
 
       {onResize && (

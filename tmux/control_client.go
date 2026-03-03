@@ -74,6 +74,16 @@ func (cc *ControlClient) Start() error {
 	cc.ptySlave = nil
 
 	go cc.readLoop(bufio.NewReader(master))
+
+	// Exclude this CC client from window size calculations so it never
+	// overrides kitty's dimensions (window-size=latest).
+	cc.stdinMu.Lock()
+	_, err = io.WriteString(cc.stdin, "refresh-client -f ignore-size\n")
+	cc.stdinMu.Unlock()
+	if err != nil {
+		slog.Warn("failed to set ignore-size on CC client", "error", err)
+	}
+
 	return nil
 }
 
@@ -143,7 +153,7 @@ func (cc *ControlClient) dispatch(paneID string, data []byte) {
 
 // Subscribe returns a channel that receives raw output for the given pane.
 func (cc *ControlClient) Subscribe(paneID string) <-chan []byte {
-	ch := make(chan []byte, 64)
+	ch := make(chan []byte, 4096)
 	cc.mu.Lock()
 	cc.subs[paneID] = append(cc.subs[paneID], ch)
 	cc.mu.Unlock()
@@ -166,14 +176,114 @@ func (cc *ControlClient) Unsubscribe(paneID string, ch <-chan []byte) {
 	}
 }
 
-// SendKeys sends literal text to a pane via the control mode connection.
+// SendKeys sends text to a pane via the control mode connection.
+// Printable text uses -l (literal) which supports UTF-8. Control characters
+// and escape sequences are mapped to tmux key names to avoid embedding
+// raw control bytes in the CC command string.
 func (cc *ControlClient) SendKeys(paneID, text string) error {
+	// Fast path: all printable text — send as literal
+	if isPrintable(text) {
+		return cc.sendLiteral(paneID, text)
+	}
+
+	// Mixed content (e.g. paste with newlines): split into printable
+	// segments and control characters, send each appropriately.
+	i := 0
+	for i < len(text) {
+		b := text[i]
+		if b == 0x1b && i+1 < len(text) {
+			// Escape sequence — try to match and send as key name
+			if seqLen, name := matchEscSeq(text[i:]); seqLen > 0 {
+				if err := cc.SendSpecialKey(paneID, name); err != nil {
+					return err
+				}
+				i += seqLen
+				continue
+			}
+		}
+		if b < 0x20 || b == 0x7f {
+			if err := cc.sendControl(paneID, b); err != nil {
+				return err
+			}
+			i++
+		} else {
+			// Collect run of printable bytes
+			j := i + 1
+			for j < len(text) && text[j] >= 0x20 && text[j] != 0x7f {
+				j++
+			}
+			if err := cc.sendLiteral(paneID, text[i:j]); err != nil {
+				return err
+			}
+			i = j
+		}
+	}
+	return nil
+}
+
+func isPrintable(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 || s[i] == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+func (cc *ControlClient) sendLiteral(paneID, text string) error {
 	escaped := strings.ReplaceAll(text, "'", "'\\''")
 	cmd := fmt.Sprintf("send-keys -t %s -l '%s'\n", paneID, escaped)
 	cc.stdinMu.Lock()
 	_, err := io.WriteString(cc.stdin, cmd)
 	cc.stdinMu.Unlock()
 	return err
+}
+
+func (cc *ControlClient) sendControl(paneID string, b byte) error {
+	var name string
+	switch b {
+	case '\r', '\n':
+		name = "Enter"
+	case '\t':
+		name = "Tab"
+	case 0x1b:
+		name = "Escape"
+	case 0x7f:
+		name = "BSpace"
+	default:
+		if b >= 1 && b <= 26 {
+			name = fmt.Sprintf("C-%c", 'a'+rune(b)-1)
+		} else {
+			// Rare control char — send as hex
+			cmd := fmt.Sprintf("send-keys -t %s -H %02x\n", paneID, b)
+			cc.stdinMu.Lock()
+			_, err := io.WriteString(cc.stdin, cmd)
+			cc.stdinMu.Unlock()
+			return err
+		}
+	}
+	return cc.SendSpecialKey(paneID, name)
+}
+
+// matchEscSeq tries to match a terminal escape sequence and returns its
+// length and tmux key name. Returns (0, "") if no match.
+func matchEscSeq(s string) (int, string) {
+	seqs := map[string]string{
+		"\x1b[A": "Up", "\x1b[B": "Down", "\x1b[C": "Right", "\x1b[D": "Left",
+		"\x1b[H": "Home", "\x1b[F": "End",
+		"\x1b[2~": "Insert", "\x1b[3~": "DC", "\x1b[5~": "PPage", "\x1b[6~": "NPage",
+		"\x1b[Z": "BTab",
+		"\x1bOP": "F1", "\x1bOQ": "F2", "\x1bOR": "F3", "\x1bOS": "F4",
+		"\x1b[15~": "F5", "\x1b[17~": "F6", "\x1b[18~": "F7", "\x1b[19~": "F8",
+		"\x1b[20~": "F9", "\x1b[21~": "F10", "\x1b[23~": "F11", "\x1b[24~": "F12",
+	}
+	// Try longest match first (up to 6 bytes)
+	for l := min(len(s), 6); l >= 2; l-- {
+		if name, ok := seqs[s[:l]]; ok {
+			return l, name
+		}
+	}
+	return 0, ""
 }
 
 // SendSpecialKey sends a named key (Enter, Escape, C-c, etc.) to a pane.

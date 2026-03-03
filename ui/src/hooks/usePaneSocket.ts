@@ -1,8 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { WSMeta, WSOutput } from '../api/types'
 
+interface WSDims {
+  cols: number
+  rows: number
+}
+
 interface PaneSocketCallbacks {
-  onSeed: (data: string) => void    // full snapshot — write via writeSnapshot
+  onDims: (dims: WSDims) => void    // pane dimensions — resize xterm.js to match
+  onSeed: (data: string) => void    // full snapshot — write via writeSnapshot (clears scrollback)
+  onReseed: (data: string) => void  // post-resize snapshot — write without clearing scrollback
   onOutput: (data: string) => void  // incremental terminal data — write via term.write
   onMeta: (meta: WSMeta) => void
 }
@@ -75,9 +82,19 @@ export function usePaneSocket(target: string | null, callbacks: PaneSocketCallba
         try {
           const msg = JSON.parse(event.data as string)
           switch (msg.type) {
+            case 'dims': {
+              const dims = msg.data as WSDims
+              callbacksRef.current.onDims(dims)
+              break
+            }
             case 'seed': {
               const output = msg.data as WSOutput
               callbacksRef.current.onSeed(output.data)
+              break
+            }
+            case 'reseed': {
+              const output = msg.data as WSOutput
+              callbacksRef.current.onReseed(output.data)
               break
             }
             case 'output': {

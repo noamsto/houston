@@ -102,8 +102,10 @@ export function MobileInputBar({ target, choices, wideMode, onToggleWide }: Prop
   const [text, setText] = useState('')
   const [listening, setListening] = useState(false)
   const [expanded, setExpanded] = useState(false)
+  const [uploading, setUploading] = useState(false)
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const handleSend = async () => {
     const line = text.trim()
@@ -158,6 +160,40 @@ export function MobileInputBar({ target, choices, wideMode, onToggleWide }: Prop
   const autoGrow = (el: HTMLTextAreaElement) => {
     el.style.height = 'auto'
     el.style.height = Math.min(el.scrollHeight, 4 * 24) + 'px'
+  }
+
+  const handleFileAttach = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    setUploading(true)
+    try {
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => {
+          const result = reader.result as string
+          resolve(result.replace(/^data:[^;]+;base64,/, ''))
+        }
+        reader.onerror = reject
+        reader.readAsDataURL(file)
+      })
+
+      await fetch(`/api/pane/${target}/send-with-images`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: text.trim(),
+          images: [{ name: file.name, type: file.type, data: base64 }],
+        }),
+      })
+
+      setText('')
+      if (textareaRef.current) textareaRef.current.style.height = 'auto'
+    } finally {
+      setUploading(false)
+      // Reset so the same file can be selected again
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
   }
 
   const hasSpeech = !!SpeechRecognitionCtor
@@ -263,7 +299,7 @@ export function MobileInputBar({ target, choices, wideMode, onToggleWide }: Prop
             autoGrow(e.target)
           }}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && e.shiftKey) {
+            if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault()
               void handleSend()
             }
@@ -311,6 +347,35 @@ export function MobileInputBar({ target, choices, wideMode, onToggleWide }: Prop
             🎤
           </button>
         )}
+
+        <input
+          ref={fileInputRef}
+          type="file"
+          onChange={(e) => void handleFileAttach(e)}
+          style={{ display: 'none' }}
+        />
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          disabled={uploading}
+          style={{
+            background: uploading ? 'var(--accent-working)' : 'var(--bg-surface)',
+            border: '1px solid var(--border)',
+            borderRadius: 6,
+            color: uploading ? '#fff' : 'var(--text-secondary)',
+            cursor: uploading ? 'default' : 'pointer',
+            fontSize: 16,
+            width: 36,
+            height: 36,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexShrink: 0,
+            opacity: uploading ? 0.7 : 1,
+          }}
+          title="Attach file"
+        >
+          {uploading ? '...' : '📎'}
+        </button>
 
         <button
           onClick={() => void handleSend()}

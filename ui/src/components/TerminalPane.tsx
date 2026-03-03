@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
+import { UnicodeGraphemesAddon } from '@xterm/addon-unicode-graphemes'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import type { WSMeta } from '../api/types'
@@ -19,21 +20,52 @@ interface Props {
   onClose: () => void
 }
 
-/** Write a full-screen snapshot into an xterm instance.
- *  Returns via callback when the write has been fully processed by xterm. */
+/** Write a capture-pane snapshot for scrollback + initial visual content.
+ *  The SIGWINCH redraw via %output will replace the visible area with
+ *  correctly-stated terminal data; scrollback from this seed is preserved. */
 function writeSnapshot(term: Terminal, data: string, onDone?: () => void) {
-  // \x1b[2J   clear visible screen  (no stale lines from previous write)
-  // \x1b[3J   clear scrollback       (always reflects latest capture)
-  // \x1b[H    home cursor
-  // \x1b[?25l hide xterm cursor      (tmux capture renders the real one)
-  // \x1b[?1007l disable alt-scroll   \  prevent wheel→arrow forwarding
-  // \x1b[?1l  disable app-cursor-keys/  while keeping viewport scroll
-  term.write('\x1b[2J\x1b[3J\x1b[H' + data + '\x1b[?25l\x1b[?1007l\x1b[?1l', onDone)
+  term.options.convertEol = true
+
+  const lines = data.split('\n')
+  if (lines[lines.length - 1] === '') lines.pop()
+
+  const H = term.rows
+  let scrollPart: string
+  let visiblePart: string
+
+  if (lines.length > H) {
+    // Scrollback lines scroll through naturally, then we clear the viewport
+    // and write the visible portion fresh from (1,1). This decouples visible
+    // positioning from scrollback line count — no off-by-one possible.
+    scrollPart = lines.slice(0, lines.length - H).join('\n') + '\n'
+    visiblePart = lines.slice(lines.length - H).join('\n')
+  } else {
+    scrollPart = ''
+    visiblePart = lines.join('\n')
+  }
+
+  // 1. Clear scrollback + viewport, home cursor
+  // 2. Write scrollback (scrolls through, populating scrollback buffer)
+  // 3. Clear viewport + home cursor (erase scrollback residue)
+  // 4. Write visible content from (1,1) — always correctly positioned
+  // 5. Hide cursor (SIGWINCH redraw restores it at the correct position)
+  const payload =
+    '\x1b[3J\x1b[2J\x1b[H' +
+    scrollPart +
+    '\x1b[2J\x1b[H\x1b[?25l' +
+    visiblePart
+
+  term.write(payload, () => {
+    term.options.convertEol = false
+    onDone?.()
+  })
 }
 
 // Wide mode: ~120 columns for diffs and wide output. Fit mode: viewport width.
 const MOBILE_TERM_WIDTH_WIDE = 960
 const PAD = 6
+// Height in px to clip from bottom on mobile for claude-code (hides input box: separator + mode + prompt)
+const CLAUDE_INPUT_CLIP_PX = 48
 
 export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
   // outerRef: observed by ResizeObserver; has padding that creates visual breathing room
@@ -44,8 +76,15 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
   const fitAddonRef = useRef<FitAddon | null>(null)
   const [meta, setMeta] = useState<WSMeta | null>(null)
   const isDesktop = useIsDesktop()
-  const [wideMode, setWideMode] = useState(true) // wide by default
+  // Mobile: wide by default; Desktop: fit by default
+  const [wideMode, setWideMode] = useState(
+    () => !window.matchMedia('(min-width: 1024px)').matches,
+  )
   const [termMounted, setTermMounted] = useState(false)
+
+  // Track browser zoom via devicePixelRatio — skip refit on zoom to preserve columns
+  const dprRef = useRef(window.devicePixelRatio)
+  const fittedWidthRef = useRef(0)
 
   const { minScaleRef, termDimsRef, translateXRef, resetTransform } = useTouchGestures(
     innerRef, outerRef, termRef, !isDesktop && termMounted,
@@ -55,12 +94,60 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
   // without waiting for the server to send a fresh seed.
   const lastSeedRef = useRef<string | null>(null)
 
+  // When server sends pane dimensions, lock xterm.js to those dims.
+  // FitAddon must not override — CC %output uses absolute cursor positions
+  // based on the real pane size (controlled by kitty).
+  const paneDimsRef = useRef<{ cols: number; rows: number } | null>(null)
+  // Buffer seed until dims arrive — writing seed at wrong dimensions causes garbling
+  const pendingSeedRef = useRef<string | null>(null)
+
+  const applyDimsAndSeed = (term: Terminal, cols: number, rows: number) => {
+    paneDimsRef.current = { cols, rows }
+    term.resize(cols, rows)
+    // Size inner container to match terminal pixel needs so outer can scroll
+    const inner = innerRef.current
+    if (inner) {
+      requestAnimationFrame(() => {
+        const screen = inner.querySelector('.xterm-screen') as HTMLElement | null
+        if (screen) {
+          inner.style.width = `${screen.offsetWidth}px`
+          inner.style.height = `${screen.offsetHeight}px`
+          inner.style.right = 'auto'
+          inner.style.bottom = 'auto'
+        }
+      })
+    }
+    // Flush buffered seed now that dims are applied
+    if (pendingSeedRef.current) {
+      writeSnapshot(term, pendingSeedRef.current)
+      pendingSeedRef.current = null
+    }
+  }
+
   const { connected, sendInput, sendResize } = usePaneSocket(pane.target, {
+    onDims: ({ cols, rows }) => {
+      const term = termRef.current
+      if (!term) return
+      applyDimsAndSeed(term, cols, rows)
+    },
     onSeed: (data) => {
       lastSeedRef.current = data
       const term = termRef.current
       if (!term) return
+      // If dims haven't arrived yet, buffer the seed
+      if (!paneDimsRef.current) {
+        pendingSeedRef.current = data
+        return
+      }
       writeSnapshot(term, data)
+    },
+    onReseed: (data) => {
+      lastSeedRef.current = data
+      const term = termRef.current
+      if (!term) return
+      // Post-resize reseed: write data directly (contains its own \033[2J\033[H).
+      // Don't clear scrollback — preserve scroll history.
+      term.write(data + '\x1b[?25l\x1b[?1007l\x1b[?1l')
     },
     onOutput: (data) => {
       const term = termRef.current
@@ -123,10 +210,12 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
       resetTransform(1, { w: outerW, h: outerH })
     }
 
-    try {
-      fit.fit()
-      if (!wide) sendResize(term.cols, term.rows)
-    } catch { /* fit can throw if zero-size */ }
+    if (!paneDimsRef.current) {
+      try {
+        fit.fit()
+        sendResize(term.cols, term.rows)
+      } catch { /* fit can throw if zero-size */ }
+    }
   }, [isDesktop, sendResize, resetTransform])
 
   // Mount xterm.js — remount when target or desktop mode changes
@@ -140,18 +229,24 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
       fontSize: 13,
       lineHeight: 1.2,
       cursorBlink: false,
+      allowProposedApi: true,
       disableStdin: !isDesktop,
-      // convertEol: make \n behave as \r\n so capture-pane seed lines start at column 0.
-      // Seed data (capture-pane -e) uses \n separators; incremental data from control mode
-      // already has proper \r\n. The double-CR for \r\n is harmless (carriage return is idempotent).
-      convertEol: true,
+      // convertEol is OFF: %output from CC mode delivers raw terminal data
+      // with proper \r\n. Adding implicit \r to bare \n breaks TUI cursor
+      // positioning. The seed data uses \r\n from the backend.
+      convertEol: false,
       // 500 lines matches the tmux capture depth so the user can scroll through history.
       // writeSnapshot clears scrollback on each seed so it always reflects the latest state.
       scrollback: 500,
+      // Tell FitAddon not to reserve 14px for the overview ruler (we don't use it).
+      // Without this, FitAddon calculates fewer columns than actually fit.
+      overviewRuler: { width: 0 },
     })
 
     const fitAddon = new FitAddon()
     term.loadAddon(fitAddon)
+    term.loadAddon(new UnicodeGraphemesAddon())
+    term.unicode.activeVersion = '15'
     term.loadAddon(new WebLinksAddon())
 
     // Mobile: set terminal dimensions based on wide/fit mode
@@ -182,8 +277,17 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
     // Replay cached seed — when isDesktop changes, xterm remounts but the
     // WS server won't re-send a seed if the pane hasn't changed.
     requestAnimationFrame(() => {
-      fitAddon.fit()
-      if (lastSeedRef.current) {
+      // Only fit to container if server hasn't sent pane dims yet.
+      // Once dims arrive, xterm.js is locked to the real pane size.
+      if (!paneDimsRef.current) {
+        fitAddon.fit()
+      }
+      console.debug('[resize] initial mount — cols:', term.cols, 'rows:', term.rows, 'innerW:', innerRef.current?.clientWidth, 'outerW:', outerRef.current?.clientWidth)
+      sendResize(term.cols, term.rows)
+      if (isDesktop && innerRef.current) {
+        fittedWidthRef.current = innerRef.current.clientWidth
+      }
+      if (lastSeedRef.current && paneDimsRef.current) {
         writeSnapshot(term, lastSeedRef.current)
       }
       if (isDesktop) term.focus()
@@ -207,10 +311,37 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
     }
   }, [isDesktop]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Reset seed cache when switching pane targets — old content remains visible
-  // until the new WS connection delivers a fresh seed.
+  // Refit terminal when desktop wide/fit mode toggles
+  useEffect(() => {
+    if (!isDesktop) return
+    const inner = innerRef.current
+    const fit = fitAddonRef.current
+    const term = termRef.current
+    if (!inner || !fit || !term) return
+    requestAnimationFrame(() => {
+      inner.style.minWidth = ''
+      inner.style.minHeight = ''
+      if (!paneDimsRef.current) {
+        try {
+          fit.fit()
+          console.debug('[resize] wideMode toggle — cols:', term.cols, 'rows:', term.rows, 'innerW:', inner.clientWidth, 'innerH:', inner.clientHeight)
+          sendResize(term.cols, term.rows)
+          fittedWidthRef.current = inner.clientWidth
+        } catch { /* fit can throw if zero-size */ }
+      }
+    })
+  }, [wideMode, isDesktop, sendResize])
+
+  // Reset state when switching pane targets — clear terminal so old content
+  // doesn't linger as "ghost text" while waiting for the new seed.
   useEffect(() => {
     lastSeedRef.current = null
+    paneDimsRef.current = null
+    pendingSeedRef.current = null
+    const term = termRef.current
+    if (term) {
+      term.clear()
+    }
   }, [pane.target])
 
   // Resize observer — refit when outer container dimensions change
@@ -225,6 +356,22 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
         const fit = fitAddonRef.current
         const term = termRef.current
         if (!fit || !term) return
+
+        // Desktop: detect browser zoom (DPR change) vs real window resize
+        if (isDesktop) {
+          const currentDpr = window.devicePixelRatio
+          if (currentDpr !== dprRef.current) {
+            dprRef.current = currentDpr
+            // Zoomed in — lock dimensions and skip refit (scroll instead of wrap)
+            const containerW = container.clientWidth - PAD * 2
+            if (containerW < fittedWidthRef.current && innerRef.current) {
+              innerRef.current.style.minWidth = `${fittedWidthRef.current}px`
+              innerRef.current.style.minHeight = `${innerRef.current.clientHeight}px`
+              return
+            }
+            // Zoomed out — clear locks and fall through to refit
+          }
+        }
 
         // Mobile: update terminal dimensions when container resizes
         // (e.g. keyboard opens/closes, quick buttons expand/collapse)
@@ -249,16 +396,20 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
           }
         }
 
-        try {
-          fit.fit()
-          // Only auto-resize tmux in mobile fit mode.
-          // Desktop resize is triggered on pane focus or manual button
-          // to avoid fighting with other clients (e.g. Kitty).
-          if (!isDesktop && minScaleRef.current >= 1) {
+        // Skip fit() if server controls terminal size via dims
+        if (!paneDimsRef.current) {
+          try {
+            fit.fit()
             sendResize(term.cols, term.rows)
+            if (isDesktop && innerRef.current) {
+              fittedWidthRef.current = innerRef.current.clientWidth
+              // Clear zoom locks — only set when zoom-in is detected
+              innerRef.current.style.minWidth = ''
+              innerRef.current.style.minHeight = ''
+            }
+          } catch {
+            // fit() can throw if the container is hidden or has zero size
           }
-        } catch {
-          // fit() can throw if the container is hidden or has zero size
         }
       }, 150)
     })
@@ -296,13 +447,22 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
           meta={meta}
           connected={connected}
           onClose={onClose}
+          wideMode={wideMode}
+          onToggleWide={() => setWideMode((w) => !w)}
           onResize={() => {
+            if (paneDimsRef.current) return
             const term = termRef.current
             const fit = fitAddonRef.current
+            const inner = innerRef.current
             if (term && fit) {
+              if (inner) {
+                inner.style.minWidth = ''
+                inner.style.minHeight = ''
+              }
               try {
                 fit.fit()
                 sendResize(term.cols, term.rows)
+                if (inner) fittedWidthRef.current = inner.clientWidth
               } catch { /* */ }
             }
           }}
@@ -313,10 +473,15 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
         ref={outerRef}
         style={{
           flex: 1,
-          overflow: 'hidden',
+          overflow: 'auto',
           minHeight: 0,
           position: 'relative',
           background: 'var(--bg-terminal)',
+          // On mobile, clip claude-code's input box (separator + mode line + prompt).
+          // clip-path is visual only — doesn't affect layout or ResizeObserver measurements.
+          clipPath: !isDesktop && meta?.agent === 'claude-code'
+            ? `inset(0 0 ${CLAUDE_INPUT_CLIP_PX}px 0)`
+            : undefined,
         }}
       >
         {/* Inner div: inset by 6px — xterm opens here; FitAddon measures this area.
@@ -327,7 +492,11 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
             position: 'absolute',
             top: 6,
             left: 6,
-            ...(isDesktop ? { right: 6, bottom: 6 } : { transformOrigin: '0 0' }),
+            ...(isDesktop
+              ? wideMode
+                ? { width: MOBILE_TERM_WIDTH_WIDE, bottom: 6 }
+                : { right: 6, bottom: 6 }
+              : { transformOrigin: '0 0' }),
           }}
         />
       </div>

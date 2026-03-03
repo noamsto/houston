@@ -113,8 +113,9 @@ func New(cfg Config) (*Server, error) {
 		generic.New(), // Must be last (fallback)
 	)
 
+	tmuxClient := tmux.NewClient()
 	s := &Server{
-		tmux:         tmux.NewClient(),
+		tmux:         tmuxClient,
 		controlMgr:   tmux.NewControlManager(),
 		watcher:      status.NewWatcher(cfg.StatusDir),
 		registry:     registry,
