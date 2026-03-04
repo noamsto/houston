@@ -123,6 +123,7 @@ export interface WSMeta {
   status: ResultType
   choices?: string[]
   suggestion?: string
+  input_text?: string
   status_line?: string
   activity?: string
   window_name?: string

@@ -35,6 +35,7 @@ type WSMeta struct {
 	Status     string           `json:"status"`
 	Choices    []string         `json:"choices,omitempty"`
 	Suggestion string           `json:"suggestion,omitempty"`
+	InputText  string           `json:"input_text,omitempty"`
 	StatusLine string           `json:"status_line,omitempty"`
 	Activity   string           `json:"activity,omitempty"`
 	WindowName string           `json:"window_name,omitempty"`
@@ -253,6 +254,7 @@ func (s *Server) metaPollLoop(pane tmux.Pane, done <-chan struct{}, metaCh chan<
 			}
 			if agent.Type() == agents.AgentClaudeCode {
 				meta.Suggestion = claude.ExtractSuggestion(capture.Output)
+				meta.InputText = claude.ExtractInputText(capture.Output)
 			}
 			meta.Status = resultTypeToString(parseResult.Type)
 
@@ -307,6 +309,7 @@ func metaEqual(a, b WSMeta) bool {
 		a.Mode == b.Mode &&
 		a.Status == b.Status &&
 		a.Suggestion == b.Suggestion &&
+		a.InputText == b.InputText &&
 		a.StatusLine == b.StatusLine &&
 		a.Activity == b.Activity &&
 		a.WindowName == b.WindowName &&

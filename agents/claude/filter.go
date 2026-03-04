@@ -74,6 +74,39 @@ func ExtractSuggestion(output string) string {
 	return ""
 }
 
+// ExtractInputText extracts user-typed text from the Claude Code prompt.
+// Returns the text after ❯ if it's user input (not a dim suggestion).
+// Returns empty string if the prompt is empty, showing a suggestion, or not found.
+func ExtractInputText(output string) string {
+	lines := strings.Split(output, "\n")
+
+	start := len(lines) - 20
+	if start < 0 {
+		start = 0
+	}
+
+	for i := start; i < len(lines); i++ {
+		line := lines[i]
+		idx := strings.Index(line, "❯")
+		if idx == -1 {
+			continue
+		}
+
+		after := line[idx+len("❯"):]
+		after = strings.TrimLeft(after, "\u00a0 ")
+
+		// Dim text = suggestion, not user input
+		if strings.HasPrefix(after, "\x1b[2m") {
+			return ""
+		}
+
+		text := ansi.Strip(after)
+		return strings.TrimSpace(text)
+	}
+
+	return ""
+}
+
 // ExtractStatusLine finds Claude's status bar line with ANSI colors intact.
 func ExtractStatusLine(output string) string {
 	lines := strings.Split(output, "\n")

@@ -102,6 +102,7 @@ aside,
   touch-action: pan-y !important;
 }
 
+
 @keyframes attention-pulse {
   0%,
   100% {

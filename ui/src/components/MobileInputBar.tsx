@@ -3,8 +3,7 @@ import { useCallback, useRef, useState } from 'react'
 interface Props {
   target: string
   choices?: string[]
-  wideMode: boolean
-  onToggleWide: () => void
+  inputText?: string
 }
 
 // Web Speech API types (not in TS lib by default)
@@ -98,7 +97,7 @@ const pillStyle: React.CSSProperties = {
   whiteSpace: 'nowrap',
 }
 
-export function MobileInputBar({ target, choices, wideMode, onToggleWide }: Props) {
+export function MobileInputBar({ target, choices, inputText }: Props) {
   const [text, setText] = useState('')
   const [listening, setListening] = useState(false)
   const [expanded, setExpanded] = useState(false)
@@ -250,17 +249,6 @@ export function MobileInputBar({ target, choices, wideMode, onToggleWide }: Prop
               {qa.label}
             </button>
           ))}
-          <button
-            className="pill-btn"
-            onClick={onToggleWide}
-            style={{
-              ...pillStyle,
-              color: wideMode ? 'var(--text-secondary)' : 'var(--text-muted)',
-              borderColor: wideMode ? 'var(--text-secondary)' : 'var(--border)',
-            }}
-          >
-            {wideMode ? 'WIDE' : 'FIT'}
-          </button>
           {expanded && extraActions.map((qa) => (
             <button
               key={qa.label}
@@ -307,7 +295,7 @@ export function MobileInputBar({ target, choices, wideMode, onToggleWide }: Prop
           autoCapitalize="off"
           autoCorrect="off"
           spellCheck={false}
-          placeholder="Send a message..."
+          placeholder={inputText || 'Send a message...'}
           rows={1}
           style={{
             flex: 1,
