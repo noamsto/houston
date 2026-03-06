@@ -80,6 +80,18 @@ func (s *Server) handlePaneWS(w http.ResponseWriter, r *http.Request, pane tmux.
 
 	slog.Info("pane websocket connected (control mode)", "target", pane.Target(), "paneID", paneID)
 
+	// Auto-zoom: if window has multiple panes, zoom the target pane so it
+	// fills the window — gives a much better view, especially on mobile.
+	weZoomed := false
+	if count, err := s.tmux.WindowPaneCount(pane); err == nil && count > 1 {
+		if zoomed, err := s.tmux.IsZoomed(pane); err == nil && !zoomed {
+			if err := s.tmux.ZoomPane(pane); err == nil {
+				weZoomed = true
+				slog.Debug("auto-zoomed pane", "target", pane.Target())
+			}
+		}
+	}
+
 	// Pause %output for this pane before subscribing so no stale events
 	// enter the channel while we capture and send the seed snapshot.
 	paused := false
@@ -97,6 +109,10 @@ func (s *Server) handlePaneWS(w http.ResponseWriter, r *http.Request, pane tmux.
 		if paused {
 			continueCmd := fmt.Sprintf("refresh-client -A %s:continue", paneID)
 			_, _ = cc.RunCommand(continueCmd)
+		}
+		// Restore zoom state if we auto-zoomed on connect
+		if weZoomed {
+			_ = s.tmux.ZoomPane(pane) // toggle off
 		}
 		_ = conn.Close()
 		cc.Unsubscribe(paneID, outputCh)

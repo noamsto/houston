@@ -381,6 +381,25 @@ func (c *Client) ZoomPane(p Pane) error {
 	return c.run("resize-pane", "-t", p.Target(), "-Z")
 }
 
+// IsZoomed returns whether the pane's window is currently in zoomed state.
+func (c *Client) IsZoomed(p Pane) (bool, error) {
+	out, err := c.output("display-message", "-t", p.Target(), "-p", "#{window_zoomed_flag}")
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(string(out)) == "1", nil
+}
+
+// WindowPaneCount returns the number of panes in the pane's window.
+func (c *Client) WindowPaneCount(p Pane) (int, error) {
+	out, err := c.output("display-message", "-t", p.Target(), "-p", "#{window_panes}")
+	if err != nil {
+		return 0, err
+	}
+	n, _ := strconv.Atoi(strings.TrimSpace(string(out)))
+	return n, nil
+}
+
 // ForceRedraw sends SIGWINCH to the pane's foreground process by resizing
 // to the current dimensions. This forces TUI apps to redraw.
 func (c *Client) ForceRedraw(p Pane) error {

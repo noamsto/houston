@@ -98,13 +98,18 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
         inner.style.bottom = 'auto'
 
         if (!isDesktop && outer) {
-          // Mobile: full-size terminal, user pinch-zooms and pans via gestures
+          // Mobile: start zoomed to 1x at bottom-left (readable text, latest output visible).
+          // User can pinch-zoom out to see the full terminal.
           const outerW = outer.clientWidth - PAD * 2
+          const outerH = outer.clientHeight - PAD * 2
           const minS = outerW / screenW
+          const initScale = Math.max(1.0, minS)
+          const visH = screenH * initScale
+          const ty = Math.min(0, outerH - visH)
           inner.style.width = `${screenW}px`
           inner.style.height = `${screenH}px`
-          inner.style.transform = 'translate(0px, 0px) scale(1)'
-          resetTransform(minS, { w: screenW, h: screenH }, { scale: 1, tx: 0, ty: 0 })
+          inner.style.transform = `translate(0px, ${ty}px) scale(${initScale})`
+          resetTransform(minS, { w: screenW, h: screenH }, { scale: initScale, tx: 0, ty })
         } else {
           // Desktop: just size inner to match terminal
           inner.style.width = `${screenW}px`
@@ -220,15 +225,19 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
     term.unicode.activeVersion = '15'
     term.loadAddon(new WebLinksAddon())
 
-    // Mobile: wide terminal with pinch-to-zoom and pan
+    // Mobile: wide terminal with pinch-to-zoom and pan.
+    // Start at 1x bottom-left; real dims from server will override shortly.
     if (!isDesktop) {
       const outerW = outerRef.current.clientWidth - PAD * 2
       const outerH = outerRef.current.clientHeight - PAD * 2
       const minS = outerW / MOBILE_TERM_WIDTH
+      const initScale = Math.max(1.0, minS)
+      const visH = outerH * initScale
+      const ty = Math.min(0, outerH - visH)
       innerRef.current.style.width = `${MOBILE_TERM_WIDTH}px`
       innerRef.current.style.height = `${outerH}px`
-      innerRef.current.style.transform = 'translate(0px, 0px) scale(1)'
-      resetTransform(minS, { w: MOBILE_TERM_WIDTH, h: outerH }, { scale: 1, tx: 0, ty: 0 })
+      innerRef.current.style.transform = `translate(0px, ${ty}px) scale(${initScale})`
+      resetTransform(minS, { w: MOBILE_TERM_WIDTH, h: outerH }, { scale: initScale, tx: 0, ty })
     }
 
     term.open(innerRef.current)
@@ -322,18 +331,28 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
           }
         }
 
-        // Mobile: update height when container resizes
+        // Mobile: update position/height when container resizes
         // (e.g. keyboard opens/closes, quick buttons expand/collapse)
         if (!isDesktop && innerRef.current) {
           const outerH = container.clientHeight - PAD * 2
-          innerRef.current.style.height = `${outerH}px`
-          termDimsRef.current = { ...termDimsRef.current, h: outerH }
           const curScale = innerRef.current.style.transform.match(/scale\(([\d.]+)\)/)
           const sc = curScale ? parseFloat(curScale[1]) : 1
           const tx = translateXRef.current
           const s = minScaleRef.current
-          innerRef.current.style.transform = `translate(${tx}px, 0px) scale(${sc})`
-          resetTransform(s, { w: termDimsRef.current.w, h: outerH }, { scale: sc, tx, ty: 0 })
+
+          if (paneDimsRef.current) {
+            // Server controls terminal size — keep dims, auto-scroll to show bottom
+            const visH = termDimsRef.current.h * sc
+            const ty = Math.min(0, outerH - visH)
+            innerRef.current.style.transform = `translate(${tx}px, ${ty}px) scale(${sc})`
+            resetTransform(s, termDimsRef.current, { scale: sc, tx, ty })
+          } else {
+            // FitAddon controls — resize inner div to match container
+            innerRef.current.style.height = `${outerH}px`
+            termDimsRef.current = { ...termDimsRef.current, h: outerH }
+            innerRef.current.style.transform = `translate(${tx}px, 0px) scale(${sc})`
+            resetTransform(s, { w: termDimsRef.current.w, h: outerH }, { scale: sc, tx, ty: 0 })
+          }
         }
 
         // Skip fit() if server controls terminal size via dims
