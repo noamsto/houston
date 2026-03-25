@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react'
-import type { AgentType, SessionsData, SessionWithWindows, WindowWithStatus } from '../api/types'
+import type { ResultType, SessionsData, SessionWithWindows, WindowWithStatus } from '../api/types'
 
-const AGENT_ICONS: Record<AgentType, string> = {
-  'claude-code': '✦',
-  'amp': '⚡',
-  'generic': '',
+// Strip Private Use Area Unicode characters (Nerd Font glyphs) that won't render on mobile.
+// Ranges: U+E000-U+F8FF (BMP PUA), U+F0000-U+FFFFD, U+100000-U+10FFFD (Supplementary PUA)
+const PUA_RE = /[\uE000-\uF8FF]|[\u{F0000}-\u{FFFFD}]|[\u{100000}-\u{10FFFD}]/gu
+function stripPUA(s: string): string {
+  return s.replace(PUA_RE, '').replace(/\s{2,}/g, ' ').trim()
 }
 
 interface WindowRowProps {
@@ -14,32 +15,74 @@ interface WindowRowProps {
   onSplit: (target: string) => void
 }
 
+function statusColor(type: ResultType, needsAttention: boolean): string {
+  if (needsAttention) return 'var(--accent-attention)'
+  switch (type) {
+    case 'working': return 'var(--accent-working)'
+    case 'done':    return 'var(--accent-done)'
+    case 'error':   return 'var(--accent-error)'
+    default:        return 'var(--accent-idle)'
+  }
+}
+
+interface PillStyle {
+  bg: string
+  color: string
+}
+
+function pillStyle(type: ResultType, needsAttention: boolean): PillStyle | null {
+  if (needsAttention || type === 'question' || type === 'choice')
+    return { bg: 'var(--accent-attention)', color: '#000' }
+  if (type === 'error')
+    return { bg: 'var(--accent-error)', color: '#fff' }
+  if (type === 'working')
+    return { bg: 'var(--accent-working)', color: '#fff' }
+  if (type === 'done')
+    return { bg: 'transparent', color: 'var(--accent-done)' }
+  return null
+}
+
+function statusLabel(w: WindowWithStatus): string | null {
+  const { type, activity } = w.parse_result
+  if (type === 'error') return 'Error'
+  if (type === 'question') return 'Waiting for input'
+  if (type === 'choice') return 'Waiting for choice'
+  if (type === 'working') return stripPUA(activity || 'Working...')
+  if (type === 'done') return 'Done'
+  return null
+}
+
+function displayName(w: WindowWithStatus): string {
+  if (w.branch && w.branch !== 'main' && w.branch !== 'master') return w.branch
+  return stripPUA(w.window.name)
+}
+
+function dirName(w: WindowWithStatus): string {
+  if (!w.window.path) return ''
+  return w.window.path.split('/').filter(Boolean).pop() || ''
+}
+
 function WindowRow({ w, sessionName, onSelect, onSplit }: WindowRowProps) {
   const target = `${sessionName}:${w.window.index}.${w.pane.index}`
-  const { type, activity } = w.parse_result
-  const agentIcon = AGENT_ICONS[w.agent_type] || ''
-
-  const dotColor =
-    w.needs_attention ? 'var(--accent-attention)' :
-    type === 'working' ? 'var(--accent-working)' :
-    type === 'done'    ? 'var(--accent-done)' :
-                         'var(--accent-idle)'
-
-  const statusLabel =
-    type === 'error'    ? 'Error' :
-    type === 'question' ? 'Waiting for input' :
-    type === 'choice'   ? 'Waiting for choice' :
-    activity || null
+  const color = statusColor(w.parse_result.type, w.needs_attention)
+  const pill = pillStyle(w.parse_result.type, w.needs_attention)
+  const label = statusLabel(w)
+  const name = displayName(w)
+  const dir = dirName(w)
+  const showDir = dir && dir !== sessionName && dir !== name
 
   return (
     <div
       className="tree-row"
       style={{
-        padding: '3px 8px 3px 24px',
+        padding: '6px 10px 6px 12px',
         cursor: 'pointer',
         borderRadius: 4,
-        color: 'var(--text-secondary)',
-        fontSize: 12,
+        borderLeft: `3px solid ${color}`,
+        marginLeft: 4,
+        marginRight: 4,
+        marginBottom: 2,
+        background: w.needs_attention ? 'rgba(245, 158, 11, 0.06)' : undefined,
       }}
       onClick={(e) => {
         if (e.ctrlKey || e.metaKey) {
@@ -49,28 +92,54 @@ function WindowRow({ w, sessionName, onSelect, onSplit }: WindowRowProps) {
         }
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <span style={{ width: 6, height: 6, borderRadius: '50%', background: dotColor, flexShrink: 0 }} />
-        {agentIcon && <span style={{ flexShrink: 0, fontSize: 10, color: dotColor }}>{agentIcon}</span>}
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {w.branch && w.branch !== 'main' && w.branch !== 'master' ? w.branch : w.window.name}
-        </span>
+      {/* Line 1: branch/window name */}
+      <div style={{
+        fontSize: 13,
+        fontWeight: 500,
+        color: 'var(--text-primary)',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',
+      }}>
+        {name}
       </div>
-      {statusLabel && (
-        <div style={{ color: dotColor, fontSize: 10, paddingLeft: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {statusLabel}
-        </div>
-      )}
-      {w.branch && w.branch !== 'main' && w.branch !== 'master' && w.branch !== w.window.name && (
-        <div style={{ color: 'var(--text-muted)', fontSize: 10, paddingLeft: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {w.window.name}
-        </div>
-      )}
-      {w.branch && (w.branch === 'main' || w.branch === 'master') && w.branch !== w.window.name && (
-        <div style={{ color: 'var(--text-muted)', fontSize: 10, paddingLeft: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {w.branch}
-        </div>
-      )}
+
+      {/* Line 2: dir + status pill */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        marginTop: 2,
+        fontSize: 11,
+        overflow: 'hidden',
+      }}>
+        {showDir && (
+          <span style={{
+            color: 'var(--text-muted)',
+            flexShrink: 1,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            minWidth: 0,
+          }}>
+            {dir}
+          </span>
+        )}
+        {label && pill && (
+          <span style={{
+            background: pill.bg,
+            color: pill.color,
+            fontSize: 10,
+            fontWeight: 600,
+            borderRadius: 8,
+            padding: '1px 6px',
+            whiteSpace: 'nowrap',
+            flexShrink: 0,
+          }}>
+            {label}
+          </span>
+        )}
+      </div>
     </div>
   )
 }
@@ -84,6 +153,7 @@ interface SessionRowProps {
 function SessionRow({ s, onSelect, onSplit }: SessionRowProps) {
   const [expanded, setExpanded] = useState(true)
   const hasAttention = s.attention_count > 0
+  const multiWindow = s.windows.length > 1
 
   return (
     <div
@@ -93,6 +163,7 @@ function SessionRow({ s, onSelect, onSplit }: SessionRowProps) {
         marginBottom: 2,
       } : { marginBottom: 2 }}
     >
+      {/* Session header */}
       <div
         className="tree-row"
         style={{
@@ -100,19 +171,24 @@ function SessionRow({ s, onSelect, onSplit }: SessionRowProps) {
           alignItems: 'center',
           gap: 6,
           padding: '4px 8px',
-          cursor: 'pointer',
+          cursor: multiWindow ? 'pointer' : 'default',
           borderRadius: 4,
           color: hasAttention ? 'var(--accent-attention)' : 'var(--text-primary)',
           fontSize: 13,
           fontWeight: 500,
         }}
-        onClick={() => setExpanded((x) => !x)}
+        onClick={() => { if (multiWindow) setExpanded((x) => !x) }}
       >
-        <span style={{ fontSize: 10, color: 'var(--text-muted)', width: 10 }}>
-          {expanded ? '▾' : '▸'}
-        </span>
+        {multiWindow && (
+          <span style={{ fontSize: 10, color: 'var(--text-muted)', width: 10 }}>
+            {expanded ? '\u25BE' : '\u25B8'}
+          </span>
+        )}
         <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {s.session.name}
+          {multiWindow && (
+            <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}> ({s.windows.length})</span>
+          )}
         </span>
         {s.attention_count > 0 && (
           <span style={{
@@ -188,7 +264,8 @@ export function SessionTree({ sessions, onSelect, onSplit }: Props) {
         s.windows.some(
           (w) =>
             w.window.name.toLowerCase().includes(q) ||
-            w.branch.toLowerCase().includes(q),
+            w.branch.toLowerCase().includes(q) ||
+            w.window.path.toLowerCase().includes(q),
         )
       )
     }

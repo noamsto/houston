@@ -5,10 +5,18 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 )
+
+var tmuxEscapeRe = regexp.MustCompile(`#\[[^\]]*\]`)
+
+// StripTmuxEscapes removes tmux style directives like #[fg=color] from text.
+func StripTmuxEscapes(s string) string {
+	return strings.TrimSpace(tmuxEscapeRe.ReplaceAllString(s, ""))
+}
 
 // cmdTimeout is the maximum time any single tmux command is allowed to run.
 const cmdTimeout = 5 * time.Second
@@ -95,7 +103,7 @@ func parseSessionLine(line string) (Session, error) {
 	activity, _ := strconv.ParseInt(parts[4], 10, 64)
 
 	return Session{
-		Name:         parts[0],
+		Name:         StripTmuxEscapes(parts[0]),
 		Created:      time.Unix(created, 0),
 		Windows:      windows,
 		Attached:     attached,
@@ -163,7 +171,7 @@ func (c *Client) ListWindows(session string) ([]Window, error) {
 		}
 		windows = append(windows, Window{
 			Index:        idx,
-			Name:         parts[1],
+			Name:         StripTmuxEscapes(parts[1]),
 			Active:       active,
 			Panes:        panes,
 			LastActivity: lastActivity,
@@ -214,7 +222,7 @@ func (c *Client) ListPanes(session string, window int) ([]PaneInfo, error) {
 			Active:  active,
 			Command: parts[2],
 			Path:    path,
-			Title:   title,
+			Title:   StripTmuxEscapes(title),
 		})
 	}
 

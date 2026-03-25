@@ -57,6 +57,7 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
   const [meta, setMeta] = useState<WSMeta | null>(null)
   const isDesktop = useIsDesktop()
   const [termMounted, setTermMounted] = useState(false)
+  const [isScrolledUp, setIsScrolledUp] = useState(false)
 
   // Track browser zoom via devicePixelRatio — skip refit on zoom to preserve columns
   const dprRef = useRef(window.devicePixelRatio)
@@ -267,6 +268,12 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
       setTermMounted(true)
     })
 
+    // Track scroll position to show/hide "scroll to bottom" button
+    term.onScroll(() => {
+      const buf = term.buffer.active
+      setIsScrolledUp(buf.viewportY < buf.baseY)
+    })
+
     if (isDesktop) {
       // Ensure xterm.js handles all keys (including Escape) instead of
       // letting the browser consume them.
@@ -453,6 +460,35 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
               : { transformOrigin: '0 0' }),
           }}
         />
+        {isScrolledUp && (
+          <button
+            onClick={() => {
+              termRef.current?.scrollToBottom()
+              setIsScrolledUp(false)
+            }}
+            style={{
+              position: 'absolute',
+              bottom: 12,
+              right: 12,
+              background: 'var(--bg-surface)',
+              border: '1px solid var(--border)',
+              borderRadius: '50%',
+              width: 36,
+              height: 36,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              color: 'var(--text-secondary)',
+              fontSize: 18,
+              boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+              zIndex: 10,
+            }}
+            title="Scroll to bottom"
+          >
+            ↓
+          </button>
+        )}
       </div>
       {!isDesktop && (
         <MobileInputBar

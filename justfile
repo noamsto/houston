@@ -2,11 +2,11 @@
 
 # Build the binary
 build:
-    go build -o houston .
+    exec go build -o houston .
 
 # Build and run the server
 run: build
-    ./houston
+    exec ./houston
 
 # Run with hot reload (air), finds available port
 dev:
@@ -52,20 +52,20 @@ dev-local:
 
 # Start React dev server (proxy to Go backend at :9090)
 ui-dev:
-    cd ui && npm run dev
+    cd ui && exec npm run dev
 
 # Build React frontend for production
 ui-build:
-    cd ui && npm run build
+    cd ui && exec npm run build
 
 # Remove build artifacts
 clean:
-    rm -f houston
+    exec rm -f houston
 
 # Run all tests
 test:
-    go test ./... -v
+    exec go test ./... -v
 
 # Run linter
 lint:
-    golangci-lint run
+    exec golangci-lint run

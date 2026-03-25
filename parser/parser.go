@@ -238,7 +238,7 @@ func detectActivity(lines []string) string {
 
 		// Check for main spinner activity (✻ Thinking..., ✻ Sussing..., etc.)
 		if match := spinnerPattern.FindStringSubmatch(line); len(match) > 1 {
-			activity := strings.TrimSpace(match[1])
+			activity := strings.TrimSpace(ansi.Strip(match[1]))
 			// Clean up parenthetical timing info if present
 			if idx := strings.Index(activity, "("); idx > 0 {
 				activity = strings.TrimSpace(activity[:idx])
