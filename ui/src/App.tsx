@@ -1,13 +1,98 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Sidebar } from './components/Sidebar'
 import { TerminalArea } from './components/TerminalArea'
+import { AgentsView } from './components/agents/AgentsView'
 import { useIsDesktop } from './hooks/useMediaQuery'
 import { useLayout } from './hooks/useLayout'
 import { useSessionsStream } from './hooks/useSessionsStream'
 import { useAttentionNotifications } from './hooks/useAttentionNotifications'
 import './theme/tokens.css'
 
+type View = 'agents' | 'panes'
+
+function initialView(): View {
+  return window.location.hash === '#/panes' ? 'panes' : 'agents'
+}
+
 export default function App() {
+  const [view, setView] = useState<View>(initialView)
+
+  useEffect(() => {
+    const onHash = () => setView(initialView())
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+  }, [])
+
+  const goAgents = () => { window.location.hash = '#/agents'; setView('agents') }
+  const goPanes  = () => { window.location.hash = '#/panes';  setView('panes') }
+
+  if (view === 'agents') {
+    return (
+      <>
+        <AgentsView />
+        <ViewSwitch current="agents" onAgents={goAgents} onPanes={goPanes} />
+      </>
+    )
+  }
+  return (
+    <>
+      <PanesApp />
+      <ViewSwitch current="panes" onAgents={goAgents} onPanes={goPanes} />
+    </>
+  )
+}
+
+function ViewSwitch({
+  current, onAgents, onPanes,
+}: { current: View; onAgents: () => void; onPanes: () => void }) {
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        bottom: 12,
+        right: 12,
+        zIndex: 300,
+        display: 'flex',
+        gap: 0,
+        border: '1px solid #2a3444',
+        borderRadius: 2,
+        background: 'rgba(10,13,18,0.9)',
+        backdropFilter: 'blur(8px)',
+        fontFamily: 'Oswald, system-ui, sans-serif',
+        fontSize: 10,
+        letterSpacing: '0.22em',
+        textTransform: 'uppercase',
+      }}
+    >
+      <button
+        onClick={onAgents}
+        style={{
+          appearance: 'none',
+          border: 'none',
+          padding: '8px 12px',
+          cursor: 'pointer',
+          background: current === 'agents' ? 'rgba(94,255,154,0.12)' : 'transparent',
+          color: current === 'agents' ? '#5eff9a' : '#768391',
+          fontWeight: 600,
+        }}
+      >Agents</button>
+      <button
+        onClick={onPanes}
+        style={{
+          appearance: 'none',
+          border: 'none',
+          padding: '8px 12px',
+          cursor: 'pointer',
+          background: current === 'panes' ? 'rgba(255,255,255,0.06)' : 'transparent',
+          color: current === 'panes' ? '#e4ebf3' : '#768391',
+          fontWeight: 600,
+        }}
+      >Panes</button>
+    </div>
+  )
+}
+
+function PanesApp() {
   const { sessions, connected } = useSessionsStream()
   useAttentionNotifications(sessions)
   const layout = useLayout()

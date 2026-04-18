@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -21,6 +22,7 @@ import (
 	"github.com/noamsto/houston/agents/amp"
 	"github.com/noamsto/houston/agents/claude"
 	"github.com/noamsto/houston/agents/generic"
+	"github.com/noamsto/houston/hub"
 	"github.com/noamsto/houston/internal/ansi"
 	"github.com/noamsto/houston/opencode"
 	"github.com/noamsto/houston/parser"
@@ -83,6 +85,9 @@ type Server struct {
 	// OpenCode integration
 	ocDiscovery *opencode.Discovery
 	ocManager   *opencode.Manager
+
+	// Agent-card hub (new) — aggregates hook state + transcript tails.
+	hub *hub.Hub
 }
 
 // FontController controls terminal font size.
@@ -122,7 +127,16 @@ func New(cfg Config) (*Server, error) {
 		font:         cfg.FontController,
 		uiFS:         cfg.UIFS,
 		lastActivity: make(map[string]time.Time),
+		hub:          hub.New(cfg.StatusDir, slog.Default()),
 	}
+
+	// Run the hub in the background. It watches <status-dir>/claude/ and the
+	// transcripts referenced from hook state files.
+	go func() {
+		if err := s.hub.Run(context.Background()); err != nil && !errors.Is(err, context.Canceled) {
+			slog.Warn("agent hub stopped", "err", err)
+		}
+	}()
 
 	// Initialize OpenCode integration if enabled
 	if cfg.OpenCodeEnabled {
@@ -172,6 +186,8 @@ func (s *Server) Handler() http.Handler {
 	apiMux.HandleFunc("/api/pane/", s.handleAPIPane)
 	apiMux.HandleFunc("/api/opencode/sessions", s.handleAPIOpenCodeSessions)
 	apiMux.HandleFunc("/api/opencode/session/", s.handleAPIOpenCodeSession)
+	apiMux.HandleFunc("/api/agents", s.handleAgentsSnapshot)
+	apiMux.HandleFunc("/api/agents/stream", s.handleAgentsStream)
 	mux.Handle("/api/", corsMiddleware(apiMux))
 
 	return mux

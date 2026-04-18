@@ -137,3 +137,44 @@ export interface WSResize {
   cols: number
   rows: number
 }
+
+// ────────────────────────────────────────────────────────────────
+// Agent cards (new) — mirror of hub.SessionView
+// ────────────────────────────────────────────────────────────────
+
+export type AgentState =
+  | 'starting'
+  | 'thinking'
+  | 'tool-running'
+  | 'waiting'
+  | 'waiting:permission'
+  | 'compacting'
+  | 'ended'
+
+// Mirror of hub.TrailChip
+export interface TrailChip {
+  tool: string
+  hint: string
+  done: boolean
+  error?: boolean
+}
+
+// Mirror of hub.SessionView
+export interface SessionView {
+  session_id: string
+  cwd?: string
+  tmux_session?: string
+  tmux_window?: string
+  state: AgentState
+  tool?: string
+  tool_input_hint?: string
+  last_message?: string
+  turn: number
+  since?: number
+  updated_at: number
+  trail?: TrailChip[]
+  preview?: string
+  input_tokens: number
+  output_tokens: number
+  transcript_path?: string
+}

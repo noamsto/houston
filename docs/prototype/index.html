@@ -1,0 +1,1771 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<meta name="theme-color" content="#07090c" />
+<title>Houston · Mission Control</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Oswald:wght@300;400;500;600;700&family=Fraunces:ital,opsz,wght@1,144,300..900&display=swap" rel="stylesheet" />
+<style>
+/* ---------- design tokens ---------- */
+:root {
+  --bg-void:        #05070a;
+  --bg-deep:        #0a0d12;
+  --bg-elev:        #10141b;
+  --bg-panel:       #161c25;
+  --bg-panel-hi:    #1c2430;
+  --line:           #1d2530;
+  --line-bright:    #2a3444;
+  --line-hot:       #3a4656;
+
+  --ink-dim:        #4a5563;
+  --ink-quiet:      #768391;
+  --ink-body:       #a8b3c1;
+  --ink-bright:     #e4ebf3;
+  --ink-phosphor:   #f4fbff;
+
+  /* status phosphors */
+  --run:            #5eff9a;
+  --run-dim:        #1c3d2a;
+  --think:          #ffb347;
+  --think-dim:      #3a2811;
+  --wait:           #ff5566;
+  --wait-dim:       #3a1219;
+  --idle:           #4d6380;
+  --error:          #ff3355;
+
+  /* agent identity */
+  --claude:         #ff9773;
+  --claude-glow:    rgba(255,151,115,0.16);
+  --amp:            #d9ff4a;
+  --amp-glow:       rgba(217,255,74,0.14);
+  --opencode:       #62e3ff;
+  --opencode-glow:  rgba(98,227,255,0.16);
+
+  --mono: 'JetBrains Mono', ui-monospace, monospace;
+  --sans: 'Oswald', system-ui, sans-serif;
+  --serif: 'Fraunces', 'Times New Roman', serif;
+
+  --radius: 2px;
+  --dur: 180ms;
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  background: var(--bg-void);
+  color: var(--ink-body);
+  font-family: var(--mono);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+body {
+  background:
+    radial-gradient(ellipse 80% 60% at 50% -10%, rgba(255,151,115,0.04), transparent 70%),
+    radial-gradient(ellipse 60% 40% at 100% 100%, rgba(98,227,255,0.03), transparent 60%),
+    linear-gradient(to bottom, var(--bg-void), var(--bg-deep));
+}
+
+/* ---------- atmosphere: grid + scanlines ---------- */
+body::before {
+  content: '';
+  position: fixed; inset: 0;
+  background-image:
+    linear-gradient(rgba(255,255,255,0.012) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.012) 1px, transparent 1px);
+  background-size: 48px 48px;
+  pointer-events: none;
+  z-index: 0;
+  mask-image: radial-gradient(ellipse 70% 70% at 50% 40%, black 40%, transparent 100%);
+}
+
+body::after {
+  content: '';
+  position: fixed; inset: 0;
+  background: repeating-linear-gradient(
+    180deg,
+    transparent 0,
+    transparent 2px,
+    rgba(0,0,0,0.08) 2px,
+    rgba(0,0,0,0.08) 3px
+  );
+  pointer-events: none;
+  z-index: 1;
+  opacity: 0.35;
+  mix-blend-mode: multiply;
+}
+
+/* ---------- top nav ---------- */
+.nav {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 24px;
+  padding: 14px 22px;
+  background: linear-gradient(to bottom, rgba(10,13,18,0.96), rgba(10,13,18,0.82));
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--line);
+}
+
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  min-width: 0;
+}
+
+.brand .mark {
+  width: 10px; height: 10px;
+  background: var(--run);
+  border-radius: 50%;
+  box-shadow: 0 0 12px var(--run), 0 0 2px var(--run);
+  animation: pulse 2.2s ease-in-out infinite;
+  align-self: center;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.86); }
+}
+
+.brand .name {
+  font-family: var(--sans);
+  font-weight: 600;
+  font-size: 20px;
+  letter-spacing: 0.22em;
+  color: var(--ink-phosphor);
+  text-transform: uppercase;
+}
+
+.brand .slash {
+  color: var(--line-hot);
+  font-weight: 300;
+}
+
+.brand .tag {
+  font-family: var(--sans);
+  font-size: 10.5px;
+  letter-spacing: 0.32em;
+  color: var(--ink-quiet);
+  text-transform: uppercase;
+  padding-top: 2px;
+}
+
+.telemetry {
+  display: flex;
+  gap: 28px;
+  justify-content: flex-end;
+  align-items: center;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+}
+
+.metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.1;
+  text-align: right;
+}
+
+.metric .k {
+  font-family: var(--sans);
+  font-weight: 400;
+  color: var(--ink-quiet);
+  text-transform: uppercase;
+  letter-spacing: 0.22em;
+  font-size: 9.5px;
+}
+
+.metric .v {
+  font-family: var(--mono);
+  font-weight: 500;
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-bright);
+}
+
+.metric .v.run { color: var(--run); }
+.metric .v.wait { color: var(--wait); }
+.metric .v.idle { color: var(--idle); }
+
+.clock {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--ink-quiet);
+  letter-spacing: 0.08em;
+  padding-left: 20px;
+  border-left: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- filter strip ---------- */
+.controls {
+  display: flex;
+  gap: 0;
+  align-items: stretch;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 59px;
+  z-index: 9;
+  background: rgba(10,13,18,0.92);
+  backdrop-filter: blur(12px);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.controls::-webkit-scrollbar { display: none; }
+
+.tab {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--ink-quiet);
+  font-family: var(--sans);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  padding: 14px 16px;
+  cursor: pointer;
+  position: relative;
+  white-space: nowrap;
+  transition: color var(--dur) var(--ease);
+}
+
+.tab:hover { color: var(--ink-bright); }
+
+.tab .count {
+  display: inline-block;
+  margin-left: 8px;
+  font-family: var(--mono);
+  font-weight: 400;
+  font-size: 10.5px;
+  color: var(--ink-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.tab.active { color: var(--ink-phosphor); }
+.tab.active .count { color: var(--run); }
+.tab.active::after {
+  content: '';
+  position: absolute;
+  left: 12px; right: 12px; bottom: -1px;
+  height: 1px;
+  background: var(--run);
+  box-shadow: 0 0 8px var(--run);
+}
+
+.tab.needs { color: var(--wait); animation: blink 1.6s steps(2) infinite; }
+@keyframes blink {
+  0%, 60% { opacity: 1; }
+  70%, 100% { opacity: 0.55; }
+}
+
+.controls .spacer { flex: 1; min-width: 12px; }
+
+.sort {
+  display: flex; align-items: center; gap: 10px;
+  padding: 0 14px;
+  font-family: var(--sans);
+  font-size: 10.5px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--ink-quiet);
+  white-space: nowrap;
+}
+
+.sort select {
+  appearance: none;
+  -webkit-appearance: none;
+  border: 1px solid var(--line);
+  background: var(--bg-elev);
+  color: var(--ink-bright);
+  font: inherit;
+  letter-spacing: 0.18em;
+  padding: 6px 26px 6px 10px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--ink-quiet) 50%),
+    linear-gradient(135deg, var(--ink-quiet) 50%, transparent 50%);
+  background-position:
+    calc(100% - 14px) calc(50% - 1.5px),
+    calc(100% - 10px) calc(50% - 1.5px);
+  background-size: 4px 4px, 4px 4px;
+  background-repeat: no-repeat;
+}
+
+/* ---------- main grid ---------- */
+main {
+  position: relative;
+  z-index: 2;
+  padding: 20px 16px 120px;
+  max-width: 1600px;
+  margin: 0 auto;
+}
+
+.grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+}
+
+/* ---------- agent card ---------- */
+.card {
+  position: relative;
+  background: linear-gradient(180deg, var(--bg-panel), var(--bg-elev));
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 0;
+  overflow: hidden;
+  cursor: pointer;
+  transition:
+    border-color var(--dur) var(--ease),
+    transform var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease);
+  display: flex;
+  flex-direction: column;
+}
+
+.card:hover {
+  border-color: var(--line-hot);
+  transform: translateY(-1px);
+}
+
+.card::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 2px;
+  background: var(--accent, var(--idle));
+  box-shadow: 0 0 10px var(--accent, transparent);
+  opacity: 0.9;
+}
+
+.card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse 120% 40% at 0% 0%, var(--accent-glow, transparent), transparent 60%);
+  opacity: 0.6;
+}
+
+.card[data-status="running"]  { --accent: var(--run);   --accent-glow: rgba(94,255,154,0.10); }
+.card[data-status="thinking"] { --accent: var(--think); --accent-glow: rgba(255,179,71,0.10); }
+.card[data-status="waiting"]  { --accent: var(--wait);  --accent-glow: rgba(255,85,102,0.12); }
+.card[data-status="idle"]     { --accent: var(--idle);  --accent-glow: transparent; opacity: 0.88; }
+.card[data-status="error"]    { --accent: var(--error); --accent-glow: rgba(255,51,85,0.14); }
+
+.card[data-status="waiting"] {
+  animation: urgent 3.8s var(--ease) infinite;
+}
+@keyframes urgent {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255,85,102,0); }
+  50% { box-shadow: 0 0 0 2px rgba(255,85,102,0.12), 0 8px 30px rgba(255,85,102,0.08); }
+}
+
+/* card: status bar */
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 14px 9px 18px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(0,0,0,0.22);
+  font-family: var(--sans);
+  font-size: 10.5px;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+.status-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--accent);
+}
+
+.status-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+}
+
+.card[data-status="running"] .status-dot  { animation: tick 1s steps(2) infinite; }
+.card[data-status="thinking"] .status-dot { animation: breathe 1.3s ease-in-out infinite; }
+.card[data-status="waiting"] .status-dot  { animation: alarm 0.9s ease-in-out infinite; }
+.card[data-status="idle"] .status-dot     { background: transparent; border: 1px solid var(--idle); box-shadow: none; }
+
+@keyframes tick { 50% { opacity: 0.35; } }
+@keyframes breathe {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50%      { transform: scale(1.45); opacity: 0.55; }
+}
+@keyframes alarm {
+  0%, 100% { box-shadow: 0 0 4px var(--wait); }
+  50%      { box-shadow: 0 0 14px var(--wait), 0 0 3px var(--wait); }
+}
+
+.elapsed {
+  display: inline-flex; align-items: center; gap: 6px;
+  color: var(--ink-quiet);
+  font-family: var(--mono);
+  font-weight: 400;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.05em;
+}
+
+.elapsed::before {
+  content: '◴';
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+
+/* card: identity */
+.card-id {
+  display: grid;
+  grid-template-columns: 40px 1fr auto;
+  gap: 14px;
+  align-items: center;
+  padding: 16px 18px 12px;
+}
+
+.agent-glyph {
+  width: 40px; height: 40px;
+  display: grid; place-items: center;
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 22px;
+  font-weight: 400;
+  color: var(--agent-c);
+  background:
+    radial-gradient(circle at 30% 30%, var(--agent-c-glow), transparent 70%),
+    linear-gradient(135deg, rgba(255,255,255,0.02), transparent);
+  border: 1px solid var(--line-bright);
+  border-radius: 50%;
+  text-shadow: 0 0 12px var(--agent-c-glow);
+  flex: none;
+}
+
+.agent-claude   { --agent-c: var(--claude);   --agent-c-glow: var(--claude-glow); }
+.agent-amp      { --agent-c: var(--amp);      --agent-c-glow: var(--amp-glow); }
+.agent-opencode { --agent-c: var(--opencode); --agent-c-glow: var(--opencode-glow); }
+
+.id-meta { min-width: 0; }
+
+.id-agent {
+  font-family: var(--sans);
+  font-size: 10px;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--agent-c, var(--ink-quiet));
+  font-weight: 500;
+  margin-bottom: 2px;
+}
+
+.id-session {
+  font-family: var(--mono);
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--ink-bright);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: -0.01em;
+}
+
+.id-window {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-dim);
+  margin-top: 2px;
+}
+
+.id-action {
+  font-family: var(--sans);
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  color: var(--ink-dim);
+  text-transform: uppercase;
+  border: 1px solid var(--line);
+  padding: 5px 8px;
+  border-radius: var(--radius);
+}
+
+/* card: activity */
+.activity {
+  padding: 2px 18px 14px;
+  font-size: 13px;
+  color: var(--ink-body);
+  line-height: 1.45;
+  min-height: 42px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.activity .verb {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.activity em {
+  font-family: var(--mono);
+  font-style: normal;
+  color: var(--ink-bright);
+  background: rgba(255,255,255,0.04);
+  padding: 1px 5px;
+  border-radius: 2px;
+  font-size: 12px;
+}
+
+/* card: trail (tool breadcrumbs) */
+.trail {
+  display: flex;
+  gap: 6px;
+  padding: 0 14px 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  font-family: var(--sans);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+.trail .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 7px 4px 6px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: rgba(255,255,255,0.015);
+  color: var(--ink-quiet);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  text-transform: none;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.trail .chip .g {
+  font-size: 9px;
+  color: var(--accent);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  font-family: var(--sans);
+  font-weight: 600;
+}
+.trail .chip.cur {
+  border-color: var(--accent);
+  color: var(--ink-bright);
+  background: rgba(255,255,255,0.035);
+  box-shadow: inset 0 0 0 1px var(--accent-glow, transparent);
+}
+.trail .chip.cur .g { color: var(--accent); }
+.trail .chip.done {
+  color: var(--ink-quiet);
+  opacity: 0.7;
+}
+.trail .chip.done .g { color: var(--ink-dim); }
+.trail .arr {
+  color: var(--ink-dim);
+  font-family: var(--mono);
+  font-size: 10px;
+  opacity: 0.5;
+}
+.trail .more {
+  color: var(--ink-dim);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  margin-left: auto;
+}
+
+/* card: preview */
+.preview {
+  margin: 0 14px 14px;
+  background: var(--bg-void);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--ink-body);
+  max-height: 168px;
+  overflow: hidden;
+  position: relative;
+  cursor: pointer;
+  transition: max-height 240ms var(--ease);
+}
+
+.preview:hover { border-color: var(--line-bright); }
+
+.preview.peek { max-height: 480px; }
+.preview.peek::after { display: none; }
+
+.preview::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 42px;
+  background: linear-gradient(to bottom, transparent, var(--bg-void));
+  pointer-events: none;
+}
+
+.preview .peek-hint {
+  position: absolute;
+  right: 8px; bottom: 6px;
+  z-index: 1;
+  font-family: var(--sans);
+  font-size: 9px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  background: var(--bg-void);
+  padding: 3px 6px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  opacity: 0.7;
+}
+.preview:hover .peek-hint { opacity: 1; color: var(--ink-quiet); }
+.preview.peek .peek-hint::before { content: '⇲ '; }
+.preview:not(.peek) .peek-hint::before { content: '⇱ '; }
+
+.preview .prompt { color: var(--ink-dim); }
+.preview .tool   { color: var(--opencode); }
+.preview .ok     { color: var(--run); }
+.preview .warn   { color: var(--think); }
+.preview .err    { color: var(--wait); }
+.preview .dim    { color: var(--ink-dim); }
+
+.cursor {
+  display: inline-block;
+  width: 7px; height: 14px;
+  vertical-align: -2px;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+  animation: blink-cur 1.05s steps(2) infinite;
+  margin-left: 2px;
+}
+@keyframes blink-cur { 50% { opacity: 0; } }
+
+/* card: footer (actions on waiting, stats on others) */
+.card-foot {
+  border-top: 1px solid var(--line);
+  padding: 10px 14px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  background: rgba(0,0,0,0.18);
+  font-family: var(--sans);
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--ink-quiet);
+}
+
+.foot-stats { display: flex; gap: 16px; flex: 1; }
+.foot-stats span { color: var(--ink-quiet); }
+.foot-stats em {
+  font-style: normal;
+  color: var(--ink-body);
+  font-family: var(--mono);
+  letter-spacing: 0.04em;
+  font-size: 11px;
+  margin-left: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.quick-actions { display: flex; gap: 6px; width: 100%; }
+.qa {
+  appearance: none;
+  border: 1px solid var(--line-bright);
+  background: var(--bg-panel-hi);
+  color: var(--ink-body);
+  font-family: var(--sans);
+  font-size: 11px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  font-weight: 600;
+  padding: 9px 10px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  flex: 1;
+  transition: all var(--dur) var(--ease);
+}
+.qa:hover {
+  background: var(--bg-panel);
+  color: var(--ink-phosphor);
+  border-color: var(--line-hot);
+}
+.qa.primary {
+  background: var(--wait-dim);
+  border-color: var(--wait);
+  color: var(--wait);
+  flex: 1.4;
+}
+.qa.primary:hover {
+  background: var(--wait);
+  color: var(--bg-void);
+  box-shadow: 0 0 18px rgba(255,85,102,0.35);
+}
+.qa.ghost { flex: 0 0 auto; }
+
+/* ---------- dormant (non-agent windows) ---------- */
+.dormant {
+  margin-top: 32px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, rgba(16,20,27,0.6), rgba(10,13,18,0.3));
+}
+
+.dormant-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  cursor: pointer;
+  user-select: none;
+  font-family: var(--sans);
+  font-size: 11px;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+  color: var(--ink-quiet);
+}
+
+.dormant-head .chev {
+  display: inline-block;
+  transition: transform var(--dur) var(--ease);
+  color: var(--ink-dim);
+}
+.dormant[open] .chev { transform: rotate(90deg); }
+
+.dormant-head .count {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-dim);
+  letter-spacing: 0.02em;
+}
+
+.dormant-head .hint {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--ink-dim);
+  letter-spacing: 0.2em;
+}
+
+.dormant-body {
+  display: none;
+  padding: 4px 10px 14px;
+  border-top: 1px solid var(--line);
+}
+.dormant[open] .dormant-body { display: block; }
+
+.dormant-row {
+  display: grid;
+  grid-template-columns: 28px 1fr auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-body);
+  transition: background var(--dur) var(--ease);
+  cursor: pointer;
+}
+.dormant-row:hover { background: rgba(255,255,255,0.02); }
+.dormant-row .name { color: var(--ink-bright); }
+.dormant-row .path { color: var(--ink-dim); font-size: 11px; }
+.dormant-row .time { color: var(--ink-dim); font-size: 11px; font-variant-numeric: tabular-nums; }
+.dormant-row .icon { color: var(--ink-dim); text-align: center; }
+
+/* ---------- expanded view ---------- */
+.curtain {
+  position: fixed;
+  inset: 0;
+  background: rgba(3,5,8,0.82);
+  backdrop-filter: blur(6px);
+  z-index: 50;
+  display: none;
+  opacity: 0;
+  transition: opacity var(--dur) var(--ease);
+}
+.curtain.open { display: block; opacity: 1; }
+
+.expanded {
+  position: fixed;
+  inset: 0;
+  z-index: 51;
+  display: none;
+  flex-direction: column;
+  background: var(--bg-deep);
+  transform: translateY(8px);
+  opacity: 0;
+  transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease);
+}
+.expanded.open { display: flex; transform: translateY(0); opacity: 1; }
+
+.expanded-nav {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(10,13,18,0.95);
+}
+@media (max-width: 640px) {
+  .expanded-nav {
+    grid-template-columns: auto 1fr;
+    grid-template-areas: "back status" "title title";
+    gap: 10px 14px;
+    padding: 10px 14px;
+  }
+  .expanded-nav .back    { grid-area: back; }
+  .expanded-nav .ex-title { grid-area: title; }
+  .expanded-nav .ex-status { grid-area: status; justify-self: end; }
+}
+
+.back {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink-bright);
+  font-family: var(--sans);
+  font-size: 10.5px;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.back:hover { border-color: var(--line-hot); }
+
+.ex-title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.ex-title .t1 {
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 20px;
+  color: var(--ink-phosphor);
+  line-height: 1.2;
+}
+.ex-title .t2 {
+  font-family: var(--sans);
+  font-size: 10.5px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--ink-quiet);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ex-title .t1 {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ex-status {
+  display: flex; align-items: center; gap: 10px;
+  font-family: var(--sans);
+  font-size: 10.5px;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+  color: var(--accent, var(--run));
+}
+
+.ex-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr;
+  padding: 16px;
+  gap: 14px;
+  overflow-y: auto;
+}
+@media (min-width: 960px) {
+  .ex-body { grid-template-columns: 1fr 320px; }
+}
+
+.terminal {
+  background: var(--bg-void);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--ink-body);
+  overflow: auto;
+  min-height: 320px;
+  position: relative;
+  white-space: pre;
+  tab-size: 2;
+}
+
+@media (max-width: 640px) {
+  .terminal { white-space: pre-wrap; word-break: break-word; }
+}
+
+.terminal .prompt { color: var(--ink-dim); }
+.terminal .tool   { color: var(--opencode); }
+.terminal .ok     { color: var(--run); }
+.terminal .warn   { color: var(--think); }
+.terminal .err    { color: var(--wait); }
+.terminal .h      { color: var(--ink-bright); }
+
+.side {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.panel {
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.panel-head {
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--line);
+  font-family: var(--sans);
+  font-size: 10.5px;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+  color: var(--ink-quiet);
+}
+.panel-body { padding: 12px 14px; }
+
+.choice-btn {
+  display: block;
+  width: 100%;
+  appearance: none;
+  border: 1px solid var(--line-bright);
+  background: var(--bg-panel);
+  color: var(--ink-bright);
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  text-align: left;
+  margin-bottom: 8px;
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 13px;
+  transition: all var(--dur) var(--ease);
+}
+.choice-btn:hover {
+  border-color: var(--accent);
+  color: var(--ink-phosphor);
+}
+.choice-btn .k {
+  display: inline-block;
+  width: 22px; height: 22px;
+  text-align: center;
+  line-height: 22px;
+  background: var(--accent);
+  color: var(--bg-void);
+  border-radius: 2px;
+  margin-right: 10px;
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.keypad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+.key {
+  appearance: none;
+  border: 1px solid var(--line-bright);
+  background: var(--bg-panel);
+  color: var(--ink-body);
+  padding: 11px 6px;
+  border-radius: var(--radius);
+  font-family: var(--sans);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+}
+.key:hover { background: var(--bg-panel-hi); color: var(--ink-phosphor); border-color: var(--line-hot); }
+.key.wide { grid-column: span 3; }
+.key.half { grid-column: span 1; }
+
+.input-row {
+  display: flex; gap: 8px;
+  padding: 12px;
+  border-top: 1px solid var(--line);
+  background: var(--bg-elev);
+}
+.input-row input {
+  flex: 1;
+  appearance: none;
+  border: 1px solid var(--line-bright);
+  background: var(--bg-void);
+  color: var(--ink-phosphor);
+  font-family: var(--mono);
+  font-size: 13px;
+  padding: 11px 12px;
+  border-radius: var(--radius);
+}
+.input-row input:focus {
+  outline: none;
+  border-color: var(--run);
+  box-shadow: 0 0 0 1px var(--run-dim);
+}
+.input-row .mic {
+  width: 44px;
+  border: 1px solid var(--line-bright);
+  background: var(--bg-panel);
+  color: var(--ink-body);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.input-row .send {
+  padding: 0 16px;
+  background: var(--run-dim);
+  color: var(--run);
+  border: 1px solid var(--run);
+  border-radius: var(--radius);
+  font-family: var(--sans);
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  font-size: 11px;
+  cursor: pointer;
+  font-weight: 600;
+}
+.input-row .send:hover {
+  background: var(--run);
+  color: var(--bg-void);
+}
+
+/* ---------- mobile tuning ---------- */
+@media (max-width: 640px) {
+  .brand .tag { display: none; }
+  .brand .name { font-size: 17px; }
+  .telemetry { gap: 18px; }
+  .metric .v { font-size: 14px; }
+  .clock { display: none; }
+  .nav { padding: 12px 14px; gap: 10px; }
+
+  .grid { grid-template-columns: 1fr; gap: 10px; }
+  main { padding: 14px 10px 120px; }
+
+  .ex-body { padding: 10px; gap: 10px; }
+  .terminal { padding: 12px 14px; font-size: 12px; min-height: 260px; }
+}
+
+/* ---------- entrance ---------- */
+.card {
+  animation: rise 540ms var(--ease) both;
+}
+.card:nth-child(1) { animation-delay: 20ms; }
+.card:nth-child(2) { animation-delay: 70ms; }
+.card:nth-child(3) { animation-delay: 120ms; }
+.card:nth-child(4) { animation-delay: 170ms; }
+.card:nth-child(5) { animation-delay: 220ms; }
+.card:nth-child(6) { animation-delay: 270ms; }
+.card:nth-child(7) { animation-delay: 320ms; }
+.card:nth-child(8) { animation-delay: 370ms; }
+.card:nth-child(9) { animation-delay: 420ms; }
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.nav, .controls { animation: slide-down 400ms var(--ease) both; }
+@keyframes slide-down {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+</style>
+</head>
+<body>
+
+<!-- ========== TOP NAV ========== -->
+<header class="nav">
+  <div class="brand">
+    <span class="mark"></span>
+    <span class="name">Houston</span>
+    <span class="slash">/</span>
+    <span class="tag">Mission Control · v2</span>
+  </div>
+
+  <div class="telemetry">
+    <div class="metric">
+      <span class="k">Running</span>
+      <span class="v run" id="m-run">3</span>
+    </div>
+    <div class="metric">
+      <span class="k">Awaiting</span>
+      <span class="v wait" id="m-wait">2</span>
+    </div>
+    <div class="metric">
+      <span class="k">Idle</span>
+      <span class="v idle" id="m-idle">4</span>
+    </div>
+    <div class="clock" id="clock">—</div>
+  </div>
+</header>
+
+<!-- ========== FILTER STRIP ========== -->
+<nav class="controls" aria-label="filter">
+  <button class="tab active" data-filter="all">All <span class="count">9</span></button>
+  <button class="tab" data-filter="running">Running <span class="count">3</span></button>
+  <button class="tab needs" data-filter="waiting">Needs You <span class="count">2</span></button>
+  <button class="tab" data-filter="thinking">Thinking <span class="count">1</span></button>
+  <button class="tab" data-filter="idle">Idle <span class="count">3</span></button>
+  <div class="spacer"></div>
+  <div class="sort">
+    <span>Sort</span>
+    <select>
+      <option>Last active</option>
+      <option>Priority</option>
+      <option>Session</option>
+      <option>Agent</option>
+    </select>
+  </div>
+</nav>
+
+<main>
+  <!-- ========== AGENT GRID ========== -->
+  <div class="grid" id="grid">
+
+    <!-- WAITING · claude-code · factify-api -->
+    <article class="card" data-status="waiting" data-agent="claude" onclick="openExpanded(this)">
+      <div class="card-head">
+        <span class="status-label"><span class="status-dot"></span>Awaiting Input</span>
+        <span class="elapsed">02:31</span>
+      </div>
+      <div class="card-id">
+        <div class="agent-glyph agent-claude">C</div>
+        <div class="id-meta">
+          <div class="id-agent">claude-code</div>
+          <div class="id-session">factify-api</div>
+          <div class="id-window">window :2 · feat/billing-migrate</div>
+        </div>
+      </div>
+      <div class="activity">
+        <span class="verb">Proposed</span> database migration <em>2026-04-18_add_tier.sql</em> — needs your confirmation before running.
+      </div>
+      <div class="trail">
+        <span class="chip done"><span class="g">read</span>subscriptions.sql</span>
+        <span class="arr">›</span>
+        <span class="chip done"><span class="g">write</span>2026-04-18_add_tier.sql</span>
+        <span class="arr">›</span>
+        <span class="chip cur"><span class="g">bash</span>psql -f …</span>
+        <span class="more">+2 earlier</span>
+      </div>
+      <div class="preview" onclick="peekPreview(event, this)">
+        <span class="peek-hint">Peek</span>
+        <span class="prompt">●</span> <span class="tool">Bash</span> psql -f migrations/2026-04-18_add_tier.sql<br>
+        <span class="warn">⚠ The following migration will alter 2 tables · drop 1 column</span><br>
+        <span class="warn">  This is a destructive operation on 1.2M rows.</span><br>
+        <span class="dim">  Affected rows: ~1,203,418</span><br>
+        <span class="dim">  Requires: table lock for ~8s</span><br>
+        <br>
+        <span class="h">? Apply this migration? (Y/n)</span><span class="cursor"></span>
+      </div>
+      <div class="card-foot quick-actions">
+        <button class="qa primary">Approve · Y</button>
+        <button class="qa">Deny · N</button>
+        <button class="qa ghost">⋯</button>
+      </div>
+    </article>
+
+    <!-- RUNNING · claude-code · houston-ui -->
+    <article class="card" data-status="running" data-agent="claude" onclick="openExpanded(this)">
+      <div class="card-head">
+        <span class="status-label"><span class="status-dot"></span>Tool Running</span>
+        <span class="elapsed">00:14</span>
+      </div>
+      <div class="card-id">
+        <div class="agent-glyph agent-claude">C</div>
+        <div class="id-meta">
+          <div class="id-agent">claude-code</div>
+          <div class="id-session">houston</div>
+          <div class="id-window">window :0 · main</div>
+        </div>
+      </div>
+      <div class="activity">
+        <span class="verb">Editing</span> <em>TerminalPane.tsx</em> — replacing touch-zoom handler with focal-point tracking.
+      </div>
+      <div class="trail">
+        <span class="chip done"><span class="g">grep</span>handleTouch</span>
+        <span class="arr">›</span>
+        <span class="chip done"><span class="g">read</span>TerminalPane.tsx</span>
+        <span class="arr">›</span>
+        <span class="chip cur"><span class="g">edit</span>TerminalPane.tsx</span>
+        <span class="more">turn 14</span>
+      </div>
+      <div class="preview" onclick="peekPreview(event, this)">
+        <span class="peek-hint">Peek</span>
+        <span class="prompt">●</span> <span class="tool">Edit</span> ui/src/components/TerminalPane.tsx<br>
+        <span class="dim">  old_string = "handleTouchStart(e: TouchEvent) {"</span><br>
+        <span class="dim">  new_string = "handlePinch(e: TouchEvent, focal: Point) {"</span><br>
+        <span class="ok">✓</span> <span class="dim">4 lines replaced · applying next hunk</span><br>
+        <span class="prompt">●</span> <span class="tool">Edit</span> ui/src/components/TerminalPane.tsx<br>
+        <span class="dim">  old_string = "this.scale = clamp(scale,"</span><br>
+        <span class="dim">  new_string = "this.scale = clampAround(fo"</span><span class="cursor"></span>
+      </div>
+      <div class="card-foot">
+        <div class="foot-stats">
+          <span>Turns <em>14</em></span>
+          <span>Tokens <em>24.3k</em></span>
+          <span>Cost <em>$0.19</em></span>
+        </div>
+      </div>
+    </article>
+
+    <!-- THINKING · claude-code · nix-config -->
+    <article class="card" data-status="thinking" data-agent="claude" onclick="openExpanded(this)">
+      <div class="card-head">
+        <span class="status-label"><span class="status-dot"></span>Thinking</span>
+        <span class="elapsed">00:03</span>
+      </div>
+      <div class="card-id">
+        <div class="agent-glyph agent-claude">C</div>
+        <div class="id-meta">
+          <div class="id-agent">claude-code</div>
+          <div class="id-session">nix-config</div>
+          <div class="id-window">window :1 · feat/keybindings</div>
+        </div>
+      </div>
+      <div class="activity">
+        <span class="verb">Planning</span> refactor of keybinding merge strategy across three home-manager modules.
+      </div>
+      <div class="trail">
+        <span class="chip done"><span class="g">read</span>flake.nix</span>
+        <span class="arr">›</span>
+        <span class="chip done"><span class="g">glob</span>home/**/keybindings.nix</span>
+        <span class="arr">›</span>
+        <span class="chip cur"><span class="g">think</span>merge strategy</span>
+      </div>
+      <div class="preview" onclick="peekPreview(event, this)">
+        <span class="peek-hint">Peek</span>
+        <span class="warn">◆ Thinking…</span><br>
+        <span class="dim">Three modules define keybindings:</span><br>
+        <span class="dim">  · home/ai/claude-code/keybindings.nix</span><br>
+        <span class="dim">  · home/term/tmux/keybindings.nix</span><br>
+        <span class="dim">  · home/shell/fish/keybindings.nix</span><br>
+        <span class="dim">The simplest path is to extract a</span><br>
+        <span class="dim">shared type and have each consumer</span><span class="cursor"></span>
+      </div>
+      <div class="card-foot">
+        <div class="foot-stats">
+          <span>Turns <em>7</em></span>
+          <span>Tokens <em>11.1k</em></span>
+          <span>Cost <em>$0.08</em></span>
+        </div>
+      </div>
+    </article>
+
+    <!-- WAITING · amp · factify-web -->
+    <article class="card" data-status="waiting" data-agent="amp" onclick="openExpanded(this)">
+      <div class="card-head">
+        <span class="status-label"><span class="status-dot"></span>Choose Path</span>
+        <span class="elapsed">00:47</span>
+      </div>
+      <div class="card-id">
+        <div class="agent-glyph agent-amp">A</div>
+        <div class="id-meta">
+          <div class="id-agent">amp</div>
+          <div class="id-session">factify-web</div>
+          <div class="id-window">window :0 · chore/eslint-bump</div>
+        </div>
+      </div>
+      <div class="activity">
+        <span class="verb">Two approaches</span> detected — pick one to continue with the ESLint config update.
+      </div>
+      <div class="trail">
+        <span class="chip done"><span class="g">read</span>.eslintrc.json</span>
+        <span class="arr">›</span>
+        <span class="chip done"><span class="g">read</span>package.json</span>
+        <span class="arr">›</span>
+        <span class="chip cur"><span class="g">ask</span>choose approach</span>
+      </div>
+      <div class="preview" onclick="peekPreview(event, this)">
+        <span class="peek-hint">Peek</span>
+        <span class="dim">Two ways forward:</span><br>
+        <br>
+        <span class="h">1)</span> <span class="dim">Keep legacy .eslintrc + add overrides</span><br>
+        <span class="dim">     Minimal churn · 3 files touched</span><br>
+        <br>
+        <span class="h">2)</span> <span class="dim">Migrate fully to flat config</span><br>
+        <span class="dim">     Recommended · 7 files touched</span><br>
+        <br>
+        <span class="h">?</span> <span class="dim">Choose 1 or 2:</span><span class="cursor"></span>
+      </div>
+      <div class="card-foot quick-actions">
+        <button class="qa primary">1</button>
+        <button class="qa primary">2</button>
+        <button class="qa ghost">⋯</button>
+      </div>
+    </article>
+
+    <!-- RUNNING · opencode · data-pipe -->
+    <article class="card" data-status="running" data-agent="opencode" onclick="openExpanded(this)">
+      <div class="card-head">
+        <span class="status-label"><span class="status-dot"></span>Streaming</span>
+        <span class="elapsed">00:08</span>
+      </div>
+      <div class="card-id">
+        <div class="agent-glyph agent-opencode">O</div>
+        <div class="id-meta">
+          <div class="id-agent">opencode</div>
+          <div class="id-session">data-pipe</div>
+          <div class="id-window">port :4096 · main</div>
+        </div>
+      </div>
+      <div class="activity">
+        <span class="verb">Generating</span> BigQuery scheduled-query for daily cohort retention, partitioned by signup_date.
+      </div>
+      <div class="trail">
+        <span class="chip done"><span class="g">read</span>schema.sql</span>
+        <span class="arr">›</span>
+        <span class="chip cur"><span class="g">stream</span>cohort_retention.sql</span>
+        <span class="more">streaming</span>
+      </div>
+      <div class="preview" onclick="peekPreview(event, this)">
+        <span class="peek-hint">Peek</span>
+        <span class="tool">-- cohort_retention.sql</span><br>
+        <span class="dim">WITH cohorts AS (</span><br>
+        <span class="dim">  SELECT</span><br>
+        <span class="dim">    DATE_TRUNC(signup_at, WEEK) AS cohort_week,</span><br>
+        <span class="dim">    user_id</span><br>
+        <span class="dim">  FROM `analytics.users`</span><br>
+        <span class="dim">), activity AS (</span><br>
+        <span class="dim">  SELECT user_id, DATE(event_at) d</span><span class="cursor"></span>
+      </div>
+      <div class="card-foot">
+        <div class="foot-stats">
+          <span>Turns <em>3</em></span>
+          <span>Tokens <em>6.8k</em></span>
+          <span>Cost <em>$0.03</em></span>
+        </div>
+      </div>
+    </article>
+
+    <!-- RUNNING · claude-code · tests -->
+    <article class="card" data-status="running" data-agent="claude" onclick="openExpanded(this)">
+      <div class="card-head">
+        <span class="status-label"><span class="status-dot"></span>Tool Running</span>
+        <span class="elapsed">00:22</span>
+      </div>
+      <div class="card-id">
+        <div class="agent-glyph agent-claude">C</div>
+        <div class="id-meta">
+          <div class="id-agent">claude-code</div>
+          <div class="id-session">houston</div>
+          <div class="id-window">window :3 · tests</div>
+        </div>
+      </div>
+      <div class="activity">
+        <span class="verb">Running</span> Go tests <em>./tmux/…</em> — 14/22 passing so far.
+      </div>
+      <div class="trail">
+        <span class="chip done"><span class="g">edit</span>tmux/client.go</span>
+        <span class="arr">›</span>
+        <span class="chip done"><span class="g">edit</span>tmux/client_test.go</span>
+        <span class="arr">›</span>
+        <span class="chip cur"><span class="g">bash</span>go test ./…</span>
+        <span class="more">14/22</span>
+      </div>
+      <div class="preview" onclick="peekPreview(event, this)">
+        <span class="peek-hint">Peek</span>
+        <span class="prompt">$</span> go test ./tmux/... -v<br>
+        <span class="ok">=== RUN</span>   <span class="h">TestListSessions</span><br>
+        <span class="ok">--- PASS: TestListSessions (0.18s)</span><br>
+        <span class="ok">=== RUN</span>   <span class="h">TestCapturePane</span><br>
+        <span class="ok">--- PASS: TestCapturePane (0.05s)</span><br>
+        <span class="ok">=== RUN</span>   <span class="h">TestSendKeys</span><br>
+        <span class="warn">--- SKIP: TestSendKeys (requires tmux)</span><br>
+        <span class="ok">=== RUN</span>   <span class="h">TestListWindows</span><span class="cursor"></span>
+      </div>
+      <div class="card-foot">
+        <div class="foot-stats">
+          <span>Turns <em>22</em></span>
+          <span>Tokens <em>38.1k</em></span>
+          <span>Cost <em>$0.31</em></span>
+        </div>
+      </div>
+    </article>
+
+    <!-- IDLE · claude-code · scratch -->
+    <article class="card" data-status="idle" data-agent="claude" onclick="openExpanded(this)">
+      <div class="card-head">
+        <span class="status-label"><span class="status-dot"></span>Idle</span>
+        <span class="elapsed">12:04</span>
+      </div>
+      <div class="card-id">
+        <div class="agent-glyph agent-claude">C</div>
+        <div class="id-meta">
+          <div class="id-agent">claude-code</div>
+          <div class="id-session">scratch</div>
+          <div class="id-window">window :0 · main</div>
+        </div>
+      </div>
+      <div class="activity">
+        Last task <em>completed 12 min ago</em> — awaiting your next instruction.
+      </div>
+      <div class="card-foot">
+        <div class="foot-stats">
+          <span>Turns <em>48</em></span>
+          <span>Last <em>12m</em></span>
+          <span>Cost <em>$1.24</em></span>
+        </div>
+      </div>
+    </article>
+
+    <!-- IDLE · amp · infra -->
+    <article class="card" data-status="idle" data-agent="amp" onclick="openExpanded(this)">
+      <div class="card-head">
+        <span class="status-label"><span class="status-dot"></span>Idle</span>
+        <span class="elapsed">41:08</span>
+      </div>
+      <div class="card-id">
+        <div class="agent-glyph agent-amp">A</div>
+        <div class="id-meta">
+          <div class="id-agent">amp</div>
+          <div class="id-session">infra</div>
+          <div class="id-window">window :1 · main</div>
+        </div>
+      </div>
+      <div class="activity">
+        Paused after running <em>terraform plan</em> — 3 additions, 0 destructions waiting for review.
+      </div>
+      <div class="card-foot">
+        <div class="foot-stats">
+          <span>Turns <em>6</em></span>
+          <span>Last <em>41m</em></span>
+          <span>Cost <em>$0.14</em></span>
+        </div>
+      </div>
+    </article>
+
+    <!-- ERROR · opencode · ingest -->
+    <article class="card" data-status="error" data-agent="opencode" onclick="openExpanded(this)">
+      <div class="card-head">
+        <span class="status-label"><span class="status-dot"></span>Error</span>
+        <span class="elapsed">01:16</span>
+      </div>
+      <div class="card-id">
+        <div class="agent-glyph agent-opencode">O</div>
+        <div class="id-meta">
+          <div class="id-agent">opencode</div>
+          <div class="id-session">ingest</div>
+          <div class="id-window">port :4097 · main</div>
+        </div>
+      </div>
+      <div class="activity">
+        <span class="verb">Connection lost</span> to OpenCode server — WebSocket closed unexpectedly (code 1006).
+      </div>
+      <div class="trail">
+        <span class="chip done"><span class="g">ws</span>events subscribed</span>
+        <span class="arr">›</span>
+        <span class="chip cur" style="--accent: var(--error);"><span class="g">err</span>socket 1006</span>
+        <span class="more">3 retries</span>
+      </div>
+      <div class="preview" onclick="peekPreview(event, this)">
+        <span class="peek-hint">Peek</span>
+        <span class="err">✗ ws://127.0.0.1:4097/events</span><br>
+        <span class="dim">  closed 1006 · abnormal closure</span><br>
+        <span class="dim">  last heartbeat 14s ago</span><br>
+        <span class="dim">  · attempt 1 failed (1s)</span><br>
+        <span class="dim">  · attempt 2 failed (2s)</span><br>
+        <span class="dim">  · attempt 3 failed (4s)</span><br>
+        <span class="dim">  retry in 8s…</span><span class="cursor"></span>
+      </div>
+      <div class="card-foot quick-actions">
+        <button class="qa primary" style="--wait-dim:#3a2811;--wait:var(--error)">Reconnect</button>
+        <button class="qa">View Log</button>
+      </div>
+    </article>
+  </div>
+
+  <!-- ========== DORMANT / NON-AGENT ========== -->
+  <section class="dormant" id="dormant">
+    <header class="dormant-head" onclick="toggleDormant()">
+      <span class="chev">›</span>
+      <span>Other Windows</span>
+      <span class="count">7</span>
+      <span class="hint">tmux · no agent detected</span>
+    </header>
+    <div class="dormant-body">
+      <div class="dormant-row">
+        <span class="icon">$</span>
+        <div><div class="name">houston</div><div class="path">window :1 · server</div></div>
+        <span>fish</span>
+        <span class="time">1m ago</span>
+      </div>
+      <div class="dormant-row">
+        <span class="icon">$</span>
+        <div><div class="name">houston</div><div class="path">window :2 · vite</div></div>
+        <span>npm run dev</span>
+        <span class="time">4m ago</span>
+      </div>
+      <div class="dormant-row">
+        <span class="icon">$</span>
+        <div><div class="name">nix-config</div><div class="path">window :0 · shell</div></div>
+        <span>fish</span>
+        <span class="time">22m ago</span>
+      </div>
+      <div class="dormant-row">
+        <span class="icon">$</span>
+        <div><div class="name">factify-api</div><div class="path">window :1 · logs</div></div>
+        <span>docker logs -f</span>
+        <span class="time">2m ago</span>
+      </div>
+      <div class="dormant-row">
+        <span class="icon">$</span>
+        <div><div class="name">factify-api</div><div class="path">window :3 · db</div></div>
+        <span>psql</span>
+        <span class="time">58m ago</span>
+      </div>
+      <div class="dormant-row">
+        <span class="icon">$</span>
+        <div><div class="name">notes</div><div class="path">window :0 · main</div></div>
+        <span>nvim</span>
+        <span class="time">2h ago</span>
+      </div>
+      <div class="dormant-row">
+        <span class="icon">$</span>
+        <div><div class="name">scratch</div><div class="path">window :1 · repl</div></div>
+        <span>node</span>
+        <span class="time">3h ago</span>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- ========== EXPANDED VIEW ========== -->
+<div class="curtain" id="curtain" onclick="closeExpanded()"></div>
+<section class="expanded" id="expanded" aria-modal="true">
+  <header class="expanded-nav">
+    <button class="back" onclick="closeExpanded()">← Back</button>
+    <div class="ex-title">
+      <div class="t1" id="ex-t1">factify-api</div>
+      <div class="t2" id="ex-t2">claude-code · window :2 · feat/billing-migrate</div>
+    </div>
+    <div class="ex-status" id="ex-status">
+      <span class="status-dot" style="background: var(--wait); box-shadow: 0 0 8px var(--wait);"></span>
+      Awaiting · 02:31
+    </div>
+  </header>
+
+  <div class="ex-body">
+    <div class="terminal" id="terminal">
+<span class="prompt">●</span> <span class="tool">Bash</span> psql -c "\d+ subscriptions"
+<span class="dim">                                 Table "public.subscriptions"</span>
+<span class="dim">     Column      │   Type    │ Nullable │        Default         │</span>
+<span class="dim">  ─────────────┼───────────┼──────────┼────────────────────────┤</span>
+<span class="dim">   id          │ uuid      │ not null │ gen_random_uuid()      │</span>
+<span class="dim">   user_id     │ uuid      │ not null │                        │</span>
+<span class="dim">   plan        │ text      │ not null │                        │</span>
+<span class="dim">   created_at  │ timestamp │ not null │ now()                  │</span>
+
+<span class="prompt">●</span> <span class="tool">Write</span> migrations/2026-04-18_add_tier.sql
+<span class="dim">  ALTER TABLE subscriptions</span>
+<span class="dim">    ADD COLUMN tier text NOT NULL DEFAULT 'standard';</span>
+
+<span class="prompt">●</span> <span class="tool">Bash</span> psql -f migrations/2026-04-18_add_tier.sql
+<span class="warn">⚠ The following migration will alter 2 tables · drop 1 column</span>
+<span class="warn">  This is a destructive operation on 1.2M rows.</span>
+
+<span class="h">? Apply this migration? (Y/n)</span><span class="cursor"></span>
+    </div>
+
+    <aside class="side">
+      <div class="panel">
+        <div class="panel-head">Respond</div>
+        <div class="panel-body">
+          <button class="choice-btn" style="--accent: var(--run);">
+            <span class="k" style="background: var(--run);">Y</span>Apply migration
+          </button>
+          <button class="choice-btn" style="--accent: var(--wait);">
+            <span class="k" style="background: var(--wait);">N</span>Cancel · review again
+          </button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">Controls</div>
+        <div class="panel-body">
+          <div class="keypad">
+            <button class="key wide">↵ Enter</button>
+            <button class="key">Esc</button>
+            <button class="key">Tab</button>
+            <button class="key">⇧ Tab</button>
+            <button class="key">↑</button>
+            <button class="key">↓</button>
+            <button class="key">Ctrl + C</button>
+            <button class="key">Alt + P</button>
+            <button class="key">Ctrl + O</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">Telemetry</div>
+        <div class="panel-body" style="font-family: var(--mono); font-size: 12px; line-height: 1.9; color: var(--ink-body);">
+          <div><span style="color: var(--ink-dim)">turns</span> &nbsp; 14</div>
+          <div><span style="color: var(--ink-dim)">input</span> &nbsp; 18,412</div>
+          <div><span style="color: var(--ink-dim)">output</span> &nbsp; 5,903</div>
+          <div><span style="color: var(--ink-dim)">cost</span> &nbsp; $0.19</div>
+          <div><span style="color: var(--ink-dim)">model</span> &nbsp; claude-opus-4-7</div>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <div class="input-row">
+    <button class="mic" title="Voice input">◉</button>
+    <input placeholder="Type a message or a custom response…" />
+    <button class="send">Send ▸</button>
+  </div>
+</section>
+
+<script>
+/* ---------- live clock ---------- */
+(function tick() {
+  const el = document.getElementById('clock');
+  function render() {
+    const d = new Date();
+    const hh = String(d.getUTCHours()).padStart(2, '0');
+    const mm = String(d.getUTCMinutes()).padStart(2, '0');
+    const ss = String(d.getUTCSeconds()).padStart(2, '0');
+    el.textContent = `${hh}:${mm}:${ss} UTC`;
+  }
+  render();
+  setInterval(render, 1000);
+})();
+
+/* ---------- filter tabs ---------- */
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    const f = tab.dataset.filter;
+    document.querySelectorAll('.card').forEach(card => {
+      if (f === 'all') { card.style.display = ''; return; }
+      card.style.display = (card.dataset.status === f) ? '' : 'none';
+    });
+  });
+});
+
+/* ---------- dormant section ---------- */
+function toggleDormant() {
+  document.getElementById('dormant').toggleAttribute('open');
+}
+
+/* ---------- peek preview (click preview to expand inline) ---------- */
+function peekPreview(e, el) {
+  e.stopPropagation();
+  el.classList.toggle('peek');
+  const hint = el.querySelector('.peek-hint');
+  if (hint) hint.textContent = el.classList.contains('peek') ? 'Collapse' : 'Peek';
+}
+
+/* ---------- expanded view ---------- */
+function openExpanded(card) {
+  const curtain = document.getElementById('curtain');
+  const ex = document.getElementById('expanded');
+  const t1 = card.querySelector('.id-session').textContent;
+  const agent = card.querySelector('.id-agent').textContent;
+  const win = card.querySelector('.id-window').textContent;
+  const statusLabel = card.querySelector('.status-label').textContent.trim();
+  const elapsed = card.querySelector('.elapsed').textContent.trim();
+  const status = card.dataset.status;
+
+  document.getElementById('ex-t1').textContent = t1;
+  document.getElementById('ex-t2').textContent = `${agent} · ${win}`;
+
+  const statusEl = document.getElementById('ex-status');
+  const colors = {
+    running: 'var(--run)', thinking: 'var(--think)', waiting: 'var(--wait)',
+    idle: 'var(--idle)', error: 'var(--error)'
+  };
+  const color = colors[status] || 'var(--run)';
+  statusEl.innerHTML = `<span class="status-dot" style="background:${color};box-shadow:0 0 8px ${color};"></span>${statusLabel} · ${elapsed}`;
+
+  curtain.classList.add('open');
+  ex.classList.add('open');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeExpanded() {
+  document.getElementById('curtain').classList.remove('open');
+  document.getElementById('expanded').classList.remove('open');
+  document.body.style.overflow = '';
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeExpanded();
+});
+
+/* ---------- elapsed tickers ---------- */
+(function tickElapsed() {
+  document.querySelectorAll('.card .elapsed').forEach(el => {
+    const [mm, ss] = el.textContent.trim().split(':').map(Number);
+    if (isNaN(mm) || isNaN(ss)) return;
+    let secs = mm * 60 + ss;
+    setInterval(() => {
+      secs += 1;
+      const m = String(Math.floor(secs / 60)).padStart(2, '0');
+      const s = String(secs % 60).padStart(2, '0');
+      el.textContent = `${m}:${s}`;
+    }, 1000);
+  });
+})();
+
+/* ---------- simulated live activity on running cards ---------- */
+(function liveActivity() {
+  const runningPreviews = document.querySelectorAll('.card[data-status="running"] .preview, .card[data-status="thinking"] .preview');
+  const updates = [
+    ' reading 12 files…', ' analyzing imports…', ' running tests…',
+    ' diff applied…', ' checking types…', ' formatting…'
+  ];
+  let i = 0;
+  setInterval(() => {
+    runningPreviews.forEach((p, idx) => {
+      const cursor = p.querySelector('.cursor');
+      if (!cursor) return;
+    });
+    i++;
+  }, 2400);
+})();
+</script>
+</body>
+</html>

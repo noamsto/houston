@@ -12,6 +12,7 @@ run: build
 dev:
     #!/usr/bin/env bash
     test -d ui/node_modules || npm install --prefix ui
+    test -d ui/dist || npm run build --prefix ui
     for port in 7474 7475 7476 7477 7478 7479; do
         if ! nc -z localhost $port 2>/dev/null; then
             export HOUSTON_PORT=$port
@@ -26,6 +27,7 @@ dev:
 run-dev:
     #!/usr/bin/env bash
     test -d ui/node_modules || npm install --prefix ui
+    test -d ui/dist || npm run build --prefix ui
     for port in 7474 7475 7476 7477 7478 7479; do
         if ! nc -z localhost $port 2>/dev/null; then
             echo "Starting houston on port $port"
@@ -39,6 +41,7 @@ run-dev:
 dev-local:
     #!/usr/bin/env bash
     test -d ui/node_modules || npm install --prefix ui
+    test -d ui/dist || npm run build --prefix ui
     for port in 7474 7475 7476 7477 7478 7479; do
         if ! nc -z localhost $port 2>/dev/null; then
             export HOUSTON_PORT=$port
