@@ -1,7 +1,6 @@
 import { useEffect, useState, useCallback, memo } from 'react'
 import type { AgentState, SessionView } from '../../api/types'
 
-/** Display copy for the status bar. */
 const stateLabel: Record<AgentState, string> = {
   'starting':          'Starting',
   'thinking':          'Thinking',
@@ -12,10 +11,12 @@ const stateLabel: Record<AgentState, string> = {
   'ended':             'Ended',
 }
 
-/** Agent icon + coloring keyed off cwd basename or tmux_session. Claude-only for now. */
-function agentInitial(v: SessionView): string {
-  const session = v.tmux_session || v.cwd?.split('/').pop() || v.session_id.slice(0, 4)
-  return session.slice(0, 1).toUpperCase()
+function displayName(v: SessionView): string {
+  return v.tmux_session || v.cwd?.split('/').pop() || v.session_id.slice(0, 4)
+}
+
+function isWaiting(state: AgentState): boolean {
+  return state === 'waiting' || state === 'waiting:permission'
 }
 
 interface Props {
@@ -33,7 +34,7 @@ export const AgentCard = memo(function AgentCard({ view, onOpen }: Props) {
   }, [])
 
   const activity = buildActivity(view)
-  const sessionName = view.tmux_session || view.cwd?.split('/').pop() || 'claude'
+  const name = displayName(view)
   const windowName = view.tmux_window ? `window :${view.tmux_window}` : ''
 
   return (
@@ -51,10 +52,10 @@ export const AgentCard = memo(function AgentCard({ view, onOpen }: Props) {
       </div>
 
       <div className="card-id">
-        <div className="agent-glyph">{agentInitial(view)}</div>
+        <div className="agent-glyph">{name.slice(0, 1).toUpperCase()}</div>
         <div className="id-meta">
           <div className="id-agent">claude-code</div>
-          <div className="id-session" title={view.session_id}>{sessionName}</div>
+          <div className="id-session" title={view.session_id}>{name}</div>
           {windowName && <div className="id-window">{windowName}</div>}
         </div>
       </div>
@@ -84,7 +85,7 @@ export const AgentCard = memo(function AgentCard({ view, onOpen }: Props) {
       )}
 
       <div className="card-foot">
-        {view.state === 'waiting:permission' || view.state === 'waiting' ? (
+        {isWaiting(view.state) ? (
           <div className="quick-actions">
             <button className="qa primary" onClick={(e) => { e.stopPropagation(); /* TODO: wire Y */ }}>
               Approve · Y

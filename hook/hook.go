@@ -34,8 +34,7 @@ var MustHaveEvents = []string{
 	EventPostToolUse,
 }
 
-// Event is the payload Claude Code sends on stdin. Fields not relevant to a
-// given hook are simply empty.
+// Event is the payload Claude Code sends on stdin.
 type Event struct {
 	HookEventName    string          `json:"hook_event_name"`
 	SessionID        string          `json:"session_id"`
@@ -53,11 +52,8 @@ type Event struct {
 	StopHookActive   bool            `json:"stop_hook_active,omitempty"`
 }
 
-// Dispatch reads one event from stdin, merges it into the session's state
-// file under stateDir, and writes the result atomically.
-//
-// event is the CLI arg ("PreToolUse", "Stop", …) and is trusted over the
-// payload's HookEventName in case the binary is invoked via a wrapper.
+// Dispatch merges one event into the session's state file under stateDir.
+// event (CLI arg) is trusted over the payload's HookEventName so wrappers work.
 func Dispatch(event string, stateDir string, stdin io.Reader) error {
 	var ev Event
 	if err := json.NewDecoder(stdin).Decode(&ev); err != nil && !errors.Is(err, io.EOF) {
@@ -67,8 +63,6 @@ func Dispatch(event string, stateDir string, stdin io.Reader) error {
 		event = ev.HookEventName
 	}
 	if ev.SessionID == "" {
-		// Without a session id we have nowhere to store state. This shouldn't
-		// happen for real Claude Code events, but keep it non-fatal.
 		return fmt.Errorf("missing session_id in hook payload")
 	}
 
@@ -97,35 +91,27 @@ func Dispatch(event string, stateDir string, stdin io.Reader) error {
 }
 
 func apply(s *SessionState, event string, ev Event, now int64) {
+	clearTool := func() { s.Tool = ""; s.ToolInputHint = "" }
+	s.Since = now
 	switch event {
 	case EventSessionStart:
 		s.State = StateStarting
 		s.Source = ev.Source
-		s.Since = now
 	case EventSessionEnd:
 		s.State = StateEnded
 		s.Reason = ev.Reason
-		s.Tool = ""
-		s.ToolInputHint = ""
-		s.Since = now
+		clearTool()
 	case EventUserPromptSubmit:
 		s.State = StateThinking
-		s.Tool = ""
-		s.ToolInputHint = ""
 		s.Turn++
-		s.Since = now
+		clearTool()
 	case EventPreToolUse:
 		s.State = StateToolRunning
 		s.Tool = ev.ToolName
 		s.ToolInputHint = toolInputHint(ev.ToolInput)
-		s.Since = now
 	case EventPostToolUse:
-		// Tool finished; until Stop fires or another PreToolUse comes in,
-		// Claude is either formatting a reply or thinking.
 		s.State = StateThinking
-		s.Tool = ""
-		s.ToolInputHint = ""
-		s.Since = now
+		clearTool()
 	case EventNotification:
 		switch ev.NotificationType {
 		case "permission_prompt":
@@ -138,20 +124,18 @@ func apply(s *SessionState, event string, ev Event, now int64) {
 			}
 		}
 		s.LastMessage = ev.Message
-		s.Since = now
 	case EventStop, EventSubagentStop:
 		s.State = StateWaiting
-		s.Tool = ""
-		s.ToolInputHint = ""
-		s.Since = now
+		clearTool()
 	case EventPreCompact:
 		s.State = StateCompacting
-		s.Since = now
 	}
 }
 
-// toolInputHint extracts a short, human-readable fragment from a tool_input blob.
-// Prefers common fields across Claude's built-in tools.
+// ToolHintKeys lists the tool_input fields we pull a display hint from, in
+// priority order. Shared with transcript parsing.
+var ToolHintKeys = []string{"file_path", "path", "command", "pattern", "url", "description", "prompt"}
+
 func toolInputHint(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
@@ -160,7 +144,7 @@ func toolInputHint(raw json.RawMessage) string {
 	if err := json.Unmarshal(raw, &m); err != nil {
 		return ""
 	}
-	for _, k := range []string{"file_path", "path", "command", "pattern", "url", "description", "prompt"} {
+	for _, k := range ToolHintKeys {
 		if v, ok := m[k].(string); ok && v != "" {
 			return truncate(strings.TrimSpace(v), 120)
 		}
@@ -175,8 +159,8 @@ func truncate(s string, n int) string {
 	return s[:n-1] + "…"
 }
 
-// tmuxCoords returns (session, window, pane) by invoking tmux display-message.
-// Empty strings on any failure — not all hooks fire from inside tmux.
+// tmuxCoords returns (session, window, pane). Empty on any failure — hooks
+// can fire outside tmux.
 func tmuxCoords() (string, string, string) {
 	out, err := exec.Command("tmux", "display-message", "-p", "#S\t#I\t#P").Output()
 	if err != nil {

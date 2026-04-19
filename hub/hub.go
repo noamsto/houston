@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -72,15 +73,14 @@ type Options struct {
 type Session struct {
 	view SessionView
 
-	// transcript tail bookkeeping
 	transcriptPath   string
 	transcriptOffset int64
 
-	// bounded trail + preview
 	trail   []TrailChip
 	preview []string
 
-	lastTurnStart int64 // unix-sec when turn began (UserPromptSubmit)
+	lastTurnStart    int64  // unix-sec when turn began (UserPromptSubmit)
+	lastBroadcastSig string // last broadcast view signature; skip duplicates
 }
 
 // New creates a hub rooted at stateDir with default options. Call Run to start it.
@@ -133,17 +133,13 @@ func (h *Hub) Run(ctx context.Context) error {
 		return err
 	}
 
-	// Initial scan of hook state files.
 	if err := h.scan(claudeDir); err != nil {
 		h.log.Warn("initial scan failed", "err", err)
 	}
-	// Initial discovery of Claude transcripts for sessions that were running
-	// before houston started and haven't yet produced a hook event.
 	h.runDiscovery()
 
-	// Fast tick drives transcript refresh for known sessions; slow tick
-	// re-runs discovery so new sessions started after startup are picked up
-	// even if the user hasn't installed hooks.
+	// Poll transcripts every 2s (fsnotify only watches state files) and
+	// re-discover every 30s to pick up sessions started without hooks.
 	tick := time.NewTicker(2 * time.Second)
 	defer tick.Stop()
 	discover := time.NewTicker(30 * time.Second)
@@ -187,8 +183,8 @@ func (h *Hub) runDiscovery() {
 	}
 }
 
-// seed registers a session from a synthesized state, but only if we don't
-// already have it (hook-fired state always wins over inferred state).
+// seed registers a discovered session only if we don't already know it —
+// hook-fired state always wins over inferred.
 func (h *Hub) seed(s hook.SessionState) {
 	h.mu.Lock()
 	if _, exists := h.sessions[s.SessionID]; exists {
@@ -201,7 +197,6 @@ func (h *Hub) seed(s hook.SessionState) {
 	view := sess.view
 	h.mu.Unlock()
 
-	// Pull fresh trail + preview from the transcript.
 	if sess.transcriptPath != "" {
 		h.refreshTranscript(s.SessionID)
 		return
@@ -241,8 +236,6 @@ func (h *Hub) Unsubscribe(ch chan SessionView) {
 	}
 	h.mu.Unlock()
 }
-
-// ---------- internals ----------
 
 func (h *Hub) scan(dir string) error {
 	entries, err := os.ReadDir(dir)
@@ -293,9 +286,7 @@ func (h *Hub) loadStateFile(path string) {
 	}
 	mergeStateIntoView(&sess.view, s)
 
-	// If the hook signals a new turn, reset the trail so it reflects only
-	// *this* turn. Old tool_use events remain in the transcript but won't
-	// appear in trail chips.
+	// Reset trail on new turn so chips reflect only the current turn.
 	if s.State == hook.StateThinking && s.Since > sess.lastTurnStart {
 		sess.lastTurnStart = s.Since
 		sess.trail = sess.trail[:0]
@@ -304,12 +295,11 @@ func (h *Hub) loadStateFile(path string) {
 	view := sess.view
 	h.mu.Unlock()
 
-	// Ingest any new transcript bytes for this session.
 	if sess.transcriptPath != "" {
 		h.refreshTranscript(s.SessionID)
 	}
 
-	h.broadcast(view)
+	h.broadcastIfChanged(sess, view)
 }
 
 func (h *Hub) refreshAllTranscripts() {
@@ -356,7 +346,7 @@ func (h *Hub) refreshTranscript(sessionID string) {
 	view := sess.view
 	h.mu.Unlock()
 
-	h.broadcast(view)
+	h.broadcastIfChanged(sess, view)
 }
 
 func (h *Hub) broadcast(v SessionView) {
@@ -369,6 +359,44 @@ func (h *Hub) broadcast(v SessionView) {
 			h.log.Debug("subscriber slow, dropping update", "session", v.SessionID)
 		}
 	}
+}
+
+// broadcastIfChanged skips fan-out when nothing material changed since the
+// last broadcast for this session — avoids O(subscribers) work on every
+// fsnotify write or transcript poll that yields no delta.
+func (h *Hub) broadcastIfChanged(sess *Session, v SessionView) {
+	sig := viewSignature(v)
+	h.mu.Lock()
+	if sess.lastBroadcastSig == sig {
+		h.mu.Unlock()
+		return
+	}
+	sess.lastBroadcastSig = sig
+	h.mu.Unlock()
+	h.broadcast(v)
+}
+
+func viewSignature(v SessionView) string {
+	var b strings.Builder
+	b.Grow(128 + len(v.Preview))
+	b.WriteString(string(v.State))
+	b.WriteByte('|')
+	b.WriteString(v.Tool)
+	b.WriteByte('|')
+	b.WriteString(v.ToolInputHint)
+	b.WriteByte('|')
+	b.WriteString(v.LastMessage)
+	b.WriteByte('|')
+	b.WriteString(strconv.Itoa(v.Turn))
+	b.WriteByte('|')
+	b.WriteString(strconv.Itoa(len(v.Trail)))
+	b.WriteByte('|')
+	b.WriteString(strconv.Itoa(v.InputTokens))
+	b.WriteByte('|')
+	b.WriteString(strconv.Itoa(v.OutputTokens))
+	b.WriteByte('|')
+	b.WriteString(strconv.Itoa(len(v.Preview)))
+	return b.String()
 }
 
 // mergeStateIntoView copies hook-owned fields into the view without clobbering
@@ -395,21 +423,15 @@ func applyTranscriptEvent(s *Session, ev TranscriptEvent) {
 	const maxPreview = 40
 
 	switch ev.Type {
-	case "tool_use":
-		// Mark any existing "current" chip done, append a new one.
+	case EventTypeToolUse:
 		if n := len(s.trail); n > 0 && !s.trail[n-1].Done {
 			s.trail[n-1].Done = true
 		}
-		s.trail = append(s.trail, TrailChip{
-			Tool: ev.ToolName,
-			Hint: ev.Text,
-			Done: false,
-		})
+		s.trail = append(s.trail, TrailChip{Tool: ev.ToolName, Hint: ev.Text})
 		if len(s.trail) > maxTrail {
 			s.trail = s.trail[len(s.trail)-maxTrail:]
 		}
-	case "tool_result":
-		// Find the matching tool_use (walking back) and mark done.
+	case EventTypeToolResult:
 		for i := len(s.trail) - 1; i >= 0; i-- {
 			if !s.trail[i].Done {
 				s.trail[i].Done = true
@@ -422,11 +444,11 @@ func applyTranscriptEvent(s *Session, ev TranscriptEvent) {
 		if ev.Text != "" {
 			s.preview = append(s.preview, "→ "+ev.Text)
 		}
-	case "text":
+	case EventTypeText:
 		if ev.Role == "assistant" && ev.Text != "" {
 			s.preview = append(s.preview, ev.Text)
 		}
-	case "thinking":
+	case EventTypeThinking:
 		if ev.Text != "" {
 			s.preview = append(s.preview, "◆ "+ev.Text)
 		}

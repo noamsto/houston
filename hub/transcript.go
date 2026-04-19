@@ -19,6 +19,16 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/noamsto/houston/hook"
+)
+
+// TranscriptEvent type constants.
+const (
+	EventTypeToolUse    = "tool_use"
+	EventTypeToolResult = "tool_result"
+	EventTypeText       = "text"
+	EventTypeThinking   = "thinking"
 )
 
 // TranscriptEvent is a normalized subset of a single JSONL line from a
@@ -39,17 +49,8 @@ type TranscriptEvent struct {
 	CacheWriteTokens int
 }
 
-// jsonlRecord is the on-disk envelope Claude Code writes. Layout:
-//
-//	{
-//	  "type": "user" | "assistant" | "system" | "tool_use" | "tool_result",
-//	  "timestamp": "2026-04-18T16:05:12.000Z",
-//	  "message": { "role": "...", "content": [ ... blocks ... ], "usage": {...} },
-//	  ...
-//	}
-//
-// We unmarshal loosely — the live schema evolves and we don't want to fail
-// a whole transcript because one new field shows up.
+// jsonlRecord is the on-disk envelope. Unmarshalled loosely — the schema
+// evolves and one new field shouldn't poison a whole transcript.
 type jsonlRecord struct {
 	Type      string           `json:"type"`
 	Timestamp string           `json:"timestamp"`
@@ -85,12 +86,8 @@ type usage struct {
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 }
 
-// ReadTranscriptFrom reads the transcript file starting at byteOffset and
-// yields one TranscriptEvent per JSONL line. Returns the new offset
-// (i.e. file size after reading) and any I/O error.
-//
-// The caller typically stashes the offset so subsequent reads pick up only
-// appended lines.
+// ReadTranscriptFrom reads JSONL events from byteOffset and returns the new
+// offset so callers can resume.
 func ReadTranscriptFrom(path string, byteOffset int64) ([]TranscriptEvent, int64, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -140,18 +137,17 @@ func parseLine(line string, offset int64) []TranscriptEvent {
 		base.ToolName = rec.ToolName
 		base.ToolUseID = rec.ToolUseID
 		base.IsError = rec.IsError
-		base.Text = firstStringField(rec.ToolInput, "file_path", "command", "pattern", "url", "prompt", "description")
+		base.Text = firstStringField(rec.ToolInput, hook.ToolHintKeys...)
 		return []TranscriptEvent{base}
 	}
 
-	// Otherwise decompose the message content blocks.
 	if rec.Message == nil || len(rec.Message.Content) == 0 {
 		return []TranscriptEvent{base}
 	}
 
 	var blocks []contentBlock
 	// content may be a string OR an array of blocks.
-	if len(rec.Message.Content) > 0 && rec.Message.Content[0] == '"' {
+	if rec.Message.Content[0] == '"' {
 		var s string
 		if err := json.Unmarshal(rec.Message.Content, &s); err == nil {
 			blocks = append(blocks, contentBlock{Type: "text", Text: s})
@@ -165,19 +161,19 @@ func parseLine(line string, offset int64) []TranscriptEvent {
 		ev := base
 		ev.Role = rec.Message.Role
 		switch blk.Type {
-		case "text":
-			ev.Type = "text"
+		case EventTypeText:
+			ev.Type = EventTypeText
 			ev.Text = blk.Text
-		case "thinking":
-			ev.Type = "thinking"
+		case EventTypeThinking:
+			ev.Type = EventTypeThinking
 			ev.Text = blk.Thinking
-		case "tool_use":
-			ev.Type = "tool_use"
+		case EventTypeToolUse:
+			ev.Type = EventTypeToolUse
 			ev.ToolName = blk.Name
 			ev.ToolUseID = blk.ID
-			ev.Text = firstStringField(blk.Input, "file_path", "command", "pattern", "url", "prompt", "description")
-		case "tool_result":
-			ev.Type = "tool_result"
+			ev.Text = firstStringField(blk.Input, hook.ToolHintKeys...)
+		case EventTypeToolResult:
+			ev.Type = EventTypeToolResult
 			ev.ToolUseID = blk.ToolUseID
 			ev.IsError = blk.IsError
 			ev.Text = extractToolResultText(blk.Content)
@@ -197,8 +193,6 @@ func parseLine(line string, offset int64) []TranscriptEvent {
 	return out
 }
 
-// firstStringField returns the first non-empty string field from a JSON object
-// matching one of the given keys. Used to get a human hint from tool inputs.
 func firstStringField(raw json.RawMessage, keys ...string) string {
 	if len(raw) == 0 {
 		return ""
@@ -215,8 +209,8 @@ func firstStringField(raw json.RawMessage, keys ...string) string {
 	return ""
 }
 
-// extractToolResultText flattens a tool_result content blob into a short string.
-// Content may be a bare string, an array of blocks, or missing entirely.
+// extractToolResultText handles the three shapes Claude writes: bare string,
+// block array, or missing.
 func extractToolResultText(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
