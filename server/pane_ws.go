@@ -102,7 +102,7 @@ func (s *Server) handlePaneWS(w http.ResponseWriter, r *http.Request, pane tmux.
 		slog.Debug("pause pane failed, proceeding without", "paneID", paneID, "error", err)
 	}
 
-	outputCh := cc.Subscribe(paneID)
+	sub := cc.Subscribe(paneID)
 
 	defer func() {
 		// Ensure pane is resumed if we exit before the explicit continue
@@ -115,7 +115,7 @@ func (s *Server) handlePaneWS(w http.ResponseWriter, r *http.Request, pane tmux.
 			_ = s.tmux.ZoomPane(pane) // toggle off
 		}
 		_ = conn.Close()
-		cc.Unsubscribe(paneID, outputCh)
+		cc.Unsubscribe(paneID, sub)
 		s.controlMgr.ReleaseClient(pane.Session)
 	}()
 
@@ -163,10 +163,10 @@ func (s *Server) handlePaneWS(w http.ResponseWriter, r *http.Request, pane tmux.
 	}
 
 	go s.paneWSReadLoop(conn, cc, paneID)
-	s.paneWSWriteLoop(conn, cc, pane, outputCh)
+	s.paneWSWriteLoop(conn, cc, pane, sub)
 }
 
-func (s *Server) paneWSWriteLoop(conn *websocket.Conn, cc *tmux.ControlClient, pane tmux.Pane, outputCh <-chan []byte) {
+func (s *Server) paneWSWriteLoop(conn *websocket.Conn, cc *tmux.ControlClient, pane tmux.Pane, sub *tmux.PaneSub) {
 	pingTicker := time.NewTicker(30 * time.Second)
 	defer pingTicker.Stop()
 
@@ -179,14 +179,14 @@ func (s *Server) paneWSWriteLoop(conn *websocket.Conn, cc *tmux.ControlClient, p
 
 	for {
 		select {
-		case data := <-outputCh:
+		case ev := <-sub.C():
 			// Coalesce: drain all buffered chunks into one write
 			// to keep the channel drained and reduce WS round-trips.
-			buf := append([]byte(nil), data...)
+			buf := append([]byte(nil), ev.Data...)
 			for {
 				select {
-				case more := <-outputCh:
-					buf = append(buf, more...)
+				case more := <-sub.C():
+					buf = append(buf, more.Data...)
 				default:
 					goto send
 				}

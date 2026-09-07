@@ -23,7 +23,7 @@ type ControlClient struct {
 	ptySlave  *os.File
 
 	mu   sync.RWMutex
-	subs map[string][]chan<- []byte // paneID → output subscribers
+	subs map[string][]*PaneSub // paneID → subscribers
 
 	// Synchronous command support: one command at a time.
 	// tmux assigns command numbers server-side, so we serialize
@@ -42,7 +42,7 @@ type commandResponse struct {
 func NewControlClient(session string) *ControlClient {
 	return &ControlClient{
 		session: session,
-		subs:    make(map[string][]chan<- []byte),
+		subs:    make(map[string][]*PaneSub),
 		pending: make(chan commandResponse, 1),
 		done:    make(chan struct{}),
 	}
@@ -142,34 +142,51 @@ func (cc *ControlClient) readLoop(r *bufio.Reader) {
 	}
 }
 
+// PaneEvent is one item in a pane subscription. A Dirty event marks a gap in
+// the stream: everything buffered before it was discarded, and the subscriber
+// must re-seed from capture-pane before applying any later Data. Data and
+// Dirty are never both set.
+type PaneEvent struct {
+	Data  []byte
+	Dirty bool
+}
+
+// PaneSub is one subscriber's handle on a pane's output.
+type PaneSub struct {
+	ch    chan PaneEvent
+	dirty bool // guarded by ControlClient.mu
+}
+
+// C returns the event stream. Read it until the subscription is released.
+func (s *PaneSub) C() <-chan PaneEvent { return s.ch }
+
 func (cc *ControlClient) dispatch(paneID string, data []byte) {
-	cc.mu.RLock()
-	defer cc.mu.RUnlock()
-	for _, ch := range cc.subs[paneID] {
+	cc.mu.Lock()
+	defer cc.mu.Unlock()
+	for _, s := range cc.subs[paneID] {
 		select {
-		case ch <- data:
+		case s.ch <- PaneEvent{Data: data}:
 		default:
-			// Subscriber too slow — drop this chunk
 		}
 	}
 }
 
-// Subscribe returns a channel that receives raw output for the given pane.
-func (cc *ControlClient) Subscribe(paneID string) <-chan []byte {
-	ch := make(chan []byte, 4096)
+// Subscribe returns a handle receiving output for the given pane.
+func (cc *ControlClient) Subscribe(paneID string) *PaneSub {
+	s := &PaneSub{ch: make(chan PaneEvent, 4096)}
 	cc.mu.Lock()
-	cc.subs[paneID] = append(cc.subs[paneID], ch)
+	cc.subs[paneID] = append(cc.subs[paneID], s)
 	cc.mu.Unlock()
-	return ch
+	return s
 }
 
-// Unsubscribe removes a subscriber channel for a pane.
-func (cc *ControlClient) Unsubscribe(paneID string, ch <-chan []byte) {
+// Unsubscribe releases a subscription handle.
+func (cc *ControlClient) Unsubscribe(paneID string, s *PaneSub) {
 	cc.mu.Lock()
 	defer cc.mu.Unlock()
 	subs := cc.subs[paneID]
-	for i, s := range subs {
-		if fmt.Sprintf("%p", s) == fmt.Sprintf("%p", ch) {
+	for i, existing := range subs {
+		if existing == s {
 			cc.subs[paneID] = append(subs[:i], subs[i+1:]...)
 			break
 		}
