@@ -330,6 +330,15 @@ func (cc *ControlClient) AckReseed(s *PaneSub) {
 	s.dirty = false
 }
 
+// MarkPendingReseed re-arms a Dirty event that a consumer drained while
+// coalescing, so it is not lost.
+func (cc *ControlClient) MarkPendingReseed(s *PaneSub) {
+	cc.mu.Lock()
+	defer cc.mu.Unlock()
+	s.dirty = false // markDirtyLocked is a no-op while already dirty
+	cc.markDirtyLocked(s)
+}
+
 // Subscribe returns a handle receiving output for the given pane.
 func (cc *ControlClient) Subscribe(paneID string) *PaneSub {
 	s := &PaneSub{ch: make(chan PaneEvent, 4096)}
@@ -468,15 +477,6 @@ func matchEscSeq(s string) (int, string) {
 // SendSpecialKey sends a named key (Enter, Escape, C-c, etc.) to a pane.
 func (cc *ControlClient) SendSpecialKey(paneID, key string) error {
 	cmd := fmt.Sprintf("send-keys -t %s %s\n", paneID, key)
-	cc.stdinMu.Lock()
-	_, err := io.WriteString(cc.stdin, cmd)
-	cc.stdinMu.Unlock()
-	return err
-}
-
-// SetClientSize sets the control client dimensions.
-func (cc *ControlClient) SetClientSize(cols, rows int) error {
-	cmd := fmt.Sprintf("refresh-client -C %d,%d\n", cols, rows)
 	cc.stdinMu.Lock()
 	_, err := io.WriteString(cc.stdin, cmd)
 	cc.stdinMu.Unlock()
