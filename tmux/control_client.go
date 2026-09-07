@@ -5,22 +5,27 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 )
 
 // ControlClient manages a tmux -CC connection to a session.
 type ControlClient struct {
 	session string
-	cmd     *exec.Cmd
 	stdin   io.Writer
 	stdinMu sync.Mutex // serialize writes to stdin
 
-	// PTY master/slave for tmux -CC (requires a terminal)
-	ptyMaster *os.File
-	ptySlave  *os.File
+	// dial opens one control-mode connection. Overridable in tests.
+	dial    func() (io.ReadCloser, io.Writer, func() error, error)
+	backoff time.Duration // initial reconnect delay; doubles to backoffMax
+
+	closeMu  sync.Mutex
+	closed   bool
+	connMu   sync.RWMutex
+	connOK   bool
+	closeCur func() error
 
 	mu   sync.RWMutex
 	subs map[string][]*PaneSub // paneID → subscribers
@@ -39,57 +44,142 @@ type commandResponse struct {
 	err    error
 }
 
+const backoffMax = 10 * time.Second
+
 func NewControlClient(session string) *ControlClient {
-	return &ControlClient{
+	cc := &ControlClient{
 		session: session,
 		subs:    make(map[string][]*PaneSub),
 		pending: make(chan commandResponse, 1),
 		done:    make(chan struct{}),
+		backoff: 250 * time.Millisecond,
 	}
+	cc.dial = cc.dialTmux
+	return cc
+}
+
+// dialTmux opens the real control-mode connection over a PTY. tmux -CC needs a
+// terminal for tcgetattr, so a plain pipe will not do.
+func (cc *ControlClient) dialTmux() (io.ReadCloser, io.Writer, func() error, error) {
+	master, slave, err := openPTY()
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("open pty: %w", err)
+	}
+
+	cmd := exec.Command("tmux", "-CC", "attach-session", "-t", cc.session)
+	cmd.Stdin = slave
+	cmd.Stdout = slave
+	cmd.Stderr = slave
+
+	if err := cmd.Start(); err != nil {
+		_ = master.Close()
+		_ = slave.Close()
+		return nil, nil, nil, fmt.Errorf("start tmux -CC: %w", err)
+	}
+	_ = slave.Close() // child inherited it
+
+	closeFn := func() error {
+		_ = master.Close()
+		return cmd.Wait()
+	}
+	return master, master, closeFn, nil
 }
 
 func (cc *ControlClient) Start() error {
-	// tmux -CC requires a terminal for tcgetattr — use a PTY
-	master, slave, err := openPTY()
+	r, w, closeFn, err := cc.dial()
 	if err != nil {
-		return fmt.Errorf("open pty: %w", err)
+		return err
 	}
-	cc.ptyMaster = master
-	cc.ptySlave = slave
+	cc.attach(w, closeFn)
+	go cc.supervise(r)
+	return nil
+}
 
-	cc.cmd = exec.Command("tmux", "-CC", "attach-session", "-t", cc.session)
-	cc.cmd.Stdin = slave
-	cc.cmd.Stdout = slave
-	cc.cmd.Stderr = slave
-	cc.stdin = master // write commands to PTY master
-
-	if err := cc.cmd.Start(); err != nil {
-		_ = master.Close()
-		_ = slave.Close()
-		return fmt.Errorf("start tmux -CC: %w", err)
-	}
-
-	// Close slave in parent — child inherited it
-	_ = slave.Close()
-	cc.ptySlave = nil
-
-	go cc.readLoop(bufio.NewReader(master))
-
+// attach installs a freshly dialled connection and re-asserts client options.
+func (cc *ControlClient) attach(w io.Writer, closeFn func() error) {
+	// Every send path reads cc.stdin under stdinMu, so the assignment must be
+	// guarded by the same lock, not connMu.
+	cc.stdinMu.Lock()
+	cc.stdin = w
 	// Exclude this CC client from window size calculations so it never
 	// overrides kitty's dimensions (window-size=latest).
-	cc.stdinMu.Lock()
-	_, err = io.WriteString(cc.stdin, "refresh-client -f ignore-size\n")
+	_, err := io.WriteString(w, "refresh-client -f ignore-size\n")
 	cc.stdinMu.Unlock()
 	if err != nil {
 		slog.Warn("failed to set ignore-size on CC client", "error", err)
 	}
 
-	return nil
+	cc.connMu.Lock()
+	cc.closeCur = closeFn
+	cc.connOK = true
+	cc.connMu.Unlock()
+}
+
+// supervise runs the read loop, re-dialling until Close. Every successful
+// re-attach marks all subscribers dirty: the pane painted on while we were
+// away, so their screens are stale by definition.
+func (cc *ControlClient) supervise(r io.ReadCloser) {
+	defer close(cc.done)
+
+	delay := cc.backoff
+	for {
+		cc.readLoop(bufio.NewReader(r))
+		_ = r.Close()
+
+		cc.connMu.Lock()
+		cc.connOK = false
+		cc.connMu.Unlock()
+
+		if cc.isClosed() {
+			return
+		}
+		slog.Info("control client disconnected, reconnecting", "session", cc.session)
+
+		next, w, closeFn, err := cc.dial()
+		if err != nil {
+			if cc.isClosed() {
+				return
+			}
+			time.Sleep(delay)
+			if delay = delay * 2; delay > backoffMax {
+				delay = backoffMax
+			}
+			continue
+		}
+
+		delay = cc.backoff
+		r = next
+		cc.attach(w, closeFn)
+		cc.markAllDirty()
+		slog.Info("control client reattached", "session", cc.session)
+	}
+}
+
+func (cc *ControlClient) markAllDirty() {
+	cc.mu.Lock()
+	defer cc.mu.Unlock()
+	for _, subs := range cc.subs {
+		for _, s := range subs {
+			cc.markDirtyLocked(s)
+		}
+	}
+}
+
+func (cc *ControlClient) isClosed() bool {
+	cc.closeMu.Lock()
+	defer cc.closeMu.Unlock()
+	return cc.closed
+}
+
+// Connected reports whether a control connection is currently established.
+// Consumers use it to mark their view stale rather than to tear it down.
+func (cc *ControlClient) Connected() bool {
+	cc.connMu.RLock()
+	defer cc.connMu.RUnlock()
+	return cc.connOK
 }
 
 func (cc *ControlClient) readLoop(r *bufio.Reader) {
-	defer close(cc.done)
-
 	var cmdBuf strings.Builder
 	inBlock := false
 
@@ -420,12 +510,20 @@ func (cc *ControlClient) Done() <-chan struct{} {
 }
 
 func (cc *ControlClient) Close() error {
-	cc.stdinMu.Lock()
-	_, _ = io.WriteString(cc.stdin, "\n")
-	cc.stdinMu.Unlock()
-
-	if cc.ptyMaster != nil {
-		_ = cc.ptyMaster.Close()
+	cc.closeMu.Lock()
+	if cc.closed {
+		cc.closeMu.Unlock()
+		return nil
 	}
-	return cc.cmd.Wait()
+	cc.closed = true
+	cc.closeMu.Unlock()
+
+	cc.connMu.RLock()
+	closeFn := cc.closeCur
+	cc.connMu.RUnlock()
+
+	if closeFn != nil {
+		return closeFn()
+	}
+	return nil
 }
