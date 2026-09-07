@@ -190,12 +190,17 @@ func TestContinueDoesNotMarkDirty(t *testing.T) {
 
 func TestPauseOnAnotherPaneIsIgnored(t *testing.T) {
 	cc := NewControlClient("test")
-	sub := cc.Subscribe("%1")
+	other := cc.Subscribe("%2")
+	mine := cc.Subscribe("%1")
 
 	feed(cc, "%pause %2\n")
 
-	if len(sub.C()) != 0 {
-		t.Fatal("a pause on %2 marked %1 dirty")
+	ev := <-other.C()
+	if !ev.Dirty {
+		t.Fatalf("subscriber on the paused pane got %+v, want Dirty", ev)
+	}
+	if len(mine.C()) != 0 {
+		t.Fatalf("a pause on %%2 marked %%1 dirty (%d events)", len(mine.C()))
 	}
 }
 
@@ -310,7 +315,7 @@ func TestCloseDuringDialDoesNotLeak(t *testing.T) {
 	cc.backoff = time.Millisecond
 	cc.dial = func() (io.ReadCloser, io.Writer, func() error, error) {
 		if first {
-			first = false // dial() is only ever called from supervise, one goroutine
+			first = false // this first dial is Start()'s own call; every later one runs in supervise's goroutine, so the two never race
 			return io.NopCloser(strings.NewReader("")), io.Discard,
 				func() error { return nil }, nil
 		}

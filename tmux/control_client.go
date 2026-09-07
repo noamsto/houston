@@ -26,6 +26,11 @@ type ControlClient struct {
 	connMu   sync.RWMutex
 	connOK   bool
 	closeCur func() error
+	// gone is closed when the CURRENT connection ends, so a caller blocked in
+	// RunCommand is released at the end of that connection rather than waiting
+	// for Close(). Replaced on every attach; nil means no live connection.
+	// Guarded by connMu.
+	gone chan struct{}
 
 	mu   sync.RWMutex
 	subs map[string][]*PaneSub // paneID → subscribers
@@ -78,9 +83,21 @@ func (cc *ControlClient) dialTmux() (io.ReadCloser, io.Writer, func() error, err
 	}
 	_ = slave.Close() // child inherited it
 
+	var once sync.Once
 	closeFn := func() error {
-		_ = master.Close()
-		return cmd.Wait()
+		var err error
+		once.Do(func() {
+			_ = master.Close()
+			// Closing the PTY alone can leave the tmux client alive for ~10s
+			// before it notices, and Wait() would block that whole time —
+			// stalling both Close() and supervise. Killing the CLIENT is safe:
+			// the server and the session are untouched by it.
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+			}
+			err = cmd.Wait() // still reaps the child; no zombie
+		})
+		return err
 	}
 	return master, master, closeFn, nil
 }
@@ -91,7 +108,7 @@ func (cc *ControlClient) Start() error {
 		return err
 	}
 	cc.attach(w, closeFn)
-	go cc.supervise(r)
+	go cc.supervise(r, closeFn)
 	return nil
 }
 
@@ -112,6 +129,7 @@ func (cc *ControlClient) attach(w io.Writer, closeFn func() error) {
 	cc.connMu.Lock()
 	cc.closeCur = closeFn
 	cc.connOK = true
+	cc.gone = make(chan struct{})
 	cc.connMu.Unlock()
 }
 
@@ -124,17 +142,23 @@ const minHealthyConn = 5 * time.Second
 // supervise runs the read loop, re-dialling until Close. Every successful
 // re-attach marks all subscribers dirty: the pane painted on while we were
 // away, so their screens are stale by definition.
-func (cc *ControlClient) supervise(r io.ReadCloser) {
+func (cc *ControlClient) supervise(r io.ReadCloser, closeConn func() error) {
 	defer close(cc.done)
 
 	delay := cc.backoff
 	for {
 		start := time.Now()
 		cc.readLoop(bufio.NewReader(r))
-		_ = r.Close()
+		// closeConn, not r.Close(): it closes the PTY master AND waits on the
+		// tmux child. Closing only the reader leaves a zombie per reconnect.
+		_ = closeConn()
 
 		cc.connMu.Lock()
 		cc.connOK = false
+		if cc.gone != nil {
+			close(cc.gone)
+			cc.gone = nil // a dial-error lap must not close it twice
+		}
 		cc.connMu.Unlock()
 
 		if cc.isClosed() {
@@ -166,6 +190,7 @@ func (cc *ControlClient) supervise(r io.ReadCloser) {
 		}
 
 		r = next
+		closeConn = closeFn
 		cc.attach(w, closeFn)
 		cc.markAllDirty()
 		slog.Info("control client reattached", "session", cc.session)
@@ -217,9 +242,12 @@ func (cc *ControlClient) readLoop(r *bufio.Reader) {
 		case EventPause:
 			// tmux discards output while paused, so resuming without a
 			// re-seed would paint on top of a hole. Only %pause marks:
-			// houston's own seed handshake pauses BEFORE it subscribes,
-			// so its deliberate pause reaches nobody. Marking on
-			// %continue instead would re-seed straight after every seed.
+			// houston's own seed handshake pauses before it subscribes, so
+			// its deliberate pause usually reaches nobody — but tmux does
+			// not guarantee the %pause notification precedes that command's
+			// %end, so on the rare reorder this connect does one spurious,
+			// harmless re-seed. Marking on %continue instead would re-seed
+			// straight after every seed.
 			cc.markPaneDirty(event.PaneID)
 
 		case EventContinue:
@@ -304,8 +332,10 @@ func (cc *ControlClient) markDirtyLocked(s *PaneSub) {
 		select {
 		case <-s.ch:
 		default:
-			// Drained, and we are the only producer while holding cc.mu,
-			// so this send cannot block.
+			// Drained. Three goroutines write subscriber channels (readLoop,
+			// supervise, and the WebSocket write loop), but all are
+			// serialized by cc.mu and the reader only ever removes, so this
+			// send still cannot block.
 			s.ch <- PaneEvent{Dirty: true}
 			s.dirty = true
 			return
@@ -495,6 +525,19 @@ func (cc *ControlClient) RunCommand(command string) (string, error) {
 	default:
 	}
 
+	// Capture the current connection's cancellation channel BEFORE writing, so
+	// a nil here means the connection was already dead and the command cannot
+	// have landed. Reading it after the write would let a reattach that swaps
+	// cc.stdin before publishing its gone channel report "lost" for a command
+	// that was in fact delivered — which strands the caller's state (a pane
+	// left paused with nothing to resume it).
+	cc.connMu.RLock()
+	gone := cc.gone
+	cc.connMu.RUnlock()
+	if gone == nil {
+		return "", fmt.Errorf("control connection lost")
+	}
+
 	cc.stdinMu.Lock()
 	_, err := io.WriteString(cc.stdin, command+"\n")
 	cc.stdinMu.Unlock()
@@ -505,6 +548,8 @@ func (cc *ControlClient) RunCommand(command string) (string, error) {
 	select {
 	case resp := <-cc.pending:
 		return resp.output, resp.err
+	case <-gone:
+		return "", fmt.Errorf("control connection lost")
 	case <-cc.done:
 		return "", fmt.Errorf("control client closed")
 	}
