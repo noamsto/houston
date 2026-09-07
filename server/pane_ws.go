@@ -166,11 +166,10 @@ func (s *Server) handlePaneWS(w http.ResponseWriter, r *http.Request, pane tmux.
 // sendSeed pushes a capture-pane snapshot as the authoritative screen state.
 // Used on connect and again after any gap in the control stream.
 //
-// The two failure kinds are deliberately distinct: ok reports whether a seed
-// was actually delivered, while err is non-nil ONLY when the WebSocket write
-// failed, which is always fatal to the connection. A capture-pane failure
-// returns (false, nil) — the caller decides whether it can proceed without a
-// seed, and on connect it can.
+// ok reports whether a seed was delivered; err is non-nil only when the
+// WebSocket write failed, which is always fatal. A capture-pane failure is
+// (false, nil), leaving the caller to decide whether it can proceed without
+// a seed.
 func (s *Server) sendSeed(conn *websocket.Conn, pane tmux.Pane) (ok bool, err error) {
 	seed, ok := s.captureSeed(pane)
 	if !ok {
@@ -183,9 +182,8 @@ func (s *Server) sendSeed(conn *websocket.Conn, pane tmux.Pane) (ok bool, err er
 }
 
 // captureSeed takes a capture-pane snapshot. The bool reports whether a
-// non-empty seed was captured; a capture failure or empty pane both return
-// false with no error, matching sendSeed's "costs scrollback, not the
-// connection" contract.
+// non-empty seed was captured; neither a capture failure nor an empty pane
+// is an error.
 func (s *Server) captureSeed(pane tmux.Pane) (string, bool) {
 	seed, capErr := s.tmux.CapturePane(pane, 500)
 	if capErr != nil {
@@ -230,10 +228,10 @@ func (s *Server) paneWSWriteLoop(conn *websocket.Conn, cc *tmux.ControlClient, p
 					slog.Warn("re-seed failed, closing pane socket", "target", pane.Target())
 					return
 				}
-				// Ack before the write: this write loop is the sole WebSocket
-				// writer and the subscription channel preserves order, so any
-				// output produced after the capture is queued behind this
-				// seed rather than dropped while we wait on the write.
+				// Ack before the write: this goroutine stays inside
+				// writeSeed until the seed reaches the socket, so output
+				// produced after the capture queues behind it instead of
+				// being dropped for the duration of the write.
 				cc.AckReseed(sub)
 				if err := writeSeed(conn, seed); err != nil {
 					return

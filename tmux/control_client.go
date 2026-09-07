@@ -242,12 +242,11 @@ func (cc *ControlClient) readLoop(r *bufio.Reader) {
 		case EventPause:
 			// tmux discards output while paused, so resuming without a
 			// re-seed would paint on top of a hole. Only %pause marks:
-			// houston's own seed handshake pauses before it subscribes, so
-			// its deliberate pause usually reaches nobody — but tmux does
-			// not guarantee the %pause notification precedes that command's
-			// %end, so on the rare reorder this connect does one spurious,
-			// harmless re-seed. Marking on %continue instead would re-seed
-			// straight after every seed.
+			// marking on %continue would re-seed straight after every
+			// deliberate seed. The handshake's own pause usually lands
+			// before its subscriber exists — usually, because tmux does not
+			// guarantee %pause precedes that command's %end; the rare
+			// reorder costs one harmless re-seed.
 			cc.markPaneDirty(event.PaneID)
 
 		case EventContinue:
@@ -332,10 +331,8 @@ func (cc *ControlClient) markDirtyLocked(s *PaneSub) {
 		select {
 		case <-s.ch:
 		default:
-			// Drained. Three goroutines write subscriber channels (readLoop,
-			// supervise, and the WebSocket write loop), but all are
-			// serialized by cc.mu and the reader only ever removes, so this
-			// send still cannot block.
+			// Drained, and every writer holds cc.mu while the reader only
+			// removes, so this send cannot block.
 			s.ch <- PaneEvent{Dirty: true}
 			s.dirty = true
 			return
@@ -525,12 +522,8 @@ func (cc *ControlClient) RunCommand(command string) (string, error) {
 	default:
 	}
 
-	// Capture the current connection's cancellation channel BEFORE writing, so
-	// a nil here means the connection was already dead and the command cannot
-	// have landed. Reading it after the write would let a reattach that swaps
-	// cc.stdin before publishing its gone channel report "lost" for a command
-	// that was in fact delivered — which strands the caller's state (a pane
-	// left paused with nothing to resume it).
+	// Captured before the write, so a nil here means the connection was
+	// already dead and the command cannot have landed.
 	cc.connMu.RLock()
 	gone := cc.gone
 	cc.connMu.RUnlock()
