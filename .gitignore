@@ -16,3 +16,6 @@ tmp/
 .claude/
 .playwright-mcp/
 .worktrees/
+
+# Brainstorming companion
+.superpowers/
