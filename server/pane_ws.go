@@ -136,8 +136,9 @@ func (s *Server) handlePaneWS(w http.ResponseWriter, r *http.Request, pane tmux.
 	}
 
 	// Seed: capture-pane provides scrollback history and initial visible
-	// content. Pane is paused so no %output races with this seed.
-	if err := s.sendSeed(conn, pane); err != nil {
+	// content. Pane is paused so no %output races with this seed. A capture
+	// failure costs scrollback, not the connection.
+	if _, err := s.sendSeed(conn, pane); err != nil {
 		return
 	}
 
@@ -163,14 +164,27 @@ func (s *Server) handlePaneWS(w http.ResponseWriter, r *http.Request, pane tmux.
 
 // sendSeed pushes a capture-pane snapshot as the authoritative screen state.
 // Used on connect and again after any gap in the control stream.
-func (s *Server) sendSeed(conn *websocket.Conn, pane tmux.Pane) error {
-	seed, err := s.tmux.CapturePane(pane, 500)
-	if err != nil || seed == "" {
-		return err
+//
+// The two failure kinds are deliberately distinct: ok reports whether a seed
+// was actually delivered, while err is non-nil ONLY when the WebSocket write
+// failed, which is always fatal to the connection. A capture-pane failure
+// returns (false, nil) — the caller decides whether it can proceed without a
+// seed, and on connect it can.
+func (s *Server) sendSeed(conn *websocket.Conn, pane tmux.Pane) (ok bool, err error) {
+	seed, capErr := s.tmux.CapturePane(pane, 500)
+	if capErr != nil {
+		slog.Debug("capture-pane failed", "target", pane.Target(), "error", capErr)
+		return false, nil
+	}
+	if seed == "" {
+		return false, nil
 	}
 	outputJSON, _ := json.Marshal(WSOutput{Data: seed})
 	msg, _ := json.Marshal(WSMessage{Type: "seed", Data: outputJSON})
-	return conn.WriteMessage(websocket.TextMessage, msg)
+	if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (s *Server) paneWSWriteLoop(conn *websocket.Conn, cc *tmux.ControlClient, pane tmux.Pane, sub *tmux.PaneSub) {
@@ -191,7 +205,15 @@ func (s *Server) paneWSWriteLoop(conn *websocket.Conn, cc *tmux.ControlClient, p
 				// The stream has a hole. Everything buffered was discarded,
 				// so capture-pane is the only trustworthy screen state.
 				slog.Debug("pane stream dirty, re-seeding", "target", pane.Target())
-				if err := s.sendSeed(conn, pane); err != nil {
+				ok, err := s.sendSeed(conn, pane)
+				if err != nil {
+					return
+				}
+				if !ok {
+					// Cannot re-seed, so the screen is unrecoverable on this
+					// socket. Close it and let the client reconnect for a
+					// coherent seed rather than ack and resume over a hole.
+					slog.Warn("re-seed failed, closing pane socket", "target", pane.Target())
 					return
 				}
 				cc.AckReseed(sub)

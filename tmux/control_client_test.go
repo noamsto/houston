@@ -104,6 +104,39 @@ func TestDirtySuppressesDeliveryUntilAcked(t *testing.T) {
 	}
 }
 
+func TestMarkPendingReseedReArmsExactlyOnce(t *testing.T) {
+	cc := NewControlClient("test")
+	sub := cc.Subscribe("%1")
+
+	// Drive the subscriber dirty, then consume the marker the way the
+	// WebSocket write loop's coalescing branch does.
+	fillSub(cc, "%1", sub)
+	cc.dispatch("%1", []byte("overflow"))
+	if ev := <-sub.C(); !ev.Dirty {
+		t.Fatalf("setup: expected Dirty, got %+v", ev)
+	}
+
+	cc.MarkPendingReseed(sub)
+
+	if got := len(sub.C()); got != 1 {
+		t.Fatalf("after re-arm, %d events queued, want exactly 1", got)
+	}
+	if ev := <-sub.C(); !ev.Dirty {
+		t.Fatalf("re-armed event = %+v, want Dirty", ev)
+	}
+
+	// Still suppressed until the consumer acks.
+	cc.dispatch("%1", []byte("suppressed"))
+	if len(sub.C()) != 0 {
+		t.Fatal("delivered output while still dirty")
+	}
+	cc.AckReseed(sub)
+	cc.dispatch("%1", []byte("after ack"))
+	if ev := <-sub.C(); string(ev.Data) != "after ack" {
+		t.Fatalf("got %q, want %q", ev.Data, "after ack")
+	}
+}
+
 func TestDropOnOneSubscriberDoesNotAffectAnother(t *testing.T) {
 	cc := NewControlClient("test")
 	slow := cc.Subscribe("%1")
