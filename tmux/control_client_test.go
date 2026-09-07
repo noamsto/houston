@@ -131,12 +131,12 @@ func TestPauseMarksDirty(t *testing.T) {
 
 	feed(cc, "%output %1 before\\015\\012\n%pause %1\n")
 
-	if ev := <-sub.C(); ev.Dirty {
-		t.Fatal("marked dirty before the pause arrived")
-	}
 	ev := <-sub.C()
 	if !ev.Dirty {
-		t.Fatalf("event after %%pause = %+v, want Dirty", ev)
+		t.Fatalf("first event after %%pause = %+v, want Dirty", ev)
+	}
+	if len(sub.C()) != 0 {
+		t.Fatalf("%d events survived the pause, want 0 — the backlog is discarded", len(sub.C()))
 	}
 }
 
