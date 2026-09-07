@@ -1,6 +1,10 @@
 package tmux
 
-import "testing"
+import (
+	"bufio"
+	"strings"
+	"testing"
+)
 
 func TestSubscribeDeliversOutput(t *testing.T) {
 	cc := NewControlClient("test")
@@ -113,5 +117,47 @@ func TestDropOnOneSubscriberDoesNotAffectAnother(t *testing.T) {
 	}
 	if ev := <-fast.C(); ev.Dirty {
 		t.Fatal("fast subscriber was marked dirty by its neighbour's drop")
+	}
+}
+
+// feed runs the read loop over a canned control-mode transcript.
+func feed(cc *ControlClient, transcript string) {
+	cc.readLoop(bufio.NewReader(strings.NewReader(transcript)))
+}
+
+func TestPauseMarksDirty(t *testing.T) {
+	cc := NewControlClient("test")
+	sub := cc.Subscribe("%1")
+
+	feed(cc, "%output %1 before\\015\\012\n%pause %1\n")
+
+	if ev := <-sub.C(); ev.Dirty {
+		t.Fatal("marked dirty before the pause arrived")
+	}
+	ev := <-sub.C()
+	if !ev.Dirty {
+		t.Fatalf("event after %%pause = %+v, want Dirty", ev)
+	}
+}
+
+func TestContinueDoesNotMarkDirty(t *testing.T) {
+	cc := NewControlClient("test")
+	sub := cc.Subscribe("%1")
+
+	feed(cc, "%continue %1\n")
+
+	if len(sub.C()) != 0 {
+		t.Fatal("continue marked the pane dirty; only pause may")
+	}
+}
+
+func TestPauseOnAnotherPaneIsIgnored(t *testing.T) {
+	cc := NewControlClient("test")
+	sub := cc.Subscribe("%1")
+
+	feed(cc, "%pause %2\n")
+
+	if len(sub.C()) != 0 {
+		t.Fatal("a pause on %2 marked %1 dirty")
 	}
 }

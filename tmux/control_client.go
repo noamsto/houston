@@ -107,8 +107,16 @@ func (cc *ControlClient) readLoop(r *bufio.Reader) {
 		case EventOutput, EventExtendedOutput:
 			cc.dispatch(event.PaneID, []byte(event.Data))
 
-		case EventPause, EventContinue:
-			slog.Debug("control mode flow control", "session", cc.session, "event", event.Type, "paneID", event.PaneID)
+		case EventPause:
+			// tmux discards output while paused, so resuming without a
+			// re-seed would paint on top of a hole. Only %pause marks:
+			// houston's own seed handshake pauses BEFORE it subscribes,
+			// so its deliberate pause reaches nobody. Marking on
+			// %continue instead would re-seed straight after every seed.
+			cc.markPaneDirty(event.PaneID)
+
+		case EventContinue:
+			slog.Debug("control mode continue", "session", cc.session, "paneID", event.PaneID)
 
 		case EventBegin:
 			inBlock = true
@@ -195,6 +203,15 @@ func (cc *ControlClient) markDirtyLocked(s *PaneSub) {
 			s.dirty = true
 			return
 		}
+	}
+}
+
+// markPaneDirty signals every subscriber of a pane that its stream has a gap.
+func (cc *ControlClient) markPaneDirty(paneID string) {
+	cc.mu.Lock()
+	defer cc.mu.Unlock()
+	for _, s := range cc.subs[paneID] {
+		cc.markDirtyLocked(s)
 	}
 }
 
