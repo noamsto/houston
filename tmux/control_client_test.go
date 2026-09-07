@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -262,5 +263,76 @@ func TestCloseFiresDone(t *testing.T) {
 	case <-cc.Done():
 	case <-time.After(time.Second):
 		t.Fatal("Done() did not fire after Close()")
+	}
+}
+
+func TestCloseDuringDialDoesNotLeak(t *testing.T) {
+	dialStarted := make(chan struct{})
+	release := make(chan struct{})
+	closedConn := make(chan struct{}, 1)
+	var once sync.Once
+	first := true
+
+	cc := NewControlClient("test")
+	cc.backoff = time.Millisecond
+	cc.dial = func() (io.ReadCloser, io.Writer, func() error, error) {
+		if first {
+			first = false // dial() is only ever called from supervise, one goroutine
+			return io.NopCloser(strings.NewReader("")), io.Discard,
+				func() error { return nil }, nil
+		}
+		once.Do(func() { close(dialStarted) })
+		<-release // hold this dial in flight until the test has called Close()
+		return io.NopCloser(strings.NewReader("")), io.Discard,
+			func() error { closedConn <- struct{}{}; return nil }, nil
+	}
+
+	if err := cc.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	<-dialStarted
+	_ = cc.Close()
+	close(release)
+
+	select {
+	case <-closedConn:
+	case <-time.After(2 * time.Second):
+		t.Fatal("connection dialled during Close() was never closed — leaked")
+	}
+	select {
+	case <-cc.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("Done() never fired after Close()")
+	}
+}
+
+func TestReconnectBacksOffWhenConnectionsDieImmediately(t *testing.T) {
+	var dials int32
+
+	cc := NewControlClient("test")
+	cc.backoff = 20 * time.Millisecond
+	cc.dial = func() (io.ReadCloser, io.Writer, func() error, error) {
+		atomic.AddInt32(&dials, 1)
+		// dial succeeds, but the connection is dead on arrival
+		return io.NopCloser(strings.NewReader("")), io.Discard,
+			func() error { return nil }, nil
+	}
+
+	if err := cc.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = cc.Close() }()
+
+	time.Sleep(300 * time.Millisecond)
+
+	n := atomic.LoadInt32(&dials)
+	// 20ms doubling gives roughly 20+40+80+160 -> about 5 dials in 300ms.
+	// With no backoff on this path it would be thousands.
+	if n > 12 {
+		t.Fatalf("dialled %d times in 300ms — reconnect is hot-spinning", n)
+	}
+	if n < 2 {
+		t.Fatalf("dialled %d times — never retried at all", n)
 	}
 }

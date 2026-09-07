@@ -115,6 +115,12 @@ func (cc *ControlClient) attach(w io.Writer, closeFn func() error) {
 	cc.connMu.Unlock()
 }
 
+// minHealthyConn is how long a connection must last to count as healthy. A
+// connection that dies sooner is treated as a failed attempt for backoff
+// purposes, even though dial() itself succeeded — a tmux server that is up
+// but has no such session accepts the dial and drops it instantly.
+const minHealthyConn = 5 * time.Second
+
 // supervise runs the read loop, re-dialling until Close. Every successful
 // re-attach marks all subscribers dirty: the pane painted on while we were
 // away, so their screens are stale by definition.
@@ -123,6 +129,7 @@ func (cc *ControlClient) supervise(r io.ReadCloser) {
 
 	delay := cc.backoff
 	for {
+		start := time.Now()
 		cc.readLoop(bufio.NewReader(r))
 		_ = r.Close()
 
@@ -133,21 +140,31 @@ func (cc *ControlClient) supervise(r io.ReadCloser) {
 		if cc.isClosed() {
 			return
 		}
-		slog.Info("control client disconnected, reconnecting", "session", cc.session)
+		if time.Since(start) >= minHealthyConn {
+			delay = cc.backoff
+		}
+
+		slog.Info("control client disconnected, reconnecting",
+			"session", cc.session, "in", delay)
+		time.Sleep(delay)
+		if delay *= 2; delay > backoffMax {
+			delay = backoffMax
+		}
+		if cc.isClosed() {
+			return
+		}
 
 		next, w, closeFn, err := cc.dial()
 		if err != nil {
-			if cc.isClosed() {
-				return
-			}
-			time.Sleep(delay)
-			if delay = delay * 2; delay > backoffMax {
-				delay = backoffMax
-			}
 			continue
 		}
+		// Close() may have run while dial() was in flight. It could only have
+		// closed the previous connection, so this one is ours to clean up.
+		if cc.isClosed() {
+			_ = closeFn()
+			return
+		}
 
-		delay = cc.backoff
 		r = next
 		cc.attach(w, closeFn)
 		cc.markAllDirty()
