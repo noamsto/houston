@@ -164,11 +164,46 @@ func (cc *ControlClient) dispatch(paneID string, data []byte) {
 	cc.mu.Lock()
 	defer cc.mu.Unlock()
 	for _, s := range cc.subs[paneID] {
+		// A dirty subscriber has a hole in its stream; nothing may be
+		// delivered until it re-seeds and acks.
+		if s.dirty {
+			continue
+		}
 		select {
 		case s.ch <- PaneEvent{Data: data}:
 		default:
+			// A drop can cut an escape sequence, so everything already
+			// buffered is unusable too. Discard it and signal a re-seed.
+			cc.markDirtyLocked(s)
 		}
 	}
+}
+
+// markDirtyLocked discards a subscriber's buffered output and leaves a single
+// Dirty event in its place. Caller must hold cc.mu.
+func (cc *ControlClient) markDirtyLocked(s *PaneSub) {
+	if s.dirty {
+		return
+	}
+	for {
+		select {
+		case <-s.ch:
+		default:
+			// Drained, and we are the only producer while holding cc.mu,
+			// so this send cannot block.
+			s.ch <- PaneEvent{Dirty: true}
+			s.dirty = true
+			return
+		}
+	}
+}
+
+// AckReseed resumes delivery after the subscriber has re-seeded from
+// capture-pane in response to a Dirty event.
+func (cc *ControlClient) AckReseed(s *PaneSub) {
+	cc.mu.Lock()
+	defer cc.mu.Unlock()
+	s.dirty = false
 }
 
 // Subscribe returns a handle receiving output for the given pane.

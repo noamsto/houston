@@ -50,3 +50,68 @@ func TestUnsubscribeRemovesOnlyThatSubscriber(t *testing.T) {
 		t.Fatalf("remaining subscriber got %d events, want 1", len(b.C()))
 	}
 }
+
+// fillSub saturates a subscriber's buffer so the next dispatch must drop.
+func fillSub(cc *ControlClient, paneID string, s *PaneSub) {
+	for i := 0; i < cap(s.ch); i++ {
+		cc.dispatch(paneID, []byte("x"))
+	}
+}
+
+func TestDropMarksDirtyAndDiscardsStaleBuffer(t *testing.T) {
+	cc := NewControlClient("test")
+	sub := cc.Subscribe("%1")
+
+	fillSub(cc, "%1", sub)
+	cc.dispatch("%1", []byte("this one cannot fit"))
+
+	ev := <-sub.C()
+	if !ev.Dirty {
+		t.Fatalf("first event after a drop = %+v, want Dirty", ev)
+	}
+	if len(sub.C()) != 0 {
+		t.Fatalf("%d stale events survived the drop, want 0", len(sub.C()))
+	}
+}
+
+func TestDirtySuppressesDeliveryUntilAcked(t *testing.T) {
+	cc := NewControlClient("test")
+	sub := cc.Subscribe("%1")
+
+	fillSub(cc, "%1", sub)
+	cc.dispatch("%1", []byte("overflow"))
+	<-sub.C() // consume the Dirty marker
+
+	cc.dispatch("%1", []byte("still suppressed"))
+	if len(sub.C()) != 0 {
+		t.Fatal("delivered output while dirty; subscriber has not re-seeded yet")
+	}
+
+	cc.AckReseed(sub)
+	cc.dispatch("%1", []byte("after reseed"))
+
+	ev := <-sub.C()
+	if string(ev.Data) != "after reseed" {
+		t.Fatalf("got %q, want %q", ev.Data, "after reseed")
+	}
+}
+
+func TestDropOnOneSubscriberDoesNotAffectAnother(t *testing.T) {
+	cc := NewControlClient("test")
+	slow := cc.Subscribe("%1")
+	fast := cc.Subscribe("%1")
+
+	fillSub(cc, "%1", slow) // also fills fast; drain fast so it has room
+	for len(fast.C()) > 0 {
+		<-fast.C()
+	}
+
+	cc.dispatch("%1", []byte("live"))
+
+	if ev := <-slow.C(); !ev.Dirty {
+		t.Fatalf("slow subscriber = %+v, want Dirty", ev)
+	}
+	if ev := <-fast.C(); ev.Dirty {
+		t.Fatal("fast subscriber was marked dirty by its neighbour's drop")
+	}
+}
