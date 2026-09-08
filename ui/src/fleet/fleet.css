@@ -85,3 +85,30 @@
 .run-chip.issue { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
 
 .fleet-empty { padding: 40px 20px; text-align: center; color: var(--text-faint); font-size: 13px; }
+
+.shell { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--bg); }
+.shell-body { flex: 1; position: relative; overflow: hidden; }
+
+.shell-tabs {
+  display: flex; flex: none;
+  background: var(--bg-sunken); border-top: 1px solid var(--line);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.shell-tabs button {
+  position: relative;
+  flex: 1; min-height: var(--tap);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  border: 0; background: none; color: var(--text-faint);
+  font: inherit; font-size: 10px; cursor: pointer;
+}
+.shell-tabs button.on { color: var(--accent); font-weight: 700; }
+.shell-tabs .glyph { font-size: 15px; line-height: 1; }
+.shell-tabs .dot {
+  position: absolute; transform: translate(14px, -10px);
+  width: 6px; height: 6px; border-radius: 50%; background: var(--state-blocked);
+}
+
+.shell-placeholder {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  padding: 24px; text-align: center; color: var(--text-faint); font-size: 13px; line-height: 1.6;
+}
