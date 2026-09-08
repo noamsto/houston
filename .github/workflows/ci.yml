@@ -21,20 +21,15 @@ jobs:
 
       - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
 
-      - name: Debug tmux
-        run: |
-          nix develop -c tmux -V
-          nix develop -c id
-          nix develop -c bash -c 'echo "TMUX_TMPDIR=$TMUX_TMPDIR TERM=$TERM"; ls -la /tmp | head -20'
-          nix develop -c tmux new-session -d -s ci-probe -x 80 -y 24
-          echo "new-session exit: $?"
-          nix develop -c tmux kill-session -t ci-probe || true
-
       - run: nix develop -c just build
 
       - run: nix develop -c go vet ./...
 
-      - run: nix develop -c go test ./...
+      # -p 1: tmux's integration tests spawn a real tmux server under a 5s
+      # timeout (tmux/client.go); GitHub runners' limited CPU can starve that
+      # spawn past it when packages run in parallel (reproduced here as a
+      # flake). Serializing removes the contention at negligible wall-clock cost.
+      - run: nix develop -c go test -p 1 ./...
 
       - name: Check gofmt
         run: nix develop -c bash -c 'out=$(gofmt -l .); [ -z "$out" ] || { echo "$out"; exit 1; }'
@@ -57,4 +52,4 @@ jobs:
 
       - run: nix develop -c just build
 
-      - run: nix develop -c go test -race ./...
+      - run: nix develop -c go test -race -p 1 ./...
