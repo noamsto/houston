@@ -60,24 +60,37 @@ func tokenMatches(want, got string) bool {
 	return subtle.ConstantTimeCompare([]byte(want), []byte(got)) == 1
 }
 
+// sameOrigin reports whether the request's Origin is this server's own.
+func sameOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return false
+	}
+	u, err := url.Parse(origin)
+	return err == nil && u.Host == r.Host
+}
+
 // originAllowed reports whether a request's Origin may talk to this server.
 //
-// A browser always sends Origin on a WebSocket handshake and on a cross-origin
-// fetch, so an absent Origin means a non-browser client (curl, a native app) —
-// those are gated by the token, not by this check. A present Origin must match
-// the request's own host or appear in allowed.
+// An absent Origin is allowed, but NOT because browsers always send one — they
+// do not: <img>, <script>, <link>, top-level navigation and <form method=GET>
+// all omit it. It is safe for two independent reasons: every state-changing
+// route is POST, and every Origin-less vector above is GET-only; and the auth
+// cookie is SameSite=Strict, so no cross-site request carries it at all.
+// Weakening either of those — a GET that mutates, or SameSite=Lax — reopens
+// this, whatever this comment says.
 func originAllowed(r *http.Request, allowed []string) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" {
+		return true
+	}
+	if sameOrigin(r) {
 		return true
 	}
 
 	u, err := url.Parse(origin)
 	if err != nil || u.Host == "" {
 		return false // includes the literal "null" a sandboxed frame sends
-	}
-	if u.Host == r.Host {
-		return true
 	}
 	for _, a := range allowed {
 		if a == origin {
@@ -93,27 +106,33 @@ func originAllowed(r *http.Request, allowed []string) bool {
 const authCookie = "houston_token"
 
 // authGate guards /api/. Disabled, it is a pass-through, which is what
-// -no-auth selects. A nil *authGate is a different case: agents_test.go
-// constructs bare &Server{} values that never set auth, but that is a
-// programming error, not a configuration choice — middleware fails closed
-// on it rather than treating it as auth-disabled.
+// -no-auth selects. A nil *authGate is a different case: a Server constructed
+// without wiring auth, which is a programming error, not a configuration
+// choice — middleware fails closed on it rather than treating it as
+// auth-disabled.
 type authGate struct {
 	token          string
 	allowedOrigins []string
 	enabled        bool
 }
 
-// presentedToken pulls the token from the three places a client can put it.
-// A browser WebSocket cannot set headers, which is why the query parameter
-// exists; same-origin sockets use the cookie and never need it.
+// presentedToken pulls the token from the places a client can put it. The
+// query parameter is accepted only on a WebSocket upgrade: a browser socket
+// cannot set headers, and the cookie already covers same-origin sockets, so
+// the parameter exists solely for the cross-site Vite dev proxy. Accepting it
+// on ordinary requests would leak the token into browser history, Referer,
+// and proxy logs for no benefit.
 func presentedToken(r *http.Request) string {
 	if c, err := r.Cookie(authCookie); err == nil && c.Value != "" {
 		return c.Value
 	}
-	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
-		return strings.TrimPrefix(h, "Bearer ")
+	if h := r.Header.Get("Authorization"); len(h) > 7 && strings.EqualFold(h[:7], "Bearer ") {
+		return h[7:]
 	}
-	return r.URL.Query().Get("token")
+	if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+		return r.URL.Query().Get("token")
+	}
+	return ""
 }
 
 func (a *authGate) middleware(next http.Handler) http.Handler {
@@ -125,19 +144,23 @@ func (a *authGate) middleware(next http.Handler) http.Handler {
 			http.Error(w, "server misconfigured", http.StatusInternalServerError)
 			return
 		}
-		if !a.enabled {
-			next.ServeHTTP(w, r)
-			return
-		}
 
+		// Origin checking runs even when auth is disabled: -no-auth removes
+		// the token requirement, not cross-origin drivability.
 		if !originAllowed(r, a.allowedOrigins) {
 			http.Error(w, "forbidden origin", http.StatusForbidden)
 			return
 		}
 
+		if !a.enabled {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		// Echo the origin only once it is known-good, and only when it is
 		// genuinely cross-origin; same-origin requests need no CORS headers.
-		if origin := r.Header.Get("Origin"); origin != "" && origin != "http://"+r.Host && origin != "https://"+r.Host {
+		if origin := r.Header.Get("Origin"); origin != "" && !sameOrigin(r) {
+			w.Header().Set("Vary", "Origin")
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
@@ -156,7 +179,9 @@ func (a *authGate) middleware(next http.Handler) http.Handler {
 	})
 }
 
-// setCookie issues the token to a browser loading the SPA.
+// setCookie issues the token to a browser loading the SPA. It has no Secure
+// flag: houston serves plaintext over a tailnet or loopback, and Secure would
+// break the cookie on both.
 func (a *authGate) setCookie(w http.ResponseWriter) {
 	if a == nil || !a.enabled {
 		return

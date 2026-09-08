@@ -146,8 +146,11 @@ func TestMiddlewareAcceptsCookieBearerAndQuery(t *testing.T) {
 	bearerReq := reqWithOrigin("halo:9090", "")
 	bearerReq.Header.Set("Authorization", "Bearer secret")
 
+	// The query parameter is accepted only on a WebSocket upgrade — that is
+	// the one path a browser socket can't attach the cookie/header to.
 	queryReq := httptest.NewRequest("GET", "http://halo:9090/api/runs?token=secret", nil)
 	queryReq.Host = "halo:9090"
+	queryReq.Header.Set("Upgrade", "websocket")
 
 	for name, r := range map[string]*http.Request{
 		"cookie": cookieReq,
@@ -161,6 +164,20 @@ func TestMiddlewareAcceptsCookieBearerAndQuery(t *testing.T) {
 				t.Fatalf("status %d, want 200", rec.Code)
 			}
 		})
+	}
+}
+
+func TestMiddlewareRejectsQueryTokenOnNonUpgradeRequest(t *testing.T) {
+	a := &authGate{token: "secret", enabled: true}
+
+	r := httptest.NewRequest("GET", "http://halo:9090/api/runs?token=secret", nil)
+	r.Host = "halo:9090"
+
+	rec := httptest.NewRecorder()
+	a.middleware(okHandler()).ServeHTTP(rec, r)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status %d, want 401 — ?token= must only work on a WebSocket upgrade", rec.Code)
 	}
 }
 
@@ -181,10 +198,21 @@ func TestMiddlewareDisabledAllowsEverything(t *testing.T) {
 	a := &authGate{enabled: false}
 	rec := httptest.NewRecorder()
 
-	a.middleware(okHandler()).ServeHTTP(rec, reqWithOrigin("halo:9090", "http://evil.example"))
+	a.middleware(okHandler()).ServeHTTP(rec, reqWithOrigin("halo:9090", ""))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d, want 200 when auth is disabled", rec.Code)
+	}
+}
+
+func TestMiddlewareDisabledStillEnforcesOrigin(t *testing.T) {
+	a := &authGate{enabled: false}
+	rec := httptest.NewRecorder()
+
+	a.middleware(okHandler()).ServeHTTP(rec, reqWithOrigin("halo:9090", "http://evil.example"))
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status %d, want 403 — -no-auth disables the token requirement, not cross-origin drivability", rec.Code)
 	}
 }
 
@@ -209,6 +237,41 @@ func TestCORSHeadersOnlyForAllowedOrigin(t *testing.T) {
 
 	if got := badRec.Header().Get("Access-Control-Allow-Origin"); got != "" {
 		t.Fatalf("Allow-Origin = %q for a rejected origin, want empty", got)
+	}
+
+	same := reqWithOrigin("halo:9090", "http://halo:9090")
+	same.AddCookie(&http.Cookie{Name: authCookie, Value: "secret"})
+	sameRec := httptest.NewRecorder()
+	a.middleware(okHandler()).ServeHTTP(sameRec, same)
+
+	if got := sameRec.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("Allow-Origin = %q for a same-origin request, want empty — a reintroduced Allow-Origin: * would show up here", got)
+	}
+}
+
+func TestOptionsFromDisallowedOriginIsForbidden(t *testing.T) {
+	a := &authGate{token: "secret", enabled: true, allowedOrigins: []string{"http://localhost:5173"}}
+	r := reqWithOrigin("halo:9090", "http://evil.example")
+	r.Method = http.MethodOptions
+
+	rec := httptest.NewRecorder()
+	a.middleware(okHandler()).ServeHTTP(rec, r)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status %d, want 403 — preflight must not bypass the origin check", rec.Code)
+	}
+}
+
+func TestMiddlewareRejectsWrongToken(t *testing.T) {
+	a := &authGate{token: "secret", enabled: true}
+	r := reqWithOrigin("halo:9090", "")
+	r.AddCookie(&http.Cookie{Name: authCookie, Value: "wrong"})
+
+	rec := httptest.NewRecorder()
+	a.middleware(okHandler()).ServeHTTP(rec, r)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status %d, want 401 for a wrong (not merely absent) token", rec.Code)
 	}
 }
 

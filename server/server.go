@@ -89,7 +89,8 @@ type Server struct {
 	// Agent-card hub (new) — aggregates hook state + transcript tails.
 	hub *hub.Hub
 
-	auth *authGate
+	auth  *authGate
+	hosts *hostGate
 }
 
 // FontController controls terminal font size.
@@ -118,6 +119,10 @@ type Config struct {
 	// AllowedOrigins are extra origins permitted beyond same-origin, e.g. the
 	// Vite dev server.
 	AllowedOrigins []string
+	// AllowedHosts are extra Host values this server answers to, beyond what
+	// it can derive about itself (loopback, hostname, Tailscale addresses).
+	// For reverse proxies or custom DNS.
+	AllowedHosts []string
 }
 
 func New(cfg Config) (*Server, error) {
@@ -188,6 +193,7 @@ func New(cfg Config) (*Server, error) {
 		gate.token = tok
 	}
 	s.auth = gate
+	s.hosts = deriveHosts(cfg.AllowedHosts, cfg.AllowedOrigins)
 
 	return s, nil
 }
@@ -209,7 +215,9 @@ func (s *Server) Handler() http.Handler {
 	apiMux.HandleFunc("/api/agents/stream", s.handleAgentsStream)
 	mux.Handle("/api/", s.auth.middleware(apiMux))
 
-	return mux
+	// The host gate wraps everything, including "/", so a rebound domain is
+	// never handed the token via SPAHandler's setCookie.
+	return s.hosts.middleware(mux)
 }
 
 // SPAHandler serves the embedded SPA, falling back to index.html for

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/noamsto/houston/hook"
 	"github.com/noamsto/houston/server"
@@ -168,6 +169,9 @@ func runServer() {
 
 	noAuth := flag.Bool("no-auth", false, "disable API authentication (NOT recommended)")
 
+	var hostnames stringList
+	flag.Var(&hostnames, "hostname", "additional Host value to accept (repeatable; for reverse proxies or custom DNS)")
+
 	flag.Parse()
 
 	// Configure slog
@@ -213,6 +217,7 @@ func runServer() {
 		UIFS:            uiSubFS,
 		AuthEnabled:     !*noAuth,
 		AllowedOrigins:  allowedOrigins,
+		AllowedHosts:    hostnames,
 	})
 	if err != nil {
 		log.Fatalf("failed to create server: %v", err)
@@ -228,4 +233,16 @@ func runServer() {
 	if err := http.ListenAndServe(*addr, srv.Handler()); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// stringList collects repeated occurrences of a flag into a slice.
+type stringList []string
+
+func (l *stringList) String() string {
+	return strings.Join(*l, ",")
+}
+
+func (l *stringList) Set(v string) error {
+	*l = append(*l, v)
+	return nil
 }

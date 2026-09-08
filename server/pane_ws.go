@@ -15,18 +15,16 @@ import (
 	"github.com/noamsto/houston/tmux"
 )
 
-// wsUpgrader validates Origin against the same allowlist as the HTTP API. A
-// browser always sends Origin on a WebSocket handshake, so this is a real
-// check, not a formality.
+// wsUpgrader validates Origin against the same allowlist as the HTTP API.
+// This runs regardless of whether auth is enabled: -no-auth disables the
+// token requirement, not cross-origin drivability — see originAllowed's
+// comment in auth.go for why an absent Origin is still safe to allow.
 func (s *Server) wsUpgrader() websocket.Upgrader {
 	return websocket.Upgrader{
 		CheckOrigin: func(r *http.Request) bool {
 			if s.auth == nil {
 				// Unwired gate — refuse rather than accept every origin.
 				return false
-			}
-			if !s.auth.enabled {
-				return true
 			}
 			return originAllowed(r, s.auth.allowedOrigins)
 		},
