@@ -1,6 +1,8 @@
 package server
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,5 +74,44 @@ func TestTokenMatches(t *testing.T) {
 	}
 	if tokenMatches("", "abc123") {
 		t.Error("empty expected token matched — that would disable auth")
+	}
+}
+
+func reqWithOrigin(host, origin string) *http.Request {
+	r := httptest.NewRequest("GET", "http://"+host+"/api/runs", nil)
+	r.Host = host
+	if origin != "" {
+		r.Header.Set("Origin", origin)
+	}
+	return r
+}
+
+func TestOriginAllowed(t *testing.T) {
+	allowed := []string{"http://localhost:5173"}
+
+	tests := []struct {
+		name   string
+		host   string
+		origin string
+		want   bool
+	}{
+		{"no origin is a non-browser client", "halo:9090", "", true},
+		{"same origin", "halo:9090", "http://halo:9090", true},
+		{"same origin over https", "halo:9090", "https://halo:9090", true},
+		{"explicitly allowlisted", "halo:9090", "http://localhost:5173", true},
+		{"different host", "halo:9090", "http://evil.example", false},
+		{"different port on same host", "halo:9090", "http://halo:9091", false},
+		{"port-less origin against ported host", "halo:9090", "http://halo", false},
+		{"null origin from a sandboxed frame", "halo:9090", "null", false},
+		{"prefix of an allowed origin", "halo:9090", "http://localhost:51739", false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := originAllowed(reqWithOrigin(tc.host, tc.origin), allowed); got != tc.want {
+				t.Fatalf("originAllowed(host=%q, origin=%q) = %v, want %v",
+					tc.host, tc.origin, got, tc.want)
+			}
+		})
 	}
 }

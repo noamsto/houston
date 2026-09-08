@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -55,4 +57,31 @@ func tokenMatches(want, got string) bool {
 		return false
 	}
 	return subtle.ConstantTimeCompare([]byte(want), []byte(got)) == 1
+}
+
+// originAllowed reports whether a request's Origin may talk to this server.
+//
+// A browser always sends Origin on a WebSocket handshake and on a cross-origin
+// fetch, so an absent Origin means a non-browser client (curl, a native app) —
+// those are gated by the token, not by this check. A present Origin must match
+// the request's own host or appear in allowed.
+func originAllowed(r *http.Request, allowed []string) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return false // includes the literal "null" a sandboxed frame sends
+	}
+	if u.Host == r.Host {
+		return true
+	}
+	for _, a := range allowed {
+		if a == origin {
+			return true
+		}
+	}
+	return false
 }
