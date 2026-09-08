@@ -226,17 +226,3 @@ func (s *Server) handleAPIOpenCodeSession(w http.ResponseWriter, r *http.Request
 	r.URL.Path = strings.TrimPrefix(r.URL.Path, "/api")
 	s.handleOpenCodeSession(w, r)
 }
-
-// corsMiddleware adds CORS headers for development (Vite dev server on different port).
-func corsMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-		if r.Method == "OPTIONS" {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}

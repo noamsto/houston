@@ -261,3 +261,20 @@ func TestNilGateSetCookieIsSafeNoOp(t *testing.T) {
 		t.Fatal("an unwired gate issued a cookie")
 	}
 }
+
+func TestSPAHandlerIssuesCookie(t *testing.T) {
+	a := &authGate{token: "secret", enabled: true}
+	rec := httptest.NewRecorder()
+
+	SPAHandler(nil, a).ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+
+	found := false
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == authCookie {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("loading the SPA did not issue the auth cookie; the UI could never authenticate")
+	}
+}

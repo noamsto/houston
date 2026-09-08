@@ -224,7 +224,18 @@ The pane WebSocket (`/api/pane/:target/ws`) is bidirectional:
 
 ## Security
 
-**No built-in auth** — rely on network-level security:
+**Token-gated API.** On first run houston generates a random token into
+`<status-dir>/token` (`0600`). Every `/api/` request must present it as the
+`houston_token` cookie, an `Authorization: Bearer` header, or a `?token=` query
+parameter (the last is for WebSockets, which can't set headers). Loading the
+SPA issues the cookie as an httpOnly response cookie, so a browser that has
+opened the UI once authenticates transparently on every subsequent call.
+Requests are also checked against an origin allowlist — same-origin plus the
+Vite dev server under `-debug` — covering both the HTTP API and the WebSocket
+handshake, so a page from another origin is refused even with a valid token.
+Pass `-no-auth` to disable the token check entirely (not recommended).
+
+This token model is the primary defense; the following are additional layers:
 1. Default bind: `127.0.0.1:9090` (localhost only)
 2. Access via Tailscale (recommended)
 3. Or SSH tunnel: `ssh -L 9090:localhost:9090 host`

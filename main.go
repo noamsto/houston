@@ -166,6 +166,8 @@ func runServer() {
 	openCodeURL := flag.String("opencode-url", "", "OpenCode server URL (skip discovery)")
 	noOpenCode := flag.Bool("no-opencode", false, "Disable OpenCode integration")
 
+	noAuth := flag.Bool("no-auth", false, "disable API authentication (NOT recommended)")
+
 	flag.Parse()
 
 	// Configure slog
@@ -193,12 +195,24 @@ func runServer() {
 		log.Fatalf("failed to create UI sub-filesystem: %v", err)
 	}
 
+	allowedOrigins := []string{}
+	if *debug {
+		// The Vite dev server proxies /api here; its Origin is preserved
+		// through the proxy, so it has to be allowlisted explicitly.
+		allowedOrigins = append(allowedOrigins, "http://localhost:5173")
+	}
+	if *noAuth {
+		slog.Warn("API authentication is DISABLED; any page that can reach this port can drive your tmux panes")
+	}
+
 	srv, err := server.New(server.Config{
 		StatusDir:       *statusDir,
 		FontController:  fontCtrl,
 		OpenCodeEnabled: !*noOpenCode,
 		OpenCodeURL:     *openCodeURL,
 		UIFS:            uiSubFS,
+		AuthEnabled:     !*noAuth,
+		AllowedOrigins:  allowedOrigins,
 	})
 	if err != nil {
 		log.Fatalf("failed to create server: %v", err)
@@ -206,6 +220,10 @@ func runServer() {
 
 	fmt.Fprintf(os.Stderr, "houston starting on http://%s\n", *addr)
 	fmt.Fprintf(os.Stderr, "status directory: %s\n", *statusDir)
+	if !*noAuth {
+		fmt.Fprintf(os.Stderr, "api token: %s (open the UI once to authorize this browser)\n",
+			filepath.Join(*statusDir, "token"))
+	}
 
 	if err := http.ListenAndServe(*addr, srv.Handler()); err != nil {
 		log.Fatal(err)
