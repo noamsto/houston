@@ -24,16 +24,20 @@ type hostGate struct {
 // domain genuinely does resolve to our address, so a lookup would validate the
 // attacker's own claim.
 func deriveHosts(extra []string, allowedOrigins []string) *hostGate {
-	g := &hostGate{hosts: map[string]struct{}{}}
+	return newHostGate(selfKnownHosts(), extra, allowedOrigins)
+}
 
-	for _, h := range []string{"localhost", "127.0.0.1", "::1"} {
-		g.add(h)
-	}
+// selfKnownHosts asks the machine what it knows about itself: its hostname
+// and its Tailscale addresses, reverse-resolved to their MagicDNS names.
+// Isolated from newHostGate so tests can supply a fixed host list instead of
+// depending on ambient machine/network state.
+func selfKnownHosts() []string {
+	var out []string
 	if hn, err := os.Hostname(); err == nil {
-		g.add(hn)
+		out = append(out, hn)
 	}
 	for _, ip := range tailnetAddrs() {
-		g.add(ip)
+		out = append(out, ip)
 		// Reverse lookup is safe here: the input is our own bound address,
 		// not anything a client sent. Bounded so a dead resolver (e.g. a
 		// laptop waking on a flaky network) can't hang startup — a timeout
@@ -44,9 +48,25 @@ func deriveHosts(extra []string, allowedOrigins []string) *hostGate {
 		cancel()
 		if err == nil {
 			for _, n := range names {
-				g.add(strings.TrimSuffix(n, "."))
+				out = append(out, strings.TrimSuffix(n, "."))
 			}
 		}
+	}
+	return out
+}
+
+// newHostGate builds the allowlist from explicit inputs, with zero ambient
+// machine or network dependency: loopback literals, the given self-known
+// hosts (what the machine reports about itself, in production), the
+// hostnames of allowedOrigins, and any extra hosts (e.g. from -hostname).
+func newHostGate(selfKnown []string, extra []string, allowedOrigins []string) *hostGate {
+	g := &hostGate{hosts: map[string]struct{}{}}
+
+	for _, h := range []string{"localhost", "127.0.0.1", "::1"} {
+		g.add(h)
+	}
+	for _, h := range selfKnown {
+		g.add(h)
 	}
 	for _, o := range allowedOrigins {
 		if u, err := url.Parse(o); err == nil && u.Hostname() != "" {
