@@ -41,11 +41,10 @@ func (s *Server) handleRunsStream(w http.ResponseWriter, r *http.Request) {
 	h.Set("Connection", "keep-alive")
 	h.Set("X-Accel-Buffering", "no")
 
-	// Subscribe before writing the snapshot: anything that changes in that
-	// window must land in the channel, not get missed. Updates that arrive
-	// while the snapshot is being written just buffer — the snapshot is
-	// written first, so a replayed update afterward is same-or-newer and
-	// harmless.
+	// Subscribe before writing the snapshot, so a change during the write
+	// lands in the channel instead of being missed. Ordering makes a replay
+	// harmless: the snapshot goes out first, so a buffered update is
+	// same-or-newer.
 	sub := s.runs.Subscribe()
 	defer s.runs.Unsubscribe(sub)
 

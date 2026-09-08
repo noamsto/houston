@@ -135,9 +135,9 @@ func TestTmuxSourceRun(t *testing.T) {
 
 	f := &fakeLister{steps: []fakeStep{
 		{wins: []tmux.WindowOptions{claudeWin}, panes: []tmux.PaneOptions{claudePane}}, // tick 1: pane present
-		{err: errors.New("tmux boom")},                                                 // tick 2: transient error
+		{err: errors.New("tmux boom")}, // tick 2: transient error
 		{wins: []tmux.WindowOptions{claudeWin}, panes: []tmux.PaneOptions{claudePane}}, // tick 3: still present — proves tick 2 retired nothing
-		{wins: nil, panes: nil},                                                        // tick 4: pane genuinely gone
+		{wins: nil, panes: nil}, // tick 4: pane genuinely gone
 	}}
 
 	src := NewTmuxSource(f, 5*time.Millisecond)
@@ -165,12 +165,10 @@ func TestTmuxSourceRun(t *testing.T) {
 		t.Fatalf("tick 1: got %+v, want a live claude-agent delta for %%1", d)
 	}
 
-	// Tick 2 (the error tick) must emit nothing. The discriminator is this
-	// second receive: a regression that emits Gone on error would produce
-	// update, Gone, update, Gone here, which is why this must check !d.Gone
-	// specifically rather than just "a Gone eventually arrives" — the old,
-	// weaker assertion could not tell a correct run from that regression,
-	// since the tail of both sequences ends in a Gone for %1 either way.
+	// Tick 2 (the error tick) must emit nothing, and this second receive is
+	// the only place that shows it: a regression emitting Gone on error yields
+	// update, Gone, update, Gone, whose tail is identical to the correct
+	// sequence. Assert !d.Gone here, not merely that a Gone arrives later.
 	d = recv(t)
 	if d.Gone || d.Key != "%1" {
 		t.Fatalf("got %+v, want tick 3's live update for %%1 — the error tick must not have retired it", d)

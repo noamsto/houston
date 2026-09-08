@@ -209,12 +209,10 @@ func TestIdForIsURLPathSafe(t *testing.T) {
 }
 
 func TestApplyDoesNotRaceSubscribeClose(t *testing.T) {
-	// A send on a closed channel panics; select/default does not protect
-	// against it — it only guards a full buffer, not a closed one. Apply used
-	// to copy the subscriber set under Lock, release it, then send, which
-	// left a window for Unsubscribe to close a channel out from under it.
-	// This spins concurrent Apply against concurrent Subscribe/Unsubscribe
-	// churn to prove that window is real, not theoretical.
+	// A send on a closed channel panics, and select/default does not protect
+	// against it — that only guards a full buffer, not a closed one. Spinning
+	// Apply against Subscribe/Unsubscribe churn is what makes the window
+	// reachable; a sequential test cannot reach it at all.
 	r := NewRegistry(DefaultOrder)
 
 	stop := make(chan struct{})

@@ -80,14 +80,12 @@ func (r *Registry) Apply(d Delta) {
 	}
 	composed, live := r.composeLocked(d.Key)
 
-	// Edge-tracked removal: a key is listed only while some layer describes it
-	// AND the composed run has an agent. Broadcast a removal only on the
-	// was-listed -> not-listed edge — that covers both "last layer gone" and
-	// "agent lost" in one place, and means a never-listed pane (a plain shell,
-	// say) emits nothing, ever. Without tracking the edge there is a real
-	// wedge: the hooks layer can go Gone while the tmux layer survives, the
-	// key stays live in r.layers, Agent drops to "", the update is correctly
-	// suppressed below — but nothing would ever tell a subscriber the run left.
+	// A key is listed only while some layer describes it AND the composed run
+	// has an agent. Removal fires on the listed -> not-listed edge, which
+	// covers both "last layer gone" and "agent lost", and means a plain shell
+	// emits nothing ever. The edge is load-bearing: without it, a hooks layer
+	// going Gone while the tmux layer survives leaves the key live with no
+	// agent, so the update is suppressed and nothing tells the subscriber.
 	listed := live && composed.listed()
 	was := r.listedKeys[d.Key]
 	switch {
