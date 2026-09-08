@@ -21,6 +21,15 @@ jobs:
 
       - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
 
+      - name: Debug tmux
+        run: |
+          nix develop -c tmux -V
+          nix develop -c id
+          nix develop -c bash -c 'echo "TMUX_TMPDIR=$TMUX_TMPDIR TERM=$TERM"; ls -la /tmp | head -20'
+          nix develop -c tmux new-session -d -s ci-probe -x 80 -y 24
+          echo "new-session exit: $?"
+          nix develop -c tmux kill-session -t ci-probe || true
+
       - run: nix develop -c just build
 
       - run: nix develop -c go vet ./...
