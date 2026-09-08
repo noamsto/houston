@@ -20,7 +20,7 @@
             pname = "houston-ui";
             version = "0.1.0";
             src = ./ui;
-            npmDepsHash = "sha256-VbXiUUSVVP3F+a9H3l4DlVD9wC35v9rBXwY9a1tAKHo=";
+            npmDepsHash = "sha256-NyflCfn5AlUeWGWXniENFt80ZXAZjejHXyZ/Ly1GGcA=";
             buildPhase = "npm run build";
             installPhase = "cp -r dist $out";
             dontNpmInstall = true;
@@ -50,7 +50,10 @@
             pname = "houston";
             version = "0.1.0";
             src = pkgs.lib.cleanSource ./.;
-            vendorHash = "sha256-0Qxw+MUYVgzgWB8vi3HBYtVXSq/btfh4ZfV/m1chNrA=";
+            vendorHash = "sha256-ArYCbm+rj0VYQV58tiVyYPXGfgiW45hfc+wFGQuQy3U=";
+
+            # tmux/control_integration_test.go drives a real server.
+            nativeCheckInputs = [pkgs.tmux];
 
             preBuild = ''
               mkdir -p ui/dist
