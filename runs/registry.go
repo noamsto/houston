@@ -64,16 +64,18 @@ func (r *Registry) Apply(d Delta) {
 		r.layers[d.Key][d.Source] = d.Run
 	}
 	composed, live := r.composeLocked(d.Key)
-	subs := make([]chan Run, 0, len(r.subs))
-	for ch := range r.subs {
-		subs = append(subs, ch)
-	}
 	r.mu.Unlock()
 
 	if !live {
 		return
 	}
-	for _, ch := range subs {
+
+	// Fan out under RLock, as hub.broadcast does. Unsubscribe takes the write
+	// lock to close a channel, so it cannot close one while we hold this —
+	// which is what stops a send racing a close and panicking.
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for ch := range r.subs {
 		select {
 		case ch <- composed:
 		default: // a slow subscriber drops updates, never blocks the source
@@ -92,7 +94,16 @@ func (r *Registry) composeLocked(key string) (Run, bool) {
 	for name := range bySource {
 		names = append(names, name)
 	}
-	sort.Slice(names, func(i, j int) bool { return r.order[names[i]] < r.order[names[j]] })
+	// A name absent from order is strictly lowest precedence (merged first),
+	// rather than tying with index 0 and landing wherever the unstable sort
+	// happens to put it.
+	rank := func(name string) int {
+		if i, ok := r.order[name]; ok {
+			return i
+		}
+		return -1
+	}
+	sort.Slice(names, func(i, j int) bool { return rank(names[i]) < rank(names[j]) })
 
 	var out Run
 	for _, name := range names {
@@ -151,7 +162,7 @@ func mergeInto(dst *Run, src Run) {
 		dst.Activity.Task = src.Activity.Task
 	}
 	if len(src.Activity.Trail) > 0 {
-		dst.Activity.Trail = src.Activity.Trail
+		dst.Activity.Trail = append([]TrailChip(nil), src.Activity.Trail...)
 	}
 	if src.Activity.Preview != "" {
 		dst.Activity.Preview = src.Activity.Preview
