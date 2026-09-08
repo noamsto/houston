@@ -35,30 +35,34 @@ const (
 // Claude Code transcript. Not every field is populated for every event; the
 // UI consumer decides what's interesting.
 type TranscriptEvent struct {
-	Offset        int64     // byte offset of the line start in the file
-	Timestamp     time.Time // event timestamp (best effort)
-	Type          string    // "user" | "assistant" | "tool_use" | "tool_result" | "thinking" | "text"
-	Role          string    // for user/assistant messages
-	ToolName      string    // for tool_use / tool_result
-	ToolUseID     string    // links tool_use to tool_result
-	IsError       bool      // tool_result failure
-	Text          string    // plain text content (assistant text / thinking / tool inputs squashed)
-	InputTokens   int
-	OutputTokens  int
-	CacheReadTokens int
+	Offset           int64     // byte offset of the line start in the file
+	Timestamp        time.Time // event timestamp (best effort)
+	Type             string    // "user" | "assistant" | "tool_use" | "tool_result" | "thinking" | "text"
+	Role             string    // for user/assistant messages
+	ToolName         string    // for tool_use / tool_result
+	ToolUseID        string    // links tool_use to tool_result
+	IsError          bool      // tool_result failure
+	Text             string    // plain text content (assistant text / thinking / tool inputs squashed)
+	CWD              string    // working directory recorded on the record, if any
+	GitBranch        string    // git branch recorded on the record, if any
+	InputTokens      int
+	OutputTokens     int
+	CacheReadTokens  int
 	CacheWriteTokens int
 }
 
 // jsonlRecord is the on-disk envelope. Unmarshalled loosely — the schema
 // evolves and one new field shouldn't poison a whole transcript.
 type jsonlRecord struct {
-	Type      string           `json:"type"`
-	Timestamp string           `json:"timestamp"`
-	Message   *anthropicMsg    `json:"message,omitempty"`
-	ToolName  string           `json:"tool_name,omitempty"`
-	ToolInput json.RawMessage  `json:"tool_input,omitempty"`
-	ToolUseID string           `json:"tool_use_id,omitempty"`
-	IsError   bool             `json:"is_error,omitempty"`
+	Type      string          `json:"type"`
+	Timestamp string          `json:"timestamp"`
+	CWD       string          `json:"cwd,omitempty"`
+	GitBranch string          `json:"gitBranch,omitempty"`
+	Message   *anthropicMsg   `json:"message,omitempty"`
+	ToolName  string          `json:"tool_name,omitempty"`
+	ToolInput json.RawMessage `json:"tool_input,omitempty"`
+	ToolUseID string          `json:"tool_use_id,omitempty"`
+	IsError   bool            `json:"is_error,omitempty"`
 }
 
 type anthropicMsg struct {
@@ -68,15 +72,15 @@ type anthropicMsg struct {
 }
 
 type contentBlock struct {
-	Type       string          `json:"type"`
-	Text       string          `json:"text,omitempty"`
-	Thinking   string          `json:"thinking,omitempty"`
-	ID         string          `json:"id,omitempty"`
-	Name       string          `json:"name,omitempty"`
-	Input      json.RawMessage `json:"input,omitempty"`
-	ToolUseID  string          `json:"tool_use_id,omitempty"`
-	IsError    bool            `json:"is_error,omitempty"`
-	Content    json.RawMessage `json:"content,omitempty"` // tool_result body
+	Type      string          `json:"type"`
+	Text      string          `json:"text,omitempty"`
+	Thinking  string          `json:"thinking,omitempty"`
+	ID        string          `json:"id,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	Input     json.RawMessage `json:"input,omitempty"`
+	ToolUseID string          `json:"tool_use_id,omitempty"`
+	IsError   bool            `json:"is_error,omitempty"`
+	Content   json.RawMessage `json:"content,omitempty"` // tool_result body
 }
 
 type usage struct {
@@ -130,7 +134,7 @@ func parseLine(line string, offset int64) []TranscriptEvent {
 		return nil
 	}
 	ts, _ := time.Parse(time.RFC3339Nano, rec.Timestamp)
-	base := TranscriptEvent{Offset: offset, Timestamp: ts, Type: rec.Type}
+	base := TranscriptEvent{Offset: offset, Timestamp: ts, Type: rec.Type, CWD: rec.CWD, GitBranch: rec.GitBranch}
 
 	// Top-level tool_use / tool_result rows (some schema variants).
 	if rec.ToolName != "" {

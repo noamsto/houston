@@ -200,3 +200,65 @@ func TestHubHookStateWinsOverDiscovery(t *testing.T) {
 		t.Fatalf("hook state should win: %+v", snap)
 	}
 }
+
+func TestDiscoveryPrefersTranscriptCWDOverDirName(t *testing.T) {
+	// The encoded directory name cannot be decoded: every "-" is either a path
+	// separator or a literal hyphen, and nothing in the name says which. Every
+	// transcript record carries the real cwd, so read that instead.
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "-home-noams-git-nix-amd-ai")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	body := `{"type":"user","cwd":"/home/noams/git/nix-amd-ai","gitBranch":"main","message":{"role":"user","content":"hi"}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"which one?"}]}}
+`
+	if err := os.WriteFile(filepath.Join(projectDir, "sess-aaa.jsonl"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	got, err := DiscoverClaudeSessions(root, time.Hour)
+	if err != nil {
+		t.Fatalf("DiscoverClaudeSessions: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d sessions, want 1", len(got))
+	}
+	if got[0].CWD != "/home/noams/git/nix-amd-ai" {
+		t.Errorf("CWD = %q, want /home/noams/git/nix-amd-ai (decoding the dir name gives /home/noams/git/nix/amd/ai)", got[0].CWD)
+	}
+	if got[0].GitBranch != "main" {
+		t.Errorf("GitBranch = %q, want main", got[0].GitBranch)
+	}
+}
+
+func TestDiscoveryDatesSessionByLastEventNotMtime(t *testing.T) {
+	// mtime moves for reasons that are not session activity — a backup, a
+	// restore, a resume that rewrites the file. Only the events date the work.
+	lastEvent := time.Now().Add(-48 * time.Hour).UTC().Truncate(time.Second)
+	body := `{"type":"user","timestamp":"` + lastEvent.Add(-time.Minute).Format(time.RFC3339Nano) + `","message":{"role":"user","content":"hi"}}
+{"type":"assistant","timestamp":"` + lastEvent.Format(time.RFC3339Nano) + `","message":{"role":"assistant","content":[{"type":"text","text":"shall I proceed?"}]}}
+`
+	root := fakeProjectsDir(t, map[string]string{"sess-ghost.jsonl": body})
+	path := filepath.Join(root, "-home-me-project", "sess-ghost.jsonl")
+	now := time.Now()
+	if err := os.Chtimes(path, now, now); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+
+	got, err := DiscoverClaudeSessions(root, time.Hour)
+	if err != nil {
+		t.Fatalf("DiscoverClaudeSessions: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d sessions, want 1 (a fresh mtime keeps it in the window)", len(got))
+	}
+	if got[0].UpdatedAt != lastEvent.Unix() {
+		t.Errorf("UpdatedAt = %d, want %d (the last event, not the mtime %d)", got[0].UpdatedAt, lastEvent.Unix(), now.Unix())
+	}
+	// The ghost this produces: a session that stopped two days ago still
+	// claiming a human is required, and counting toward the Fleet badge.
+	if got[0].State != hook.StateEnded {
+		t.Errorf("State = %q, want %q — a transcript two days cold is not waiting on anyone", got[0].State, hook.StateEnded)
+	}
+}

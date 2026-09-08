@@ -28,6 +28,7 @@ type TrailChip struct {
 type SessionView struct {
 	SessionID      string      `json:"session_id"`
 	CWD            string      `json:"cwd,omitempty"`
+	GitBranch      string      `json:"git_branch,omitempty"`
 	TmuxSession    string      `json:"tmux_session,omitempty"`
 	TmuxWindow     string      `json:"tmux_window,omitempty"`
 	TmuxPane       string      `json:"tmux_pane,omitempty"`
@@ -405,6 +406,7 @@ func viewSignature(v SessionView) string {
 func mergeStateIntoView(v *SessionView, s hook.SessionState) {
 	v.SessionID = s.SessionID
 	v.CWD = s.CWD
+	v.GitBranch = s.GitBranch
 	v.TmuxSession = s.TmuxSession
 	v.TmuxWindow = s.TmuxWindow
 	v.TmuxPane = s.TmuxPane

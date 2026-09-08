@@ -64,6 +64,9 @@ func DiscoverClaudeSessions(projectsDir string, window time.Duration) ([]hook.Se
 			if err != nil {
 				continue
 			}
+			// mtime stays the pre-filter: it is free, and it only ever
+			// over-includes — synthesizeFromTranscript re-dates the session
+			// from its own events.
 			if info.ModTime().Before(cutoff) {
 				continue
 			}
@@ -91,12 +94,38 @@ func synthesizeFromTranscript(path string, info fs.FileInfo, cwd string) (hook.S
 		return hook.SessionState{}, false
 	}
 
+	// The transcript is the authority on its own session. The encoded directory
+	// name cannot be decoded (every "-" is either a separator or a literal), and
+	// mtime moves for reasons that are not session activity — a backup, a
+	// restore, a resume that rewrites the file. Both are fallbacks only.
+	var (
+		lastEvent time.Time
+		gitBranch string
+	)
+	for i := range events {
+		ev := &events[i]
+		if ev.Timestamp.After(lastEvent) {
+			lastEvent = ev.Timestamp
+		}
+		if ev.CWD != "" {
+			cwd = ev.CWD
+		}
+		if ev.GitBranch != "" {
+			gitBranch = ev.GitBranch
+		}
+	}
+	updated := info.ModTime()
+	if !lastEvent.IsZero() {
+		updated = lastEvent
+	}
+
 	state := hook.SessionState{
 		SessionID:      sessionID,
 		TranscriptPath: path,
 		CWD:            cwd,
-		UpdatedAt:      info.ModTime().Unix(),
-		Since:          info.ModTime().Unix(),
+		GitBranch:      gitBranch,
+		UpdatedAt:      updated.Unix(),
+		Since:          updated.Unix(),
 	}
 
 	var (
@@ -127,7 +156,7 @@ func synthesizeFromTranscript(path string, info fs.FileInfo, cwd string) (hook.S
 		}
 	}
 
-	age := time.Since(info.ModTime())
+	age := time.Since(updated)
 	switch {
 	case unmatchedTool != nil && age < 30*time.Second:
 		state.State = hook.StateToolRunning
@@ -141,9 +170,10 @@ func synthesizeFromTranscript(path string, info fs.FileInfo, cwd string) (hook.S
 	return state, true
 }
 
-// decodeProjectDirName reverses Claude's `-home-me-foo` path encoding.
-// Ambiguous for paths containing `-` — good enough for display until a hook
-// fire writes the real CWD.
+// decodeProjectDirName reverses Claude's `-home-me-foo` path encoding. It
+// cannot be done correctly: a "-" in the name is either a path separator or a
+// literal hyphen, so `-home-me-nix-amd-ai` decodes to `/home/me/nix/amd/ai`.
+// Only a transcript that carries no cwd of its own ever falls back to this.
 func decodeProjectDirName(name string) string {
 	if !strings.HasPrefix(name, "-") {
 		return name

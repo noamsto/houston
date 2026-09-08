@@ -42,6 +42,7 @@ type SessionState struct {
 	SessionID      string `json:"session_id"`
 	TranscriptPath string `json:"transcript_path,omitempty"`
 	CWD            string `json:"cwd,omitempty"`
+	GitBranch      string `json:"git_branch,omitempty"`
 
 	// tmux coordinates captured at hook time (may be empty if not under tmux).
 	TmuxSession string `json:"tmux_session,omitempty"`
@@ -49,15 +50,15 @@ type SessionState struct {
 	TmuxPane    string `json:"tmux_pane,omitempty"`
 
 	State         State  `json:"state"`
-	Tool          string `json:"tool,omitempty"`           // set by PreToolUse, cleared by PostToolUse
+	Tool          string `json:"tool,omitempty"` // set by PreToolUse, cleared by PostToolUse
 	ToolInputHint string `json:"tool_input_hint,omitempty"`
-	LastMessage   string `json:"last_message,omitempty"`   // populated by Notification
-	Reason        string `json:"reason,omitempty"`          // populated by SessionEnd
-	Source        string `json:"source,omitempty"`          // populated by SessionStart
+	LastMessage   string `json:"last_message,omitempty"` // populated by Notification
+	Reason        string `json:"reason,omitempty"`       // populated by SessionEnd
+	Source        string `json:"source,omitempty"`       // populated by SessionStart
 
 	Turn      int   `json:"turn,omitempty"`
-	Since     int64 `json:"since,omitempty"`      // unix-sec state entered
-	UpdatedAt int64 `json:"updated_at"`           // unix-sec last hook fired
+	Since     int64 `json:"since,omitempty"` // unix-sec state entered
+	UpdatedAt int64 `json:"updated_at"`      // unix-sec last hook fired
 	PID       int   `json:"pid,omitempty"`
 }
 
