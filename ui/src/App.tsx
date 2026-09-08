@@ -2,16 +2,19 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Sidebar } from './components/Sidebar'
 import { TerminalArea } from './components/TerminalArea'
 import { AgentsView } from './components/agents/AgentsView'
+import { Shell } from './fleet/Shell'
 import { useIsDesktop } from './hooks/useMediaQuery'
 import { useLayout } from './hooks/useLayout'
 import { useSessionsStream } from './hooks/useSessionsStream'
 import { useAttentionNotifications } from './hooks/useAttentionNotifications'
 import './theme/tokens.css'
 
-type View = 'agents' | 'panes'
+type View = 'agents' | 'panes' | 'fleet'
 
 function initialView(): View {
-  return window.location.hash === '#/panes' ? 'panes' : 'agents'
+  if (window.location.hash === '#/panes') return 'panes'
+  if (window.location.hash === '#/fleet') return 'fleet'
+  return 'agents'
 }
 
 export default function App() {
@@ -25,26 +28,30 @@ export default function App() {
 
   const goAgents = () => { window.location.hash = '#/agents'; setView('agents') }
   const goPanes  = () => { window.location.hash = '#/panes';  setView('panes') }
+  const goFleet  = () => { window.location.hash = '#/fleet';  setView('fleet') }
 
+  if (view === 'fleet') {
+    return <Shell />
+  }
   if (view === 'agents') {
     return (
       <>
         <AgentsView />
-        <ViewSwitch current="agents" onAgents={goAgents} onPanes={goPanes} />
+        <ViewSwitch current="agents" onAgents={goAgents} onPanes={goPanes} onFleet={goFleet} />
       </>
     )
   }
   return (
     <>
       <PanesApp />
-      <ViewSwitch current="panes" onAgents={goAgents} onPanes={goPanes} />
+      <ViewSwitch current="panes" onAgents={goAgents} onPanes={goPanes} onFleet={goFleet} />
     </>
   )
 }
 
 function ViewSwitch({
-  current, onAgents, onPanes,
-}: { current: View; onAgents: () => void; onPanes: () => void }) {
+  current, onAgents, onPanes, onFleet,
+}: { current: View; onAgents: () => void; onPanes: () => void; onFleet: () => void }) {
   return (
     <div
       style={{
@@ -88,6 +95,18 @@ function ViewSwitch({
           fontWeight: 600,
         }}
       >Panes</button>
+      <button
+        onClick={onFleet}
+        style={{
+          appearance: 'none',
+          border: 'none',
+          padding: '8px 12px',
+          cursor: 'pointer',
+          background: current === 'fleet' ? 'rgba(255,255,255,0.06)' : 'transparent',
+          color: current === 'fleet' ? '#e4ebf3' : '#768391',
+          fontWeight: 600,
+        }}
+      >Fleet</button>
     </div>
   )
 }

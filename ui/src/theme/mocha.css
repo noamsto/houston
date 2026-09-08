@@ -1,0 +1,63 @@
+/*
+ * Catppuccin Mocha. Scoped to .mocha so it can coexist with the old views'
+ * tokens until those are deleted.
+ *
+ * Raw palette first, then semantic aliases. Components use only the semantic
+ * names — a component naming --ctp-mauve directly is a bug, because it pins a
+ * colour to a meaning it does not own.
+ */
+.mocha {
+  --ctp-base: #1e1e2e;
+  --ctp-mantle: #181825;
+  --ctp-crust: #11111b;
+  --ctp-surface0: #313244;
+  --ctp-surface1: #45475a;
+  --ctp-surface2: #585b70;
+  --ctp-overlay0: #6c7086;
+  --ctp-overlay1: #7f849c;
+  --ctp-overlay2: #9399b2;
+  --ctp-subtext0: #a6adc8;
+  --ctp-subtext1: #bac2de;
+  --ctp-text: #cdd6f4;
+  --ctp-green: #a6e3a1;
+  --ctp-red: #f38ba8;
+  --ctp-yellow: #f9e2af;
+  --ctp-peach: #fab387;
+  --ctp-blue: #89b4fa;
+  --ctp-mauve: #cba6f7;
+  --ctp-teal: #94e2d5;
+
+  --bg: var(--ctp-mantle);
+  --bg-raised: var(--ctp-base);
+  --bg-sunken: var(--ctp-crust);
+  --line: var(--ctp-surface0);
+  --line-strong: var(--ctp-surface1);
+  --fill: var(--ctp-surface0);
+  --text: var(--ctp-text);
+  --text-strong: var(--ctp-subtext1);
+  --text-dim: var(--ctp-overlay2);
+  /* overlay1, not overlay0 — overlay0 on the mantle ground is ~3.1:1, below
+     readable contrast for the 10-13px text (tab labels, ages, filters) that
+     use this token. */
+  --text-faint: var(--ctp-overlay1);
+  --accent: var(--ctp-mauve);
+
+  /* One colour per run state. blocked is the only "needs you" colour and must
+     not be reused for anything else, or the badge stops meaning one thing. */
+  --state-blocked: var(--ctp-red);
+  --state-running: var(--ctp-green);
+  --state-thinking: var(--ctp-yellow);
+  --state-review: var(--ctp-blue);
+  --state-done: var(--ctp-overlay0);
+  --state-failed: var(--ctp-peach);
+  --state-idle: var(--ctp-overlay0);
+  --state-compacting: var(--ctp-teal);
+
+  --host-local: var(--ctp-blue);
+  --host-remote: var(--ctp-peach);
+
+  --font-ui: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --tap: 44px; /* minimum touch target */
+}
