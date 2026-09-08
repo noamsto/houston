@@ -2,6 +2,9 @@
 
 # Build the binary
 build:
+    #!/usr/bin/env bash
+    test -d ui/node_modules || npm install --prefix ui
+    test -d ui/dist || npm run build --prefix ui
     exec go build -o houston .
 
 # Build and run the server
