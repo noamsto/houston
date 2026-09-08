@@ -227,15 +227,30 @@ The pane WebSocket (`/api/pane/:target/ws`) is bidirectional:
 **Token-gated API.** On first run houston generates a random token into
 `<status-dir>/token` (`0600`). Every `/api/` request must present it as the
 `houston_token` cookie, an `Authorization: Bearer` header, or a `?token=` query
-parameter (the last is for WebSockets, which can't set headers). Loading the
-SPA issues the cookie as an httpOnly response cookie, so a browser that has
-opened the UI once authenticates transparently on every subsequent call.
-Requests are also checked against an origin allowlist — same-origin plus the
-Vite dev server under `-debug` — covering both the HTTP API and the WebSocket
-handshake, so a page from another origin is refused even with a valid token.
-Pass `-no-auth` to disable the token check entirely (not recommended).
+parameter. The query parameter is accepted **only on a WebSocket upgrade**,
+which is the one request a browser can't attach a header to; everywhere else it
+would just leak the token into history and proxy logs. Loading the SPA issues
+the cookie as an httpOnly `SameSite=Strict` response cookie, so a browser that
+has opened the UI once authenticates transparently on every subsequent call.
 
-This token model is the primary defense; the following are additional layers:
+**Origin allowlist.** Requests are checked against same-origin plus, under
+`-debug`, the Vite dev server — covering both the HTTP API and the WebSocket
+handshake, so a page from another origin is refused even with a valid token.
+
+**Host allowlist.** Origin checking alone cannot stop DNS rebinding: a rebound
+attacker controls both `Host` and `Origin`, so they always agree. houston
+therefore pins the `Host` header, derived from what the machine knows about
+itself — `os.Hostname()`, its Tailscale address (CGNAT `100.64.0.0/10`), the
+reverse-DNS name of that address, and loopback literals. It never resolves a
+client-supplied name, because under rebinding that resolves to us and would
+validate the attacker's own claim. An unrecognised `Host` gets **421** and, more
+importantly, is never issued a token. If you reach houston by a name it can't
+derive — a reverse proxy, custom DNS — add it with `-hostname` (repeatable).
+
+`-no-auth` disables the **token** only. Origin and Host checking still apply:
+turning off authentication shouldn't make the server cross-origin drivable.
+
+This model is the primary defense; the following are additional layers:
 1. Default bind: `127.0.0.1:9090` (localhost only)
 2. Access via Tailscale (recommended)
 3. Or SSH tunnel: `ssh -L 9090:localhost:9090 host`
