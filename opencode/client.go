@@ -270,7 +270,7 @@ func (c *Client) SubscribeEvents(ctx context.Context) (<-chan Event, error) {
 
 			line, err := reader.ReadString('\n')
 			if err != nil {
-					return
+				return
 			}
 
 			line = strings.TrimSpace(line)

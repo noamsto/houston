@@ -12,7 +12,7 @@ const detectionTTL = 15 * time.Second
 
 type cachedDetection struct {
 	agentType AgentType
-	command   string    // pane_current_command when detected
+	command   string // pane_current_command when detected
 	expiresAt time.Time
 }
 

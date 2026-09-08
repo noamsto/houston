@@ -48,7 +48,7 @@ func TestRunsStreamDeliversARemoval(t *testing.T) {
 	reg.Apply(runs.Delta{Source: "hooks", Key: "%1", Run: runs.Run{Agent: "claude", State: runs.StateRunning}})
 
 	s := &Server{runs: reg}
-	rec := httptest.NewRecorder()
+	rec := newSyncRecorder()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -63,7 +63,7 @@ func TestRunsStreamDeliversARemoval(t *testing.T) {
 	waitForBody := func(substr string, timeout time.Duration) bool {
 		deadline := time.Now().Add(timeout)
 		for time.Now().Before(deadline) {
-			if strings.Contains(rec.Body.String(), substr) {
+			if strings.Contains(rec.body(), substr) {
 				return true
 			}
 			time.Sleep(25 * time.Millisecond)
@@ -72,7 +72,7 @@ func TestRunsStreamDeliversARemoval(t *testing.T) {
 	}
 
 	if !waitForBody("event: snapshot", time.Second) {
-		t.Fatalf("snapshot event never sent\n%s", rec.Body.String())
+		t.Fatalf("snapshot event never sent\n%s", rec.body())
 	}
 
 	// The run's only agent-bearing layer leaves — the registry must report it
@@ -80,7 +80,7 @@ func TestRunsStreamDeliversARemoval(t *testing.T) {
 	reg.Apply(runs.Delta{Source: "hooks", Key: "%1", Gone: true})
 
 	if !waitForBody(`"removed":true`, 2*time.Second) {
-		t.Fatalf("removal never reached the client\n%s", rec.Body.String())
+		t.Fatalf("removal never reached the client\n%s", rec.body())
 	}
 
 	cancel()

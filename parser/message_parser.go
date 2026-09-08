@@ -56,8 +56,8 @@ func (t MessageType) String() string {
 // Message represents a single message in the conversation
 type Message struct {
 	Type       MessageType
-	Content    string            // Clean content (colors stripped for matching)
-	RawContent string            // Original with ANSI colors (for display)
+	Content    string // Clean content (colors stripped for matching)
+	RawContent string // Original with ANSI colors (for display)
 	Timestamp  time.Time
 	Metadata   map[string]string // tool name, activity, line numbers, etc.
 }
@@ -95,9 +95,9 @@ type ConversationState struct {
 // MessageParser parses agent output into structured messages
 type MessageParser struct {
 	config       ParserConfig
-	buffer       []string          // Raw output lines with ANSI colors
+	buffer       []string // Raw output lines with ANSI colors
 	state        ConversationState
-	seenMessages map[int]bool      // Track processed lines
+	seenMessages map[int]bool // Track processed lines
 }
 
 // NewMessageParser creates a new parser with the given configuration
@@ -180,8 +180,8 @@ func (s *ConversationState) ToLegacyResult() Result {
 		// Has a question but not multiple choice
 		resultType = TypeQuestion
 	} else if s.CurrentState == StateThinking ||
-	          s.CurrentState == StateResponding ||
-	          s.CurrentState == StateRunningTool {
+		s.CurrentState == StateResponding ||
+		s.CurrentState == StateRunningTool {
 		// Agent is actively working
 		resultType = TypeWorking
 	}
