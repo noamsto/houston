@@ -8,8 +8,7 @@ import (
 	"testing/fstest"
 )
 
-// TestUnknownHostGetsNoCookieAndIsRefused is the A0 regression test. If it
-// fails, a rebound page can obtain the real token by fetching "/".
+// If this fails, a rebound page can obtain the real token by fetching "/".
 func TestUnknownHostGetsNoCookieAndIsRefused(t *testing.T) {
 	g := deriveHosts(nil, nil)
 	a := &authGate{token: "secret", enabled: true}
@@ -32,11 +31,9 @@ func TestUnknownHostGetsNoCookieAndIsRefused(t *testing.T) {
 	}
 }
 
-// TestHandlerRefusesUnknownHostEndToEnd is the A0 regression test proper: it
-// exercises Server.Handler(), because A0 was a wiring defect — the SPA
-// handler sat outside the host gate and issued the real token to any Host. A
-// test that builds its own middleware chain (above) cannot catch that coming
-// back.
+// Exercises the real Handler() rather than a hand-built chain: the bug this
+// guards against was in the wiring, not the gate — the SPA handler sat outside
+// the host gate and issued the real token to any Host that asked.
 func TestHandlerRefusesUnknownHostEndToEnd(t *testing.T) {
 	dir := t.TempDir()
 	s, err := New(Config{StatusDir: dir, AuthEnabled: true, UIFS: fstest.MapFS{}})

@@ -223,7 +223,8 @@ func (s *Server) Handler() http.Handler {
 // SPAHandler serves the embedded SPA, falling back to index.html for
 // client-side routing. Every response issues the auth cookie, which is how the
 // browser comes to hold a token it can send on same-origin fetch, EventSource
-// and WebSocket calls.
+// and WebSocket calls. It must therefore stay inside the host gate: served to
+// an unrecognised Host, it would hand the token to a rebound attacker.
 func SPAHandler(uiFS fs.FS, auth *authGate) http.Handler {
 	var fileServer http.Handler
 	if uiFS != nil {
