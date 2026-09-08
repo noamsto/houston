@@ -28,10 +28,23 @@ type Run struct {
 	// Stale means a source stopped reporting. The Run keeps its last known
 	// values and says so; it is never a State, because a stale run still has
 	// one.
+	//
+	// No source sets this yet — federated peers will need it once one exists.
+	// mergeInto ORs it stickily, which means nothing can ever clear it once
+	// set; revisit that merge rule when a source actually starts setting it.
 	Stale bool `json:"stale,omitempty"`
 
 	Caps Caps `json:"caps"`
+
+	// Removed marks a broadcast-only payload telling subscribers a run left
+	// the listing. Only ID is set alongside it; every other field is zero.
+	// Never present in Snapshot or in a source's layer.
+	Removed bool `json:"removed,omitempty"`
 }
+
+// listed reports whether a composed Run is an agent run and therefore belongs
+// in /api/runs. A pane with no agent is a workspace pane, not a run.
+func (r Run) listed() bool { return r.Agent != "" }
 
 // TmuxRef locates a run's pane. Nil for agents with no pane.
 type TmuxRef struct {

@@ -10,15 +10,23 @@ import (
 	"github.com/noamsto/houston/tmux"
 )
 
+// lister is what TmuxSource needs from a tmux client — narrow enough that a
+// fake can drive TmuxSource.Run in tests without shelling out. *tmux.Client
+// satisfies it already, so no production call site changes.
+type lister interface {
+	ListWindowOptions() ([]tmux.WindowOptions, error)
+	ListPaneOptions() ([]tmux.PaneOptions, error)
+}
+
 // TmuxSource reads the enrichment lazytmux already computes and parks in tmux
 // user-options: branch, worktree, linked issue, PR state and crew membership.
 // Houston never recomputes any of it.
 type TmuxSource struct {
-	client *tmux.Client
+	client lister
 	every  time.Duration
 }
 
-func NewTmuxSource(c *tmux.Client, every time.Duration) *TmuxSource {
+func NewTmuxSource(c lister, every time.Duration) *TmuxSource {
 	if every <= 0 {
 		every = 2 * time.Second
 	}
@@ -91,12 +99,20 @@ func deltasFromTmux(wins []tmux.WindowOptions, panes []tmux.PaneOptions) []Delta
 		}
 
 		r := Run{
-			State:    FromClaudeStatus(p.ClaudeStatus),
-			Branch:   w.Branch,
-			Worktree: w.GitRoot,
-			Tmux:     &TmuxRef{Session: w.Session, Window: w.Window, PaneID: p.PaneID},
-			Activity: Activity{Task: firstNonEmpty(p.ClaudeTask, w.Task)},
-			Caps:     Caps{Terminal: true, Reply: true, Kill: true},
+			State:     FromClaudeStatus(p.ClaudeStatus),
+			UpdatedAt: ClaudeStatusEpoch(p.ClaudeStatus),
+			Branch:    w.Branch,
+			Worktree:  w.GitRoot,
+			Tmux:      &TmuxRef{Session: w.Session, Window: w.Window, PaneID: p.PaneID},
+			Activity:  Activity{Task: firstNonEmpty(p.ClaudeTask, w.Task)},
+			Caps:      Caps{Terminal: true, Reply: true, Kill: true},
+		}
+		// A pane is an agent run only once lazytmux reports a claude_status for
+		// it — an empty status means a shell, build or htop, and the enrichment
+		// above (branch, issue, PR, crew) still reaches it harmlessly, but it
+		// must not turn into a listed run in /api/runs.
+		if p.ClaudeStatus != "" {
+			r.Agent = "claude"
 		}
 		if w.GitRoot != "" {
 			r.Repo = filepath.Base(w.GitRoot)

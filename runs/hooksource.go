@@ -3,9 +3,14 @@ package runs
 import (
 	"context"
 	"strconv"
+	"time"
 
 	"github.com/noamsto/houston/hub"
 )
+
+// hookGoneCheckInterval is how often HookSource diffs against hub.Snapshot to
+// catch a session hub deleted without broadcasting (see Run).
+const hookGoneCheckInterval = 5 * time.Second
 
 // HookSource publishes Claude Code hook state. It rides the existing hub rather
 // than re-watching the state dir and re-tailing transcripts.
@@ -19,14 +24,30 @@ func (s *HookSource) Run(ctx context.Context, out chan<- Delta) error {
 	sub := s.hub.Subscribe()
 	defer s.hub.Unsubscribe(sub)
 
-	for _, v := range s.hub.Snapshot() {
-		key, r := runFromSessionView(v)
+	seen := map[string]bool{}
+	emit := func(key string, r Run) error {
+		seen[key] = true
 		select {
 		case out <- Delta{Source: s.Name(), Key: key, Run: r}:
+			return nil
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 	}
+
+	for _, v := range s.hub.Snapshot() {
+		key, r := runFromSessionView(v)
+		if err := emit(key, r); err != nil {
+			return err
+		}
+	}
+
+	// hub deletes a session on file removal and broadcasts nothing about it,
+	// so a killed agent would otherwise stay listed forever at its last known
+	// state, capabilities and all. Diff against hub.Snapshot on a ticker to
+	// catch that.
+	t := time.NewTicker(hookGoneCheckInterval)
+	defer t.Stop()
 
 	for {
 		select {
@@ -37,10 +58,25 @@ func (s *HookSource) Run(ctx context.Context, out chan<- Delta) error {
 				return nil
 			}
 			key, r := runFromSessionView(v)
-			select {
-			case out <- Delta{Source: s.Name(), Key: key, Run: r}:
-			case <-ctx.Done():
-				return ctx.Err()
+			if err := emit(key, r); err != nil {
+				return err
+			}
+		case <-t.C:
+			now := map[string]bool{}
+			for _, v := range s.hub.Snapshot() {
+				key, _ := runFromSessionView(v)
+				now[key] = true
+			}
+			for key := range seen {
+				if now[key] {
+					continue
+				}
+				delete(seen, key)
+				select {
+				case out <- Delta{Source: s.Name(), Key: key, Gone: true}:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
 			}
 		}
 	}

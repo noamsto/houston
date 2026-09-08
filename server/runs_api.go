@@ -41,12 +41,17 @@ func (s *Server) handleRunsStream(w http.ResponseWriter, r *http.Request) {
 	h.Set("Connection", "keep-alive")
 	h.Set("X-Accel-Buffering", "no")
 
+	// Subscribe before writing the snapshot: anything that changes in that
+	// window must land in the channel, not get missed. Updates that arrive
+	// while the snapshot is being written just buffer — the snapshot is
+	// written first, so a replayed update afterward is same-or-newer and
+	// harmless.
+	sub := s.runs.Subscribe()
+	defer s.runs.Unsubscribe(sub)
+
 	snap, _ := json.Marshal(s.runs.Snapshot())
 	fmt.Fprintf(w, "event: snapshot\ndata: %s\n\n", snap)
 	flusher.Flush()
-
-	sub := s.runs.Subscribe()
-	defer s.runs.Unsubscribe(sub)
 
 	ping := time.NewTicker(25 * time.Second)
 	defer ping.Stop()
@@ -69,7 +74,20 @@ func (s *Server) handleRunsStream(w http.ResponseWriter, r *http.Request) {
 			}
 			flusher.Flush()
 		case <-ping.C:
-			if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
+			// A dropped update is otherwise permanent — the registry only
+			// dedupes redundant re-emissions, it does not retry a drop. If
+			// this subscriber missed one, a full resync is owed instead of a
+			// bare keepalive.
+			if s.runs.Dirty(sub) {
+				snap, err := json.Marshal(s.runs.Snapshot())
+				if err != nil {
+					slog.Warn("runs stream resync marshal", "err", err)
+					continue
+				}
+				if _, err := fmt.Fprintf(w, "event: snapshot\ndata: %s\n\n", snap); err != nil {
+					return
+				}
+			} else if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
 				return
 			}
 			flusher.Flush()

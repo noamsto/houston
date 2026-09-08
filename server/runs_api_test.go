@@ -1,10 +1,13 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/noamsto/houston/runs"
 )
@@ -12,7 +15,7 @@ import (
 func TestRunsSnapshotReturnsComposedRuns(t *testing.T) {
 	reg := runs.NewRegistry(runs.DefaultOrder)
 	reg.Apply(runs.Delta{Source: "tmux", Key: "%1", Run: runs.Run{Branch: "main"}})
-	reg.Apply(runs.Delta{Source: "hooks", Key: "%1", Run: runs.Run{State: runs.StateRunning}})
+	reg.Apply(runs.Delta{Source: "hooks", Key: "%1", Run: runs.Run{Agent: "claude", State: runs.StateRunning}})
 
 	s := &Server{runs: reg}
 	rec := httptest.NewRecorder()
@@ -37,6 +40,54 @@ func TestRunsSnapshotWithoutRegistryIs503(t *testing.T) {
 
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status %d, want 503", rec.Code)
+	}
+}
+
+func TestRunsStreamDeliversARemoval(t *testing.T) {
+	reg := runs.NewRegistry(runs.DefaultOrder)
+	reg.Apply(runs.Delta{Source: "hooks", Key: "%1", Run: runs.Run{Agent: "claude", State: runs.StateRunning}})
+
+	s := &Server{runs: reg}
+	rec := httptest.NewRecorder()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet, "/api/runs/stream", nil).WithContext(ctx)
+
+	done := make(chan struct{})
+	go func() {
+		s.handleRunsStream(rec, req)
+		close(done)
+	}()
+
+	waitForBody := func(substr string, timeout time.Duration) bool {
+		deadline := time.Now().Add(timeout)
+		for time.Now().Before(deadline) {
+			if strings.Contains(rec.Body.String(), substr) {
+				return true
+			}
+			time.Sleep(25 * time.Millisecond)
+		}
+		return false
+	}
+
+	if !waitForBody("event: snapshot", time.Second) {
+		t.Fatalf("snapshot event never sent\n%s", rec.Body.String())
+	}
+
+	// The run's only agent-bearing layer leaves — the registry must report it
+	// as removed, not just fall silent.
+	reg.Apply(runs.Delta{Source: "hooks", Key: "%1", Gone: true})
+
+	if !waitForBody(`"removed":true`, 2*time.Second) {
+		t.Fatalf("removal never reached the client\n%s", rec.Body.String())
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Errorf("handler did not return after cancel")
 	}
 }
 

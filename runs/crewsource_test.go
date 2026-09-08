@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-const crewFixture = `{"ts":1000,"crew_id":"c1","kind":"dispatch","branch":"fix/412","title":"fix the ws drop","tier":"standard"}
+const crewFixture = `{"ts":1000,"crew_id":"c1","kind":"dispatch","branch":"fix/412","title":"fix the ws drop","tier":"standard","engine":"claude","model":"sonnet","session":"houston"}
 {"ts":1100,"crew_id":"c1","from":"worker:fix/412#s1","kind":"status","body":{"state":"working"}}
 {"ts":1200,"crew_id":"c1","from":"worker:fix/412#s1","kind":"status","body":{"state":"blocked","detail":"Keep the legacy route?"}}
 {"ts":1300,"crew_id":"c1","from":"worker:feat/413#s2","kind":"status","body":{"state":"pr_open","pr_url":"https://github.com/x/y/pull/9"}}
@@ -41,6 +41,9 @@ func TestDeltasFromCrewLogCarriesDispatchMetadata(t *testing.T) {
 	}
 	if r.Branch != "fix/412" {
 		t.Errorf("Branch = %q", r.Branch)
+	}
+	if r.Agent != "claude" {
+		t.Errorf("Agent = %q, want claude — without it a crew run has no agent and is never listed", r.Agent)
 	}
 }
 

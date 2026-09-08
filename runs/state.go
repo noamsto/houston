@@ -1,6 +1,7 @@
 package runs
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/noamsto/houston/hook"
@@ -90,4 +91,19 @@ func FromClaudeStatus(v string) State {
 		// something the user did deliberately, so it must not raise a badge.
 		return StateIdle
 	}
+}
+
+// ClaudeStatusEpoch parses the second field of lazytmux's @claude_status pane
+// option — "<state> <epoch> <unseen>" — into a unix-seconds timestamp. Zero if
+// the field is missing or not a number.
+func ClaudeStatusEpoch(v string) int64 {
+	fields := strings.Fields(v)
+	if len(fields) < 2 {
+		return 0
+	}
+	n, err := strconv.ParseInt(fields[1], 10, 64)
+	if err != nil {
+		return 0
+	}
+	return n
 }

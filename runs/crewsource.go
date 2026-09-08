@@ -110,6 +110,10 @@ func (s *CrewSource) scanRoots(roots []string) map[string]Run {
 	return merged
 }
 
+// crewDirTimeout bounds the git call below so a hung git cannot park this
+// source's goroutine forever.
+const crewDirTimeout = 5 * time.Second
+
 // crewDir resolves where dispatcher writes its bus for a checkout.
 // lazytmux's @git_root is the worktree's top level, but dispatcher writes under
 // the COMMON git dir — and in a worktree <root>/.git is a file, not a
@@ -119,14 +123,19 @@ func (s *CrewSource) crewDir(root string) string {
 	if dir, ok := s.crewDirs[root]; ok {
 		return dir
 	}
-	out, err := exec.Command("git", "-C", root, "rev-parse", "--git-common-dir").Output()
+	ctx, cancel := context.WithTimeout(context.Background(), crewDirTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "git", "-C", root, "rev-parse", "--git-common-dir").Output()
 	if err != nil {
 		s.crewDirs[root] = ""
 		return ""
 	}
 	dir := strings.TrimSpace(string(out))
 	if !filepath.IsAbs(dir) {
-		// Older git answers relatively (".git"); resolve against the root.
+		// Whether this comes back relative or absolute depends on whether root
+		// is a worktree or the main checkout, not on git's version: verified on
+		// git 2.55, a worktree answers absolute and the main checkout answers
+		// relative (".git"). Resolve the relative case against root.
 		dir = filepath.Join(root, dir)
 	}
 	dir = filepath.Join(dir, "crew")
@@ -142,7 +151,12 @@ type crewRecord struct {
 	Branch string `json:"branch"`
 	Title  string `json:"title"`
 	Tier   string `json:"tier"`
-	Body   struct {
+	Engine string `json:"engine"`
+	Model  string `json:"model"`
+	// Session is a tmux session name, present on the dispatch record. It is
+	// useful for the later branch->pane join but is not used yet.
+	Session string `json:"session"`
+	Body    struct {
 		State  string `json:"state"`
 		Detail string `json:"detail"`
 		PRURL  string `json:"pr_url"`
@@ -180,6 +194,13 @@ func deltasFromCrewLog(rd io.Reader) map[string]Run {
 		}
 		if rec.Tier != "" {
 			r.Crew.Tier = rec.Tier
+		}
+		// Engine only appears on the dispatch record, but every status record
+		// for the branch shares this map entry, so it sticks once set. Without
+		// it a crew run carries no agent and the listing predicate would drop
+		// it — this source exists specifically to surface blocked questions.
+		if rec.Engine != "" {
+			r.Agent = rec.Engine
 		}
 		if rec.Kind == "status" && rec.Body.State != "" {
 			r.State = FromCrewState(rec.Body.State)

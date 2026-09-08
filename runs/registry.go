@@ -2,8 +2,11 @@ package runs
 
 import (
 	"context"
+	"encoding/base64"
 	"sort"
+	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 // Delta is one source's view of one run. A source publishes only the fields it
@@ -26,13 +29,23 @@ type Source interface {
 // are a periodic scrape.
 var DefaultOrder = []string{"tmux", "crew", "hooks"}
 
+// sub is one subscriber's channel plus whether an update was dropped since the
+// last check. dropped is atomic because the hot fan-out path in Apply only
+// holds RLock — it must not need the write lock just to flag a drop.
+type sub struct {
+	ch      chan Run
+	dropped atomic.Bool
+}
+
 // Registry composes per-source layers into one Run per key.
 type Registry struct {
 	order map[string]int
 
-	mu     sync.RWMutex
-	layers map[string]map[string]Run // key -> source -> layer
-	subs   map[chan Run]struct{}
+	mu         sync.RWMutex
+	layers     map[string]map[string]Run // key -> source -> layer
+	listedKeys map[string]bool           // key -> currently listed (an agent run)
+	lastSig    map[string]string         // key -> signature of the last broadcast update
+	subs       map[chan Run]*sub
 }
 
 func NewRegistry(order []string) *Registry {
@@ -41,9 +54,11 @@ func NewRegistry(order []string) *Registry {
 		idx[name] = i
 	}
 	return &Registry{
-		order:  idx,
-		layers: map[string]map[string]Run{},
-		subs:   map[chan Run]struct{}{},
+		order:      idx,
+		layers:     map[string]map[string]Run{},
+		listedKeys: map[string]bool{},
+		lastSig:    map[string]string{},
+		subs:       map[chan Run]*sub{},
 	}
 }
 
@@ -64,21 +79,56 @@ func (r *Registry) Apply(d Delta) {
 		r.layers[d.Key][d.Source] = d.Run
 	}
 	composed, live := r.composeLocked(d.Key)
+
+	// Edge-tracked removal: a key is listed only while some layer describes it
+	// AND the composed run has an agent. Broadcast a removal only on the
+	// was-listed -> not-listed edge — that covers both "last layer gone" and
+	// "agent lost" in one place, and means a never-listed pane (a plain shell,
+	// say) emits nothing, ever. Without tracking the edge there is a real
+	// wedge: the hooks layer can go Gone while the tmux layer survives, the
+	// key stays live in r.layers, Agent drops to "", the update is correctly
+	// suppressed below — but nothing would ever tell a subscriber the run left.
+	listed := live && composed.listed()
+	was := r.listedKeys[d.Key]
+	switch {
+	case listed:
+		r.listedKeys[d.Key] = true
+	case was:
+		delete(r.listedKeys, d.Key)
+	}
+
+	var payload Run
+	broadcast := false
+
+	switch {
+	case listed:
+		sig := runSignature(composed)
+		if r.lastSig[d.Key] != sig {
+			r.lastSig[d.Key] = sig
+			payload = composed
+			broadcast = true
+		}
+	case was:
+		delete(r.lastSig, d.Key)
+		payload = Run{ID: idFor(d.Key), Removed: true}
+		broadcast = true
+	}
 	r.mu.Unlock()
 
-	if !live {
+	if !broadcast {
 		return
 	}
 
-	// Fan out under RLock, as hub.broadcast does. Unsubscribe takes the write
-	// lock to close a channel, so it cannot close one while we hold this —
-	// which is what stops a send racing a close and panicking.
+	// Fan out under RLock, as before. Unsubscribe takes the write lock to
+	// close a channel, so it cannot close one while we hold this — which is
+	// what stops a send racing a close and panicking.
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	for ch := range r.subs {
+	for _, sb := range r.subs {
 		select {
-		case ch <- composed:
-		default: // a slow subscriber drops updates, never blocks the source
+		case sb.ch <- payload:
+		default: // a slow subscriber drops updates; flag it, never block the source
+			sb.dropped.Store(true)
 		}
 	}
 }
@@ -109,8 +159,64 @@ func (r *Registry) composeLocked(key string) (Run, bool) {
 	for _, name := range names {
 		mergeInto(&out, bySource[name])
 	}
-	out.ID = key
+	out.ID = idFor(key)
 	return out, true
+}
+
+// idFor derives a URL-path-safe Run.ID from a source's correlation key. The
+// key itself keeps flowing internally unchanged — it is load-bearing for layer
+// bookkeeping — only the externally visible ID differs. Without this, "%307"
+// decodes as a path segment to "/07", and "branch/fix/412" or "claude/<sid>"
+// contain slashes that break /api/runs/{id} segment routing outright.
+func idFor(key string) string {
+	switch {
+	case strings.HasPrefix(key, "%"):
+		return "pane-" + strings.TrimPrefix(key, "%")
+	case strings.HasPrefix(key, "claude/"):
+		return "sess-" + strings.TrimPrefix(key, "claude/")
+	case strings.HasPrefix(key, "branch/"):
+		b := strings.TrimPrefix(key, "branch/")
+		return "branch-" + base64.RawURLEncoding.EncodeToString([]byte(b))
+	default:
+		return "key-" + base64.RawURLEncoding.EncodeToString([]byte(key))
+	}
+}
+
+// runSignature is a cheap comparable summary of the fields that matter to a
+// subscriber, mirroring hub.broadcastIfChanged: skip fan-out when nothing
+// material changed since the last broadcast for this key, so a poller that
+// re-emits an unchanged layer every tick does not cost every subscriber an
+// SSE event every tick too.
+func runSignature(r Run) string {
+	var b strings.Builder
+	b.WriteString(r.Agent)
+	b.WriteByte('|')
+	b.WriteString(string(r.State))
+	b.WriteByte('|')
+	b.WriteString(r.Repo)
+	b.WriteByte('|')
+	b.WriteString(r.Branch)
+	b.WriteByte('|')
+	b.WriteString(r.Worktree)
+	b.WriteByte('|')
+	if r.Issue != nil {
+		b.WriteString(r.Issue.ID)
+	}
+	b.WriteByte('|')
+	if r.PR != nil {
+		b.WriteString(r.PR.Number + "," + r.PR.State + "," + r.PR.CheckState + "," + r.PR.Mergeable)
+	}
+	b.WriteByte('|')
+	if r.Crew != nil {
+		b.WriteString(r.Crew.Name + "," + r.Crew.Tier)
+	}
+	b.WriteByte('|')
+	if r.Question != nil {
+		b.WriteString(r.Question.Text)
+	}
+	b.WriteByte('|')
+	b.WriteString(r.Activity.Tool + "," + r.Activity.Hint + "," + r.Activity.Message + "," + r.Activity.Task + "," + r.Activity.Preview)
+	return b.String()
 }
 
 // mergeInto copies every set field of src over dst. A zero field means "this
@@ -208,7 +314,7 @@ func (r *Registry) Snapshot() []Run {
 
 	out := make([]Run, 0, len(keys))
 	for _, k := range keys {
-		if run, ok := r.composeLocked(k); ok {
+		if run, ok := r.composeLocked(k); ok && run.listed() {
 			out = append(out, run)
 		}
 	}
@@ -218,7 +324,7 @@ func (r *Registry) Snapshot() []Run {
 func (r *Registry) Subscribe() chan Run {
 	ch := make(chan Run, 64)
 	r.mu.Lock()
-	r.subs[ch] = struct{}{}
+	r.subs[ch] = &sub{ch: ch}
 	r.mu.Unlock()
 	return ch
 }
@@ -230,4 +336,17 @@ func (r *Registry) Unsubscribe(ch chan Run) {
 		close(ch)
 	}
 	r.mu.Unlock()
+}
+
+// Dirty reports whether ch missed at least one update since the last call,
+// and clears the flag. The SSE handler uses this on its keepalive tick to
+// decide whether a bare ping is enough or a full resync is owed.
+func (r *Registry) Dirty(ch chan Run) bool {
+	r.mu.RLock()
+	sb, ok := r.subs[ch]
+	r.mu.RUnlock()
+	if !ok {
+		return false
+	}
+	return sb.dropped.Swap(false)
 }
