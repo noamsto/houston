@@ -236,3 +236,28 @@ func TestSetCookieIsHttpOnly(t *testing.T) {
 		t.Errorf("cookie path %q, want /", c.Path)
 	}
 }
+
+func TestNilGateRefusesRatherThanPassesThrough(t *testing.T) {
+	var a *authGate // a Server built without wiring the gate
+
+	rec := httptest.NewRecorder()
+	a.middleware(okHandler()).ServeHTTP(rec, reqWithOrigin("halo:9090", ""))
+
+	if rec.Code == http.StatusOK {
+		t.Fatal("an unwired auth gate served the request — auth would silently vanish")
+	}
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status %d, want 500", rec.Code)
+	}
+}
+
+func TestNilGateSetCookieIsSafeNoOp(t *testing.T) {
+	var a *authGate
+
+	rec := httptest.NewRecorder()
+	a.setCookie(rec) // must not panic
+
+	if len(rec.Result().Cookies()) != 0 {
+		t.Fatal("an unwired gate issued a cookie")
+	}
+}

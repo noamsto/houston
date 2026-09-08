@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -92,8 +93,10 @@ func originAllowed(r *http.Request, allowed []string) bool {
 const authCookie = "houston_token"
 
 // authGate guards /api/. Disabled, it is a pass-through, which is what
-// -no-auth selects. A nil *authGate behaves the same way: agents_test.go
-// constructs bare &Server{} values that never set auth.
+// -no-auth selects. A nil *authGate is a different case: agents_test.go
+// constructs bare &Server{} values that never set auth, but that is a
+// programming error, not a configuration choice — middleware fails closed
+// on it rather than treating it as auth-disabled.
 type authGate struct {
 	token          string
 	allowedOrigins []string
@@ -115,7 +118,14 @@ func presentedToken(r *http.Request) string {
 
 func (a *authGate) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if a == nil || !a.enabled {
+		if a == nil {
+			// An unwired gate is a programming error, not a configuration
+			// choice. Refuse loudly rather than serving /api/ unauthenticated.
+			slog.Error("auth gate not configured; refusing request", "path", r.URL.Path)
+			http.Error(w, "server misconfigured", http.StatusInternalServerError)
+			return
+		}
+		if !a.enabled {
 			next.ServeHTTP(w, r)
 			return
 		}
