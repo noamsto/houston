@@ -29,9 +29,6 @@ func TestRunFromSessionViewKeysOnPane(t *testing.T) {
 	if r.Agent != "claude" {
 		t.Errorf("Agent = %q, want claude", r.Agent)
 	}
-	if !r.Caps.Terminal || !r.Caps.Reply {
-		t.Errorf("Caps = %+v, want terminal and reply for a pane-backed run", r.Caps)
-	}
 }
 
 func TestRunFromSessionViewFallsBackToSessionID(t *testing.T) {
@@ -42,9 +39,6 @@ func TestRunFromSessionViewFallsBackToSessionID(t *testing.T) {
 	}
 	if r.Tmux != nil {
 		t.Errorf("TmuxRef = %+v, want nil without a pane", r.Tmux)
-	}
-	if r.Caps.Terminal {
-		t.Error("Caps.Terminal is true without a pane — there is nothing to attach to")
 	}
 }
 

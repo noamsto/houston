@@ -158,7 +158,26 @@ func (r *Registry) composeLocked(key string) (Run, bool) {
 		mergeInto(&out, bySource[name])
 	}
 	out.ID = idFor(key)
+	out.Caps = deriveCaps(bySource)
 	return out, true
+}
+
+// deriveCaps derives Caps from which layers are present for a key, not from
+// any Caps field a source publishes — only TmuxSource's poll is ground truth
+// for "a live pane exists right now," since it diffs against a fresh
+// ListPaneOptions call every tick and emits Gone the instant a pane
+// disappears, whereas HookSource asserts from a cached ref that can outlive
+// the pane it names. A composed run can still carry a non-nil Tmux ref
+// (hooksource.go's cached ref) alongside Caps.Terminal == false — that's
+// intended: Caps is the affordance signal, not Tmux != nil.
+func deriveCaps(bySource map[string]Run) Caps {
+	_, hasTmux := bySource["tmux"]
+	_, hasCrew := bySource["crew"]
+	return Caps{
+		Terminal: hasTmux,
+		Kill:     hasTmux,
+		Reply:    hasTmux || hasCrew,
+	}
 }
 
 // idFor derives a URL-path-safe Run.ID from a source's correlation key. The
@@ -214,6 +233,16 @@ func runSignature(r Run) string {
 	}
 	b.WriteByte('|')
 	b.WriteString(r.Activity.Tool + "," + r.Activity.Hint + "," + r.Activity.Message + "," + r.Activity.Task + "," + r.Activity.Preview)
+	b.WriteByte('|')
+	if r.Caps.Terminal {
+		b.WriteByte('T')
+	}
+	if r.Caps.Reply {
+		b.WriteByte('R')
+	}
+	if r.Caps.Kill {
+		b.WriteByte('K')
+	}
 	return b.String()
 }
 
@@ -288,15 +317,6 @@ func mergeInto(dst *Run, src Run) {
 	}
 	if src.Stale {
 		dst.Stale = true
-	}
-	if src.Caps.Terminal {
-		dst.Caps.Terminal = true
-	}
-	if src.Caps.Reply {
-		dst.Caps.Reply = true
-	}
-	if src.Caps.Kill {
-		dst.Caps.Kill = true
 	}
 }
 

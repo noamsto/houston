@@ -44,12 +44,21 @@ func (s *CrewSource) Run(ctx context.Context, out chan<- Delta) error {
 	t := time.NewTicker(s.every)
 	defer t.Stop()
 
+	seen := map[string]bool{}
 	for {
-		for branch, r := range s.scan() {
-			select {
-			case out <- Delta{Source: s.Name(), Key: "branch/" + branch, Run: r}:
-			case <-ctx.Done():
-				return ctx.Err()
+		current, ok := s.scan()
+		// A transient tmux error is not evidence that every crew-sourced
+		// branch vanished: skip the tick entirely rather than diffing
+		// against an empty map and emitting Gone for everything seen.
+		if ok {
+			deltas, newSeen := tickCrewDeltas(current, seen, time.Now())
+			seen = newSeen
+			for _, d := range deltas {
+				select {
+				case out <- d:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
 			}
 		}
 		select {
@@ -60,11 +69,59 @@ func (s *CrewSource) Run(ctx context.Context, out chan<- Delta) error {
 	}
 }
 
-func (s *CrewSource) scan() map[string]Run {
+// crewEvictionGrace is how long a terminal-state run stays visible after its
+// last status update before CrewSource evicts it. Zero delay would yank the
+// "done" card out from under a human looking at it the instant a worker
+// posts done; 10 minutes is long enough to avoid that while still clearing
+// finished runs out during a normal session.
+const crewEvictionGrace = 10 * time.Minute
+
+// crewRunFinished reports whether r's bus status has been terminal for
+// longer than crewEvictionGrace. UpdatedAt == 0 covers both a malformed
+// status record and a dispatch-only branch with no status yet — neither is
+// eligible, since treating a zero timestamp as "infinitely old" would evict
+// instantly and bypass the grace period entirely.
+func crewRunFinished(r Run, now time.Time) bool {
+	if r.State != StateDone && r.State != StateFailed {
+		return false
+	}
+	if r.UpdatedAt == 0 {
+		return false
+	}
+	return now.Sub(time.Unix(r.UpdatedAt, 0)) > crewEvictionGrace
+}
+
+// tickCrewDeltas computes this cycle's deltas from the branches scan()
+// currently sees, evicting anything whose bus status has been terminal for
+// longer than crewEvictionGrace. seen is the previous tick's emitted key
+// set; it returns the deltas to send and the new seen set.
+func tickCrewDeltas(current map[string]Run, seen map[string]bool, now time.Time) ([]Delta, map[string]bool) {
+	var deltas []Delta
+	newSeen := map[string]bool{}
+	for branch, r := range current {
+		if crewRunFinished(r, now) {
+			continue
+		}
+		key := "branch/" + branch
+		deltas = append(deltas, Delta{Source: "crew", Key: key, Run: r})
+		newSeen[key] = true
+	}
+	for key := range seen {
+		if !newSeen[key] {
+			deltas = append(deltas, Delta{Source: "crew", Key: key, Gone: true})
+		}
+	}
+	return deltas, newSeen
+}
+
+// scan returns ok=false when ListWindowOptions failed — a transient tmux
+// error, not evidence every crew-sourced branch vanished. The caller must
+// skip the tick entirely rather than diff against an empty map.
+func (s *CrewSource) scan() (branches map[string]Run, ok bool) {
 	wins, err := s.client.ListWindowOptions()
 	if err != nil {
 		slog.Debug("crew source: list window options", "error", err)
-		return nil
+		return nil, false
 	}
 
 	roots := map[string]bool{}
@@ -78,7 +135,7 @@ func (s *CrewSource) scan() map[string]Run {
 	for repo := range roots {
 		rootList = append(rootList, repo)
 	}
-	return s.scanRoots(rootList)
+	return s.scanRoots(rootList), true
 }
 
 // scanRoots reads every root's crew bus and folds it into the latest state per
