@@ -42,13 +42,13 @@ func (m *ControlManager) GetClient(session string) (*ControlClient, error) {
 	m.clients[session] = &managedClient{client: cc, refCount: 1}
 	slog.Info("started control client", "session", session)
 
-	// Monitor for unexpected exit
+	// The client reconnects on its own; Done() now fires only on Close.
 	go func() {
 		<-cc.Done()
 		m.mu.Lock()
 		delete(m.clients, session)
 		m.mu.Unlock()
-		slog.Info("control client exited", "session", session)
+		slog.Info("control client closed", "session", session)
 	}()
 
 	return cc, nil

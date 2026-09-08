@@ -36,8 +36,8 @@ func TestControlClientIntegration(t *testing.T) {
 	defer func() { _ = cc.Close() }()
 
 	// Subscribe to pane output
-	ch := cc.Subscribe(paneID)
-	defer cc.Unsubscribe(paneID, ch)
+	sub := cc.Subscribe(paneID)
+	defer cc.Unsubscribe(paneID, sub)
 
 	// Send keys via control client
 	if err := cc.SendKeys(paneID, "echo hello-control-mode"); err != nil {
@@ -53,8 +53,8 @@ func TestControlClientIntegration(t *testing.T) {
 	var received string
 	for {
 		select {
-		case data := <-ch:
-			received += string(data)
+		case ev := <-sub.C():
+			received += string(ev.Data)
 			if strings.Contains(received, "hello-control-mode") {
 				return // success
 			}

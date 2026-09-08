@@ -115,7 +115,7 @@ func (s *Server) handlePaneWS(w http.ResponseWriter, r *http.Request, pane tmux.
 		slog.Debug("pause pane failed, proceeding without", "paneID", paneID, "error", err)
 	}
 
-	outputCh := cc.Subscribe(paneID)
+	sub := cc.Subscribe(paneID)
 
 	defer func() {
 		// Ensure pane is resumed if we exit before the explicit continue
@@ -128,7 +128,7 @@ func (s *Server) handlePaneWS(w http.ResponseWriter, r *http.Request, pane tmux.
 			_ = s.tmux.ZoomPane(pane) // toggle off
 		}
 		_ = conn.Close()
-		cc.Unsubscribe(paneID, outputCh)
+		cc.Unsubscribe(paneID, sub)
 		s.controlMgr.ReleaseClient(pane.Session)
 	}()
 
@@ -148,25 +148,22 @@ func (s *Server) handlePaneWS(w http.ResponseWriter, r *http.Request, pane tmux.
 		}
 	}
 
-	// Seed: capture-pane provides scrollback history and initial visible content.
-	// This is a visual-only snapshot (no terminal state like modes/scroll regions).
-	// Pane is paused so no %output races with this seed.
-	if seedOutput, err := s.tmux.CapturePane(pane, 500); err == nil && seedOutput != "" {
-		outputJSON, _ := json.Marshal(WSOutput{Data: seedOutput})
-		msg, _ := json.Marshal(WSMessage{Type: "seed", Data: outputJSON})
-		if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
-			return
-		}
+	// Seed: capture-pane provides scrollback history and initial visible
+	// content. Pane is paused so no %output races with this seed. A capture
+	// failure costs scrollback, not the connection.
+	if _, err := s.sendSeed(conn, pane); err != nil {
+		return
 	}
 
-	// Force the TUI to redraw via SIGWINCH (resize pane to same dimensions).
-	// While paused, the redraw output is buffered by tmux and will be
-	// delivered when we continue — giving the client a clean seed+redraw sequence.
+	// Force the TUI to redraw via SIGWINCH (resize pane to same dimensions),
+	// prompting it to repaint any garbled state. tmux discards %output while
+	// paused, so the redraw's own output is not queued for later delivery —
+	// this just nudges the TUI before we resume normal streaming below.
 	if err := s.tmux.ForceRedraw(pane); err != nil {
 		slog.Debug("force redraw failed", "target", pane.Target(), "error", err)
 	}
 
-	// Resume %output delivery — buffered events (including any SIGWINCH redraw) flow
+	// Resume %output delivery — normal streaming resumes from here.
 	if paused {
 		continueCmd := fmt.Sprintf("refresh-client -A %s:continue", paneID)
 		if _, err := cc.RunCommand(continueCmd); err != nil {
@@ -176,10 +173,49 @@ func (s *Server) handlePaneWS(w http.ResponseWriter, r *http.Request, pane tmux.
 	}
 
 	go s.paneWSReadLoop(conn, cc, paneID)
-	s.paneWSWriteLoop(conn, cc, pane, outputCh)
+	s.paneWSWriteLoop(conn, cc, pane, sub)
 }
 
-func (s *Server) paneWSWriteLoop(conn *websocket.Conn, cc *tmux.ControlClient, pane tmux.Pane, outputCh <-chan []byte) {
+// sendSeed pushes a capture-pane snapshot as the authoritative screen state.
+// Used on connect and again after any gap in the control stream.
+//
+// ok reports whether a seed was delivered; err is non-nil only when the
+// WebSocket write failed, which is always fatal. A capture-pane failure is
+// (false, nil), leaving the caller to decide whether it can proceed without
+// a seed.
+func (s *Server) sendSeed(conn *websocket.Conn, pane tmux.Pane) (ok bool, err error) {
+	seed, ok := s.captureSeed(pane)
+	if !ok {
+		return false, nil
+	}
+	if err := writeSeed(conn, seed); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// captureSeed takes a capture-pane snapshot. The bool reports whether a
+// non-empty seed was captured; neither a capture failure nor an empty pane
+// is an error.
+func (s *Server) captureSeed(pane tmux.Pane) (string, bool) {
+	seed, capErr := s.tmux.CapturePane(pane, 500)
+	if capErr != nil {
+		slog.Debug("capture-pane failed", "target", pane.Target(), "error", capErr)
+		return "", false
+	}
+	if seed == "" {
+		return "", false
+	}
+	return seed, true
+}
+
+func writeSeed(conn *websocket.Conn, seed string) error {
+	outputJSON, _ := json.Marshal(WSOutput{Data: seed})
+	msg, _ := json.Marshal(WSMessage{Type: "seed", Data: outputJSON})
+	return conn.WriteMessage(websocket.TextMessage, msg)
+}
+
+func (s *Server) paneWSWriteLoop(conn *websocket.Conn, cc *tmux.ControlClient, pane tmux.Pane, sub *tmux.PaneSub) {
 	pingTicker := time.NewTicker(30 * time.Second)
 	defer pingTicker.Stop()
 
@@ -192,14 +228,42 @@ func (s *Server) paneWSWriteLoop(conn *websocket.Conn, cc *tmux.ControlClient, p
 
 	for {
 		select {
-		case data := <-outputCh:
+		case ev := <-sub.C():
+			if ev.Dirty {
+				// The stream has a hole. Everything buffered was discarded,
+				// so capture-pane is the only trustworthy screen state.
+				slog.Debug("pane stream dirty, re-seeding", "target", pane.Target())
+				seed, ok := s.captureSeed(pane)
+				if !ok {
+					// Cannot re-seed, so the screen is unrecoverable on this
+					// socket. Close it and let the client reconnect for a
+					// coherent seed rather than ack and resume over a hole.
+					slog.Warn("re-seed failed, closing pane socket", "target", pane.Target())
+					return
+				}
+				// Ack before the write: this goroutine stays inside
+				// writeSeed until the seed reaches the socket, so output
+				// produced after the capture queues behind it instead of
+				// being dropped for the duration of the write.
+				cc.AckReseed(sub)
+				if err := writeSeed(conn, seed); err != nil {
+					return
+				}
+				continue
+			}
 			// Coalesce: drain all buffered chunks into one write
 			// to keep the channel drained and reduce WS round-trips.
-			buf := append([]byte(nil), data...)
+			buf := append([]byte(nil), ev.Data...)
 			for {
 				select {
-				case more := <-outputCh:
-					buf = append(buf, more...)
+				case more := <-sub.C():
+					if more.Dirty {
+						// Rare: a drop while coalescing. Flush what we have,
+						// then let the next iteration re-seed over it.
+						cc.MarkPendingReseed(sub)
+						goto send
+					}
+					buf = append(buf, more.Data...)
 				default:
 					goto send
 				}
@@ -327,8 +391,9 @@ func (s *Server) paneWSReadLoop(conn *websocket.Conn, cc *tmux.ControlClient, pa
 			}
 
 		case "resize":
-			// No-op: CC client size is fixed at 400x200 (set on connect).
-			// kitty controls actual pane dimensions via window-size=latest.
+			// No-op by design: the CC client is created with
+			// `refresh-client -f ignore-size`, so houston never resizes a
+			// pane a human is attached to. The browser absorbs the mismatch.
 		}
 	}
 }
