@@ -75,8 +75,13 @@ func (s *Server) handlePaneWS(w http.ResponseWriter, r *http.Request, pane tmux.
 		return
 	}
 
+	servePane(conn, s.tmux, controlManagerAdapter{mgr: s.controlMgr}, s.registry, pane)
+}
+
+// servePane owns an upgraded pane connection: seeding, streaming and cleanup.
+func servePane(conn *websocket.Conn, tm tmuxOps, cm controlManagerOps, registry *agents.Registry, pane tmux.Pane) {
 	// Look up tmux pane ID (%N format) for control mode routing
-	paneID, err := s.tmux.GetPaneID(pane)
+	paneID, err := tm.GetPaneID(pane)
 	if err != nil {
 		slog.Error("failed to get pane ID", "target", pane.Target(), "error", err)
 		_ = conn.Close()
@@ -84,21 +89,25 @@ func (s *Server) handlePaneWS(w http.ResponseWriter, r *http.Request, pane tmux.
 	}
 
 	// Get or create control client for this session (ref-counted)
-	cc, err := s.controlMgr.GetClient(pane.Session)
+	cc, err := cm.GetClient(pane.Session)
 	if err != nil {
 		slog.Error("failed to get control client", "session", pane.Session, "error", err)
 		_ = conn.Close()
 		return
 	}
 
+	// Per-connection lifetime. The control client is shared across every
+	// socket on this session, so its Done channel outlives this connection.
+	connDone := make(chan struct{})
+
 	slog.Info("pane websocket connected (control mode)", "target", pane.Target(), "paneID", paneID)
 
 	// Auto-zoom: if window has multiple panes, zoom the target pane so it
 	// fills the window — gives a much better view, especially on mobile.
 	weZoomed := false
-	if count, err := s.tmux.WindowPaneCount(pane); err == nil && count > 1 {
-		if zoomed, err := s.tmux.IsZoomed(pane); err == nil && !zoomed {
-			if err := s.tmux.ZoomPane(pane); err == nil {
+	if count, err := tm.WindowPaneCount(pane); err == nil && count > 1 {
+		if zoomed, err := tm.IsZoomed(pane); err == nil && !zoomed {
+			if err := tm.ZoomPane(pane); err == nil {
 				weZoomed = true
 				slog.Debug("auto-zoomed pane", "target", pane.Target())
 			}
@@ -125,11 +134,12 @@ func (s *Server) handlePaneWS(w http.ResponseWriter, r *http.Request, pane tmux.
 		}
 		// Restore zoom state if we auto-zoomed on connect
 		if weZoomed {
-			_ = s.tmux.ZoomPane(pane) // toggle off
+			_ = tm.ZoomPane(pane) // toggle off
 		}
+		close(connDone)
 		_ = conn.Close()
 		cc.Unsubscribe(paneID, sub)
-		s.controlMgr.ReleaseClient(pane.Session)
+		cm.ReleaseClient(pane.Session)
 	}()
 
 	// Keepalive
@@ -140,7 +150,7 @@ func (s *Server) handlePaneWS(w http.ResponseWriter, r *http.Request, pane tmux.
 
 	// Send pane dimensions so the frontend can resize xterm.js to match.
 	// Absolute cursor positions in %output depend on matching dimensions.
-	if w, h, err := s.tmux.GetPaneSize(pane); err == nil && w > 0 && h > 0 {
+	if w, h, err := tm.GetPaneSize(pane); err == nil && w > 0 && h > 0 {
 		dimsJSON, _ := json.Marshal(WSDims{Cols: w, Rows: h})
 		dimsMsg, _ := json.Marshal(WSMessage{Type: "dims", Data: dimsJSON})
 		if err := conn.WriteMessage(websocket.TextMessage, dimsMsg); err != nil {
@@ -151,7 +161,7 @@ func (s *Server) handlePaneWS(w http.ResponseWriter, r *http.Request, pane tmux.
 	// Seed: capture-pane provides scrollback history and initial visible
 	// content. Pane is paused so no %output races with this seed. A capture
 	// failure costs scrollback, not the connection.
-	if _, err := s.sendSeed(conn, pane); err != nil {
+	if _, err := sendSeed(conn, tm, pane); err != nil {
 		return
 	}
 
@@ -159,7 +169,7 @@ func (s *Server) handlePaneWS(w http.ResponseWriter, r *http.Request, pane tmux.
 	// prompting it to repaint any garbled state. tmux discards %output while
 	// paused, so the redraw's own output is not queued for later delivery —
 	// this just nudges the TUI before we resume normal streaming below.
-	if err := s.tmux.ForceRedraw(pane); err != nil {
+	if err := tm.ForceRedraw(pane); err != nil {
 		slog.Debug("force redraw failed", "target", pane.Target(), "error", err)
 	}
 
@@ -172,8 +182,8 @@ func (s *Server) handlePaneWS(w http.ResponseWriter, r *http.Request, pane tmux.
 		paused = false
 	}
 
-	go s.paneWSReadLoop(conn, cc, paneID)
-	s.paneWSWriteLoop(conn, cc, pane, sub)
+	go paneWSReadLoop(conn, cc, paneID)
+	paneWSWriteLoop(conn, tm, cc, registry, pane, sub, connDone)
 }
 
 // sendSeed pushes a capture-pane snapshot as the authoritative screen state.
@@ -183,8 +193,8 @@ func (s *Server) handlePaneWS(w http.ResponseWriter, r *http.Request, pane tmux.
 // WebSocket write failed, which is always fatal. A capture-pane failure is
 // (false, nil), leaving the caller to decide whether it can proceed without
 // a seed.
-func (s *Server) sendSeed(conn *websocket.Conn, pane tmux.Pane) (ok bool, err error) {
-	seed, ok := s.captureSeed(pane)
+func sendSeed(conn wsWriter, tm tmuxOps, pane tmux.Pane) (ok bool, err error) {
+	seed, ok := captureSeed(tm, pane)
 	if !ok {
 		return false, nil
 	}
@@ -197,8 +207,8 @@ func (s *Server) sendSeed(conn *websocket.Conn, pane tmux.Pane) (ok bool, err er
 // captureSeed takes a capture-pane snapshot. The bool reports whether a
 // non-empty seed was captured; neither a capture failure nor an empty pane
 // is an error.
-func (s *Server) captureSeed(pane tmux.Pane) (string, bool) {
-	seed, capErr := s.tmux.CapturePane(pane, 500)
+func captureSeed(tm tmuxOps, pane tmux.Pane) (string, bool) {
+	seed, capErr := tm.CapturePane(pane, 500)
 	if capErr != nil {
 		slog.Debug("capture-pane failed", "target", pane.Target(), "error", capErr)
 		return "", false
@@ -209,20 +219,20 @@ func (s *Server) captureSeed(pane tmux.Pane) (string, bool) {
 	return seed, true
 }
 
-func writeSeed(conn *websocket.Conn, seed string) error {
+func writeSeed(conn wsWriter, seed string) error {
 	outputJSON, _ := json.Marshal(WSOutput{Data: seed})
 	msg, _ := json.Marshal(WSMessage{Type: "seed", Data: outputJSON})
 	return conn.WriteMessage(websocket.TextMessage, msg)
 }
 
-func (s *Server) paneWSWriteLoop(conn *websocket.Conn, cc *tmux.ControlClient, pane tmux.Pane, sub *tmux.PaneSub) {
+func paneWSWriteLoop(conn wsWriter, tm tmuxOps, cc controlClientOps, registry *agents.Registry, pane tmux.Pane, sub paneSub, connDone <-chan struct{}) {
 	pingTicker := time.NewTicker(30 * time.Second)
 	defer pingTicker.Stop()
 
 	// Meta polling runs in its own goroutine so capture-pane calls
 	// never block output delivery to the WebSocket client.
 	metaCh := make(chan WSMeta, 1)
-	go s.metaPollLoop(pane, cc.Done(), metaCh)
+	go metaPollLoop(tm, registry, pane, connDone, metaCh)
 
 	var lastMeta WSMeta
 
@@ -233,7 +243,7 @@ func (s *Server) paneWSWriteLoop(conn *websocket.Conn, cc *tmux.ControlClient, p
 				// The stream has a hole. Everything buffered was discarded,
 				// so capture-pane is the only trustworthy screen state.
 				slog.Debug("pane stream dirty, re-seeding", "target", pane.Target())
-				seed, ok := s.captureSeed(pane)
+				seed, ok := captureSeed(tm, pane)
 				if !ok {
 					// Cannot re-seed, so the screen is unrecoverable on this
 					// socket. Close it and let the client reconnect for a
@@ -298,12 +308,12 @@ func (s *Server) paneWSWriteLoop(conn *websocket.Conn, cc *tmux.ControlClient, p
 
 // metaPollLoop runs agent detection in its own goroutine, sending
 // results to metaCh. Exits when done closes.
-func (s *Server) metaPollLoop(pane tmux.Pane, done <-chan struct{}, metaCh chan<- WSMeta) {
+func metaPollLoop(tm tmuxOps, registry *agents.Registry, pane tmux.Pane, done <-chan struct{}, metaCh chan<- WSMeta) {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
 	// Fetch initial pane info for agent detection
-	panes, _ := s.tmux.ListPanes(pane.Session, pane.Window)
+	panes, _ := tm.ListPanes(pane.Session, pane.Window)
 	var panePath, paneCommand string
 	for _, p := range panes {
 		if p.Index == pane.Index {
@@ -313,7 +323,7 @@ func (s *Server) metaPollLoop(pane tmux.Pane, done <-chan struct{}, metaCh chan<
 		}
 	}
 	var windowName string
-	if windows, err := s.tmux.ListWindows(pane.Session); err == nil {
+	if windows, err := tm.ListWindows(pane.Session); err == nil {
 		for _, w := range windows {
 			if w.Index == pane.Window {
 				windowName = w.Name
@@ -325,11 +335,11 @@ func (s *Server) metaPollLoop(pane tmux.Pane, done <-chan struct{}, metaCh chan<
 	for {
 		select {
 		case <-ticker.C:
-			capture, err := s.tmux.CapturePaneWithMode(pane, 500)
+			capture, err := tm.CapturePaneWithMode(pane, 500)
 			if err != nil {
 				continue
 			}
-			agent := s.registry.Detect(pane.Target(), paneCommand, capture.Output)
+			agent := registry.Detect(pane.Target(), paneCommand, capture.Output)
 			parseResult := getAgentState(agent, panePath, capture.Output)
 
 			meta := WSMeta{
@@ -362,7 +372,7 @@ func (s *Server) metaPollLoop(pane tmux.Pane, done <-chan struct{}, metaCh chan<
 	}
 }
 
-func (s *Server) paneWSReadLoop(conn *websocket.Conn, cc *tmux.ControlClient, paneID string) {
+func paneWSReadLoop(conn *websocket.Conn, cc controlClientOps, paneID string) {
 	defer func() { _ = conn.Close() }()
 
 	for {
