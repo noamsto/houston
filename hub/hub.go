@@ -26,22 +26,23 @@ type TrailChip struct {
 
 // SessionView is the DTO the server emits over SSE for one agent card.
 type SessionView struct {
-	SessionID      string          `json:"session_id"`
-	CWD            string          `json:"cwd,omitempty"`
-	TmuxSession    string          `json:"tmux_session,omitempty"`
-	TmuxWindow     string          `json:"tmux_window,omitempty"`
-	State          hook.State      `json:"state"`
-	Tool           string          `json:"tool,omitempty"`
-	ToolInputHint  string          `json:"tool_input_hint,omitempty"`
-	LastMessage    string          `json:"last_message,omitempty"`
-	Turn           int             `json:"turn"`
-	Since          int64           `json:"since,omitempty"`
-	UpdatedAt      int64           `json:"updated_at"`
-	Trail          []TrailChip     `json:"trail,omitempty"`
-	Preview        string          `json:"preview,omitempty"`
-	InputTokens    int             `json:"input_tokens"`
-	OutputTokens   int             `json:"output_tokens"`
-	TranscriptPath string          `json:"transcript_path,omitempty"`
+	SessionID      string      `json:"session_id"`
+	CWD            string      `json:"cwd,omitempty"`
+	TmuxSession    string      `json:"tmux_session,omitempty"`
+	TmuxWindow     string      `json:"tmux_window,omitempty"`
+	TmuxPane       string      `json:"tmux_pane,omitempty"`
+	State          hook.State  `json:"state"`
+	Tool           string      `json:"tool,omitempty"`
+	ToolInputHint  string      `json:"tool_input_hint,omitempty"`
+	LastMessage    string      `json:"last_message,omitempty"`
+	Turn           int         `json:"turn"`
+	Since          int64       `json:"since,omitempty"`
+	UpdatedAt      int64       `json:"updated_at"`
+	Trail          []TrailChip `json:"trail,omitempty"`
+	Preview        string      `json:"preview,omitempty"`
+	InputTokens    int         `json:"input_tokens"`
+	OutputTokens   int         `json:"output_tokens"`
+	TranscriptPath string      `json:"transcript_path,omitempty"`
 }
 
 // Hub aggregates hook state files + transcript tails and exposes updates.
@@ -406,6 +407,7 @@ func mergeStateIntoView(v *SessionView, s hook.SessionState) {
 	v.CWD = s.CWD
 	v.TmuxSession = s.TmuxSession
 	v.TmuxWindow = s.TmuxWindow
+	v.TmuxPane = s.TmuxPane
 	v.State = s.State
 	v.Tool = s.Tool
 	v.ToolInputHint = s.ToolInputHint

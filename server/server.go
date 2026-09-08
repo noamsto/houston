@@ -26,6 +26,7 @@ import (
 	"github.com/noamsto/houston/internal/ansi"
 	"github.com/noamsto/houston/opencode"
 	"github.com/noamsto/houston/parser"
+	"github.com/noamsto/houston/runs"
 	"github.com/noamsto/houston/status"
 	"github.com/noamsto/houston/tmux"
 )
@@ -88,6 +89,9 @@ type Server struct {
 
 	// Agent-card hub (new) — aggregates hook state + transcript tails.
 	hub *hub.Hub
+
+	// runs composes the hook, tmux and crew sources into one Run per key.
+	runs *runs.Registry
 
 	auth  *authGate
 	hosts *hostGate
@@ -152,6 +156,28 @@ func New(cfg Config) (*Server, error) {
 		}
 	}()
 
+	reg := runs.NewRegistry(runs.DefaultOrder)
+	s.runs = reg
+
+	deltas := make(chan runs.Delta, 256)
+	go func() {
+		for d := range deltas {
+			reg.Apply(d)
+		}
+	}()
+
+	for _, src := range []runs.Source{
+		runs.NewHookSource(s.hub),
+		runs.NewTmuxSource(tmuxClient, 2*time.Second),
+		runs.NewCrewSource(tmuxClient, 3*time.Second),
+	} {
+		go func(src runs.Source) {
+			if err := src.Run(context.Background(), deltas); err != nil && !errors.Is(err, context.Canceled) {
+				slog.Warn("run source stopped", "source", src.Name(), "error", err)
+			}
+		}(src)
+	}
+
 	// Initialize OpenCode integration if enabled
 	if cfg.OpenCodeEnabled {
 		var opts []opencode.DiscoveryOption
@@ -213,6 +239,8 @@ func (s *Server) Handler() http.Handler {
 	apiMux.HandleFunc("/api/opencode/session/", s.handleAPIOpenCodeSession)
 	apiMux.HandleFunc("/api/agents", s.handleAgentsSnapshot)
 	apiMux.HandleFunc("/api/agents/stream", s.handleAgentsStream)
+	apiMux.HandleFunc("/api/runs", s.handleRunsSnapshot)
+	apiMux.HandleFunc("/api/runs/stream", s.handleRunsStream)
 	mux.Handle("/api/", s.auth.middleware(apiMux))
 
 	// The host gate wraps everything, including "/", so a rebound domain is
