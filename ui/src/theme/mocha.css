@@ -36,10 +36,17 @@
   --text: var(--ctp-text);
   --text-strong: var(--ctp-subtext1);
   --text-dim: var(--ctp-overlay2);
-  /* overlay1, not overlay0 — overlay0 on the mantle ground is ~3.1:1, below
-     readable contrast for the 10-13px text (tab labels, ages, filters) that
-     use this token. */
-  --text-faint: var(--ctp-overlay1);
+  /* overlay2, not overlay1 or overlay0 — this token carries the smallest
+     text in the shell (tab labels, ages, filters), on whichever of --bg /
+     --bg-raised / --bg-sunken happens to be under it at rest, so it needs
+     headroom on the worst case, not just the best one. Measured (WCAG,
+     sRGB): overlay0 is 3.36-3.59:1 across those three, overlay1 is
+     4.44-5.07:1 (fails AA's 4.5:1 on --bg-raised), overlay2 is 5.81-6.64:1
+     on all three — clears AA on every resting background this token sits
+     on. (A couple of :active press states swap their background to --fill,
+     where overlay2 is still under 4.5:1 — untouched here since that's a
+     sub-200ms tap flash, not sustained reading.) */
+  --text-faint: var(--ctp-overlay2);
   --accent: var(--ctp-mauve);
 
   /* One colour per run state. blocked is the only "needs you" colour and must

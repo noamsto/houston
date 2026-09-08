@@ -7,6 +7,13 @@
   font-family: var(--font-ui);
   font-size: 14px;
   -webkit-tap-highlight-color: transparent;
+  /* Insets the run-card list; as a side effect also insets .fleet-nav's
+     content since it's a child. .fleet-nav's own background/border-bottom
+     are NOT full-bleed like .shell-tabs' — on a landscape/cutout device
+     they stop short of the true edge. Accepted: --bg and the nav's
+     92%-mix of --bg are nearly identical, so the delta is a border line. */
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
 }
 
 .fleet-nav {
@@ -16,7 +23,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 14px;
+  padding: calc(12px + env(safe-area-inset-top)) 14px 12px;
   background: color-mix(in srgb, var(--bg) 92%, transparent);
   backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--line);
@@ -34,7 +41,7 @@
   color: var(--state-blocked);
   border: 0; font-family: inherit; cursor: pointer;
 }
-.fleet-badge.quiet { background: var(--fill); color: var(--text-faint); }
+.fleet-badge.quiet { background: var(--bg-raised); color: var(--text-faint); }
 
 .fleet-filters { display: flex; gap: 4px; padding: 10px 12px 4px; }
 .fleet-filters button {
@@ -87,7 +94,7 @@
 .run-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
 .run-chip {
   font-size: 11px; padding: 2.5px 7px; border-radius: 5px;
-  background: var(--fill); color: var(--text-dim);
+  background: var(--fill); color: var(--text-strong);
 }
 .run-chip.pr { background: color-mix(in srgb, var(--state-running) 18%, transparent); color: var(--state-running); }
 .run-chip.pr.failing { background: color-mix(in srgb, var(--state-blocked) 18%, transparent); color: var(--state-blocked); }
@@ -107,6 +114,11 @@
    still visibly registers. */
 .fleet-filters button:active { background: var(--line-strong); }
 .shell-tabs button:active { background: var(--fill); }
+/* opacity, not a background swap — .fleet-badge has a .quiet variant with
+   its own background, and a background :active rule would need to fight
+   that variant's specificity instead of just dimming either state. */
+.fleet-classic:active,
+.fleet-badge:active { opacity: 0.7; }
 
 .shell { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--bg); }
 .shell-body { flex: 1; position: relative; overflow: hidden; }
@@ -115,6 +127,8 @@
   display: flex; flex: none;
   background: var(--bg-sunken); border-top: 1px solid var(--line);
   padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
 }
 .shell-tabs button {
   position: relative;
