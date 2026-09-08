@@ -1,25 +1,19 @@
-import { useEffect, useMemo, useState } from 'react'
-import { useRuns } from '../hooks/useRuns'
+import { useMemo, useState } from 'react'
 import type { Run } from '../api/runs'
-import { isHistory, needsYou } from './staleness'
+import { isFresh, isHistory, needsYou } from './staleness'
 import { RunCard } from './RunCard'
 import './fleet.css'
 
 type Filter = 'active' | 'needs-you' | 'all'
 
-/** Ticks once a minute so relative ages and freshness stay honest. */
-function useNow(): number {
-  const [now, setNow] = useState(() => Date.now())
-  useEffect(() => {
-    const id = window.setInterval(() => setNow(Date.now()), 60_000)
-    return () => window.clearInterval(id)
-  }, [])
-  return now
+interface FleetViewProps {
+  runs: Run[]
+  connected: boolean
+  now: number
+  onOpen?: (r: Run) => void
 }
 
-export function FleetView({ onOpen }: { onOpen?: (r: Run) => void }) {
-  const { runs, connected } = useRuns()
-  const now = useNow()
+export function FleetView({ runs, connected, now, onOpen }: FleetViewProps) {
   const [filter, setFilter] = useState<Filter>('active')
 
   const attentionCount = useMemo(
@@ -28,13 +22,24 @@ export function FleetView({ onOpen }: { onOpen?: (r: Run) => void }) {
   )
 
   const visible = useMemo(() => {
+    // Needs-you shows every blocked run, not just fresh ones — the badge
+    // and the sort answer "how many need me now", this filter answers
+    // "what asked for me at all".
     const keep = runs.filter((r) => {
-      if (filter === 'needs-you') return needsYou(r, now)
+      if (filter === 'needs-you') return r.state === 'blocked'
       if (filter === 'active') return !isHistory(r, now)
       return true
     })
-    // Anything asking for input first, then most recently active.
     return keep.sort((a, b) => {
+      if (filter === 'needs-you') {
+        const af = isFresh(a, now) ? 1 : 0
+        const bf = isFresh(b, now) ? 1 : 0
+        if (af !== bf) return bf - af
+        return b.updated_at - a.updated_at
+      }
+      // Anything asking for input first, then most recently active. Stale
+      // blocked runs deliberately stay out of this bucket — see RunCard's
+      // muted attention border for how they stay findable in place instead.
       const an = needsYou(a, now) ? 1 : 0
       const bn = needsYou(b, now) ? 1 : 0
       if (an !== bn) return bn - an
@@ -57,15 +62,29 @@ export function FleetView({ onOpen }: { onOpen?: (r: Run) => void }) {
     <div className="fleet mocha">
       <header className="fleet-nav">
         <h1>Fleet</h1>
-        <span className={`fleet-badge${attentionCount === 0 ? ' quiet' : ''}`}>
-          {attentionCount > 0 ? `${attentionCount} needs you` : connected ? 'all quiet' : 'offline'}
-        </span>
+        <div className="fleet-nav-actions">
+          <button
+            type="button"
+            className="fleet-classic"
+            aria-label="Switch to the classic view"
+            onClick={() => { window.location.hash = '#/agents' }}
+          >
+            Classic
+          </button>
+          <button
+            type="button"
+            className={`fleet-badge${attentionCount === 0 ? ' quiet' : ''}`}
+            onClick={() => setFilter('needs-you')}
+          >
+            {attentionCount > 0 ? `${attentionCount} needs you` : connected ? 'all quiet' : 'offline'}
+          </button>
+        </div>
       </header>
 
       <nav className="fleet-filters" aria-label="filter runs">
-        <button className={filter === 'active' ? 'on' : ''} onClick={() => setFilter('active')}>Active</button>
-        <button className={filter === 'needs-you' ? 'on' : ''} onClick={() => setFilter('needs-you')}>Needs you</button>
-        <button className={filter === 'all' ? 'on' : ''} onClick={() => setFilter('all')}>All</button>
+        <button aria-pressed={filter === 'active'} className={filter === 'active' ? 'on' : ''} onClick={() => setFilter('active')}>Active</button>
+        <button aria-pressed={filter === 'needs-you'} className={filter === 'needs-you' ? 'on' : ''} onClick={() => setFilter('needs-you')}>Needs you</button>
+        <button aria-pressed={filter === 'all'} className={filter === 'all' ? 'on' : ''} onClick={() => setFilter('all')}>All</button>
       </nav>
 
       {visible.length === 0 && (

@@ -32,9 +32,14 @@
   --bg-sunken: var(--ctp-crust);
   --line: var(--ctp-surface0);
   --line-strong: var(--ctp-surface1);
+  --fill: var(--ctp-surface0);
   --text: var(--ctp-text);
+  --text-strong: var(--ctp-subtext1);
   --text-dim: var(--ctp-overlay2);
-  --text-faint: var(--ctp-overlay0);
+  /* overlay1, not overlay0 — overlay0 on the mantle ground is ~3.1:1, below
+     readable contrast for the 10-13px text (tab labels, ages, filters) that
+     use this token. */
+  --text-faint: var(--ctp-overlay1);
   --accent: var(--ctp-mauve);
 
   /* One colour per run state. blocked is the only "needs you" colour and must

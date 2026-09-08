@@ -22,21 +22,28 @@
   border-bottom: 1px solid var(--line);
 }
 .fleet-nav h1 { margin: 0; font-size: 16px; font-weight: 600; color: var(--text); }
+.fleet-nav-actions { display: flex; align-items: center; gap: 8px; }
+.fleet-classic {
+  min-height: var(--tap); padding: 0 8px; border: 0; background: none;
+  color: var(--text-faint); font: inherit; font-size: 12px; cursor: pointer;
+}
 .fleet-badge {
+  min-height: var(--tap); display: inline-flex; align-items: center;
   font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 999px;
   background: color-mix(in srgb, var(--state-blocked) 22%, transparent);
   color: var(--state-blocked);
+  border: 0; font-family: inherit; cursor: pointer;
 }
-.fleet-badge.quiet { background: var(--ctp-surface0); color: var(--text-faint); }
+.fleet-badge.quiet { background: var(--fill); color: var(--text-faint); }
 
 .fleet-filters { display: flex; gap: 4px; padding: 10px 12px 4px; }
 .fleet-filters button {
-  flex: 1; min-height: 34px; border: 1px solid var(--line); border-radius: 8px;
+  flex: 1; min-height: var(--tap); border: 1px solid var(--line); border-radius: 8px;
   background: var(--bg-raised); color: var(--text-faint);
   font: inherit; font-size: 12.5px; cursor: pointer;
 }
 .fleet-filters button.on {
-  background: var(--ctp-surface0); color: var(--text); font-weight: 600;
+  background: var(--fill); color: var(--text); font-weight: 600;
   border-color: var(--line-strong);
 }
 
@@ -55,7 +62,9 @@
   min-height: var(--tap);
 }
 .run-card.attention { border-color: color-mix(in srgb, var(--state-blocked) 45%, var(--line)); }
+.run-card.attention.muted { border-color: color-mix(in srgb, var(--state-blocked) 22%, var(--line)); }
 .run-card.history { opacity: 0.55; }
+.run-card:active { background: var(--fill); transform: scale(0.995); }
 
 .run-head { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
 .run-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
@@ -72,19 +81,32 @@
 }
 .run-question {
   margin-top: 9px; padding: 9px 10px; border-radius: 8px;
-  background: var(--bg-sunken); color: var(--ctp-subtext1);
+  background: var(--bg-sunken); color: var(--text-strong);
   font-size: 13px; line-height: 1.45;
 }
 .run-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
 .run-chip {
   font-size: 11px; padding: 2.5px 7px; border-radius: 5px;
-  background: var(--ctp-surface0); color: var(--text-dim);
+  background: var(--fill); color: var(--text-dim);
 }
 .run-chip.pr { background: color-mix(in srgb, var(--state-running) 18%, transparent); color: var(--state-running); }
 .run-chip.pr.failing { background: color-mix(in srgb, var(--state-blocked) 18%, transparent); color: var(--state-blocked); }
 .run-chip.issue { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
 
 .fleet-empty { padding: 40px 20px; text-align: center; color: var(--text-faint); font-size: 13px; }
+
+.run-card:focus-visible,
+.fleet-filters button:focus-visible,
+.shell-tabs button:focus-visible,
+.fleet-badge:focus-visible,
+.fleet-classic:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* Distinct from button.on's --fill so pressing the already-selected filter
+   still visibly registers. */
+.fleet-filters button:active { background: var(--line-strong); }
+.shell-tabs button:active { background: var(--fill); }
 
 .shell { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--bg); }
 .shell-body { flex: 1; position: relative; overflow: hidden; }
@@ -99,7 +121,7 @@
   flex: 1; min-height: var(--tap);
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
   border: 0; background: none; color: var(--text-faint);
-  font: inherit; font-size: 10px; cursor: pointer;
+  font: inherit; font-size: 11px; cursor: pointer;
 }
 .shell-tabs button.on { color: var(--accent); font-weight: 700; }
 .shell-tabs .glyph { font-size: 15px; line-height: 1; }

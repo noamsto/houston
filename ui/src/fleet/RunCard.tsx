@@ -2,6 +2,7 @@ import type { Run } from '../api/runs'
 import { isFresh, isHistory, needsYou } from './staleness'
 
 function agoLabel(updatedAt: number, now: number): string {
+  if (!updatedAt) return '—'
   const s = Math.max(0, Math.floor(now / 1000 - updatedAt))
   if (s < 60) return `${s}s`
   const m = Math.floor(s / 60)
@@ -29,17 +30,23 @@ function nameLabel(run: Run): string {
 
 export function RunCard({ run, now, onOpen }: { run: Run; now: number; onOpen?: (r: Run) => void }) {
   const attention = needsYou(run, now)
+  // Stale blocked runs are never in the sort's attention bucket, but they
+  // still need a visible marker wherever they land — a muted version of the
+  // same border, not a whole new signal.
+  const staleBlocked = run.state === 'blocked' && !isFresh(run, now)
   const history = isHistory(run, now)
   const stale = !isFresh(run, now)
+
+  const attentionClass = attention ? ' attention' : staleBlocked ? ' attention muted' : ''
 
   return (
     <button
       type="button"
-      className={`run-card${attention ? ' attention' : ''}${history ? ' history' : ''}`}
+      className={`run-card${attentionClass}${history ? ' history' : ''}`}
       onClick={() => onOpen?.(run)}
     >
       <div className="run-head">
-        <span className="run-dot" style={{ background: `var(--state-${run.state})` }} />
+        <span className="run-dot" style={{ background: `var(--state-${run.state}, var(--text-faint))` }} />
         <span className="run-name">{nameLabel(run)}</span>
         <span className={`run-age${stale ? ' stale' : ''}`}>{agoLabel(run.updated_at, now)}</span>
       </div>
