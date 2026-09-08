@@ -162,13 +162,20 @@ func truncate(s string, n int) string {
 // tmuxCoords returns (session, window, pane). Empty on any failure — hooks
 // can fire outside tmux.
 func tmuxCoords() (string, string, string) {
-	out, err := exec.Command("tmux", "display-message", "-p", "#S\t#I\t#P").Output()
-	if err != nil {
+	// $TMUX_PANE is the pane id ("%307") and is set per pane, so it is both the
+	// right namespace to correlate on — every other source keys on the pane id,
+	// never the index — and immune to which client tmux considers current.
+	pane := os.Getenv("TMUX_PANE")
+	if pane == "" {
 		return "", "", ""
 	}
-	parts := strings.SplitN(strings.TrimSpace(string(out)), "\t", 3)
-	for len(parts) < 3 {
+	out, err := exec.Command("tmux", "display-message", "-p", "-t", pane, "#S\t#I").Output()
+	if err != nil {
+		return "", "", pane
+	}
+	parts := strings.SplitN(strings.TrimSpace(string(out)), "\t", 2)
+	for len(parts) < 2 {
 		parts = append(parts, "")
 	}
-	return parts[0], parts[1], parts[2]
+	return parts[0], parts[1], pane
 }

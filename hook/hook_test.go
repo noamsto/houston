@@ -32,10 +32,10 @@ func dispatch(t *testing.T, stateDir string, event string, payload map[string]an
 func TestDispatchPreToolUseSetsToolRunning(t *testing.T) {
 	dir := t.TempDir()
 	got := dispatch(t, dir, EventPreToolUse, map[string]any{
-		"session_id":     "s1",
-		"tool_name":      "Edit",
-		"tool_input":     map[string]any{"file_path": "ui/src/App.tsx"},
-		"cwd":            "/tmp",
+		"session_id":      "s1",
+		"tool_name":       "Edit",
+		"tool_input":      map[string]any{"file_path": "ui/src/App.tsx"},
+		"cwd":             "/tmp",
 		"transcript_path": "/tmp/t.jsonl",
 	})
 	if got.State != StateToolRunning {
@@ -190,5 +190,28 @@ func TestToolInputHint(t *testing.T) {
 				t.Errorf("toolInputHint(%s) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestTmuxCoordsReportsPaneIDNotIndex(t *testing.T) {
+	// Every source correlates on the tmux pane id (%17). "#P" is the pane
+	// *index* (1), which is not the same namespace and is not even unique —
+	// every session has a pane 1. The pane's own environment is authoritative.
+	t.Setenv("TMUX_PANE", "%307")
+
+	_, _, pane := tmuxCoords()
+
+	if pane != "%307" {
+		t.Errorf("pane = %q, want %%307 — a pane index here can never merge with the tmux layer", pane)
+	}
+}
+
+func TestTmuxCoordsEmptyOutsideTmux(t *testing.T) {
+	t.Setenv("TMUX_PANE", "")
+
+	session, window, pane := tmuxCoords()
+
+	if session != "" || window != "" || pane != "" {
+		t.Errorf("got (%q, %q, %q), want all empty outside tmux", session, window, pane)
 	}
 }

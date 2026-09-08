@@ -2,7 +2,9 @@ package runs
 
 import (
 	"context"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/noamsto/houston/hub"
@@ -87,9 +89,12 @@ func (s *HookSource) Run(ctx context.Context, out chan<- Delta) error {
 // deltas can also produce; a headless session falls back to its own id and
 // simply never correlates with them.
 func runFromSessionView(v hub.SessionView) (string, Run) {
+	repo, branch := repoAndBranch(v.CWD, v.GitBranch)
 	r := Run{
 		Agent:     "claude",
 		State:     FromHookState(v.State),
+		Repo:      repo,
+		Branch:    branch,
 		Worktree:  v.CWD,
 		UpdatedAt: v.UpdatedAt,
 		Since:     v.Since,
@@ -120,4 +125,21 @@ func runFromSessionView(v hub.SessionView) (string, Run) {
 		r.Question = &Question{Text: v.LastMessage, Via: "pane"}
 	}
 	return key, r
+}
+
+// repoAndBranch names a run that has no tmux layer to inherit a name from.
+// Without it the card falls back to the raw session id.
+//
+// Worktree-per-branch is this project's mandated topology, so the leaf
+// directory is usually the branch rather than the repo — recognisably so,
+// because worktrunk names the directory after the branch with "/" flattened.
+func repoAndBranch(cwd, gitBranch string) (string, string) {
+	if cwd == "" {
+		return "", gitBranch
+	}
+	repo := filepath.Base(cwd)
+	if gitBranch != "" && repo == strings.ReplaceAll(gitBranch, "/", "-") {
+		repo = filepath.Base(filepath.Dir(cwd))
+	}
+	return repo, gitBranch
 }

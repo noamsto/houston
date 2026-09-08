@@ -65,3 +65,36 @@ func TestRunFromSessionViewCarriesQuestionWhenBlocked(t *testing.T) {
 		t.Errorf("Question.Via = %q, want pane", r.Question.Via)
 	}
 }
+
+func TestRunFromSessionViewNamesTheRepo(t *testing.T) {
+	_, r := runFromSessionView(hub.SessionView{
+		SessionID: "abc-123",
+		CWD:       "/home/noams/git/nix-amd-ai",
+		GitBranch: "main",
+	})
+
+	if r.Repo != "nix-amd-ai" {
+		t.Errorf("Repo = %q, want nix-amd-ai — without it the card falls back to the raw session id", r.Repo)
+	}
+	if r.Branch != "main" {
+		t.Errorf("Branch = %q, want main", r.Branch)
+	}
+}
+
+func TestRunFromSessionViewNamesTheRepoFromAWorktree(t *testing.T) {
+	// Worktree-per-branch is this project's mandated topology, so the leaf
+	// directory is the branch, not the repo. It is recognisable as such:
+	// worktrunk names the directory after the branch with "/" flattened.
+	_, r := runFromSessionView(hub.SessionView{
+		SessionID: "abc-123",
+		CWD:       "/home/noams/Data/git/.worktrees/git/houston/fix-build-guard-ui-dist",
+		GitBranch: "fix/build-guard-ui-dist",
+	})
+
+	if r.Repo != "houston" {
+		t.Errorf("Repo = %q, want houston — the leaf directory is the branch", r.Repo)
+	}
+	if r.Branch != "fix/build-guard-ui-dist" {
+		t.Errorf("Branch = %q, want fix/build-guard-ui-dist", r.Branch)
+	}
+}
