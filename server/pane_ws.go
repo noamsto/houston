@@ -15,8 +15,20 @@ import (
 	"github.com/noamsto/houston/tmux"
 )
 
-var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
+// wsUpgrader validates Origin against the same allowlist as the HTTP API.
+// This runs regardless of whether auth is enabled: -no-auth disables the
+// token requirement, not cross-origin drivability — see originAllowed's
+// comment in auth.go for why an absent Origin is still safe to allow.
+func (s *Server) wsUpgrader() websocket.Upgrader {
+	return websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool {
+			if s.auth == nil {
+				// Unwired gate — refuse rather than accept every origin.
+				return false
+			}
+			return originAllowed(r, s.auth.allowedOrigins)
+		},
+	}
 }
 
 // WebSocket message types
@@ -56,7 +68,8 @@ type WSDims struct {
 }
 
 func (s *Server) handlePaneWS(w http.ResponseWriter, r *http.Request, pane tmux.Pane) {
-	conn, err := upgrader.Upgrade(w, r, nil)
+	up := s.wsUpgrader()
+	conn, err := up.Upgrade(w, r, nil)
 	if err != nil {
 		slog.Error("websocket upgrade failed", "error", err)
 		return

@@ -88,6 +88,9 @@ type Server struct {
 
 	// Agent-card hub (new) — aggregates hook state + transcript tails.
 	hub *hub.Hub
+
+	auth  *authGate
+	hosts *hostGate
 }
 
 // FontController controls terminal font size.
@@ -109,6 +112,17 @@ type Config struct {
 
 	// UIFS is the embedded React SPA filesystem.
 	UIFS fs.FS
+
+	// AuthEnabled gates /api/ behind the state-dir token. Disabled only by
+	// an explicit -no-auth.
+	AuthEnabled bool
+	// AllowedOrigins are extra origins permitted beyond same-origin, e.g. the
+	// Vite dev server.
+	AllowedOrigins []string
+	// AllowedHosts are extra Host values this server answers to, beyond what
+	// it can derive about itself (loopback, hostname, Tailscale addresses).
+	// For reverse proxies or custom DNS.
+	AllowedHosts []string
 }
 
 func New(cfg Config) (*Server, error) {
@@ -170,6 +184,17 @@ func New(cfg Config) (*Server, error) {
 		s.ocManager.StartBackgroundRefresh(ctx, 10*time.Second)
 	}
 
+	gate := &authGate{enabled: cfg.AuthEnabled, allowedOrigins: cfg.AllowedOrigins}
+	if cfg.AuthEnabled {
+		tok, err := LoadOrCreateToken(cfg.StatusDir)
+		if err != nil {
+			return nil, fmt.Errorf("api token: %w", err)
+		}
+		gate.token = tok
+	}
+	s.auth = gate
+	s.hosts = deriveHosts(cfg.AllowedHosts, cfg.AllowedOrigins)
+
 	return s, nil
 }
 
@@ -177,7 +202,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	if s.uiFS != nil {
-		mux.Handle("/", SPAHandler(s.uiFS))
+		mux.Handle("/", SPAHandler(s.uiFS, s.auth))
 	}
 
 	// JSON API routes (always available)
@@ -188,26 +213,38 @@ func (s *Server) Handler() http.Handler {
 	apiMux.HandleFunc("/api/opencode/session/", s.handleAPIOpenCodeSession)
 	apiMux.HandleFunc("/api/agents", s.handleAgentsSnapshot)
 	apiMux.HandleFunc("/api/agents/stream", s.handleAgentsStream)
-	mux.Handle("/api/", corsMiddleware(apiMux))
+	mux.Handle("/api/", s.auth.middleware(apiMux))
 
-	return mux
+	// The host gate wraps everything, including "/", so a rebound domain is
+	// never handed the token via SPAHandler's setCookie.
+	return s.hosts.middleware(mux)
 }
 
-// SPAHandler serves an embedded filesystem with fallback to index.html for client-side routing.
-func SPAHandler(uiFS fs.FS) http.Handler {
-	fileServer := http.FileServer(http.FS(uiFS))
+// SPAHandler serves the embedded SPA, falling back to index.html for
+// client-side routing. Every response issues the auth cookie, which is how the
+// browser comes to hold a token it can send on same-origin fetch, EventSource
+// and WebSocket calls. It must therefore stay inside the host gate: served to
+// an unrecognised Host, it would hand the token to a rebound attacker.
+func SPAHandler(uiFS fs.FS, auth *authGate) http.Handler {
+	var fileServer http.Handler
+	if uiFS != nil {
+		fileServer = http.FileServer(http.FS(uiFS))
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth.setCookie(w)
+		if fileServer == nil {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
 		path := strings.TrimPrefix(r.URL.Path, "/")
 		if path == "" {
 			path = "index.html"
 		}
-
-		// Serve the file if it exists; otherwise fallback to index.html (client-side routing).
 		if _, err := fs.Stat(uiFS, path); err == nil {
 			fileServer.ServeHTTP(w, r)
 			return
 		}
-
 		r.URL.Path = "/"
 		fileServer.ServeHTTP(w, r)
 	})

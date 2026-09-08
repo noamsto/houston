@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/noamsto/houston/hook"
 	"github.com/noamsto/houston/server"
@@ -166,6 +167,11 @@ func runServer() {
 	openCodeURL := flag.String("opencode-url", "", "OpenCode server URL (skip discovery)")
 	noOpenCode := flag.Bool("no-opencode", false, "Disable OpenCode integration")
 
+	noAuth := flag.Bool("no-auth", false, "disable API authentication (NOT recommended)")
+
+	var hostnames stringList
+	flag.Var(&hostnames, "hostname", "additional Host value to accept (repeatable; for reverse proxies or custom DNS)")
+
 	flag.Parse()
 
 	// Configure slog
@@ -193,12 +199,25 @@ func runServer() {
 		log.Fatalf("failed to create UI sub-filesystem: %v", err)
 	}
 
+	allowedOrigins := []string{}
+	if *debug {
+		// The Vite dev server proxies /api here; its Origin is preserved
+		// through the proxy, so it has to be allowlisted explicitly.
+		allowedOrigins = append(allowedOrigins, "http://localhost:5173")
+	}
+	if *noAuth {
+		slog.Warn("API authentication is DISABLED; any page that can reach this port can drive your tmux panes")
+	}
+
 	srv, err := server.New(server.Config{
 		StatusDir:       *statusDir,
 		FontController:  fontCtrl,
 		OpenCodeEnabled: !*noOpenCode,
 		OpenCodeURL:     *openCodeURL,
 		UIFS:            uiSubFS,
+		AuthEnabled:     !*noAuth,
+		AllowedOrigins:  allowedOrigins,
+		AllowedHosts:    hostnames,
 	})
 	if err != nil {
 		log.Fatalf("failed to create server: %v", err)
@@ -206,8 +225,24 @@ func runServer() {
 
 	fmt.Fprintf(os.Stderr, "houston starting on http://%s\n", *addr)
 	fmt.Fprintf(os.Stderr, "status directory: %s\n", *statusDir)
+	if !*noAuth {
+		fmt.Fprintf(os.Stderr, "api token: %s (open the UI once to authorize this browser)\n",
+			filepath.Join(*statusDir, "token"))
+	}
 
 	if err := http.ListenAndServe(*addr, srv.Handler()); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// stringList collects repeated occurrences of a flag into a slice.
+type stringList []string
+
+func (l *stringList) String() string {
+	return strings.Join(*l, ",")
+}
+
+func (l *stringList) Set(v string) error {
+	*l = append(*l, v)
+	return nil
 }
