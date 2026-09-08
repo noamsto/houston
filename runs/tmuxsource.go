@@ -33,34 +33,38 @@ func (s *TmuxSource) Run(ctx context.Context, out chan<- Delta) error {
 
 	seen := map[string]bool{}
 	for {
-		wins, err := s.client.ListWindowOptions()
-		if err != nil {
-			slog.Debug("tmux window options", "error", err)
+		wins, winErr := s.client.ListWindowOptions()
+		if winErr != nil {
+			slog.Debug("tmux window options", "error", winErr)
 		}
-		panes, err := s.client.ListPaneOptions()
-		if err != nil {
-			slog.Debug("tmux pane options", "error", err)
+		panes, paneErr := s.client.ListPaneOptions()
+		if paneErr != nil {
+			slog.Debug("tmux pane options", "error", paneErr)
 		}
 
-		now := map[string]bool{}
-		for _, d := range deltasFromTmux(wins, panes) {
-			now[d.Key] = true
-			select {
-			case out <- d:
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
-		for key := range seen {
-			if !now[key] {
+		// A transient tmux error is not evidence that every pane vanished:
+		// skip the tick entirely rather than emitting Gone for everything seen.
+		if winErr == nil && paneErr == nil {
+			now := map[string]bool{}
+			for _, d := range deltasFromTmux(wins, panes) {
+				now[d.Key] = true
 				select {
-				case out <- Delta{Source: s.Name(), Key: key, Gone: true}:
+				case out <- d:
 				case <-ctx.Done():
 					return ctx.Err()
 				}
 			}
+			for key := range seen {
+				if !now[key] {
+					select {
+					case out <- Delta{Source: s.Name(), Key: key, Gone: true}:
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+				}
+			}
+			seen = now
 		}
-		seen = now
 
 		select {
 		case <-ctx.Done():

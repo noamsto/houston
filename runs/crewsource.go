@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -23,13 +24,18 @@ import (
 type CrewSource struct {
 	client *tmux.Client
 	every  time.Duration
+
+	// crewDirs caches root -> bus directory, keyed by lazytmux's @git_root.
+	// scan() runs only on this source's own goroutine, so a plain map needs no
+	// mutex — do not add one, and do not read this from another goroutine.
+	crewDirs map[string]string
 }
 
 func NewCrewSource(c *tmux.Client, every time.Duration) *CrewSource {
 	if every <= 0 {
 		every = 3 * time.Second
 	}
-	return &CrewSource{client: c, every: every}
+	return &CrewSource{client: c, every: every, crewDirs: map[string]string{}}
 }
 
 func (s *CrewSource) Name() string { return "crew" }
@@ -68,9 +74,24 @@ func (s *CrewSource) scan() map[string]Run {
 		}
 	}
 
-	merged := map[string]Run{}
+	rootList := make([]string, 0, len(roots))
 	for repo := range roots {
-		logs, err := filepath.Glob(filepath.Join(repo, ".git", "crew", "*.jsonl"))
+		rootList = append(rootList, repo)
+	}
+	return s.scanRoots(rootList)
+}
+
+// scanRoots reads every root's crew bus and folds it into the latest state per
+// branch. Split out from scan() so the root list can be injected in tests
+// without going through tmux.
+func (s *CrewSource) scanRoots(roots []string) map[string]Run {
+	merged := map[string]Run{}
+	for _, repo := range roots {
+		dir := s.crewDir(repo)
+		if dir == "" {
+			continue
+		}
+		logs, err := filepath.Glob(filepath.Join(dir, "*.jsonl"))
 		if err != nil {
 			continue
 		}
@@ -87,6 +108,30 @@ func (s *CrewSource) scan() map[string]Run {
 		}
 	}
 	return merged
+}
+
+// crewDir resolves where dispatcher writes its bus for a checkout.
+// lazytmux's @git_root is the worktree's top level, but dispatcher writes under
+// the COMMON git dir — and in a worktree <root>/.git is a file, not a
+// directory, so joining ".git/crew" there finds nothing. Worktree-per-branch is
+// the normal case here, not an edge case.
+func (s *CrewSource) crewDir(root string) string {
+	if dir, ok := s.crewDirs[root]; ok {
+		return dir
+	}
+	out, err := exec.Command("git", "-C", root, "rev-parse", "--git-common-dir").Output()
+	if err != nil {
+		s.crewDirs[root] = ""
+		return ""
+	}
+	dir := strings.TrimSpace(string(out))
+	if !filepath.IsAbs(dir) {
+		// Older git answers relatively (".git"); resolve against the root.
+		dir = filepath.Join(root, dir)
+	}
+	dir = filepath.Join(dir, "crew")
+	s.crewDirs[root] = dir
+	return dir
 }
 
 type crewRecord struct {

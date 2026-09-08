@@ -5,13 +5,19 @@ import (
 	"strings"
 )
 
+// optSep separates fields below. tmux emits option values verbatim, and free
+// text like @window_task is captured from a user prompt — it can contain "|"
+// (e.g. "run x | grep y"), which would shift every later field. \x1f (ASCII
+// unit separator) is not something a user types, so it round-trips safely.
+const optSep = "\x1f"
+
 // windowOptionsFormat harvests every lazytmux window user-option in one call.
 // tmux resolves #{@name} inline, so no per-window show-options loop is needed.
-const windowOptionsFormat = "#{session_name}|#{window_index}|#{@branch}|#{@issue_id}|" +
-	"#{@pr_number}|#{@crew_name}|#{@pr_state}|#{@pr_check_state}|#{@pr_mergeable}|" +
-	"#{@window_task}|#{@git_root}"
+const windowOptionsFormat = "#{session_name}" + optSep + "#{window_index}" + optSep + "#{@branch}" + optSep + "#{@issue_id}" + optSep +
+	"#{@pr_number}" + optSep + "#{@crew_name}" + optSep + "#{@pr_state}" + optSep + "#{@pr_check_state}" + optSep + "#{@pr_mergeable}" + optSep +
+	"#{@window_task}" + optSep + "#{@git_root}"
 
-const paneOptionsFormat = "#{pane_id}|#{session_name}:#{window_index}|#{@claude_status}|#{@claude_task}"
+const paneOptionsFormat = "#{pane_id}" + optSep + "#{session_name}:#{window_index}" + optSep + "#{@claude_status}" + optSep + "#{@claude_task}"
 
 // WindowOptions is lazytmux's per-window enrichment. Every field may be empty:
 // a window with no linked issue or PR simply has none.
@@ -55,8 +61,8 @@ func (c *Client) ListPaneOptions() ([]PaneOptions, error) {
 func ParseWindowOptions(out string) []WindowOptions {
 	var res []WindowOptions
 	for _, line := range strings.Split(out, "\n") {
-		f := strings.Split(line, "|")
-		if len(f) < 11 {
+		f := strings.Split(line, optSep)
+		if len(f) != 11 {
 			continue
 		}
 		idx, err := strconv.Atoi(f[1])
@@ -75,8 +81,8 @@ func ParseWindowOptions(out string) []WindowOptions {
 func ParsePaneOptions(out string) []PaneOptions {
 	var res []PaneOptions
 	for _, line := range strings.Split(out, "\n") {
-		f := strings.Split(line, "|")
-		if len(f) < 4 {
+		f := strings.Split(line, optSep)
+		if len(f) != 4 {
 			continue
 		}
 		res = append(res, PaneOptions{

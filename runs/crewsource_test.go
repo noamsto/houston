@@ -1,6 +1,9 @@
 package runs
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -48,6 +51,52 @@ func TestDeltasFromCrewLogSurvivesGarbageLines(t *testing.T) {
 	}
 	if got["feat/413"].State != StateReview {
 		t.Errorf("feat/413 State = %q, want review", got["feat/413"].State)
+	}
+}
+
+func TestScanFindsBusFromInsideAWorktree(t *testing.T) {
+	// Worktree-per-branch is this project's mandated topology, and it is the
+	// case that was broken: <worktree>/.git is a file, so the bus lives under
+	// the main checkout's git dir, not the worktree's.
+	main := t.TempDir()
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main"},
+		{"commit", "-q", "--allow-empty", "-m", "seed"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = main
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Skipf("git unavailable: %v %s", err, out)
+		}
+	}
+
+	wt := filepath.Join(t.TempDir(), "wt")
+	cmd := exec.Command("git", "worktree", "add", "-q", "-b", "feat/x", wt)
+	cmd.Dir = main
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Skipf("git worktree unavailable: %v %s", err, out)
+	}
+
+	busDir := filepath.Join(main, ".git", "crew")
+	if err := os.MkdirAll(busDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	line := `{"ts":1000,"crew_id":"c1","from":"worker:feat/x#s1","kind":"status","body":{"state":"blocked","detail":"Keep the alias?"}}` + "\n"
+	if err := os.WriteFile(filepath.Join(busDir, "events.jsonl"), []byte(line), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := &CrewSource{crewDirs: map[string]string{}}
+	got := s.scanRoots([]string{wt})
+
+	r, ok := got["feat/x"]
+	if !ok {
+		t.Fatalf("scan found nothing from inside a worktree — keys %v", keysOf(got))
+	}
+	if r.State != StateBlocked || r.Question == nil {
+		t.Fatalf("got %+v, want a blocked run carrying its question", r)
 	}
 }
 
