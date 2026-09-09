@@ -71,3 +71,7 @@ export default defineConfig([
   },
 ])
 ```
+
+## Testing
+
+DOM tests use `happy-dom` + `@testing-library/react` (see `ui/src/testing/fakeEventSource.ts` for a reusable fake `EventSource`).
