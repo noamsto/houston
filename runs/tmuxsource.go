@@ -105,7 +105,6 @@ func deltasFromTmux(wins []tmux.WindowOptions, panes []tmux.PaneOptions) []Delta
 			Worktree:  w.GitRoot,
 			Tmux:      &TmuxRef{Session: w.Session, Window: w.Window, PaneID: p.PaneID},
 			Activity:  Activity{Task: firstNonEmpty(p.ClaudeTask, w.Task)},
-			Caps:      Caps{Terminal: true, Reply: true, Kill: true},
 		}
 		// A pane is an agent run only once lazytmux reports a claude_status for
 		// it — an empty status means a shell, build or htop, and the enrichment

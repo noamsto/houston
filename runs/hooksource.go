@@ -118,7 +118,6 @@ func runFromSessionView(v hub.SessionView) (string, Run) {
 		key = v.TmuxPane
 		win, _ := strconv.Atoi(v.TmuxWindow)
 		r.Tmux = &TmuxRef{Session: v.TmuxSession, Window: win, PaneID: v.TmuxPane}
-		r.Caps = Caps{Terminal: true, Reply: true, Kill: true}
 	}
 
 	if r.State == StateBlocked && v.LastMessage != "" {

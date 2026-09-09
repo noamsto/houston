@@ -291,10 +291,87 @@ func TestMergeIntoCoversEveryField(t *testing.T) {
 			continue // set by composeLocked from the key, deliberately not merged
 		case "Removed":
 			continue // set only by the registry when broadcasting a removal, never by a source
+		case "Caps":
+			continue // derived in composeLocked from layer presence, not merged
 		}
 		if v.Field(i).IsZero() {
 			t.Errorf("mergeInto drops %s — it will never reach the API", tp.Field(i).Name)
 		}
+	}
+}
+
+func TestCapsTerminalGoesFalseAfterTmuxLayerGoesGone(t *testing.T) {
+	r := NewRegistry(DefaultOrder)
+	r.Apply(Delta{Source: "tmux", Key: "%1", Run: Run{Agent: "claude"}})
+	// Mirrors what hooksource.go sets today for a pane-backed session.
+	r.Apply(Delta{Source: "hooks", Key: "%1", Run: Run{
+		Agent: "claude",
+		Caps:  Caps{Terminal: true, Reply: true, Kill: true},
+	}})
+
+	if got := r.Snapshot(); len(got) != 1 || !got[0].Caps.Terminal {
+		t.Fatalf("Caps.Terminal = %+v, want true while the tmux layer is present", got)
+	}
+
+	r.Apply(Delta{Source: "tmux", Key: "%1", Gone: true})
+
+	got := r.Snapshot()
+	if len(got) != 1 {
+		t.Fatalf("%d runs after the tmux layer left, want 1 — the hooks layer survives", len(got))
+	}
+	if got[0].Caps.Terminal || got[0].Caps.Kill {
+		t.Errorf("Caps = %+v, want Terminal and Kill false once the tmux layer is gone", got[0].Caps)
+	}
+}
+
+func TestCapsReplyRequiresLayerNotJustFlag(t *testing.T) {
+	r := NewRegistry(DefaultOrder)
+	// Matches what crewsource.go publishes today: no Caps set on the delta.
+	r.Apply(Delta{Source: "crew", Key: "branch/fix/1", Run: Run{Agent: "claude", State: StateBlocked}})
+
+	got := r.Snapshot()
+	if len(got) != 1 {
+		t.Fatalf("%d runs, want 1", len(got))
+	}
+	if !got[0].Caps.Reply {
+		t.Error("Caps.Reply = false, want true — a crew layer can take a crew reply with no pane")
+	}
+	if got[0].Caps.Terminal || got[0].Caps.Kill {
+		t.Errorf("Caps = %+v, want Terminal and Kill false with no tmux layer", got[0].Caps)
+	}
+}
+
+func TestCapsTransitionIsBroadcast(t *testing.T) {
+	r := NewRegistry(DefaultOrder)
+	sub := r.Subscribe()
+	defer r.Unsubscribe(sub)
+
+	r.Apply(Delta{Source: "tmux", Key: "%1", Run: Run{Agent: "claude"}})
+	r.Apply(Delta{Source: "hooks", Key: "%1", Run: Run{
+		Agent: "claude",
+		Caps:  Caps{Terminal: true, Reply: true, Kill: true},
+	}})
+
+	// Drain whatever setup broadcasts fired (house style: non-blocking
+	// select/default, see TestRemovalFiresOnlyOnTheListedToUnlistedEdge).
+drain:
+	for {
+		select {
+		case <-sub:
+		default:
+			break drain
+		}
+	}
+
+	r.Apply(Delta{Source: "tmux", Key: "%1", Gone: true})
+
+	select {
+	case run := <-sub:
+		if run.Caps.Terminal {
+			t.Fatalf("got %+v, want Caps.Terminal false once the tmux layer is gone", run)
+		}
+	default:
+		t.Fatal("no broadcast when the tmux layer went gone — Caps must be part of the change signature")
 	}
 }
 
