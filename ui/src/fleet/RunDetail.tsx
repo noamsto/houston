@@ -2,6 +2,7 @@ import type { Run } from '../api/runs'
 import { paneWsTarget } from '../api/runs'
 import { agoLabel, nameLabel, subtitle } from './format'
 import { TerminalPane } from '../components/TerminalPane'
+import { useTerminalLifecycle } from './useTerminalLifecycle'
 import './fleet.css'
 
 type Tab = 'activity' | 'terminal'
@@ -9,6 +10,7 @@ type Tab = 'activity' | 'terminal'
 interface RunDetailProps {
   runs: Run[]
   hasSnapshot: boolean
+  streamConnected: boolean
   now: number
   id: string
   tab: Tab
@@ -27,7 +29,7 @@ function goToTab(id: string, tab: Tab): void {
  * sibling layer over `.fleet` (see Shell.tsx) rather than in place of it, so
  * `.fleet`'s own scroll position survives a visit here and back.
  */
-export function RunDetail({ runs, hasSnapshot, now, id, tab }: RunDetailProps) {
+export function RunDetail({ runs, hasSnapshot, streamConnected, now, id, tab }: RunDetailProps) {
   // `hasSnapshot` distinguishes "haven't heard from the stream yet" (loading)
   // from "heard from it, this id isn't in it" (really not found) — without
   // it, every cold deep link would flash "not found" for the one tick before
@@ -57,17 +59,23 @@ export function RunDetail({ runs, hasSnapshot, now, id, tab }: RunDetailProps) {
           <button type="button" className="run-detail-back-cta" onClick={goToFleet}>Back to Fleet</button>
         </div>
       ) : (
-        <RunDetailBody run={run} tab={tab} />
+        <RunDetailBody run={run} tab={tab} streamConnected={streamConnected} />
       )}
     </div>
   )
 }
 
-function RunDetailBody({ run, tab }: { run: Run; tab: Tab }) {
-  // A deep link to `.../terminal` for a run that has since lost (or never
-  // had) terminal capability isn't an error — it degrades to Activity, the
-  // same as if the Terminal tab were never offered.
-  const effectiveTab: Tab = tab === 'terminal' && !run.caps.terminal ? 'activity' : tab
+function RunDetailBody({ run, tab, streamConnected }: { run: Run; tab: Tab; streamConnected: boolean }) {
+  const capable = run.caps.terminal && Boolean(run.tmux)
+  const lifecycle = useTerminalLifecycle(run.id, capable, tab === 'terminal', streamConnected)
+
+  // A deep link to `.../terminal` for a run that has never actually gone live
+  // (never had, or already lost, terminal capability before the view ever
+  // mounted it) isn't an error — it degrades to Activity, the same as if the
+  // Terminal tab were never offered. Once it *has* gone live, a later
+  // capability loss is shown explicitly instead (see the terminal branch
+  // below) rather than silently falling back here.
+  const effectiveTab: Tab = tab === 'terminal' && !run.caps.terminal && !lifecycle.everLive ? 'activity' : tab
 
   return (
     <>
@@ -94,16 +102,26 @@ function RunDetailBody({ run, tab }: { run: Run; tab: Tab }) {
       <div className="run-detail-body">
         {effectiveTab === 'activity' ? (
           <ActivityTab run={run} />
-        ) : run.tmux ? (
-          <TerminalPane
-            pane={{ id: run.id, target: paneWsTarget(run.tmux.pane_id) }}
-            isFocused
-            readOnly
-            onFocus={() => {}}
-            onClose={goToFleet}
-          />
-        ) : (
+        ) : !run.tmux ? (
           <div className="run-detail-empty">Terminal — coming soon.</div>
+        ) : lifecycle.state === 'ended' ? (
+          <div className="run-detail-empty">
+            <p>Terminal session ended.</p>
+            <button type="button" className="run-detail-back-cta" onClick={lifecycle.reconnect}>Reconnect</button>
+          </div>
+        ) : (
+          <>
+            {lifecycle.reconnecting && <div className="run-detail-reconnecting" role="status">Reconnecting…</div>}
+            <TerminalPane
+              key={`${run.id}-${lifecycle.attempt}`}
+              pane={{ id: run.id, target: paneWsTarget(run.tmux.pane_id) }}
+              isFocused
+              readOnly
+              onFocus={() => {}}
+              onClose={goToFleet}
+              onConnectionChange={lifecycle.onConnectionChange}
+            />
+          </>
         )}
       </div>
     </>

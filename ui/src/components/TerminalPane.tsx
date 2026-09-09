@@ -20,6 +20,7 @@ interface Props {
   onFocus: () => void
   onClose: () => void
   readOnly?: boolean
+  onConnectionChange?: (connected: boolean) => void
 }
 
 /** Write a capture-pane snapshot into xterm.js.
@@ -49,7 +50,7 @@ function writeSnapshot(term: Terminal, data: string, onDone?: () => void) {
 const MOBILE_TERM_WIDTH = 960
 const PAD = 6
 
-export function TerminalPane({ pane, isFocused, onFocus, onClose, readOnly = false }: Props) {
+export function TerminalPane({ pane, isFocused, onFocus, onClose, readOnly = false, onConnectionChange }: Props) {
   // outerRef: observed by ResizeObserver; has padding that creates visual breathing room
   const outerRef = useRef<HTMLDivElement>(null)
   // innerRef: xterm.js is opened here so FitAddon measures the padded inner area
@@ -94,7 +95,7 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose, readOnly = fal
   // Coarse horizontal position for the mobile column scrubber — polled at
   // animation-frame rate below since translateX/scale live in refs mutated
   // outside React's render cycle (touch handlers, eased pans).
-  const [scrubberState, setScrubberState] = useState({ termWidthPx: 0, viewportWidthPx: 0 })
+  const [scrubberState, setScrubberState] = useState({ termWidthPx: 0, viewportWidthPx: 0, translateX: 0, scale: 1 })
 
   useEffect(() => {
     if (isDesktop || !termMounted) return
@@ -103,17 +104,22 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose, readOnly = fal
       const outer = outerRef.current
       if (outer) {
         const viewportWidthPx = outer.clientWidth - PAD * 2
+        const translateX = translateXRef.current
+        const scale = scaleRef.current
         setScrubberState((prev) =>
-          prev.termWidthPx === termDimsRef.current.w && prev.viewportWidthPx === viewportWidthPx
+          prev.termWidthPx === termDimsRef.current.w &&
+          prev.viewportWidthPx === viewportWidthPx &&
+          prev.translateX === translateX &&
+          prev.scale === scale
             ? prev
-            : { termWidthPx: termDimsRef.current.w, viewportWidthPx },
+            : { termWidthPx: termDimsRef.current.w, viewportWidthPx, translateX, scale },
         )
       }
       raf = requestAnimationFrame(tick)
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
-  }, [isDesktop, termMounted, termDimsRef])
+  }, [isDesktop, termMounted, termDimsRef, translateXRef, scaleRef])
 
   // Distinguishes the very first `seed` after connecting (normal snapshot,
   // no pan reset) from a mid-session `seed` (scrollback just got cleared by
@@ -133,6 +139,17 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose, readOnly = fal
       translateXRef.current,
     )
     if (target !== null) easeTranslateXTo(target)
+  }
+
+  // After a seed lands: a mid-session reseed clears pan (old content is
+  // simply gone — nothing to keep centered on), then follow the fresh cursor
+  // unless the user's mid-gesture.
+  const afterSeedWritten = (term: Terminal, isReseed: boolean) => {
+    if (isReseed) {
+      translateXRef.current = 0
+      applyTransform()
+    }
+    if (!gestureActiveRef.current) followCursor(term)
   }
 
   // Double-tap: toggle between "readable" (the persisted font size, column 0)
@@ -175,6 +192,10 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose, readOnly = fal
   const paneDimsRef = useRef<{ cols: number; rows: number } | null>(null)
   // Buffer seed until dims arrive — writing seed at wrong dimensions causes garbling
   const pendingSeedRef = useRef<string | null>(null)
+  // First-seed/reseed distinction for the buffered seed above, captured at
+  // receipt time (see onSeed) since that's what reflects "is this the first
+  // seed for this connection" — not whenever the buffered write lands.
+  const pendingSeedIsReseedRef = useRef(false)
 
   const applyDimsAndSeed = (term: Terminal, cols: number, rows: number) => {
     paneDimsRef.current = { cols, rows }
@@ -212,8 +233,10 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose, readOnly = fal
     }
     // Flush buffered seed now that dims are applied
     if (pendingSeedRef.current) {
-      writeSnapshot(term, pendingSeedRef.current)
+      const data = pendingSeedRef.current
+      const isReseed = pendingSeedIsReseedRef.current
       pendingSeedRef.current = null
+      writeSnapshot(term, data, () => afterSeedWritten(term, isReseed))
     }
   }
 
@@ -225,14 +248,17 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose, readOnly = fal
     },
     onSeed: (data) => {
       lastSeedRef.current = data
+      const isReseed = firstSeedDoneRef.current
+      firstSeedDoneRef.current = true
       const term = termRef.current
       if (!term) return
       // If dims haven't arrived yet, buffer the seed
       if (!paneDimsRef.current) {
         pendingSeedRef.current = data
+        pendingSeedIsReseedRef.current = isReseed
         return
       }
-      writeSnapshot(term, data)
+      writeSnapshot(term, data, () => afterSeedWritten(term, isReseed))
     },
     onReseed: (data) => {
       lastSeedRef.current = data
@@ -252,11 +278,16 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose, readOnly = fal
           const buf = outputBufRef.current
           outputBufRef.current = ''
           term.write(buf)
+          if (!gestureActiveRef.current) followCursor(term)
         })
       }
     },
     onMeta: (m) => setMeta(m),
   })
+
+  useEffect(() => {
+    onConnectionChange?.(connected)
+  }, [connected, onConnectionChange])
 
   // Focus the xterm textarea when this pane becomes the active one (desktop only).
   useEffect(() => {
@@ -395,6 +426,7 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose, readOnly = fal
     lastSeedRef.current = null
     paneDimsRef.current = null
     pendingSeedRef.current = null
+    firstSeedDoneRef.current = false
     const term = termRef.current
     if (term) {
       term.clear()
@@ -582,6 +614,18 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose, readOnly = fal
           </button>
         )}
       </div>
+      {!isDesktop && (
+        <ColumnScrubber
+          termWidthPx={scrubberState.termWidthPx}
+          viewportWidthPx={scrubberState.viewportWidthPx}
+          translateX={scrubberState.translateX}
+          scale={scrubberState.scale}
+          onScrub={(tx) => {
+            translateXRef.current = tx
+            applyTransform()
+          }}
+        />
+      )}
       {!isDesktop && !readOnly && (
         <MobileInputBar
           target={pane.target}

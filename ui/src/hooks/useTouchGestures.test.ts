@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, renderHook } from '@testing-library/react'
 import type { Terminal } from '@xterm/xterm'
-import { snapFontSize, useTouchGestures } from './useTouchGestures'
+import { computeFitFontSize, computeFollowCursorTranslateX, snapFontSize, useTouchGestures } from './useTouchGestures'
 
 function touchEvent(type: string, touches: { clientX: number; clientY: number }[]) {
   const event = new Event(type, { bubbles: true, cancelable: true })
@@ -104,6 +104,29 @@ describe('useTouchGestures pinch-end font-size zoom', () => {
   })
 })
 
+describe('computeFollowCursorTranslateX', () => {
+  it('returns null when the cursor is already within the margin of the visible window', () => {
+    // viewport [0, 200), margin 20px either side of a 10px cell — column 10
+    // sits at 100px, comfortably inside [20, 180).
+    expect(computeFollowCursorTranslateX(10, 10, 200, 0)).toBeNull()
+  })
+
+  it('returns a leftward pan when the cursor is past the right edge', () => {
+    // Column 25 sits at 250px, past visibleRight(200) - margin(20) = 180.
+    expect(computeFollowCursorTranslateX(25, 10, 200, 0)).toBe(200 - 20 - 250)
+  })
+
+  it('returns a rightward pan when the cursor is past the left edge', () => {
+    // Panned right by 100px (currentTx=-100) puts visibleLeft at 100px;
+    // column 5 sits at 50px, short of visibleLeft(100) + margin(20) = 120.
+    expect(computeFollowCursorTranslateX(5, 10, 200, -100)).toBe(20 - 50)
+  })
+
+  it('returns null when cell width is not yet known', () => {
+    expect(computeFollowCursorTranslateX(10, 0, 200, 0)).toBeNull()
+  })
+})
+
 describe('snapFontSize', () => {
   it('snaps to the nearest discrete size', () => {
     expect(snapFontSize(14)).toBe(14)
@@ -114,5 +137,22 @@ describe('snapFontSize', () => {
   it('clamps to the [9, 24] floor and ceiling', () => {
     expect(snapFontSize(3)).toBe(9)
     expect(snapFontSize(100)).toBe(24)
+  })
+})
+
+describe('computeFitFontSize', () => {
+  it('shrinks proportionally so the full width fits the narrower viewport', () => {
+    // raw = currentFontSize * (viewportWidthPx / currentTotalWidthPx) = 20 * (800/1000) = 16
+    expect(computeFitFontSize(20, 1000, 800)).toBe(16)
+  })
+
+  it('clamps to the 9px floor when the ratio would go smaller', () => {
+    // raw = 13 * (100/1000) = 1.3, well under the 9px "text can't be too small" floor
+    expect(computeFitFontSize(13, 1000, 100)).toBe(9)
+  })
+
+  it('returns the floor instead of dividing by zero when total width is not yet known', () => {
+    expect(computeFitFontSize(13, 0, 500)).toBe(9)
+    expect(computeFitFontSize(13, -50, 500)).toBe(9)
   })
 })

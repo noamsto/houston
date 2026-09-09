@@ -60,6 +60,7 @@ export function Shell() {
           <RunDetail
             runs={runs}
             hasSnapshot={hasSnapshot}
+            streamConnected={connected}
             now={now}
             id={detail.id}
             tab={detail.tab}
