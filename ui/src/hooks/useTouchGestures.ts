@@ -48,6 +48,24 @@ export function computeFitFontSize(
   return Math.max(MIN_FONT_SIZE, raw)
 }
 
+/** Real per-row pixel height for converting a scroll drag into terminal
+ *  lines. Prefers the terminal's actually-measured height (`termHeightPx`,
+ *  the `.xterm-screen` height cached in termDimsRef and rescaled on every
+ *  font-size change) divided by row count, over recomputing it from
+ *  fontSize * lineHeight — which is only an approximation of how the
+ *  browser actually laid out the rows. Falls back to that approximation
+ *  when a measured height isn't available yet (e.g. before the first
+ *  seed's dims land). */
+export function computeScrollLineHeight(
+  rows: number,
+  termHeightPx: number,
+  fallbackFontSize: number,
+  fallbackLineHeight: number,
+): number {
+  if (rows > 0 && termHeightPx > 0) return termHeightPx / rows
+  return fallbackFontSize * fallbackLineHeight
+}
+
 /** Target translateX so the cursor's column stays within the visible
  *  viewport (with a 2-cell margin), or `null` if it's already in view. */
 export function computeFollowCursorTranslateX(
@@ -247,12 +265,19 @@ export function useTouchGestures(
         }
 
         if (gesture === 'scroll') {
-          // Read fontSize/lineHeight fresh on every move rather than once at
-          // effect setup — pinch-end zoom (below) mutates term.options.fontSize
-          // at runtime, and a value closed over at effect scope would go
-          // stale the instant the user zooms.
-          const opts = termRef.current?.options
-          const lineHeight = (opts?.fontSize ?? 13) * (opts?.lineHeight ?? 1)
+          // Read the real cell height fresh on every move rather than once
+          // at effect setup — pinch-end zoom (below) mutates term.options
+          // .fontSize and rescales termDimsRef at runtime, and a value
+          // closed over at effect scope would go stale the instant the
+          // user zooms.
+          const term = termRef.current
+          const opts = term?.options
+          const lineHeight = computeScrollLineHeight(
+            term?.rows ?? 0,
+            termDimsRef.current.h,
+            opts?.fontSize ?? 13,
+            opts?.lineHeight ?? 1,
+          )
           const deltaY = scrollStartY - e.touches[0].clientY
           scrollStartY = e.touches[0].clientY
           scrollAcc += deltaY

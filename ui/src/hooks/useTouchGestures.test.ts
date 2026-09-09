@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, renderHook } from '@testing-library/react'
 import type { Terminal } from '@xterm/xterm'
-import { computeFitFontSize, computeFollowCursorTranslateX, snapFontSize, useTouchGestures } from './useTouchGestures'
+import {
+  computeFitFontSize,
+  computeFollowCursorTranslateX,
+  computeScrollLineHeight,
+  snapFontSize,
+  useTouchGestures,
+} from './useTouchGestures'
 
 function touchEvent(type: string, touches: { clientX: number; clientY: number }[]) {
   const event = new Event(type, { bubbles: true, cancelable: true })
@@ -31,7 +37,11 @@ function stubDims(el: HTMLElement, rect: { width: number; height: number; left?:
 /** Build the DOM shape useTouchGestures expects (an outer container wrapping
  *  an inner div that itself wraps a `.xterm-screen` node) and a fake xterm
  *  Terminal carrying only the fields the hook reads. */
-function setup(termOptions: { fontSize?: number; lineHeight?: number }, onPinchEnd?: (fontSize: number) => void) {
+function setup(
+  termOptions: { fontSize?: number; lineHeight?: number },
+  onPinchEnd?: (fontSize: number) => void,
+  opts?: { rows?: number; dims?: { w: number; h: number } },
+) {
   const outer = document.createElement('div')
   const inner = document.createElement('div')
   const screenEl = document.createElement('div')
@@ -45,13 +55,13 @@ function setup(termOptions: { fontSize?: number; lineHeight?: number }, onPinchE
   const innerRef = { current: inner }
   const scrollLines = vi.fn()
   const termRef = {
-    current: { options: termOptions, scrollLines } as unknown as Terminal,
+    current: { options: termOptions, rows: opts?.rows, scrollLines } as unknown as Terminal,
   }
 
   const { result } = renderHook(() => useTouchGestures(innerRef, outerRef, termRef, true, onPinchEnd))
-  result.current.resetTransform(1, { w: 960, h: 300 }, { scale: 1, tx: 0, ty: 0 })
+  result.current.resetTransform(1, opts?.dims ?? { w: 960, h: 300 }, { scale: 1, tx: 0, ty: 0 })
 
-  return { screenEl, inner, scrollLines, termRef }
+  return { screenEl, inner, scrollLines, termRef, result }
 }
 
 afterEach(() => {
@@ -70,6 +80,61 @@ describe('useTouchGestures scroll line-height math', () => {
     screenEl.dispatchEvent(touchEvent('touchmove', [{ clientX: 50, clientY: 80 }]))
 
     expect(scrollLines).not.toHaveBeenCalled()
+  })
+
+  it('prefers the real measured cell height over the fontSize approximation once dims are known', () => {
+    // fontSize 13 * lineHeight 1.2 approximates a 15.6px line — an 18px drag
+    // would cross it. The real measured terminal (10 rows over a 200px-tall
+    // `.xterm-screen`) is 20px per line, so that same drag should not fire.
+    const { screenEl, scrollLines } = setup({ fontSize: 13, lineHeight: 1.2 }, undefined, {
+      rows: 10,
+      dims: { w: 960, h: 200 },
+    })
+
+    screenEl.dispatchEvent(touchEvent('touchstart', [{ clientX: 50, clientY: 100 }]))
+    screenEl.dispatchEvent(touchEvent('touchmove', [{ clientX: 50, clientY: 82 }]))
+
+    expect(scrollLines).not.toHaveBeenCalled()
+  })
+
+  it('tracks a font-size change made mid-gesture rather than a value captured once at mount', () => {
+    // Starts at 20px/line (10 rows over a 200px-tall screen). A 10px drag
+    // accumulates without firing. applyFontSize then doubles the font size,
+    // which (per its own proportional rescale) doubles termDimsRef to
+    // 400px — 40px/line. A second 10px drag brings the accumulator to 20px:
+    // enough to cross the stale 20px/line height, not the current 40px/line
+    // one. Only a fresh read on this second move avoids firing.
+    const { screenEl, scrollLines, result, termRef } = setup({ fontSize: 13, lineHeight: 1.2 }, undefined, {
+      rows: 10,
+      dims: { w: 960, h: 200 },
+    })
+
+    screenEl.dispatchEvent(touchEvent('touchstart', [{ clientX: 50, clientY: 100 }]))
+    screenEl.dispatchEvent(touchEvent('touchmove', [{ clientX: 50, clientY: 90 }]))
+    expect(scrollLines).not.toHaveBeenCalled()
+
+    result.current.applyFontSize(termRef.current, 26)
+
+    screenEl.dispatchEvent(touchEvent('touchmove', [{ clientX: 50, clientY: 80 }]))
+    expect(scrollLines).not.toHaveBeenCalled()
+  })
+})
+
+describe('computeScrollLineHeight', () => {
+  it('uses the measured height divided by rows when both are known', () => {
+    expect(computeScrollLineHeight(10, 200, 13, 1.2)).toBe(20)
+  })
+
+  it('falls back to fontSize * lineHeight when rows is not yet known', () => {
+    expect(computeScrollLineHeight(0, 200, 13, 1.2)).toBeCloseTo(15.6)
+  })
+
+  it('falls back to fontSize * lineHeight when the measured height is not yet known', () => {
+    expect(computeScrollLineHeight(10, 0, 13, 1.2)).toBeCloseTo(15.6)
+  })
+
+  it('scales with font size when measured, matching a zoomed-in real terminal', () => {
+    expect(computeScrollLineHeight(10, 400, 26, 1.2)).toBe(40)
   })
 })
 
