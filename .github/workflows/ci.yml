@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+
+      - run: nix develop -c just build
+
+      - run: nix develop -c go vet ./...
+
+      # tmux's server auto-exits when its last session is killed. Each
+      # integration test creates and kills its own session, so on a runner
+      # with no other tmux activity the next `new-session` can race a dying
+      # server ("server exited unexpectedly" — reproduced on an isolated
+      # socket). A session outliving the test run keeps the server up.
+      - run: nix develop -c tmux new-session -d -s ci-keepalive
+
+      - run: nix develop -c go test ./...
+
+      - name: Check gofmt
+        run: nix develop -c bash -c 'out=$(gofmt -l .); [ -z "$out" ] || { echo "$out"; exit 1; }'
+
+      - run: nix develop -c golangci-lint run
+
+      - name: Frontend lint
+        run: nix develop -c bash -c 'cd ui && npx eslint .'
+
+      - name: Frontend types
+        run: nix develop -c bash -c 'cd ui && npx tsc -b'
+
+  race:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+
+      - run: nix develop -c just build
+
+      # See the "checks" job for why: keeps tmux's shared default server
+      # alive across the whole test run.
+      - run: nix develop -c tmux new-session -d -s ci-keepalive
+
+      - run: nix develop -c go test -race ./...
