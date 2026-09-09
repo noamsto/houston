@@ -96,3 +96,11 @@ export interface Run {
   caps: Caps
   removed?: boolean
 }
+
+// The pane WS route (`server/server.go:parsePaneTarget`) percent-decodes the
+// path twice — once automatically via net/http, once again explicitly — so a
+// literal `%`-prefixed pane id (e.g. tmux's `%307`) must be encoded twice here
+// to survive both decodes and arrive at the server as the original string.
+export function paneWsTarget(paneId: string): string {
+  return encodeURIComponent(encodeURIComponent(paneId))
+}

@@ -5,19 +5,21 @@ import { UnicodeGraphemesAddon } from '@xterm/addon-unicode-graphemes'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import type { WSMeta } from '../api/types'
-import type { PaneInstance } from '../hooks/useLayout'
+import { useTerminalFontSize, type PaneInstance } from '../hooks/useLayout'
 import { usePaneSocket } from '../hooks/usePaneSocket'
 import { useIsDesktop } from '../hooks/useMediaQuery'
-import { useTouchGestures } from '../hooks/useTouchGestures'
+import { computeFitFontSize, computeFollowCursorTranslateX, useTouchGestures } from '../hooks/useTouchGestures'
 import { darkTheme, lightTheme } from '../lib/xterm'
 import { PaneHeader } from './PaneHeader'
 import { MobileInputBar } from './MobileInputBar'
+import { ColumnScrubber } from './ColumnScrubber'
 
 interface Props {
   pane: PaneInstance
   isFocused: boolean
   onFocus: () => void
   onClose: () => void
+  readOnly?: boolean
 }
 
 /** Write a capture-pane snapshot into xterm.js.
@@ -47,7 +49,7 @@ function writeSnapshot(term: Terminal, data: string, onDone?: () => void) {
 const MOBILE_TERM_WIDTH = 960
 const PAD = 6
 
-export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
+export function TerminalPane({ pane, isFocused, onFocus, onClose, readOnly = false }: Props) {
   // outerRef: observed by ResizeObserver; has padding that creates visual breathing room
   const outerRef = useRef<HTMLDivElement>(null)
   // innerRef: xterm.js is opened here so FitAddon measures the padded inner area
@@ -63,9 +65,99 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
   const dprRef = useRef(window.devicePixelRatio)
   const fittedWidthRef = useRef(0)
 
-  const { minScaleRef, termDimsRef, translateXRef, resetTransform } = useTouchGestures(
-    innerRef, outerRef, termRef, !isDesktop && termMounted,
+  const [fontSize, setFontSize] = useTerminalFontSize()
+
+  // 'readable' = the persisted fontSize above; 'fit' = fit-width, computed
+  // fresh each time double-tap toggles into it (not persisted).
+  const zoomModeRef = useRef<'readable' | 'fit'>('readable')
+  // Forward-declared: useTouchGestures needs a stable double-tap callback at
+  // call time, but the callback's body needs values the hook itself returns
+  // (termDimsRef, applyFontSize, ...). The ref is filled in after the call.
+  const handleDoubleTapRef = useRef<() => void>(() => {})
+
+  const {
+    scaleRef,
+    minScaleRef,
+    termDimsRef,
+    translateXRef,
+    gestureActiveRef,
+    resetTransform,
+    clampPan,
+    applyTransform,
+    easeTranslateXTo,
+    applyFontSize,
+  } = useTouchGestures(
+    innerRef, outerRef, termRef, !isDesktop && termMounted, setFontSize,
+    () => handleDoubleTapRef.current(),
   )
+
+  // Coarse horizontal position for the mobile column scrubber — polled at
+  // animation-frame rate below since translateX/scale live in refs mutated
+  // outside React's render cycle (touch handlers, eased pans).
+  const [scrubberState, setScrubberState] = useState({ termWidthPx: 0, viewportWidthPx: 0 })
+
+  useEffect(() => {
+    if (isDesktop || !termMounted) return
+    let raf = 0
+    const tick = () => {
+      const outer = outerRef.current
+      if (outer) {
+        const viewportWidthPx = outer.clientWidth - PAD * 2
+        setScrubberState((prev) =>
+          prev.termWidthPx === termDimsRef.current.w && prev.viewportWidthPx === viewportWidthPx
+            ? prev
+            : { termWidthPx: termDimsRef.current.w, viewportWidthPx },
+        )
+      }
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [isDesktop, termMounted, termDimsRef])
+
+  // Distinguishes the very first `seed` after connecting (normal snapshot,
+  // no pan reset) from a mid-session `seed` (scrollback just got cleared by
+  // writeSnapshot, so any prior pan offset points at content that's gone).
+  const firstSeedDoneRef = useRef(false)
+
+  const followCursor = (term: Terminal) => {
+    if (isDesktop || term.cols <= 0) return
+    const outer = outerRef.current
+    if (!outer) return
+    const cellWidthPx = (termDimsRef.current.w / term.cols) * scaleRef.current
+    const viewportWidthPx = outer.clientWidth - PAD * 2
+    const target = computeFollowCursorTranslateX(
+      term.buffer.active.cursorX,
+      cellWidthPx,
+      viewportWidthPx,
+      translateXRef.current,
+    )
+    if (target !== null) easeTranslateXTo(target)
+  }
+
+  // Double-tap: toggle between "readable" (the persisted font size, column 0)
+  // and "fit-width" (computed fresh so the pane's full column count fills
+  // the viewport, floor-clamped at 9px). fontSize/setFontSize is the
+  // persisted "readable" preference — fit-width bypasses it entirely so
+  // toggling back never sees a fit-computed value permanently overwrite it.
+  useEffect(() => {
+    handleDoubleTapRef.current = () => {
+      const term = termRef.current
+      const outer = outerRef.current
+      if (!term || !outer) return
+      if (zoomModeRef.current === 'fit') {
+        applyFontSize(term, fontSize)
+        zoomModeRef.current = 'readable'
+      } else {
+        const viewportWidthPx = outer.clientWidth - PAD * 2
+        const fitSize = computeFitFontSize(term.options.fontSize ?? fontSize, termDimsRef.current.w, viewportWidthPx)
+        applyFontSize(term, fitSize)
+        zoomModeRef.current = 'fit'
+      }
+      clampPan()
+      easeTranslateXTo(0)
+    }
+  })
 
   // Buffer %output writes and flush once per animation frame to prevent
   // visual tearing from mid-update renders (e.g. erase + redraw arriving
@@ -203,11 +295,11 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
     const term = new Terminal({
       theme: isDark ? darkTheme : lightTheme,
       fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
-      fontSize: 13,
+      fontSize,
       lineHeight: 1.2,
       cursorBlink: false,
       allowProposedApi: true,
-      disableStdin: !isDesktop,
+      disableStdin: readOnly || !isDesktop,
       // convertEol is OFF: %output from CC mode delivers raw terminal data
       // with proper \r\n. Adding implicit \r to bare \n breaks TUI cursor
       // positioning. The seed data uses \r\n from the backend.
@@ -274,7 +366,7 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
       setIsScrolledUp(buf.viewportY < buf.baseY)
     })
 
-    if (isDesktop) {
+    if (isDesktop && !readOnly) {
       // Ensure xterm.js handles all keys (including Escape) instead of
       // letting the browser consume them.
       term.attachCustomKeyEventHandler(() => true)
@@ -407,7 +499,7 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
         }
       }}
     >
-      {isDesktop && (
+      {isDesktop && !readOnly && (
         <PaneHeader
           target={pane.target}
           meta={meta}
@@ -490,7 +582,7 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose }: Props) {
           </button>
         )}
       </div>
-      {!isDesktop && (
+      {!isDesktop && !readOnly && (
         <MobileInputBar
           target={pane.target}
           choices={meta?.choices}

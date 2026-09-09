@@ -13,7 +13,7 @@ type View = 'agents' | 'panes' | 'fleet'
 
 function initialView(): View {
   if (window.location.hash === '#/panes') return 'panes'
-  if (window.location.hash === '#/fleet') return 'fleet'
+  if (window.location.hash.startsWith('#/fleet')) return 'fleet'
   return 'agents'
 }
 

@@ -1,0 +1,118 @@
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, renderHook } from '@testing-library/react'
+import type { Terminal } from '@xterm/xterm'
+import { snapFontSize, useTouchGestures } from './useTouchGestures'
+
+function touchEvent(type: string, touches: { clientX: number; clientY: number }[]) {
+  const event = new Event(type, { bubbles: true, cancelable: true })
+  Object.defineProperty(event, 'touches', { value: touches, configurable: true })
+  return event
+}
+
+/** Give an element non-zero layout numbers — happy-dom has no layout engine,
+ *  so clientWidth/clientHeight/getBoundingClientRect read 0 by default. */
+function stubDims(el: HTMLElement, rect: { width: number; height: number; left?: number; top?: number }) {
+  Object.defineProperty(el, 'clientWidth', { value: rect.width, configurable: true })
+  Object.defineProperty(el, 'clientHeight', { value: rect.height, configurable: true })
+  el.getBoundingClientRect = () =>
+    ({
+      width: rect.width,
+      height: rect.height,
+      left: rect.left ?? 0,
+      top: rect.top ?? 0,
+      right: (rect.left ?? 0) + rect.width,
+      bottom: (rect.top ?? 0) + rect.height,
+      x: rect.left ?? 0,
+      y: rect.top ?? 0,
+      toJSON() {},
+    }) as DOMRect
+}
+
+/** Build the DOM shape useTouchGestures expects (an outer container wrapping
+ *  an inner div that itself wraps a `.xterm-screen` node) and a fake xterm
+ *  Terminal carrying only the fields the hook reads. */
+function setup(termOptions: { fontSize?: number; lineHeight?: number }, onPinchEnd?: (fontSize: number) => void) {
+  const outer = document.createElement('div')
+  const inner = document.createElement('div')
+  const screenEl = document.createElement('div')
+  screenEl.className = 'xterm-screen'
+  inner.appendChild(screenEl)
+  outer.appendChild(inner)
+  document.body.appendChild(outer)
+  stubDims(outer, { width: 400, height: 300 })
+
+  const outerRef = { current: outer }
+  const innerRef = { current: inner }
+  const scrollLines = vi.fn()
+  const termRef = {
+    current: { options: termOptions, scrollLines } as unknown as Terminal,
+  }
+
+  const { result } = renderHook(() => useTouchGestures(innerRef, outerRef, termRef, true, onPinchEnd))
+  result.current.resetTransform(1, { w: 960, h: 300 }, { scale: 1, tx: 0, ty: 0 })
+
+  return { screenEl, inner, scrollLines, termRef }
+}
+
+afterEach(() => {
+  cleanup()
+  document.body.innerHTML = ''
+})
+
+describe('useTouchGestures scroll line-height math', () => {
+  it('uses the terminal actual font size, not a hardcoded 13px, for scroll-line math', () => {
+    // At fontSize 20 (lineHeight 1.2) a real terminal line is 24px tall, so a
+    // 20px vertical drag should not yet cross a full line. The hardcoded
+    // `13 * 1.2 = 15.6px` line height wrongly crosses it and fires a scroll.
+    const { screenEl, scrollLines } = setup({ fontSize: 20, lineHeight: 1.2 })
+
+    screenEl.dispatchEvent(touchEvent('touchstart', [{ clientX: 50, clientY: 100 }]))
+    screenEl.dispatchEvent(touchEvent('touchmove', [{ clientX: 50, clientY: 80 }]))
+
+    expect(scrollLines).not.toHaveBeenCalled()
+  })
+})
+
+describe('useTouchGestures pinch-end font-size zoom', () => {
+  it('snaps to a discrete font size, resets the CSS scale to 1.0, and reports the new size', () => {
+    const onPinchEnd = vi.fn()
+    const { screenEl, inner, termRef } = setup({ fontSize: 14, lineHeight: 1.2 }, onPinchEnd)
+
+    // Pinch outward: two fingers starting 100px apart, ending 200px apart —
+    // a 2x pinch scale on top of the starting fontSize (14 * 2 = 28, clamped
+    // to the 24px ceiling).
+    screenEl.dispatchEvent(
+      touchEvent('touchstart', [
+        { clientX: 100, clientY: 150 },
+        { clientX: 200, clientY: 150 },
+      ]),
+    )
+    screenEl.dispatchEvent(
+      touchEvent('touchmove', [
+        { clientX: 50, clientY: 150 },
+        { clientX: 250, clientY: 150 },
+      ]),
+    )
+    screenEl.dispatchEvent(touchEvent('touchend', []))
+
+    expect(termRef.current.options.fontSize).toBe(24)
+    expect(onPinchEnd).toHaveBeenCalledWith(24)
+    // At rest, the wrapper transform's scale component is always 1.0 — the
+    // pinch's magnification is baked into the real font size instead, so
+    // text is never left resampled/blurry.
+    expect(inner.style.transform).toContain('scale(1)')
+  })
+})
+
+describe('snapFontSize', () => {
+  it('snaps to the nearest discrete size', () => {
+    expect(snapFontSize(14)).toBe(14)
+    expect(snapFontSize(15)).toBe(14)
+    expect(snapFontSize(17)).toBe(16)
+  })
+
+  it('clamps to the [9, 24] floor and ceiling', () => {
+    expect(snapFontSize(3)).toBe(9)
+    expect(snapFontSize(100)).toBe(24)
+  })
+})
