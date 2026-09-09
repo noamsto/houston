@@ -232,12 +232,12 @@ func (c *Client) ListPanes(session string, window int) ([]PaneInfo, error) {
 // CaptureResult holds the captured pane output and detected mode
 type CaptureResult struct {
 	Output     string `json:"output"`
-	CursorX    int    `json:"cursor_x"`     // 0-indexed cursor column in visible area
-	CursorY    int    `json:"cursor_y"`     // 0-indexed cursor row in visible area
-	PaneWidth  int    `json:"pane_width"`   // visible columns in the pane
-	PaneHeight int    `json:"pane_height"`  // visible rows in the pane
-	Mode       string `json:"mode"`         // "insert", "normal", or ""
-	StatusLine string `json:"status_line"`  // Full status line with ANSI colors intact
+	CursorX    int    `json:"cursor_x"`    // 0-indexed cursor column in visible area
+	CursorY    int    `json:"cursor_y"`    // 0-indexed cursor row in visible area
+	PaneWidth  int    `json:"pane_width"`  // visible columns in the pane
+	PaneHeight int    `json:"pane_height"` // visible rows in the pane
+	Mode       string `json:"mode"`        // "insert", "normal", or ""
+	StatusLine string `json:"status_line"` // Full status line with ANSI colors intact
 }
 
 func (c *Client) CapturePane(p Pane, lines int) (string, error) {
@@ -286,10 +286,6 @@ func (c *Client) CapturePaneWithMode(p Pane, lines int) (CaptureResult, error) {
 		StatusLine: "", // Agent-specific; set by caller
 	}, nil
 }
-
-
-
-
 
 // GetPaneID returns the tmux pane ID (e.g. "%42") for a given pane target.
 func (c *Client) GetPaneID(p Pane) (string, error) {

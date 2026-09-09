@@ -770,7 +770,6 @@ func parsePaneTarget(path string) (tmux.Pane, error) {
 	return tmux.Pane{Session: session, Window: window, Index: pane}, nil
 }
 
-
 func (s *Server) handlePaneSend(w http.ResponseWriter, r *http.Request, pane tmux.Pane) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

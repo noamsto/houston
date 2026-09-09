@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -75,11 +76,60 @@ func TestAgentsSnapshotReflectsHookState(t *testing.T) {
 	}
 }
 
+// syncRecorder wraps httptest.ResponseRecorder with a mutex so a handler
+// writing concurrently with a test goroutine reading the body doesn't race.
+// The recorder is unexported (not embedded) so any stray direct
+// .Body/.Header() access fails to compile instead of silently working.
+type syncRecorder struct {
+	mu  sync.Mutex
+	rec *httptest.ResponseRecorder
+}
+
+func newSyncRecorder() *syncRecorder {
+	return &syncRecorder{rec: httptest.NewRecorder()}
+}
+
+func (s *syncRecorder) Header() http.Header {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.rec.Header()
+}
+
+func (s *syncRecorder) Write(b []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.rec.Write(b)
+}
+
+func (s *syncRecorder) WriteHeader(code int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.rec.WriteHeader(code)
+}
+
+func (s *syncRecorder) Flush() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.rec.Flush()
+}
+
+func (s *syncRecorder) body() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.rec.Body.String()
+}
+
+func (s *syncRecorder) header() http.Header {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.rec.Header()
+}
+
 func TestAgentsStreamEmitsSnapshotAndUpdate(t *testing.T) {
 	dir := t.TempDir()
 	s := newTestServer(t, dir)
 
-	rec := httptest.NewRecorder()
+	rec := newSyncRecorder()
 
 	// Kick the SSE handler off in a goroutine and cancel it when we're done.
 	ctx, cancel := context.WithCancel(context.Background())
@@ -96,7 +146,7 @@ func TestAgentsStreamEmitsSnapshotAndUpdate(t *testing.T) {
 	waitForBody := func(substr string, timeout time.Duration) bool {
 		deadline := time.Now().Add(timeout)
 		for time.Now().Before(deadline) {
-			if strings.Contains(rec.Body.String(), substr) {
+			if strings.Contains(rec.body(), substr) {
 				return true
 			}
 			time.Sleep(25 * time.Millisecond)
@@ -105,7 +155,7 @@ func TestAgentsStreamEmitsSnapshotAndUpdate(t *testing.T) {
 	}
 
 	if !waitForBody("event: snapshot", time.Second) {
-		t.Fatalf("snapshot event never sent\n%s", rec.Body.String())
+		t.Fatalf("snapshot event never sent\n%s", rec.body())
 	}
 
 	// Write a state file — the hub should broadcast an update.
@@ -119,7 +169,7 @@ func TestAgentsStreamEmitsSnapshotAndUpdate(t *testing.T) {
 	}
 
 	if !waitForBody("event: update", 2*time.Second) {
-		t.Errorf("update event never sent\n%s", rec.Body.String())
+		t.Errorf("update event never sent\n%s", rec.body())
 	}
 
 	cancel()
@@ -130,12 +180,12 @@ func TestAgentsStreamEmitsSnapshotAndUpdate(t *testing.T) {
 	}
 
 	// Content-Type sanity.
-	if got := rec.Header().Get("Content-Type"); got != "text/event-stream" {
+	if got := rec.header().Get("Content-Type"); got != "text/event-stream" {
 		t.Errorf("Content-Type = %q", got)
 	}
 
 	// Parse the SSE stream and assert the update payload deserializes cleanly.
-	r := bufio.NewReader(strings.NewReader(rec.Body.String()))
+	r := bufio.NewReader(strings.NewReader(rec.body()))
 	var lastData string
 	var lastEvent string
 	for {
