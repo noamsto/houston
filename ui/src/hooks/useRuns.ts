@@ -26,6 +26,7 @@ export function applyEvent(runs: Map<string, Run>, r: Run): Map<string, Run> {
 export function useRuns() {
   const [runs, setRuns] = useState<Map<string, Run>>(new Map())
   const [connected, setConnected] = useState(false)
+  const [hasSnapshot, setHasSnapshot] = useState(false)
 
   useEffect(() => {
     const es = new EventSource('/api/runs/stream')
@@ -37,6 +38,7 @@ export function useRuns() {
         const arr = JSON.parse(ev.data) as Run[]
         setRuns(new Map(arr.map((r) => [r.id, r])))
         setConnected(true)
+        setHasSnapshot(true)
       } catch (e) {
         console.error('runs snapshot parse failed', e)
       }
@@ -56,5 +58,5 @@ export function useRuns() {
     return () => es.close()
   }, [])
 
-  return { runs: Array.from(runs.values()), connected }
+  return { runs: Array.from(runs.values()), connected, hasSnapshot }
 }

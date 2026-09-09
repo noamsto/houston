@@ -199,28 +199,40 @@ The Vite dev server (`ui/vite.config.ts`) proxies `/api` to `http://localhost:90
 
 ## Mobile Features
 
-- **Wide terminal mode** (default): 960px container (~120 columns) scaled to fit viewport, good for diffs
-- **Fit mode**: Terminal matches viewport width, larger text
+- **Wide terminal**: fixed-width container (~120 columns), CSS-scaled to fit the viewport
 - **Touch scrolling**: Single-finger vertical scroll through terminal history
 - **Pinch-to-zoom**: Two-finger pinch with focal-point tracking
 - **Pan**: Single-finger horizontal drag or two-finger drag when zoomed
-- **Quick actions**: Number keys (1-5), Y/N, with expandable section for ^C, Enter, arrows, Esc, Tab, Shift+Tab, Alt+P, Ctrl+O, Ctrl+Z
+- **Quick actions**: Number keys (1-5), Y/N, with expandable section for ^C, arrows, Esc, Tab, Shift+Tab, Alt+P, Ctrl+O, Ctrl+Z
 - **Voice input**: Web Speech API microphone button
-- **WIDE/FIT toggle**: In pane header, switches between wide and fit modes
+
+There is no WIDE/FIT toggle — that affordance was removed. A terminal rework
+(font-size zoom, pan behavior, possibly more) is in progress; revisit this
+section once it ships rather than trusting the bullets above for anything not
+already verified in `TerminalPane.tsx` / `useTouchGestures.ts`.
 
 ## WebSocket Protocol
 
-The pane WebSocket (`/api/pane/:target/ws`) is bidirectional:
+The pane WebSocket (`/api/pane/:target/ws`) is bidirectional and carries a
+JSON envelope, `{"type":"...","data":{...}}` (`server/pane_ws.go`,
+`ui/src/hooks/usePaneSocket.ts`):
 
 **Server → Client:**
-- `output:<data>` — Terminal capture-pane content (sent on change, deduped)
-- `meta:<json>` — Pane metadata (agent type, status, mode, activity, choices)
-- `resize-done` — Acknowledgment of resize
+- `dims` — Pane dimensions (cols/rows) to resize xterm.js to match
+- `seed` — Full snapshot of pane content; also used for a mid-stream re-seed (e.g. after a resize) — there is no separate `reseed` type on the wire
+- `output` — Incremental terminal data
+- `meta` — Pane metadata (agent type, status, mode, activity, choices)
 
 **Client → Server:**
-- `input:<text>` — Send text to pane (appends Enter)
-- `special:<key>` — Send special key (C-c, Enter, Up, Down, Escape, Tab, BTab, M-p, C-o, C-z)
-- `resize:<cols>:<rows>` — Request terminal resize
+- `input` — `{data: <text>}`, sent verbatim to the pane (no implicit Enter)
+- `resize` — `{cols, rows}`, request terminal resize
+
+There is no `resize-done` acknowledgment, and no `special:<key>` message type
+on this WebSocket. `special` does exist, but as a form parameter on the
+legacy REST route `POST /api/pane/:target/send` (`server/server.go`): when
+`special=true`, `input` is sent as a key name (C-c, Up, Down, Escape, Tab,
+BTab, M-p, C-o, C-z) rather than literal text. `MobileInputBar.tsx` uses this
+route for quick actions instead of the WebSocket.
 
 ## Security
 

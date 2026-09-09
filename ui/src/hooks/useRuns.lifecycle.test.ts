@@ -100,6 +100,22 @@ describe('useRuns lifecycle', () => {
     expect(result.current.connected).toBe(true)
   })
 
+  it('sets hasSnapshot only after the first snapshot event, and never back to false', () => {
+    const { result } = renderHook(useRunsProbe)
+    expect(result.current.hasSnapshot).toBe(false)
+
+    const instance = fake.instances[0]
+    act(() => {
+      instance.emit('snapshot', [run('pane-1')])
+    })
+    expect(result.current.hasSnapshot).toBe(true)
+
+    act(() => {
+      instance.error()
+    })
+    expect(result.current.hasSnapshot).toBe(true)
+  })
+
   it('does not wedge the store on malformed JSON', () => {
     const { result } = renderHook(useRunsProbe)
     const instance = fake.instances[0]

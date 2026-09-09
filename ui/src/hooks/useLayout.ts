@@ -1,4 +1,4 @@
-import { useEffect, useReducer } from 'react'
+import { useEffect, useReducer, useState } from 'react'
 
 export interface PaneInstance {
   id: string
@@ -161,4 +161,35 @@ export function useLayout() {
   }, [state])
 
   return { ...state, dispatch }
+}
+
+const FONT_SIZE_STORAGE_KEY = 'houston-terminal-font-size'
+const DEFAULT_TERMINAL_FONT_SIZE = 14
+
+function loadTerminalFontSize(): number {
+  try {
+    const saved = localStorage.getItem(FONT_SIZE_STORAGE_KEY)
+    const n = saved === null ? NaN : Number(saved)
+    if (Number.isFinite(n)) return n
+  } catch {
+    // ignore
+  }
+  return DEFAULT_TERMINAL_FONT_SIZE
+}
+
+/** Persisted per-device terminal font-size preference, deliberately NOT a
+ *  field on LayoutState: useLayout()'s reducer snapshots the whole state on
+ *  mount and rewrites it wholesale on every change, and #/panes vs. the
+ *  run-detail view don't share a useLayout() instance — folding font size in
+ *  here would let a stale reducer snapshot from one clobber the other's
+ *  pane-split/focus state on save. A standalone hook with its own storage
+ *  key avoids that entirely. */
+export function useTerminalFontSize() {
+  const [fontSize, setFontSize] = useState<number>(loadTerminalFontSize)
+
+  useEffect(() => {
+    localStorage.setItem(FONT_SIZE_STORAGE_KEY, String(fontSize))
+  }, [fontSize])
+
+  return [fontSize, setFontSize] as const
 }
