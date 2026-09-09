@@ -15,16 +15,16 @@ import (
 
 // Message represents a single entry in the JSONL log.
 type Message struct {
-	Type       string    `json:"type"` // "user", "assistant", "file-history-snapshot", "summary"
-	UUID       string    `json:"uuid"`
-	ParentUUID string    `json:"parentUuid"`
-	SessionID  string    `json:"sessionId"`
-	Timestamp  time.Time `json:"timestamp"`
-	CWD        string    `json:"cwd"`
-	GitBranch  string    `json:"gitBranch"`
-	Todos      []Todo    `json:"todos"`
+	Type       string         `json:"type"` // "user", "assistant", "file-history-snapshot", "summary"
+	UUID       string         `json:"uuid"`
+	ParentUUID string         `json:"parentUuid"`
+	SessionID  string         `json:"sessionId"`
+	Timestamp  time.Time      `json:"timestamp"`
+	CWD        string         `json:"cwd"`
+	GitBranch  string         `json:"gitBranch"`
+	Todos      []Todo         `json:"todos"`
 	Message    MessageContent `json:"message"`
-	Summary    string `json:"summary"`
+	Summary    string         `json:"summary"`
 }
 
 // MessageContent represents the content of a user or assistant message.

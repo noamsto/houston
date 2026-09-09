@@ -113,9 +113,7 @@ func ReadTranscriptFrom(path string, byteOffset int64) ([]TranscriptEvent, int64
 		n := int64(len(line))
 		trimmed := strings.TrimSpace(string(line))
 		if trimmed != "" {
-			for _, ev := range parseLine(trimmed, pos) {
-				events = append(events, ev)
-			}
+			events = append(events, parseLine(trimmed, pos)...)
 		}
 		pos += n
 		if err == io.EOF {

@@ -41,11 +41,11 @@ type WorkspaceTree struct {
 
 // Message represents a thread message.
 type Message struct {
-	Role      string        `json:"role"`
-	MessageID int           `json:"messageId"`
-	Content   []any `json:"content"`
-	State     MessageState  `json:"state"`
-	Usage     Usage         `json:"usage"`
+	Role      string       `json:"role"`
+	MessageID int          `json:"messageId"`
+	Content   []any        `json:"content"`
+	State     MessageState `json:"state"`
+	Usage     Usage        `json:"usage"`
 }
 
 // MessageState represents the state of a message.

@@ -1,0 +1,7 @@
+# Restores golangci-lint v1's default EXC0001 errcheck exclusions
+# (dropped when this repo's config moved to v2 schema).
+version: "2"
+linters:
+  exclusions:
+    presets:
+      - std-error-handling
