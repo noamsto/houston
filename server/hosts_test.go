@@ -10,7 +10,7 @@ import (
 
 // If this fails, a rebound page can obtain the real token by fetching "/".
 func TestUnknownHostGetsNoCookieAndIsRefused(t *testing.T) {
-	g := deriveHosts(nil, nil)
+	g := newHostGate([]string{"houston-host"}, nil, nil)
 	a := &authGate{token: "secret", enabled: true}
 
 	handler := g.middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -34,12 +34,21 @@ func TestUnknownHostGetsNoCookieAndIsRefused(t *testing.T) {
 // Exercises the real Handler() rather than a hand-built chain: the bug this
 // guards against was in the wiring, not the gate — the SPA handler sat outside
 // the host gate and issued the real token to any Host that asked.
+//
+// The allowlist is swapped for a fixed one after New() (both in package
+// server, so the unexported field is reachable), so the assertion — an
+// unrecognised Host gets 421 and no cookie — holds against a fixed, injected
+// allowlist with zero dependence on os.Hostname(), DNS, or a Tailscale
+// interface being present. (New() still probes those ambient sources during
+// construction, same as any production startup; only their result is
+// discarded here, not the probing itself.)
 func TestHandlerRefusesUnknownHostEndToEnd(t *testing.T) {
 	dir := t.TempDir()
 	s, err := New(Config{StatusDir: dir, AuthEnabled: true, UIFS: fstest.MapFS{}})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	s.hosts = newHostGate([]string{"houston-host"}, nil, nil)
 
 	req := httptest.NewRequest("GET", "http://evil.example/", nil)
 	req.Host = "evil.example"
@@ -74,7 +83,7 @@ func TestDeriveHostsIncludesSelfKnowledge(t *testing.T) {
 }
 
 func TestAllowsStripsPortAndIsCaseInsensitive(t *testing.T) {
-	g := deriveHosts(nil, nil)
+	g := newHostGate(nil, nil, nil)
 
 	if !g.allows("127.0.0.1:9090") {
 		t.Error("allows(\"127.0.0.1:9090\") = false, want true — the port must be stripped")

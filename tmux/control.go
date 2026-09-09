@@ -9,7 +9,7 @@ import (
 type ControlEventType int
 
 const (
-	EventOutput          ControlEventType = iota
+	EventOutput ControlEventType = iota
 	EventBegin
 	EventEnd
 	EventError

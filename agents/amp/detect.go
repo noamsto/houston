@@ -13,8 +13,8 @@ var boxStatusPattern = regexp.MustCompile(`╭─.*─╮`)
 func DetectFromOutput(output string) bool {
 	// Amp-specific markers (high confidence)
 	ampMarkers := []string{
-		"Cogitated for",           // Amp thinking indicator
-		"Baked for",               // Amp thinking variant
+		"Cogitated for",             // Amp thinking indicator
+		"Baked for",                 // Amp thinking variant
 		"Running PostToolUse hooks", // Amp hook indicator
 	}
 	for _, marker := range ampMarkers {

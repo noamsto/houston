@@ -72,8 +72,8 @@ type Result struct {
 	Question     string     `json:"question,omitempty"`
 	Choices      []string   `json:"choices,omitempty"`
 	ErrorSnippet string     `json:"error_snippet,omitempty"`
-	Activity     string     `json:"activity,omitempty"`     // What Claude is currently doing (for TypeWorking)
-	Suggestion   string     `json:"suggestion,omitempty"`   // Prompt suggestion from Claude Code subagent
+	Activity     string     `json:"activity,omitempty"`   // What Claude is currently doing (for TypeWorking)
+	Suggestion   string     `json:"suggestion,omitempty"` // Prompt suggestion from Claude Code subagent
 }
 
 var (
@@ -84,7 +84,7 @@ var (
 	// Error patterns - look for actual error messages, not just code containing "error"
 	// Requires colon after error keyword to avoid matching code/comments
 	// Matches: "Error: message" or "error: message" but not "// handle error" or "errorCount"
-	errorPattern = regexp.MustCompile(`(?mi)^(?:error|failed|fatal|panic):\s+(.+)`)
+	errorPattern    = regexp.MustCompile(`(?mi)^(?:error|failed|fatal|panic):\s+(.+)`)
 	approvalPattern = regexp.MustCompile(`(?i)(proceed|continue|look right|does this|should i)\?`)
 
 	// Claude Code working/activity patterns
@@ -155,7 +155,6 @@ func Parse(output string) Result {
 			}
 		}
 	}
-
 
 	// Check for approval/confirmation question
 	if approvalPattern.MatchString(text) {

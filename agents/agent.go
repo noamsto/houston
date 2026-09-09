@@ -14,7 +14,7 @@ const (
 
 // AgentState wraps parser.Result with agent metadata.
 type AgentState struct {
-	Agent  AgentType    `json:"agent"`
+	Agent  AgentType     `json:"agent"`
 	Result parser.Result `json:"result"`
 }
 
