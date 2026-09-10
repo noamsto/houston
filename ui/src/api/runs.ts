@@ -1,4 +1,6 @@
 // Mirror of runs.State (Go). Exactly one state means "a human is required".
+// Can also be '' on the wire: a crew layer that has nothing left to say (R5)
+// publishes no state opinion, and runtime already tolerates the empty value.
 export type RunState =
   | 'thinking'
   | 'running'
@@ -32,8 +34,9 @@ export interface PRRef {
 }
 
 export interface CrewRef {
-  name: string
-  color?: string
+  name: string // crew id; '' when only tmux knows this run — such a run belongs to no crew group
+  codename?: string
+  color?: string // always '#rrggbb' when present; never a tmux colour name
   tier?: string
 }
 
@@ -95,6 +98,35 @@ export interface Run {
   stale?: boolean
   caps: Caps
   removed?: boolean
+}
+
+// Mirror of server/runs_reply.go's response contract. `refused` (409, the
+// worker's own stderr) and `failed` (502/504/network, houston's fault) must
+// stay distinct — collapsing them is what makes "surface the failure
+// honestly" untestable.
+export type ReplyOutcome =
+  | { kind: 'delivered' }
+  | { kind: 'refused'; reason: string }
+  | { kind: 'rejected'; reason: string }
+  | { kind: 'failed'; reason: string }
+
+export async function replyRun(id: string, text: string): Promise<ReplyOutcome> {
+  let res: Response
+  try {
+    res = await fetch(`/api/runs/${id}/reply`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    })
+  } catch {
+    return { kind: 'failed', reason: 'network error' }
+  }
+  if (res.status === 204) return { kind: 'delivered' }
+  // http.Error appends a trailing newline server-side; trim it, not the text itself.
+  const reason = (await res.text()).trim()
+  if (res.status === 409) return { kind: 'refused', reason }
+  if (res.status === 400 || res.status === 404 || res.status === 413) return { kind: 'rejected', reason }
+  return { kind: 'failed', reason }
 }
 
 // The pane WS route (`server/server.go:parsePaneTarget`) percent-decodes the

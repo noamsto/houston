@@ -70,9 +70,10 @@ type PRRef struct {
 }
 
 type CrewRef struct {
-	Name  string `json:"name"`
-	Color string `json:"color,omitempty"`
-	Tier  string `json:"tier,omitempty"`
+	Name     string `json:"name"`               // crew id — the grouping key. Crew bus only. "" when only tmux knows this run.
+	Codename string `json:"codename,omitempty"` // lazytmux @crew_name: this worker's codename. tmux only.
+	Color    string `json:"color,omitempty"`    // "#rrggbb" or "". tmux only.
+	Tier     string `json:"tier,omitempty"`     // Crew bus only.
 }
 
 // Activity is what the run is doing right now.

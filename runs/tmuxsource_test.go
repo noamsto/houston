@@ -13,7 +13,7 @@ func TestDeltasFromTmuxJoinsPanesToWindows(t *testing.T) {
 	wins := []tmux.WindowOptions{{
 		Session: "lazytmux", Window: 2, Branch: "feat/320",
 		IssueID: "#320", PRNumber: "565", PRState: "open", PRCheckState: "passing",
-		CrewName: "mauve", GitRoot: "/home/n/git/lazytmux",
+		CrewName: "mauve", CrewColor: "colour168", GitRoot: "/home/n/git/lazytmux",
 	}}
 	panes := []tmux.PaneOptions{{
 		PaneID: "%459", Target: "lazytmux:2", ClaudeStatus: "processing 1788 ",
@@ -39,7 +39,7 @@ func TestDeltasFromTmuxJoinsPanesToWindows(t *testing.T) {
 	if d.Run.PR == nil || d.Run.PR.Number != "565" || d.Run.PR.CheckState != "passing" {
 		t.Errorf("PR = %+v", d.Run.PR)
 	}
-	if d.Run.Crew == nil || d.Run.Crew.Name != "mauve" {
+	if d.Run.Crew == nil || d.Run.Crew.Codename != "mauve" || d.Run.Crew.Name != "" || d.Run.Crew.Color != "#d75f87" {
 		t.Errorf("Crew = %+v", d.Run.Crew)
 	}
 	if d.Run.Repo != "lazytmux" {

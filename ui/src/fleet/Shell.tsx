@@ -3,14 +3,14 @@ import { useRuns } from '../hooks/useRuns'
 import { needsYou } from './staleness'
 import { useNow } from './useNow'
 import { FleetView } from './FleetView'
+import { CrewsView } from './CrewsView'
 import { RunDetail } from './RunDetail'
 import '../theme/mocha.css'
 import './fleet.css'
 
 type Tab = 'fleet' | 'crews' | 'workspace' | 'dispatch'
 
-const PLACEHOLDER: Record<Exclude<Tab, 'fleet'>, string> = {
-  crews: 'Crews arrives with the dispatcher milestone — crew grouping, tier and PR badges, and answering a blocked worker from here.',
+const PLACEHOLDER: Record<Exclude<Tab, 'fleet' | 'crews'>, string> = {
   workspace: 'Workspace arrives next — the tmux tree across every host, including panes that are not agents.',
   dispatch: 'Dispatch arrives with the dispatcher milestone — pick a repo, task, tier and engine, and start work from your phone.',
 }
@@ -52,7 +52,15 @@ export function Shell() {
             onOpen={(r) => { window.location.hash = `#/fleet/${r.id}/activity` }}
           />
         </div>
-        {tab !== 'fleet' && <div className="shell-placeholder">{PLACEHOLDER[tab]}</div>}
+        {/* Kept mounted like FleetView, so a half-typed reply survives a tab switch. */}
+        <div hidden={tab !== 'crews'}>
+          <CrewsView
+            runs={runs}
+            now={now}
+            onOpen={(r) => { window.location.hash = `#/fleet/${r.id}/activity` }}
+          />
+        </div>
+        {tab !== 'fleet' && tab !== 'crews' && <div className="shell-placeholder">{PLACEHOLDER[tab]}</div>}
         {/* A stacked overlay, not a `hidden`-swapped replacement of `.fleet` —
             `hidden` maps to display:none, which would collapse `.fleet`'s own
             scroll container and lose its scrollTop on return. */}

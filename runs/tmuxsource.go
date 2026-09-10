@@ -86,10 +86,7 @@ func (s *TmuxSource) Run(ctx context.Context, out chan<- Delta) error {
 // window was not listed is skipped rather than emitted bare — it means the two
 // queries raced a window closing.
 func deltasFromTmux(wins []tmux.WindowOptions, panes []tmux.PaneOptions) []Delta {
-	byTarget := make(map[string]tmux.WindowOptions, len(wins))
-	for _, w := range wins {
-		byTarget[fmt.Sprintf("%s:%d", w.Session, w.Window)] = w
-	}
+	byTarget := windowsByTarget(wins)
 
 	out := make([]Delta, 0, len(panes))
 	for _, p := range panes {
@@ -126,11 +123,21 @@ func deltasFromTmux(wins []tmux.WindowOptions, panes []tmux.PaneOptions) []Delta
 			}
 		}
 		if w.CrewName != "" {
-			r.Crew = &CrewRef{Name: w.CrewName}
+			r.Crew = &CrewRef{Codename: w.CrewName, Color: tmuxColorToHex(w.CrewColor)}
 		}
 		out = append(out, Delta{Source: "tmux", Key: p.PaneID, Run: r})
 	}
 	return out
+}
+
+// windowsByTarget indexes windows by the "session:window" string a pane
+// carries as its Target. Both sources join panes to windows through it.
+func windowsByTarget(wins []tmux.WindowOptions) map[string]tmux.WindowOptions {
+	byTarget := make(map[string]tmux.WindowOptions, len(wins))
+	for _, w := range wins {
+		byTarget[fmt.Sprintf("%s:%d", w.Session, w.Window)] = w
+	}
+	return byTarget
 }
 
 func firstNonEmpty(vals ...string) string {
