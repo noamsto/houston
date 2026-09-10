@@ -11,8 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-
-	"github.com/noamsto/houston/tmux"
 )
 
 // CrewSource reads dispatcher's git-backed bus. It contributes the one thing
@@ -22,7 +20,7 @@ import (
 // uses, rather than taking them from the caller — that keeps construction free
 // of I/O and self-contained.
 type CrewSource struct {
-	client *tmux.Client
+	client lister
 	every  time.Duration
 
 	// crewDirs caches root -> bus directory, keyed by lazytmux's @git_root.
@@ -31,7 +29,7 @@ type CrewSource struct {
 	crewDirs map[string]string
 }
 
-func NewCrewSource(c *tmux.Client, every time.Duration) *CrewSource {
+func NewCrewSource(c lister, every time.Duration) *CrewSource {
 	if every <= 0 {
 		every = 3 * time.Second
 	}
@@ -91,18 +89,22 @@ func crewRunFinished(r Run, now time.Time) bool {
 	return now.Sub(time.Unix(r.UpdatedAt, 0)) > crewEvictionGrace
 }
 
-// tickCrewDeltas computes this cycle's deltas from the branches scan()
-// currently sees, evicting anything whose bus status has been terminal for
-// longer than crewEvictionGrace. seen is the previous tick's emitted key
-// set; it returns the deltas to send and the new seen set.
+// tickCrewDeltas computes this cycle's deltas from the runs scan() currently
+// sees, already keyed by their final registry keys, evicting anything whose
+// bus status has been terminal for longer than crewEvictionGrace. seen is the
+// previous tick's emitted key set; it returns the deltas to send and the new
+// seen set.
+//
+// Every update is emitted before every Gone. A branch's key flips as its pane
+// opens and closes, and that order is what stops a subscriber briefly holding
+// neither key.
 func tickCrewDeltas(current map[string]Run, seen map[string]bool, now time.Time) ([]Delta, map[string]bool) {
 	var deltas []Delta
 	newSeen := map[string]bool{}
-	for branch, r := range current {
+	for key, r := range current {
 		if crewRunFinished(r, now) {
 			continue
 		}
-		key := "branch/" + branch
 		deltas = append(deltas, Delta{Source: "crew", Key: key, Run: r})
 		newSeen[key] = true
 	}
@@ -114,13 +116,21 @@ func tickCrewDeltas(current map[string]Run, seen map[string]bool, now time.Time)
 	return deltas, newSeen
 }
 
-// scan returns ok=false when ListWindowOptions failed — a transient tmux
-// error, not evidence every crew-sourced branch vanished. The caller must
-// skip the tick entirely rather than diff against an empty map.
-func (s *CrewSource) scan() (branches map[string]Run, ok bool) {
+// scan returns this tick's runs under their final registry keys: the pane id
+// where the branch joins exactly one agent pane, otherwise "crew/<bus>/<branch>".
+//
+// ok=false means a tmux query failed — a transient error, not evidence every
+// crew-sourced branch vanished. The caller must skip the tick entirely rather
+// than diff against an empty map.
+func (s *CrewSource) scan() (map[string]Run, bool) {
 	wins, err := s.client.ListWindowOptions()
 	if err != nil {
 		slog.Debug("crew source: list window options", "error", err)
+		return nil, false
+	}
+	panes, err := s.client.ListPaneOptions()
+	if err != nil {
+		slog.Debug("crew source: list pane options", "error", err)
 		return nil, false
 	}
 
@@ -135,14 +145,30 @@ func (s *CrewSource) scan() (branches map[string]Run, ok bool) {
 	for repo := range roots {
 		rootList = append(rootList, repo)
 	}
-	return s.scanRoots(rootList), true
+
+	out := map[string]Run{}
+	for bus, branches := range s.scanRoots(rootList) {
+		for branch, r := range branches {
+			r.Worktree = worktreeFor(bus, branch, wins, s.crewDir)
+			paneID, candidates := resolvePane(bus, branch, wins, panes, s.crewDir)
+			key := paneID
+			if candidates != 1 {
+				key = "crew/" + bus + "/" + branch
+				slog.Debug("crew source: no pane join", "bus", bus, "branch", branch, "candidates", candidates)
+			}
+			out[key] = r
+		}
+	}
+	return out, true
 }
 
 // scanRoots reads every root's crew bus and folds it into the latest state per
-// branch. Split out from scan() so the root list can be injected in tests
-// without going through tmux.
-func (s *CrewSource) scanRoots(roots []string) map[string]Run {
-	merged := map[string]Run{}
+// branch, grouped by bus directory. Several worktrees of one repo resolve to
+// the same common git dir and therefore to one bus, which is the correct
+// dedupe; two repos each holding a `main` record stay apart. Split out from
+// scan() so the root list can be injected in tests without going through tmux.
+func (s *CrewSource) scanRoots(roots []string) map[string]map[string]Run {
+	merged := map[string]map[string]Run{}
 	for _, repo := range roots {
 		dir := s.crewDir(repo)
 		if dir == "" {
@@ -159,7 +185,10 @@ func (s *CrewSource) scanRoots(roots []string) map[string]Run {
 				continue
 			}
 			for branch, r := range deltasFromCrewLog(f) {
-				merged[branch] = r
+				if merged[dir] == nil {
+					merged[dir] = map[string]Run{}
+				}
+				merged[dir][branch] = r
 			}
 			_ = f.Close()
 		}
@@ -204,6 +233,7 @@ type crewRecord struct {
 	TS     int64  `json:"ts"`
 	CrewID string `json:"crew_id"`
 	From   string `json:"from"`
+	To     string `json:"to"`
 	Kind   string `json:"kind"`
 	Branch string `json:"branch"`
 	Title  string `json:"title"`
@@ -213,17 +243,37 @@ type crewRecord struct {
 	// Session is a tmux session name, present on the dispatch record. It is
 	// useful for the later branch->pane join but is not used yet.
 	Session string `json:"session"`
-	Body    struct {
-		State  string `json:"state"`
-		Detail string `json:"detail"`
-		PRURL  string `json:"pr_url"`
-	} `json:"body"`
+	// Body is a JSON object on a status record but a JSON string on a msg
+	// record, so decoding straight into a struct fails on every msg line and
+	// drops that record whole. Decode it only where the shape is known.
+	Body json.RawMessage `json:"body"`
 }
+
+// crewStatusBody is crewRecord.Body decoded for a "status" record.
+type crewStatusBody struct {
+	State  string `json:"state"`
+	Detail string `json:"detail"`
+	PRURL  string `json:"pr_url"`
+}
+
+// crewBlockedNoDetail is the question synthesised for a `crew status <from>
+// blocked` carrying no detail, since that detail is optional. The composed-run
+// invariant (a non-nil Question implies StateBlocked) can only protect a
+// blocked status that has a Question, so without this the higher-precedence
+// hooks layer overwrites State and the block goes unseen. Worded as houston's
+// own description: there is no worker text here to quote.
+const crewBlockedNoDetail = "Blocked, no detail given."
 
 // deltasFromCrewLog folds one bus log into the latest state per branch. The bus
 // is append-only, so later records win.
 func deltasFromCrewLog(rd io.Reader) map[string]Run {
 	out := map[string]Run{}
+	// lastStatusTS and dispatcherReplyTS are compared by timestamp, not by
+	// line order, to decide whether a blocked question has been answered —
+	// see the retirement pass below.
+	lastStatusTS := map[string]int64{}
+	dispatcherReplyTS := map[string]int64{}
+
 	sc := bufio.NewScanner(rd)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
@@ -233,8 +283,15 @@ func deltasFromCrewLog(rd io.Reader) map[string]Run {
 			continue // the bus is written by shell; a torn line is not fatal
 		}
 
+		// A dispatcher reply is addressed with from: "dispatcher:…", to:
+		// "worker:<branch>#…" — its branch lives in To, not From, since From
+		// never resolves through branchFromWorker.
 		branch := rec.Branch
-		if branch == "" {
+		switch {
+		case branch != "":
+		case rec.Kind == "msg" && strings.HasPrefix(rec.From, "dispatcher:"):
+			branch = branchFromWorker(rec.To)
+		default:
 			branch = branchFromWorker(rec.From)
 		}
 		if branch == "" {
@@ -259,16 +316,41 @@ func deltasFromCrewLog(rd io.Reader) map[string]Run {
 		if rec.Engine != "" {
 			r.Agent = rec.Engine
 		}
-		if rec.Kind == "status" && rec.Body.State != "" {
-			r.State = FromCrewState(rec.Body.State)
-			r.UpdatedAt = rec.TS / 1000
-			r.Question = nil
-			if r.State == StateBlocked && rec.Body.Detail != "" {
-				r.Question = &Question{Text: rec.Body.Detail, Via: "crew"}
+		if rec.Kind == "msg" && strings.HasPrefix(rec.From, "dispatcher:") && rec.TS > dispatcherReplyTS[branch] {
+			dispatcherReplyTS[branch] = rec.TS
+		}
+		if rec.Kind == "status" {
+			var body crewStatusBody
+			if err := json.Unmarshal(rec.Body, &body); err == nil && body.State != "" {
+				r.State = FromCrewState(body.State)
+				r.UpdatedAt = rec.TS / 1000
+				lastStatusTS[branch] = rec.TS
+				r.Question = nil
+				if r.State == StateBlocked {
+					r.Question = &Question{Text: crewBlockedNoDetail, Via: "crew"}
+					if body.Detail != "" {
+						r.Question.Text = body.Detail
+					}
+				}
 			}
 		}
 		out[branch] = r
 	}
+
+	// A dispatcher reply newer than the blocking status has answered the
+	// question: measured on this repo's own bus, a worker's next status
+	// arrived 783s and 348s after the dispatcher's reply, so without this the
+	// question — and the attention badge — persists for minutes after it was
+	// answered. The layer then has no opinion left to publish: no Question,
+	// no State.
+	for branch, r := range out {
+		if r.State == StateBlocked && dispatcherReplyTS[branch] > lastStatusTS[branch] {
+			r.State = ""
+			r.Question = nil
+			out[branch] = r
+		}
+	}
+
 	return out
 }
 

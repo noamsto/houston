@@ -159,6 +159,16 @@ func (r *Registry) composeLocked(key string) (Run, bool) {
 	}
 	out.ID = idFor(key)
 	out.Caps = deriveCaps(bySource)
+	// run.go documents "non-nil Question implies State == StateBlocked", and
+	// composition is where that invariant must actually hold: hooksource.go
+	// keys on the same pane id as the crew layer and sits above it in
+	// DefaultOrder, so a worker blocked on `crew await` merges as State ==
+	// StateRunning from hooks while the crew layer's Question survives. Forcing
+	// it here restores the invariant without touching precedence: a layer that
+	// reports blocked without a Question is unaffected.
+	if out.Question != nil {
+		out.State = StateBlocked
+	}
 	return out, true
 }
 
@@ -183,17 +193,18 @@ func deriveCaps(bySource map[string]Run) Caps {
 // idFor derives a URL-path-safe Run.ID from a source's correlation key. The
 // key itself keeps flowing internally unchanged — it is load-bearing for layer
 // bookkeeping — only the externally visible ID differs. Without this, "%307"
-// decodes as a path segment to "/07", and "branch/fix/412" or "claude/<sid>"
-// contain slashes that break /api/runs/{id} segment routing outright.
+// decodes as a path segment to "/07", and "crew/<busDir>/<branch>" or
+// "claude/<sid>" contain slashes that break /api/runs/{id} segment routing
+// outright.
 func idFor(key string) string {
 	switch {
 	case strings.HasPrefix(key, "%"):
 		return "pane-" + strings.TrimPrefix(key, "%")
 	case strings.HasPrefix(key, "claude/"):
 		return "sess-" + strings.TrimPrefix(key, "claude/")
-	case strings.HasPrefix(key, "branch/"):
-		b := strings.TrimPrefix(key, "branch/")
-		return "branch-" + base64.RawURLEncoding.EncodeToString([]byte(b))
+	case strings.HasPrefix(key, "crew/"):
+		b := strings.TrimPrefix(key, "crew/")
+		return "crew-" + base64.RawURLEncoding.EncodeToString([]byte(b))
 	default:
 		return "key-" + base64.RawURLEncoding.EncodeToString([]byte(key))
 	}
@@ -225,11 +236,11 @@ func runSignature(r Run) string {
 	}
 	b.WriteByte('|')
 	if r.Crew != nil {
-		b.WriteString(r.Crew.Name + "," + r.Crew.Tier)
+		b.WriteString(r.Crew.Name + "," + r.Crew.Codename + "," + r.Crew.Color + "," + r.Crew.Tier)
 	}
 	b.WriteByte('|')
 	if r.Question != nil {
-		b.WriteString(r.Question.Text)
+		b.WriteString(r.Question.Text + "," + r.Question.Via)
 	}
 	b.WriteByte('|')
 	b.WriteString(r.Activity.Tool + "," + r.Activity.Hint + "," + r.Activity.Message + "," + r.Activity.Task + "," + r.Activity.Preview)
@@ -277,7 +288,25 @@ func mergeInto(dst *Run, src Run) {
 		dst.PR = src.PR
 	}
 	if src.Crew != nil {
-		dst.Crew = src.Crew
+		// Field-wise, not wholesale: tmux owns Codename/Color and the crew bus
+		// owns Name/Tier, so two layers can each set half of this struct on the
+		// same key. Wholesale replacement would let whichever layer merges last
+		// erase the other's half.
+		if dst.Crew == nil {
+			dst.Crew = &CrewRef{}
+		}
+		if src.Crew.Name != "" {
+			dst.Crew.Name = src.Crew.Name
+		}
+		if src.Crew.Codename != "" {
+			dst.Crew.Codename = src.Crew.Codename
+		}
+		if src.Crew.Color != "" {
+			dst.Crew.Color = src.Crew.Color
+		}
+		if src.Crew.Tier != "" {
+			dst.Crew.Tier = src.Crew.Tier
+		}
 	}
 	if src.Question != nil {
 		dst.Question = src.Question

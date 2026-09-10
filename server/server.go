@@ -93,6 +93,10 @@ type Server struct {
 	// runs composes the hook, tmux and crew sources into one Run per key.
 	runs *runs.Registry
 
+	// replyRunner delivers a crew answer. It exists so a test can observe that
+	// no command ran, which no assertion about the response alone can prove.
+	replyRunner replyRunner
+
 	auth  *authGate
 	hosts *hostGate
 }
@@ -146,6 +150,7 @@ func New(cfg Config) (*Server, error) {
 		uiFS:         cfg.UIFS,
 		lastActivity: make(map[string]time.Time),
 		hub:          hub.New(cfg.StatusDir, slog.Default()),
+		replyRunner:  execCrewReply,
 	}
 
 	// Run the hub in the background. It watches <status-dir>/claude/ and the
@@ -241,6 +246,7 @@ func (s *Server) Handler() http.Handler {
 	apiMux.HandleFunc("/api/agents/stream", s.handleAgentsStream)
 	apiMux.HandleFunc("/api/runs", s.handleRunsSnapshot)
 	apiMux.HandleFunc("/api/runs/stream", s.handleRunsStream)
+	apiMux.HandleFunc("POST /api/runs/{id}/reply", s.handleRunReply)
 	mux.Handle("/api/", s.auth.middleware(apiMux))
 
 	// The host gate wraps everything, including "/", so a rebound domain is

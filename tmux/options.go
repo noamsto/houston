@@ -15,7 +15,7 @@ const optSep = "\x1f"
 // tmux resolves #{@name} inline, so no per-window show-options loop is needed.
 const windowOptionsFormat = "#{session_name}" + optSep + "#{window_index}" + optSep + "#{@branch}" + optSep + "#{@issue_id}" + optSep +
 	"#{@pr_number}" + optSep + "#{@crew_name}" + optSep + "#{@pr_state}" + optSep + "#{@pr_check_state}" + optSep + "#{@pr_mergeable}" + optSep +
-	"#{@window_task}" + optSep + "#{@git_root}"
+	"#{@window_task}" + optSep + "#{@git_root}" + optSep + "#{@crew_color}"
 
 const paneOptionsFormat = "#{pane_id}" + optSep + "#{session_name}:#{window_index}" + optSep + "#{@claude_status}" + optSep + "#{@claude_task}"
 
@@ -33,6 +33,7 @@ type WindowOptions struct {
 	PRMergeable  string
 	Task         string
 	GitRoot      string
+	CrewColor    string
 }
 
 type PaneOptions struct {
@@ -62,7 +63,7 @@ func ParseWindowOptions(out string) []WindowOptions {
 	var res []WindowOptions
 	for _, line := range strings.Split(out, "\n") {
 		f := strings.Split(line, optSep)
-		if len(f) != 11 {
+		if len(f) != 12 {
 			continue
 		}
 		idx, err := strconv.Atoi(f[1])
@@ -72,7 +73,7 @@ func ParseWindowOptions(out string) []WindowOptions {
 		res = append(res, WindowOptions{
 			Session: f[0], Window: idx, Branch: f[2], IssueID: f[3],
 			PRNumber: f[4], CrewName: f[5], PRState: f[6], PRCheckState: f[7],
-			PRMergeable: f[8], Task: f[9], GitRoot: f[10],
+			PRMergeable: f[8], Task: f[9], GitRoot: f[10], CrewColor: f[11],
 		})
 	}
 	return res

@@ -4,8 +4,8 @@ import "testing"
 
 func TestParseWindowOptions(t *testing.T) {
 	// Real output shape, including the common all-empty-options case.
-	out := "lazytmux\x1f2\x1ffeat/320-relay\x1f#320\x1f565\x1fmauve\x1fopen\x1fpassing\x1fMERGEABLE\x1f\x1f\n" +
-		"houston\x1f1\x1fmain\x1f\x1f\x1f\x1f\x1f\x1f\x1f\x1f\n"
+	out := "lazytmux\x1f2\x1ffeat/320-relay\x1f#320\x1f565\x1fmauve\x1fopen\x1fpassing\x1fMERGEABLE\x1f\x1f\x1fcolour168\n" +
+		"houston\x1f1\x1fmain\x1f\x1f\x1f\x1f\x1f\x1f\x1f\x1f\x1f\n"
 
 	got := ParseWindowOptions(out)
 	if len(got) != 2 {
@@ -22,6 +22,9 @@ func TestParseWindowOptions(t *testing.T) {
 	if w.CrewName != "mauve" || w.PRState != "open" || w.PRCheckState != "passing" {
 		t.Errorf("got crew=%q pr_state=%q checks=%q", w.CrewName, w.PRState, w.PRCheckState)
 	}
+	if w.CrewColor != "colour168" {
+		t.Errorf("CrewColor = %q, want colour168", w.CrewColor)
+	}
 
 	bare := got[1]
 	if bare.Branch != "main" || bare.IssueID != "" || bare.PRNumber != "" {
@@ -30,7 +33,7 @@ func TestParseWindowOptions(t *testing.T) {
 }
 
 func TestParseWindowOptionsSkipsMalformedLines(t *testing.T) {
-	got := ParseWindowOptions("too\x1ffew\x1ffields\n\nhouston\x1f1\x1fmain\x1f\x1f\x1f\x1f\x1f\x1f\x1f\x1f\n")
+	got := ParseWindowOptions("too\x1ffew\x1ffields\n\nhouston\x1f1\x1fmain\x1f\x1f\x1f\x1f\x1f\x1f\x1f\x1f\x1f\n")
 	if len(got) != 1 {
 		t.Fatalf("%d windows, want 1 — short and empty lines are skipped, not fatal", len(got))
 	}
@@ -40,7 +43,7 @@ func TestParseWindowOptionsSurvivesPipeInFreeText(t *testing.T) {
 	// @window_task is free text captured from a user prompt, so it can contain
 	// anything. With a "|" delimiter this shifted GitRoot into garbage and
 	// silently dropped the real value.
-	out := "houston\x1f1\x1fmain\x1f\x1f\x1f\x1f\x1f\x1f\x1frun x | grep fail\x1f/home/n/git/houston\n"
+	out := "houston\x1f1\x1fmain\x1f\x1f\x1f\x1f\x1f\x1f\x1frun x | grep fail\x1f/home/n/git/houston\x1f\n"
 
 	got := ParseWindowOptions(out)
 	if len(got) != 1 {

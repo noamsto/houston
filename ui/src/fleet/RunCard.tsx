@@ -18,6 +18,7 @@ export function RunCard({ run, now, onOpen }: { run: Run; now: number; onOpen?: 
       type="button"
       className={`run-card${attentionClass}${history ? ' history' : ''}`}
       onClick={() => onOpen?.(run)}
+      style={{ '--run-accent': run.crew?.color } as React.CSSProperties}
     >
       <div className="run-head">
         <span className="run-dot" style={{ background: `var(--state-${run.state}, var(--text-faint))` }} />
@@ -37,7 +38,8 @@ export function RunCard({ run, now, onOpen }: { run: Run; now: number; onOpen?: 
             #{run.pr.number}
           </span>
         )}
-        {run.crew && <span className="run-chip">{run.crew.name}</span>}
+        {run.crew?.codename && <span className="run-chip codename">{run.crew.codename}</span>}
+        {run.crew?.tier && <span className="run-chip tier">{run.crew.tier}</span>}
       </div>
     </button>
   )
