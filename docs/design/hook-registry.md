@@ -19,17 +19,20 @@ declared three times, in `adapters/claude-code/plugin/hooks/hooks.json`,
 `adapters/codex/plugin/hooks/hooks.json`, and `adapters/cursor/hooks.json`,
 differing only in event-name casing and how the plugin root is spelled
 (`${CLAUDE_PLUGIN_ROOT}` vs `$PLUGIN_ROOT` vs `<ADAPTER_DIR>`). Re-verification
-during this design pass corrects the picture in both directions. Three of the
-five are genuinely drifted logic, not cosmetic copies: `diagrams.sh` differs
-by 231 changed lines between the claude-code and codex adapters (not 229),
-`session-backfill.sh` by 152 (not 150), `images.sh` by 58 (not 56) — different
-session-id extraction, different path resolution. But `diagram-guidance.sh` is
-byte-identical across claude-code and codex; it isn't drifted at all, and
-Cursor's `session-backfill.sh` is a deliberate 6-line no-op stub, not a
-degraded copy, so diffing it against the other two overstates drift. Against
-that, two files outside the original five-item list turn out to be drifted
-too: `session-reset.sh` (21 changed lines) and each adapter's own
-`lib/shim.sh` (61 changed lines, codex vs cursor). aeye already has one piece
+during this design pass corrects the picture in both directions. Counts below
+are changed-line totals (insertions + deletions) from `git diff --no-index
+--stat <claude-code path> <codex path>`, run against the aeye repo on this
+machine (`~/git/aeye`, at commit `17da13f`). Three of the five are genuinely
+drifted logic, not cosmetic copies: `diagrams.sh` differs by 229 changed lines
+between the claude-code and codex adapters, `session-backfill.sh` by 150,
+`images.sh` by 56 — different session-id extraction, different path
+resolution. But `diagram-guidance.sh` is byte-identical across claude-code and
+codex; it isn't drifted at all, and Cursor's `session-backfill.sh` is a
+deliberate 6-line no-op stub, not a degraded copy, so diffing it against the
+other two overstates drift. Against that, two files outside the original
+five-item list turn out to be drifted too: `session-reset.sh` (13 changed
+lines, claude-code vs codex) and each adapter's own `lib/shim.sh` (59 changed
+lines, codex vs cursor). aeye already has one piece
 of shared-code machinery — a `justfile` `sync-{codex,cursor}-core` step that
 vendors two core files via `cp` — which is evidence the maintainer has already
 felt this pain, not evidence the problem is solved. Net effect of the
@@ -710,7 +713,7 @@ aeye weakens under correction (`diagram-guidance.sh` turns out byte-identical,
 not drifted; Cursor's stub is deliberate, not degraded; a `justfile` step
 already vendors two shared files, so aeye isn't a completely clean-slate
 problem). But the correction also surfaces genuine drift the original count
-missed — `session-reset.sh` (21 lines) and each adapter's `lib/shim.sh` (61
+missed — `session-reset.sh` (13 lines) and each adapter's `lib/shim.sh` (59
 lines) — so the net picture is not weaker, just more precisely characterized.
 aeye also remains structurally distinct from every other repo: it is the only
 one with **three-way** duplication (Claude Code, Codex, Cursor), where
