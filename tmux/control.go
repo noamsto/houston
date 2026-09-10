@@ -34,8 +34,14 @@ type ControlEvent struct {
 	Data      string // unescaped output, window name, etc.
 }
 
+// controlModeIntroducer is the DCS sequence tmux emits on entering control
+// mode. It is glued to the front of the stream's very first line, which is the
+// %begin of the block answering the attach command itself.
+const controlModeIntroducer = "\x1bP1000p"
+
 // ParseControlLine parses a single line from tmux control mode stdout.
 func ParseControlLine(line string) ControlEvent {
+	line = strings.TrimPrefix(line, controlModeIntroducer)
 	switch {
 	case strings.HasPrefix(line, "%output "):
 		return parseOutput(line)
@@ -58,9 +64,9 @@ func ParseControlLine(line string) ControlEvent {
 	case strings.HasPrefix(line, "%pane-mode-changed "):
 		return parsePaneModeChanged(line)
 	case strings.HasPrefix(line, "%pause "):
-		return parsePaneNotification(line, "%pause ", EventPause)
+		return parsePaneNotification(line, EventPause)
 	case strings.HasPrefix(line, "%continue "):
-		return parsePaneNotification(line, "%continue ", EventContinue)
+		return parsePaneNotification(line, EventContinue)
 	case strings.HasPrefix(line, "%extended-output "):
 		return parseExtendedOutput(line)
 	default:
@@ -130,10 +136,35 @@ func parsePaneModeChanged(line string) ControlEvent {
 	return ControlEvent{Type: EventPaneModeChanged, PaneID: paneID}
 }
 
-func parsePaneNotification(line, prefix string, eventType ControlEventType) ControlEvent {
+func parsePaneNotification(line string, eventType ControlEventType) ControlEvent {
 	// "%pause %0" or "%continue %0"
-	rest := strings.TrimSpace(line[len(prefix):])
-	return ControlEvent{Type: eventType, PaneID: rest}
+	fields := strings.Fields(line)
+	var paneID string
+	if len(fields) >= 2 {
+		paneID = fields[1]
+	}
+	// This pane ID ends up in a tmux command string (ControlClient.expireGap's
+	// refresh-client -A), where ';' separates commands — quoting alone can't
+	// neutralize a field that itself contains a quote. A field that isn't
+	// shaped like a pane ID isn't a pause/continue notification at all.
+	if !isPaneID(paneID) {
+		return ControlEvent{Type: EventData, Data: line}
+	}
+	return ControlEvent{Type: eventType, PaneID: paneID}
+}
+
+// isPaneID reports whether s has tmux's pane-ID shape: '%' followed by one or
+// more digits.
+func isPaneID(s string) bool {
+	if len(s) < 2 || s[0] != '%' {
+		return false
+	}
+	for _, c := range s[1:] {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func parseExtendedOutput(line string) ControlEvent {

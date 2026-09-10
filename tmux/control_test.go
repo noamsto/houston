@@ -19,6 +19,11 @@ func TestParseControlLine(t *testing.T) {
 			ControlEvent{Type: EventBegin, CmdNumber: 258},
 		},
 		{
+			"begin block behind the control-mode introducer",
+			"\x1bP1000p%begin 1789033623 812527 0",
+			ControlEvent{Type: EventBegin, CmdNumber: 812527},
+		},
+		{
 			"end block",
 			"%end 1578920019 258 0",
 			ControlEvent{Type: EventEnd, CmdNumber: 258},
@@ -62,6 +67,36 @@ func TestParseControlLine(t *testing.T) {
 			"unknown line",
 			"some random output",
 			ControlEvent{Type: EventData, Data: "some random output"},
+		},
+		{
+			"pause with trailing field",
+			"%pause %0 junk",
+			ControlEvent{Type: EventPause, PaneID: "%0"},
+		},
+		{
+			"pause with a quoted pane id is not a notification",
+			"%pause %0';kill-server;'x",
+			ControlEvent{Type: EventData, Data: "%pause %0';kill-server;'x"},
+		},
+		{
+			"continue with an embedded command is not a notification",
+			"%continue %0;kill-server",
+			ControlEvent{Type: EventData, Data: "%continue %0;kill-server"},
+		},
+		{
+			"pause multi-digit pane id",
+			"%pause %12",
+			ControlEvent{Type: EventPause, PaneID: "%12"},
+		},
+		{
+			"pause with a non-numeric pane id is not a notification",
+			"%pause abc",
+			ControlEvent{Type: EventData, Data: "%pause abc"},
+		},
+		{
+			"continue",
+			"%continue %3",
+			ControlEvent{Type: EventContinue, PaneID: "%3"},
 		},
 	}
 	for _, tt := range tests {

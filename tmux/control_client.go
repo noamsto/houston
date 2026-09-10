@@ -2,6 +2,7 @@ package tmux
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -40,11 +41,23 @@ type ControlClient struct {
 	// subscriber on it re-seeds. Shortened by tests.
 	gapDeadline time.Duration
 
-	// Synchronous command support: one command at a time.
-	// tmux assigns command numbers server-side, so we serialize
-	// and route the next %begin/%end to the pending caller.
-	cmdMu   sync.Mutex
-	pending chan commandResponse
+	// Synchronous command support. tmux answers every write with exactly one
+	// block, in the order it received the writes, so a reply is bound to its
+	// command by queue position. The command number cannot be a lookup key:
+	// it is a server-global counter, so houston never knows in advance what
+	// its own write will be assigned.
+	//
+	// Lock order is stdinMu → cmdQMu. readLoop must never take stdinMu, or a
+	// blocked PTY write and a blocked reader deadlock against each other.
+	//
+	// cmdMu only serializes RunCommand callers; it is cmdQ, not this lock, that
+	// binds a block to the command that asked for it. An unwaited writer never
+	// takes cmdMu, so a caller holding it can still be handed that writer's
+	// block.
+	cmdMu     sync.Mutex
+	cmdQMu    sync.Mutex
+	cmdQ      []chan commandResponse // commands awaiting their block; a nil entry is a writer that is not waiting
+	cmdDesync bool
 
 	done chan struct{}
 }
@@ -61,12 +74,24 @@ type gap struct {
 
 const backoffMax = 10 * time.Second
 
+// Exclude this CC client from window size calculations so it never overrides
+// kitty's dimensions (window-size=latest).
+const ignoreSizeCmd = "refresh-client -f ignore-size"
+
+var (
+	errConnLost     = errors.New("control connection lost")
+	errClientClosed = errors.New("control client closed")
+	// errTmuxRefused wraps a refusal tmux actually sent, which callers branch
+	// on to tell it apart from every other way a command can fail.
+	errTmuxRefused = errors.New("tmux refused the command")
+	errCmdDesync   = errors.New("control command stream desynchronised")
+)
+
 func NewControlClient(session string) *ControlClient {
 	cc := &ControlClient{
 		session: session,
 		subs:    make(map[string][]*PaneSub),
 		gaps:    make(map[string]*gap),
-		pending: make(chan commandResponse, 1),
 		done:    make(chan struct{}),
 		backoff: 250 * time.Millisecond,
 		// Comfortably beyond a healthy seed handshake, short enough that a
@@ -128,23 +153,117 @@ func (cc *ControlClient) Start() error {
 
 // attach installs a freshly dialled connection and re-asserts client options.
 func (cc *ControlClient) attach(w io.Writer, closeFn func() error) {
-	// Every send path reads cc.stdin under stdinMu, so the assignment must be
-	// guarded by the same lock, not connMu.
-	cc.stdinMu.Lock()
-	cc.stdin = w
-	// Exclude this CC client from window size calculations so it never
-	// overrides kitty's dimensions (window-size=latest).
-	_, err := io.WriteString(w, "refresh-client -f ignore-size\n")
-	cc.stdinMu.Unlock()
-	if err != nil {
-		slog.Warn("failed to set ignore-size on CC client", "error", err)
-	}
-
+	// Installed before the first enrolled write: a desync raised by that write
+	// tears down whatever closeCur names, and the previous connection's is a
+	// spent sync.Once — or nil on the first attach — which would leave this
+	// connection installed and terminal. Write order is unaffected, since the
+	// stdinMu section below spans both the cc.stdin assignment and the write.
 	cc.connMu.Lock()
 	cc.closeCur = closeFn
 	cc.connOK = true
 	cc.gone = make(chan struct{})
 	cc.connMu.Unlock()
+
+	// Every send path reads cc.stdin under stdinMu, so the assignment must be
+	// guarded by the same lock, not connMu.
+	cc.stdinMu.Lock()
+	cc.stdin = w
+	cc.cmdQMu.Lock()
+	cc.cmdQ = nil
+	cc.cmdDesync = false
+	cc.cmdQMu.Unlock()
+	err := cc.writeCommandLocked(ignoreSizeCmd, nil)
+	cc.stdinMu.Unlock()
+	if err != nil {
+		slog.Warn("failed to set ignore-size on CC client", "error", err)
+		cc.dropConnection("ignore-size write failed")
+	}
+}
+
+// writeCommandLocked enrolls reply and writes command. The caller must hold
+// stdinMu, which is what makes enrollment order equal write order.
+func (cc *ControlClient) writeCommandLocked(command string, reply chan commandResponse) error {
+	cc.cmdQMu.Lock()
+	if cc.cmdDesync {
+		cc.cmdQMu.Unlock()
+		return errCmdDesync
+	}
+	// Enrolled before the write: tmux can answer the instant the bytes land,
+	// and a block that finds an empty queue has nothing to bind to.
+	cc.cmdQ = append(cc.cmdQ, reply)
+	cc.cmdQMu.Unlock()
+
+	_, err := io.WriteString(cc.stdin, command+"\n")
+	if err != nil {
+		// The entry is left in place: a short write may have delivered part of
+		// a command line, so the queue can no longer be reasoned about, which
+		// is exactly what cmdDesync records. Set inside the stdinMu section,
+		// or a write failing against a dying connection could mark the
+		// freshly-installed one desynchronised.
+		cc.cmdQMu.Lock()
+		cc.cmdDesync = true
+		cc.cmdQMu.Unlock()
+	}
+	return err
+}
+
+func (cc *ControlClient) writeCommand(command string, reply chan commandResponse) error {
+	cc.stdinMu.Lock()
+	err := cc.writeCommandLocked(command, reply)
+	cc.stdinMu.Unlock()
+	// errCmdDesync means the stream was already desynchronised, and whoever
+	// desynchronised it already dropped the connection; dropping again would log
+	// a teardown per send for the whole window before the reconnect lands.
+	if err != nil && !errors.Is(err, errCmdDesync) {
+		cc.dropConnection("control command write failed")
+	}
+	return err
+}
+
+// claimCommand pops the command the next block answers.
+func (cc *ControlClient) claimCommand() chan commandResponse {
+	cc.cmdQMu.Lock()
+	defer cc.cmdQMu.Unlock()
+	if cc.cmdDesync || len(cc.cmdQ) == 0 {
+		return nil
+	}
+	reply := cc.cmdQ[0]
+	cc.cmdQ = cc.cmdQ[1:]
+	return reply
+}
+
+// desync abandons the queue once its alignment stops being knowable, failing
+// every enrolled waiter rather than answering it from another command's block.
+// A false return means someone got here first, so the teardown runs once.
+func (cc *ControlClient) desync() bool {
+	cc.cmdQMu.Lock()
+	defer cc.cmdQMu.Unlock()
+	if cc.cmdDesync {
+		return false
+	}
+	cc.cmdDesync = true
+	for _, reply := range cc.cmdQ {
+		if reply != nil {
+			reply <- commandResponse{err: errCmdDesync}
+		}
+	}
+	cc.cmdQ = nil
+	return true
+}
+
+// dropConnection ends the current connection so supervise re-dials, attach
+// resets the queue and markAllDirty re-seeds every subscriber. Without it a
+// desynchronised but transport-healthy connection is terminal: readLoop keeps
+// reading, connOK stays true, nothing re-dials, and every later command fails
+// for the life of the client while a paused pane stays dark.
+func (cc *ControlClient) dropConnection(reason string) {
+	slog.Warn("dropping control connection", "session", cc.session, "reason", reason)
+	// No nil guard: attach installs closeCur before any path that can drop
+	// the connection exists.
+	cc.connMu.RLock()
+	closeFn := cc.closeCur
+	cc.connMu.RUnlock()
+	_ = closeFn()
 }
 
 // minHealthyConn is how long a connection must last to count as healthy. A
@@ -241,6 +360,47 @@ func (cc *ControlClient) Connected() bool {
 func (cc *ControlClient) readLoop(r *bufio.Reader) {
 	var cmdBuf strings.Builder
 	inBlock := false
+	blockNum := 0
+	var blockReply chan commandResponse
+	// A real tmux -CC answers the dialer's own attach-session command before
+	// houston has written anything, so exactly one block per connection is
+	// owed to no write of ours. Per-connection state, not a field: a once-only
+	// field would leave every connection after the first permanently one block
+	// out of step.
+	sawBaseline := false
+
+	// endBlock hands a terminator to whoever asked for the block.
+	endBlock := func(cmdNum int, resp commandResponse) {
+		if !inBlock {
+			// Binding happens at %begin, so a block whose %begin never reached
+			// us claimed no queue entry: the queue is untouched and still
+			// aligned, and dropping the orphan is all this case asks for. The
+			// one %begin that can go missing is the baseline's — it is the only
+			// line tmux glues its control-mode introducer onto — so absorb the
+			// baseline here too, which keeps a stream introduced some other way
+			// merely odd instead of permanently one block out of step.
+			slog.Debug("control block terminator outside a block", "session", cc.session, "cmd", cmdNum)
+			sawBaseline = true
+			return
+		}
+		if cmdNum != blockNum {
+			// Unlike the orphan above, this block was bound at its %begin and
+			// then answered under a different command number, so which entry
+			// the queue head now belongs to is unknowable and delivering would
+			// answer the wrong caller.
+			if cc.desync() {
+				cc.dropConnection("block terminator does not match its %begin")
+			}
+			inBlock = false
+			blockReply = nil
+			return
+		}
+		if blockReply != nil {
+			blockReply <- resp
+		}
+		inBlock = false
+		blockReply = nil
+	}
 
 	for {
 		line, err := r.ReadString('\n')
@@ -267,20 +427,24 @@ func (cc *ControlClient) readLoop(r *bufio.Reader) {
 		case EventBegin:
 			inBlock = true
 			cmdBuf.Reset()
+			// Recorded for the baseline too, so its own terminator is a match
+			// rather than a desynchronising mismatch.
+			blockNum = event.CmdNumber
+			if !sawBaseline {
+				sawBaseline = true
+				blockReply = nil
+				break
+			}
+			// A block that finds an empty queue is one houston did not write:
+			// it owns no queue position, so dropping it keeps the queue
+			// aligned where desynchronising would not.
+			blockReply = cc.claimCommand()
 
 		case EventEnd:
-			inBlock = false
-			select {
-			case cc.pending <- commandResponse{output: cmdBuf.String()}:
-			default:
-			}
+			endBlock(event.CmdNumber, commandResponse{output: cmdBuf.String()})
 
 		case EventError:
-			inBlock = false
-			select {
-			case cc.pending <- commandResponse{err: fmt.Errorf("tmux error: %s", cmdBuf.String())}:
-			default:
-			}
+			endBlock(event.CmdNumber, commandResponse{err: fmt.Errorf("%w: %s", errTmuxRefused, cmdBuf.String())})
 
 		case EventData:
 			if inBlock {
@@ -441,8 +605,22 @@ func (cc *ControlClient) expireGap(paneID string, g *gap) {
 	// Resume first, mark after. Marked first, the consumer would capture-pane
 	// while tmux is still discarding: everything painted before the resume
 	// lands is lost, and the subscriber, having acked, never re-seeds again.
-	if _, err := cc.RunCommand("refresh-client -A " + paneID + ":continue"); err != nil {
-		slog.Warn("gap deadline resume failed",
+	//
+	// paneID must be quoted: tmux's command-string lexer rejects a bare token
+	// that starts with '%' and contains ':', so %0:continue is a parse error.
+	if _, err := cc.RunCommand(fmt.Sprintf("refresh-client -A '%s:continue'", paneID)); err != nil {
+		// Only a refusal tmux sent means the pane may still be paused with
+		// tmux still willing to talk. Every other failure — the connection
+		// already gone before the write, dying after it, or a desynchronised
+		// queue — ends in a re-attach, and that sweeps the gaps and re-seeds
+		// every subscriber anyway. Re-arming there would retry against a
+		// connection that cannot carry the write.
+		if !errors.Is(err, errTmuxRefused) {
+			slog.Debug("gap deadline resume abandoned to the reconnect",
+				"session", cc.session, "pane", paneID, "error", err)
+			return
+		}
+		slog.Warn("gap deadline resume refused",
 			"session", cc.session, "pane", paneID, "error", err)
 		// The pane may still be paused, and %pause is edge-triggered: tmux
 		// will never announce one it already considers paused. Without a
@@ -579,11 +757,7 @@ func isPrintable(s string) bool {
 
 func (cc *ControlClient) sendLiteral(paneID, text string) error {
 	escaped := strings.ReplaceAll(text, "'", "'\\''")
-	cmd := fmt.Sprintf("send-keys -t %s -l '%s'\n", paneID, escaped)
-	cc.stdinMu.Lock()
-	_, err := io.WriteString(cc.stdin, cmd)
-	cc.stdinMu.Unlock()
-	return err
+	return cc.writeCommand(fmt.Sprintf("send-keys -t %s -l '%s'", paneID, escaped), nil)
 }
 
 func (cc *ControlClient) sendControl(paneID string, b byte) error {
@@ -602,11 +776,7 @@ func (cc *ControlClient) sendControl(paneID string, b byte) error {
 			name = fmt.Sprintf("C-%c", 'a'+rune(b)-1)
 		} else {
 			// Rare control char — send as hex
-			cmd := fmt.Sprintf("send-keys -t %s -H %02x\n", paneID, b)
-			cc.stdinMu.Lock()
-			_, err := io.WriteString(cc.stdin, cmd)
-			cc.stdinMu.Unlock()
-			return err
+			return cc.writeCommand(fmt.Sprintf("send-keys -t %s -H %02x", paneID, b), nil)
 		}
 	}
 	return cc.SendSpecialKey(paneID, name)
@@ -635,24 +805,15 @@ func matchEscSeq(s string) (int, string) {
 
 // SendSpecialKey sends a named key (Enter, Escape, C-c, etc.) to a pane.
 func (cc *ControlClient) SendSpecialKey(paneID, key string) error {
-	cmd := fmt.Sprintf("send-keys -t %s %s\n", paneID, key)
-	cc.stdinMu.Lock()
-	_, err := io.WriteString(cc.stdin, cmd)
-	cc.stdinMu.Unlock()
-	return err
+	return cc.writeCommand(fmt.Sprintf("send-keys -t %s %s", paneID, key), nil)
 }
 
-// RunCommand sends a command and waits for its response.
-// Only one command runs at a time (serialized via cmdMu).
+// RunCommand sends a command and waits for the block tmux answers it with.
+// cmdMu only serializes callers; what binds the reply to this command is its
+// position in cmdQ.
 func (cc *ControlClient) RunCommand(command string) (string, error) {
 	cc.cmdMu.Lock()
 	defer cc.cmdMu.Unlock()
-
-	// Drain any stale response from a previous unsolicited %begin/%end
-	select {
-	case <-cc.pending:
-	default:
-	}
 
 	// Captured before the write, so a nil here means the connection was
 	// already dead and the command cannot have landed.
@@ -660,23 +821,23 @@ func (cc *ControlClient) RunCommand(command string) (string, error) {
 	gone := cc.gone
 	cc.connMu.RUnlock()
 	if gone == nil {
-		return "", fmt.Errorf("control connection lost")
+		return "", errConnLost
 	}
 
-	cc.stdinMu.Lock()
-	_, err := io.WriteString(cc.stdin, command+"\n")
-	cc.stdinMu.Unlock()
-	if err != nil {
+	// Buffered and sent exactly once, so readLoop never blocks on a waiter
+	// that has already left via gone or done.
+	reply := make(chan commandResponse, 1)
+	if err := cc.writeCommand(command, reply); err != nil {
 		return "", err
 	}
 
 	select {
-	case resp := <-cc.pending:
+	case resp := <-reply:
 		return resp.output, resp.err
 	case <-gone:
-		return "", fmt.Errorf("control connection lost")
+		return "", errConnLost
 	case <-cc.done:
-		return "", fmt.Errorf("control client closed")
+		return "", errClientClosed
 	}
 }
 
