@@ -344,6 +344,14 @@ type recordedConn struct {
 	buf      strings.Builder
 	blocks   int   // command numbers for the blocks this connection answers
 	writeErr error // when set, every stdin write fails; nothing else here can
+
+	// parkWrite, when set, blocks the next Write until the channel is closed,
+	// then writeErr is returned. parked is closed once Write is blocked on it,
+	// so a test can observe the write is genuinely parked before proceeding.
+	// Both are read-and-cleared under mu the instant Write enters the park
+	// branch, so a second Write can never re-enter it and double-close parked.
+	parkWrite chan struct{}
+	parked    chan struct{}
 }
 
 // baselineBlock is what a real tmux -CC answers its own attach-session command
@@ -400,6 +408,18 @@ func (d *recordingDialer) connAt(t *testing.T, i int) *recordedConn {
 }
 
 func (c *recordedConn) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	park, parked := c.parkWrite, c.parked
+	if park != nil {
+		c.parkWrite, c.parked = nil, nil
+	}
+	c.mu.Unlock()
+	if park != nil {
+		if parked != nil {
+			close(parked)
+		}
+		<-park
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.writeErr != nil {
@@ -522,12 +542,21 @@ const resume1 = "refresh-client -A '%1:continue'"
 
 // pinnedDial hands out d's first connection and fails every later dial.
 //
-// Every negative assertion about gap state needs this pin. Unpinned, supervise
-// re-dials inside its backoff and the re-attach runs markAllDirty →
-// clearGapsLocked, which deletes the very gap the test is examining: gapCount()
-// then reads 0 whether the re-arm under test happened or not, and a gap that
+// Three re-arm tests use this pin. Unpinned, against CORRECT code, the three
+// pass at rates 22/40, 40/40, 40/40 over repeated runs — one of them flakes,
+// because supervise's re-dial inside its backoff re-attaches, and the
+// re-attach's markAllDirty call queues an extra Dirty event into a test that
+// asserts "0 events received". Against the MUTANT (the re-arm guard actually
+// removed), all three already pass 0/40 — every run fails, so the mutant is
+// always caught — identical whether pinned or unpinned. So the pin does not
+// change whether the mutant is detected; the gapCount()-style assertions
+// catch it either way, pinned or not. What the pin actually buys is
+// eliminating that one flake source against correct code, which is unrelated
+// to the mutant. Separately, and still true regardless of the pin: a gap that
 // did get re-armed fires its deadline against a connection the test no longer
-// holds. Tests that want the re-dial say so and use d.dial directly.
+// holds, once a re-dial has happened. TestStaleDeadlineDoesNotClaimANewerGap
+// never reaches RunCommand at all, so the pin buys it nothing measurable.
+// Tests that want the re-dial say so and use d.dial directly.
 func pinnedDial(d *recordingDialer) func() (io.ReadCloser, io.Writer, func() error, error) {
 	first := true
 	return func() (io.ReadCloser, io.Writer, func() error, error) {
@@ -549,6 +578,21 @@ func waitRetired(t *testing.T, cc *ControlClient) {
 		select {
 		case <-deadline:
 			t.Fatal("connection was never retired")
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
+// waitConnected blocks until supervise has re-attached. attach installs connOK
+// in the same critical section as closeCur and gone, so this is the barrier for
+// "a new connection is now the current one".
+func waitConnected(t *testing.T, cc *ControlClient) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for !cc.Connected() {
+		select {
+		case <-deadline:
+			t.Fatal("connection was never re-established")
 		case <-time.After(time.Millisecond):
 		}
 	}
@@ -1536,16 +1580,17 @@ func assertIgnoreSizeFirst(t *testing.T, c *recordedConn) {
 	}
 }
 
-// TestAttachWriteFailureTearsDownItsOwnConnection pins why attach installs
-// closeCur, connOK and gone before its own ignore-size write. That write can
-// fail, and the teardown behind it must close the connection being installed;
-// reached through the previous connection's closeCur it would close a spent
-// sync.Once — nil on the very first attach — and leave this connection
-// installed, connOK true, and nothing ever re-dialling.
+// TestAttachWriteFailureTearsDownItsOwnConnection pins that attach's own
+// ignore-size write, when it fails, tears down the connection attach just
+// installed. It has that connection's close fn in scope as a parameter and
+// hands it to the teardown, rather than letting the teardown pick a connection
+// out of a field — which, on the first attach, holds nothing yet, and later
+// holds whichever connection is current by then. Closed through the wrong one,
+// this connection would stay installed with connOK true and nothing ever
+// re-dialling.
 //
 // What tells the two apart is a second connection appearing at all, with
-// ignore-size written on it — though on the very first attach the wrong order
-// does not get that far: closeCur is still nil and the teardown panics on it.
+// ignore-size written on it.
 func TestAttachWriteFailureTearsDownItsOwnConnection(t *testing.T) {
 	d := &recordingDialer{
 		onDial: func(i int, c *recordedConn) {
@@ -1567,6 +1612,78 @@ func TestAttachWriteFailureTearsDownItsOwnConnection(t *testing.T) {
 		t.Fatalf("the failing connection recorded %q, want nothing", got)
 	}
 	assertIgnoreSizeFirst(t, d.connAt(t, 1))
+}
+
+// TestFailedWriteTearsDownTheConnectionItActuallyWroteTo pins that a write
+// failure closes the connection the bytes were going out on, not whichever
+// connection happens to be current when the write finally returns. A write
+// stalls inside the PTY while holding stdinMu; nothing about retiring that
+// connection and attaching the next one needs stdinMu, so the whole
+// EOF → retire → backoff → dial → attach cycle can complete underneath it —
+// attach installs the new closeCur under connMu long before it reaches its own
+// stdinMu section. Reading the teardown target from a field after unlocking
+// therefore names the *new* connection, and the stale write kills a healthy
+// one. What tells the two apart is a third dial: the wrongly-closed connection
+// EOFs at once and supervise re-dials.
+func TestFailedWriteTearsDownTheConnectionItActuallyWroteTo(t *testing.T) {
+	d := &recordingDialer{}
+	cc := NewControlClient("test")
+	cc.dial = d.dial
+	cc.backoff = time.Millisecond
+
+	if err := cc.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = cc.Close() }()
+
+	conn0 := d.connAt(t, 0)
+	conn0.ackAttach(t)
+
+	// Driven through local channels only: Write nils the fields the instant it
+	// parks, so reading them back would find nil and close(nil) panics.
+	park, parked := make(chan struct{}), make(chan struct{})
+	conn0.mu.Lock()
+	conn0.parkWrite, conn0.parked, conn0.writeErr = park, parked, errors.New("stdin is gone")
+	conn0.mu.Unlock()
+
+	go func() { _ = cc.SendSpecialKey("%1", "C-c") }()
+
+	select {
+	case <-parked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the send never reached the parked write")
+	}
+
+	// Connection 0's read side dies, so readLoop EOFs and supervise retires it
+	// and re-dials — none of which needs the stdinMu the parked write holds.
+	_ = conn0.pw.Close()
+
+	// Not waitRetired: with a 1ms backoff the retired window can close before a
+	// poll ever sees it. The second dial is the sound barrier — supervise
+	// clears connOK before dialling — and Connected() after it means attach's
+	// connMu section has completed for connection 1 while its own stdinMu
+	// section is still queued behind the parked write. That is the window the
+	// bug needs.
+	d.connAt(t, 1)
+	waitConnected(t, cc)
+
+	close(park)
+
+	deadline := time.After(200 * time.Millisecond)
+	for {
+		d.mu.Lock()
+		n := len(d.conns)
+		d.mu.Unlock()
+		if n >= 3 {
+			t.Fatal("a third connection was dialled: connection 1 was torn down through a stale closeCur")
+		}
+		select {
+		case <-deadline:
+			assertIgnoreSizeFirst(t, d.connAt(t, 1))
+			return
+		case <-time.After(time.Millisecond):
+		}
+	}
 }
 
 func TestReconnectMarksSubscribersDirty(t *testing.T) {

@@ -17,6 +17,12 @@ type ControlClient struct {
 	session string
 	stdin   io.Writer
 	stdinMu sync.Mutex // serialize writes to stdin
+	// curClose is the close fn for the connection cc.stdin currently writes to.
+	// Guarded by stdinMu, not connMu, and set in the same critical section as
+	// cc.stdin: a writer holding stdinMu can then rely on curClose naming the
+	// connection its write is actually going out on, even if connMu's closeCur
+	// has already moved on to a newer connection.
+	curClose func() error
 
 	// dial opens one control-mode connection. Overridable in tests.
 	dial    func() (io.ReadCloser, io.Writer, func() error, error)
@@ -41,11 +47,17 @@ type ControlClient struct {
 	// subscriber on it re-seeds. Shortened by tests.
 	gapDeadline time.Duration
 
-	// Synchronous command support. tmux answers every write with exactly one
-	// block, in the order it received the writes, so a reply is bound to its
-	// command by queue position. The command number cannot be a lookup key:
-	// it is a server-global counter, so houston never knows in advance what
-	// its own write will be assigned.
+	// Synchronous command support. Each write is bound to its reply by queue
+	// position, which requires each command to draw exactly one block from
+	// tmux. That is a precondition on the caller, not a guaranteed property of
+	// tmux: a command string containing a top-level `;` draws two blocks
+	// (tmux draws one block per top-level command), and a command string
+	// containing a newline is written to tmux's control-mode stdin as more
+	// than one line, which draws more than one block the same way. See
+	// writeCommandLocked's doc comment for this precondition and the matching
+	// one on a command's response body. The command number cannot be a lookup
+	// key: it is a server-global counter, so houston never knows in advance
+	// what its own write will be assigned.
 	//
 	// Lock order is stdinMu → cmdQMu. readLoop must never take stdinMu, or a
 	// blocked PTY write and a blocked reader deadlock against each other.
@@ -153,11 +165,12 @@ func (cc *ControlClient) Start() error {
 
 // attach installs a freshly dialled connection and re-asserts client options.
 func (cc *ControlClient) attach(w io.Writer, closeFn func() error) {
-	// Installed before the first enrolled write: a desync raised by that write
-	// tears down whatever closeCur names, and the previous connection's is a
-	// spent sync.Once — or nil on the first attach — which would leave this
-	// connection installed and terminal. Write order is unaffected, since the
-	// stdinMu section below spans both the cc.stdin assignment and the write.
+	// Installed before the first enrolled write: that write can fail, and
+	// gone is what RunCommand reads to decide whether a connection is live
+	// (connOK is Connected()'s field, with no production reader today). Left
+	// stale, it would advertise the previous connection as current for the
+	// length of this write. Write order is unaffected, since the stdinMu
+	// section below spans both the cc.stdin assignment and the write.
 	cc.connMu.Lock()
 	cc.closeCur = closeFn
 	cc.connOK = true
@@ -168,6 +181,7 @@ func (cc *ControlClient) attach(w io.Writer, closeFn func() error) {
 	// guarded by the same lock, not connMu.
 	cc.stdinMu.Lock()
 	cc.stdin = w
+	cc.curClose = closeFn
 	cc.cmdQMu.Lock()
 	cc.cmdQ = nil
 	cc.cmdDesync = false
@@ -176,12 +190,27 @@ func (cc *ControlClient) attach(w io.Writer, closeFn func() error) {
 	cc.stdinMu.Unlock()
 	if err != nil {
 		slog.Warn("failed to set ignore-size on CC client", "error", err)
-		cc.dropConnection("ignore-size write failed")
+		cc.dropConnection("ignore-size write failed", closeFn)
 	}
 }
 
 // writeCommandLocked enrolls reply and writes command. The caller must hold
 // stdinMu, which is what makes enrollment order equal write order.
+//
+// Two preconditions on command, neither enforced here:
+//   - It must not contain a top-level `;` or a newline (see the struct-level
+//     "Synchronous command support" comment on ControlClient) — either makes
+//     tmux draw more than one block for what this queue treats as a single
+//     write.
+//   - Whatever response body tmux sends back for it must be empty. tmux does
+//     not escape response body lines, so a body line starting with `%begin `
+//     or `%end ` forges a block opener/terminator: it desynchronises the
+//     reply-attribution queue, or, for a forged `%begin `, silently
+//     misattributes a reply. Unreachable today — every call site's response
+//     body is empty — but binds any future caller, e.g. a seeding call built
+//     on RunCommand("capture-pane ...") (sketched in
+//     docs/plans/2026-03-01-control-mode-io-refactor.md), whose body is pane
+//     screen content and could legitimately contain such a line.
 func (cc *ControlClient) writeCommandLocked(command string, reply chan commandResponse) error {
 	cc.cmdQMu.Lock()
 	if cc.cmdDesync {
@@ -210,12 +239,17 @@ func (cc *ControlClient) writeCommandLocked(command string, reply chan commandRe
 func (cc *ControlClient) writeCommand(command string, reply chan commandResponse) error {
 	cc.stdinMu.Lock()
 	err := cc.writeCommandLocked(command, reply)
+	// Captured under stdinMu, because the write above can stall long enough for
+	// this connection to be retired and a new one attached: read after the
+	// unlock, the teardown would name that new connection. Non-nil whenever
+	// cc.stdin is — attach assigns both in one stdinMu section — so no guard.
+	closeFn := cc.curClose
 	cc.stdinMu.Unlock()
 	// errCmdDesync means the stream was already desynchronised, and whoever
 	// desynchronised it already dropped the connection; dropping again would log
 	// a teardown per send for the whole window before the reconnect lands.
 	if err != nil && !errors.Is(err, errCmdDesync) {
-		cc.dropConnection("control command write failed")
+		cc.dropConnection("control command write failed", closeFn)
 	}
 	return err
 }
@@ -256,13 +290,12 @@ func (cc *ControlClient) desync() bool {
 // desynchronised but transport-healthy connection is terminal: readLoop keeps
 // reading, connOK stays true, nothing re-dials, and every later command fails
 // for the life of the client while a paused pane stays dark.
-func (cc *ControlClient) dropConnection(reason string) {
+// closeFn names the connection to end, and the caller must have determined it
+// while still holding whatever lock pins it to the failure being reported: read
+// from a field afterwards it can name a newer connection, which would kill a
+// healthy one and leave the dead one installed.
+func (cc *ControlClient) dropConnection(reason string, closeFn func() error) {
 	slog.Warn("dropping control connection", "session", cc.session, "reason", reason)
-	// No nil guard: attach installs closeCur before any path that can drop
-	// the connection exists.
-	cc.connMu.RLock()
-	closeFn := cc.closeCur
-	cc.connMu.RUnlock()
 	_ = closeFn()
 }
 
@@ -389,7 +422,15 @@ func (cc *ControlClient) readLoop(r *bufio.Reader) {
 			// the queue head now belongs to is unknowable and delivering would
 			// answer the wrong caller.
 			if cc.desync() {
-				cc.dropConnection("block terminator does not match its %begin")
+				// Read fresh under connMu rather than captured under stdinMu,
+				// which readLoop must never take. Safe here because supervise
+				// calls readLoop and attach strictly in sequence and there is
+				// one supervise goroutine per client, so no newer connection
+				// can have been installed while this readLoop is still live.
+				cc.connMu.RLock()
+				closeFn := cc.closeCur
+				cc.connMu.RUnlock()
+				cc.dropConnection("block terminator does not match its %begin", closeFn)
 			}
 			inBlock = false
 			blockReply = nil
