@@ -2,7 +2,11 @@ package tmux
 
 import (
 	"bufio"
+	"bytes"
+	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -176,6 +180,16 @@ func (cc *ControlClient) gapFor(paneID string) *gap {
 	return cc.gaps[paneID]
 }
 
+// isDirty reports whether a subscriber is currently withholding delivery. A
+// test asserting that nothing reaches a subscriber needs it: dispatch drops
+// everything for a dirty subscriber, so silence alone cannot tell "tmux sent
+// nothing" apart from "we refused to deliver it".
+func (cc *ControlClient) isDirty(s *PaneSub) bool {
+	cc.mu.RLock()
+	defer cc.mu.RUnlock()
+	return s.dirty
+}
+
 // TestPauseDefersDirtyUntilContinue proves that %pause alone must queue no
 // Dirty: a capture triggered at %pause predates the output tmux discards
 // during the gap, so re-seeding then paints onto a stale screen. The Dirty
@@ -266,6 +280,21 @@ func TestOrphanContinueMarksNobody(t *testing.T) {
 	}
 }
 
+// TestPauseWithAQuotedPaneIDOpensNoGap proves the injection is closed
+// upstream of expireGap's command string: a %pause whose pane-ID field isn't
+// shaped like a real pane ID must not be treated as a notification at all, or
+// that field would reach refresh-client -A '<id>:continue' verbatim.
+func TestPauseWithAQuotedPaneIDOpensNoGap(t *testing.T) {
+	cc := NewControlClient("test")
+	t.Cleanup(cc.clearGaps) // a failed fix would open a gap nothing closes
+
+	feed(cc, "%pause %0';kill-server;'x\n")
+
+	if n := cc.gapCount(); n != 0 {
+		t.Fatalf("%d gaps open after a malformed %%pause, want 0", n)
+	}
+}
+
 // scriptedDialer hands out one canned transcript per dial, so a test can drive
 // the client through a disconnect and a re-attach without running tmux.
 type scriptedDialer struct {
@@ -302,21 +331,56 @@ func (d *scriptedDialer) count() int {
 type recordingDialer struct {
 	mu    sync.Mutex
 	conns []*recordedConn
+	// onDial arms a connection before it is handed out. It takes the index
+	// because arming every connection hot-loops the dialer.
+	onDial func(i int, c *recordedConn)
+	// baseline replaces baselineBlock on every connection.
+	baseline string
 }
 
 type recordedConn struct {
-	pw  *io.PipeWriter
-	mu  sync.Mutex
-	buf strings.Builder
+	pw       *io.PipeWriter
+	mu       sync.Mutex
+	buf      strings.Builder
+	blocks   int   // command numbers for the blocks this connection answers
+	writeErr error // when set, every stdin write fails; nothing else here can
+
+	// parkWrite, when set, blocks the next Write until the channel is closed,
+	// then writeErr is returned. parked is closed once Write is blocked on it,
+	// so a test can observe the write is genuinely parked before proceeding.
+	// Both are read-and-cleared under mu the instant Write enters the park
+	// branch, so a second Write can never re-enter it and double-close parked.
+	parkWrite chan struct{}
+	parked    chan struct{}
 }
+
+// baselineBlock is what a real tmux -CC answers its own attach-session command
+// with, before houston has written anything. The fake owes it because blocks
+// bind to commands by order: without it every block on the connection answers
+// the command one place ahead of the right one. Byte-faithful down to the
+// control-mode introducer and the CRLFs, because the introducer is exactly what
+// decides whether the baseline's %begin parses at all.
+const baselineBlock = "\x1bP1000p%begin 1700000000 1 0\r\n%end 1700000000 1 0\r\n"
 
 func (d *recordingDialer) dial() (io.ReadCloser, io.Writer, func() error, error) {
 	pr, pw := io.Pipe()
 	c := &recordedConn{pw: pw}
 	d.mu.Lock()
+	if d.onDial != nil {
+		// Called before the connection is visible to connAt, so a test can arm
+		// it ahead of attach's own write.
+		d.onDial(len(d.conns), c)
+	}
 	d.conns = append(d.conns, c)
+	baseline := d.baseline
 	d.mu.Unlock()
-	return pr, c, func() error { return pw.Close() }, nil
+	if baseline == "" {
+		baseline = baselineBlock
+	}
+	// Prefixed onto the reader rather than written into pw: readLoop does not
+	// run until attach returns, so a write here would deadlock Start().
+	return io.NopCloser(io.MultiReader(strings.NewReader(baseline), pr)),
+		c, func() error { return pw.Close() }, nil
 }
 
 // connAt waits for the i-th dial and returns its connection. Dial i>0 happens
@@ -345,8 +409,31 @@ func (d *recordingDialer) connAt(t *testing.T, i int) *recordedConn {
 
 func (c *recordedConn) Write(p []byte) (int, error) {
 	c.mu.Lock()
+	park, parked := c.parkWrite, c.parked
+	if park != nil {
+		c.parkWrite, c.parked = nil, nil
+	}
+	c.mu.Unlock()
+	if park != nil {
+		if parked != nil {
+			close(parked)
+		}
+		<-park
+	}
+	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.writeErr != nil {
+		return 0, c.writeErr
+	}
 	return c.buf.Write(p)
+}
+
+// nextBlock numbers the next block this connection emits.
+func (c *recordedConn) nextBlock() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.blocks++
+	return c.blocks
 }
 
 func (c *recordedConn) written() string {
@@ -407,18 +494,36 @@ func waitForWriteCount(t *testing.T, c *recordedConn, want string, n int) {
 }
 
 // answerCommand releases a RunCommand caller parked on its response block.
-func (c *recordedConn) answerCommand(t *testing.T) {
+func (c *recordedConn) answerCommand(t *testing.T, body ...string) {
 	t.Helper()
-	c.feedLine(t, "%begin 1700000000 1 0")
-	c.feedLine(t, "%end 1700000000 1 0")
+	c.emitBlock(t, "%end", body)
 }
 
 // answerCommandError releases a RunCommand caller with tmux's refusal.
-func (c *recordedConn) answerCommandError(t *testing.T) {
+func (c *recordedConn) answerCommandError(t *testing.T, body string) {
 	t.Helper()
-	c.feedLine(t, "%begin 1700000000 1 0")
-	c.feedLine(t, "can't find pane")
-	c.feedLine(t, "%error 1700000000 1 0")
+	c.emitBlock(t, "%error", []string{body})
+}
+
+// emitBlock writes one block. Both ends carry the same command number: a
+// mismatch desynchronises the connection instead of delivering.
+func (c *recordedConn) emitBlock(t *testing.T, terminator string, body []string) {
+	t.Helper()
+	num := c.nextBlock()
+	c.feedLine(t, fmt.Sprintf("%%begin 1700000000 %d 0", num))
+	for _, line := range body {
+		c.feedLine(t, line)
+	}
+	c.feedLine(t, fmt.Sprintf("%s 1700000000 %d 0", terminator, num))
+}
+
+// ackAttach answers the ignore-size command attach writes. Every block is
+// bound in order to the command it answers, so a test that leaves ignore-size
+// outstanding binds its own command's reply to the attach write and parks.
+func (c *recordedConn) ackAttach(t *testing.T) {
+	t.Helper()
+	waitForWrite(t, c, ignoreSizeCmd)
+	c.answerCommand(t)
 }
 
 func expectDirty(t *testing.T, s *PaneSub, who string) {
@@ -433,7 +538,112 @@ func expectDirty(t *testing.T, s *PaneSub, who string) {
 	}
 }
 
-const resume1 = "refresh-client -A %1:continue"
+const resume1 = "refresh-client -A '%1:continue'"
+
+// pinnedDial hands out d's first connection and fails every later dial.
+//
+// Three re-arm tests use this pin. Unpinned, against CORRECT code, the three
+// pass at rates 22/40, 40/40, 40/40 over repeated runs — one of them flakes,
+// because supervise's re-dial inside its backoff re-attaches, and the
+// re-attach's markAllDirty call queues an extra Dirty event into a test that
+// asserts "0 events received". Against the MUTANT (the re-arm guard actually
+// removed), all three already pass 0/40 — every run fails, so the mutant is
+// always caught — identical whether pinned or unpinned. So the pin does not
+// change whether the mutant is detected; the gapCount()-style assertions
+// catch it either way, pinned or not. What the pin actually buys is
+// eliminating that one flake source against correct code, which is unrelated
+// to the mutant. Separately, and still true regardless of the pin: a gap that
+// did get re-armed fires its deadline against a connection the test no longer
+// holds, once a re-dial has happened. TestStaleDeadlineDoesNotClaimANewerGap
+// never reaches RunCommand at all, so the pin buys it nothing measurable.
+// Tests that want the re-dial say so and use d.dial directly.
+func pinnedDial(d *recordingDialer) func() (io.ReadCloser, io.Writer, func() error, error) {
+	first := true
+	return func() (io.ReadCloser, io.Writer, func() error, error) {
+		if !first {
+			return nil, nil, nil, errors.New("pinned to one connection")
+		}
+		first = false // Start()'s own call; every later one runs in supervise's goroutine, so the two never race
+		return d.dial()
+	}
+}
+
+// waitRetired blocks until supervise has retired the live connection. connOK
+// and gone are cleared in the same critical section, so this is the barrier for
+// "the next RunCommand cannot even write".
+func waitRetired(t *testing.T, cc *ControlClient) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for cc.Connected() {
+		select {
+		case <-deadline:
+			t.Fatal("connection was never retired")
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
+// waitConnected blocks until supervise has re-attached. attach installs connOK
+// in the same critical section as closeCur and gone, so this is the barrier for
+// "a new connection is now the current one".
+func waitConnected(t *testing.T, cc *ControlClient) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for !cc.Connected() {
+		select {
+		case <-deadline:
+			t.Fatal("connection was never re-established")
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
+// logCapture collects slog output. The buffer carries its own lock: the lines
+// under test are written from expireGap's goroutine and from supervise's.
+type logCapture struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (l *logCapture) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *logCapture) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
+}
+
+// captureLogs routes slog to a buffer for the rest of the test. slog.SetDefault
+// is process-global, so a test using it must never call t.Parallel(): it would
+// clobber, and be clobbered by, anything logging beside it. Debug is enabled so
+// a test can prove the quiet path ran at all instead of reading an empty buffer
+// as success.
+func captureLogs(t *testing.T) *logCapture {
+	t.Helper()
+	lc := &logCapture{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(lc, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return lc
+}
+
+// assertNoWarn proves a failure was logged quietly. The positive half carries
+// the test: an empty buffer satisfies "no warning" even when expireGap never
+// ran at all.
+func assertNoWarn(t *testing.T, logs *logCapture, wantDebug string) {
+	t.Helper()
+	got := logs.String()
+	if !strings.Contains(got, wantDebug) {
+		t.Fatalf("no %q line logged; got %q", wantDebug, got)
+	}
+	if strings.Contains(got, "level=WARN") {
+		t.Fatalf("warned about a failure the reconnect already recovers from: %q", got)
+	}
+}
 
 func TestGapDeadlineResumesAndMarksEverySubscriber(t *testing.T) {
 	d := &recordingDialer{}
@@ -453,6 +663,7 @@ func TestGapDeadlineResumesAndMarksEverySubscriber(t *testing.T) {
 	}
 	defer func() { _ = cc.Close() }()
 	conn := d.connAt(t, 0)
+	conn.ackAttach(t)
 
 	conn.feedLine(t, "%pause %1")
 	conn.sync(t, sentinel) // the gap is open
@@ -490,6 +701,7 @@ func TestGapDeadlineResumesBeforeMarking(t *testing.T) {
 	}
 	defer func() { _ = cc.Close() }()
 	conn := d.connAt(t, 0)
+	conn.ackAttach(t)
 
 	conn.feedLine(t, "%pause %1")
 	waitForWrite(t, conn, resume1)
@@ -525,10 +737,11 @@ func TestRefusedResumeReArmsTheGap(t *testing.T) {
 	}
 	defer func() { _ = cc.Close() }()
 	conn := d.connAt(t, 0)
+	conn.ackAttach(t)
 
 	conn.feedLine(t, "%pause %1")
 	waitForWrite(t, conn, resume1)
-	conn.answerCommandError(t)
+	conn.answerCommandError(t, "can't find pane")
 
 	waitForWriteCount(t, conn, resume1, 2)
 	if n := len(sub.C()); n != 0 {
@@ -553,10 +766,11 @@ func TestRefusedResumeWithNoSubscribersStopsRetrying(t *testing.T) {
 	}
 	defer func() { _ = cc.Close() }()
 	conn := d.connAt(t, 0)
+	conn.ackAttach(t)
 
 	conn.feedLine(t, "%pause %1")
 	waitForWrite(t, conn, resume1)
-	conn.answerCommandError(t)
+	conn.answerCommandError(t, "can't find pane")
 
 	time.Sleep(5 * cc.gapDeadline)
 	if n := cc.gapCount(); n != 0 {
@@ -564,6 +778,226 @@ func TestRefusedResumeWithNoSubscribersStopsRetrying(t *testing.T) {
 	}
 	if n := strings.Count(conn.written(), resume1); n != 1 {
 		t.Fatalf("wrote %d resumes with no subscribers, want exactly 1", n)
+	}
+}
+
+// The three tests below fix the other half of the refusal rule: only a refusal
+// tmux actually sent may re-arm the gap. Every other failure is already on its
+// way to a re-attach, and that sweeps the gaps and re-seeds every subscriber,
+// so a deadline re-armed there resumes nothing and only logs about it.
+
+// TestUnwritableResumeDoesNotReArm covers the failure that never reached tmux:
+// the connection was retired before the write, so RunCommand returns without
+// writing. Nothing is paused as far as tmux is concerned that a retry could fix.
+func TestUnwritableResumeDoesNotReArm(t *testing.T) {
+	logs := captureLogs(t) // process-global: never t.Parallel() this test
+	d := &recordingDialer{}
+	cc := NewControlClient("test")
+	cc.dial = pinnedDial(d)
+	cc.backoff = time.Millisecond
+	// Out of reach, so the gap under test is the one the test opened and
+	// expireGap runs exactly once, by hand.
+	cc.gapDeadline = time.Hour
+
+	sentinel := cc.Subscribe("%9")
+	sub := cc.Subscribe("%1")
+
+	if err := cc.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = cc.Close() }()
+	conn := d.connAt(t, 0)
+	conn.ackAttach(t)
+
+	conn.feedLine(t, "%pause %1")
+	conn.sync(t, sentinel)
+	g := cc.gapFor("%1")
+	if g == nil {
+		t.Fatalf("no gap open after %%pause")
+	}
+
+	_ = conn.pw.Close()
+	waitRetired(t, cc)
+
+	cc.expireGap("%1", g) // returns without parking: RunCommand finds gone nil
+
+	if n := cc.gapCount(); n != 0 {
+		t.Fatalf("%d gaps armed after a resume that was never written, want 0", n)
+	}
+	if strings.Contains(conn.written(), resume1) {
+		t.Fatalf("wrote a resume onto a retired connection: %q", conn.written())
+	}
+	if n := len(sub.C()); n != 0 {
+		t.Fatalf("%d events queued off a failed resume, want 0", n)
+	}
+	assertNoWarn(t, logs, "gap deadline resume abandoned")
+}
+
+// TestResumeLostWithItsConnectionDoesNotReArm covers the other connection-lost
+// shape: the resume was written, tmux may well have acted on it, and only the
+// reply is missing. The re-attach is what recovers the pane either way.
+func TestResumeLostWithItsConnectionDoesNotReArm(t *testing.T) {
+	logs := captureLogs(t) // process-global: never t.Parallel() this test
+	d := &recordingDialer{}
+	cc := NewControlClient("test")
+	cc.dial = pinnedDial(d)
+	cc.backoff = time.Millisecond
+	cc.gapDeadline = time.Hour
+
+	sentinel := cc.Subscribe("%9")
+	sub := cc.Subscribe("%1")
+
+	if err := cc.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = cc.Close() }()
+	conn := d.connAt(t, 0)
+	conn.ackAttach(t)
+
+	conn.feedLine(t, "%pause %1")
+	conn.sync(t, sentinel)
+	g := cc.gapFor("%1")
+	if g == nil {
+		t.Fatalf("no gap open after %%pause")
+	}
+
+	// On its own goroutine, and the channel is the barrier: expireGap parks in
+	// RunCommand until the connection dies and re-arms only after it returns.
+	// Asserting any earlier reads the window where the gap is legitimately
+	// deleted, and passes with the re-arm still in place.
+	returned := make(chan struct{})
+	go func() { defer close(returned); cc.expireGap("%1", g) }()
+
+	waitForWrite(t, conn, resume1) // on the wire, unanswered
+	_ = conn.pw.Close()
+
+	select {
+	case <-returned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expireGap stayed parked after its connection died")
+	}
+
+	if n := cc.gapCount(); n != 0 {
+		t.Fatalf("%d gaps armed after the resume's connection died, want 0", n)
+	}
+	if n := len(sub.C()); n != 0 {
+		t.Fatalf("%d events queued off a failed resume, want 0", n)
+	}
+	assertNoWarn(t, logs, "gap deadline resume abandoned")
+}
+
+// TestDesynchronisedResumeDoesNotReArm covers the queue refusing the write.
+// cmdDesync is set directly because every way of provoking it for real — a
+// mismatched terminator, a failed stdin write — also tears the connection down,
+// which lands expireGap on the connection-lost path the tests above already
+// cover. The window being modelled is real: desync() sets the flag, then
+// dropConnection starts a teardown supervise has not observed yet, so gone is
+// still live and the write is refused by the queue rather than by the transport.
+func TestDesynchronisedResumeDoesNotReArm(t *testing.T) {
+	d := &recordingDialer{}
+	cc := NewControlClient("test")
+	cc.dial = pinnedDial(d)
+	cc.backoff = time.Millisecond
+	cc.gapDeadline = time.Hour
+
+	sentinel := cc.Subscribe("%9")
+	sub := cc.Subscribe("%1")
+
+	if err := cc.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = cc.Close() }()
+	conn := d.connAt(t, 0)
+	conn.ackAttach(t)
+
+	conn.feedLine(t, "%pause %1")
+	conn.sync(t, sentinel)
+	g := cc.gapFor("%1")
+	if g == nil {
+		t.Fatalf("no gap open after %%pause")
+	}
+
+	cc.cmdQMu.Lock()
+	cc.cmdDesync = true
+	cc.cmdQMu.Unlock()
+
+	cc.expireGap("%1", g) // returns without parking: the queue refuses the write
+
+	if n := cc.gapCount(); n != 0 {
+		t.Fatalf("%d gaps armed after a resume the queue refused, want 0", n)
+	}
+	if strings.Contains(conn.written(), resume1) {
+		t.Fatalf("a desynchronised queue still let a resume onto the wire: %q", conn.written())
+	}
+	if n := len(sub.C()); n != 0 {
+		t.Fatalf("%d events queued off a failed resume, want 0", n)
+	}
+}
+
+// TestStaleDeadlineDoesNotClaimANewerGap covers expireGap's pointer-identity
+// check. A deadline whose Stop lost the race wakes up holding the gap it armed;
+// without the check it resumes a pane a newer handshake legitimately paused,
+// deletes the newer record so nothing bounds it any more, and marks every
+// subscriber — a re-seed storm off a gap that was never its own.
+//
+// Losing a Stop race is not something a test can arrange on a real clock, so
+// the two gaps are driven by %pause/%continue and the stale deadline is fired
+// by hand.
+func TestStaleDeadlineDoesNotClaimANewerGap(t *testing.T) {
+	d := &recordingDialer{}
+	cc := NewControlClient("test")
+	cc.dial = pinnedDial(d)
+	cc.backoff = time.Millisecond
+	cc.gapDeadline = time.Hour
+
+	sentinel := cc.Subscribe("%9")
+	sub := cc.Subscribe("%1")
+
+	if err := cc.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = cc.Close() }()
+	conn := d.connAt(t, 0)
+	conn.ackAttach(t)
+
+	conn.feedLine(t, "%pause %1")
+	conn.sync(t, sentinel)
+	stale := cc.gapFor("%1")
+	if stale == nil {
+		t.Fatalf("no gap open after the first %%pause")
+	}
+
+	conn.feedLine(t, "%continue %1")
+	conn.sync(t, sentinel)
+	expectDirty(t, sub, "subscriber at the first %continue")
+	cc.AckReseed(sub)
+
+	conn.feedLine(t, "%pause %1")
+	conn.sync(t, sentinel)
+	newer := cc.gapFor("%1")
+	if newer == nil || newer == stale {
+		t.Fatalf("the second %%pause opened no fresh gap: %p", newer)
+	}
+
+	// With the identity check this returns at once. Without it the stale
+	// deadline writes a resume nothing will ever answer and parks inside
+	// RunCommand, which is the first thing the failure looks like.
+	returned := make(chan struct{})
+	go func() { defer close(returned); cc.expireGap("%1", stale) }()
+	select {
+	case <-returned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a stale deadline resumed a pane whose gap it never armed")
+	}
+
+	if g := cc.gapFor("%1"); g != newer {
+		t.Fatalf("stale deadline dropped the newer gap: have %p, want %p", g, newer)
+	}
+	if strings.Contains(conn.written(), resume1) {
+		t.Fatalf("stale deadline wrote a resume: %q", conn.written())
+	}
+	if n := len(sub.C()); n != 0 {
+		t.Fatalf("%d events queued by a stale deadline, want 0", n)
 	}
 }
 
@@ -607,6 +1041,7 @@ func TestReadLoopKeepsDispatchingWhileResumeOutstanding(t *testing.T) {
 	}
 	defer func() { _ = cc.Close() }()
 	conn := d.connAt(t, 0)
+	conn.ackAttach(t)
 
 	conn.feedLine(t, "%pause %1")
 	waitForWrite(t, conn, resume1)
@@ -622,6 +1057,497 @@ func TestReadLoopKeepsDispatchingWhileResumeOutstanding(t *testing.T) {
 	}
 
 	conn.answerCommand(t)
+}
+
+// TestReplyGoesToTheCommandThatAskedForIt pins which command a block answers.
+// tmux answers every write with a block of its own, waited on or not, so a
+// caller that takes the next block to arrive takes whatever the last unwaited
+// writer provoked — and a resume that tmux refused reads back as a success.
+func TestReplyGoesToTheCommandThatAskedForIt(t *testing.T) {
+	d := &recordingDialer{}
+	cc := NewControlClient("test")
+	cc.dial = d.dial
+	cc.backoff = time.Millisecond
+
+	sentinel := cc.Subscribe("%9")
+
+	if err := cc.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = cc.Close() }()
+	conn := d.connAt(t, 0)
+	conn.ackAttach(t)
+
+	if err := cc.SendSpecialKey("%1", "C-c"); err != nil {
+		t.Fatalf("SendSpecialKey: %v", err)
+	}
+	waitForWrite(t, conn, "send-keys -t %1 C-c")
+
+	const command = "display-message -p mine"
+	type result struct {
+		out string
+		err error
+	}
+	got := make(chan result, 1)
+	go func() {
+		out, err := cc.RunCommand(command)
+		got <- result{out: out, err: err}
+	}()
+	waitForWrite(t, conn, command)
+
+	// The send-keys above is on nobody's hook, but tmux still answers it.
+	conn.answerCommand(t, "theirs")
+	conn.sync(t, sentinel)
+
+	select {
+	case r := <-got:
+		t.Fatalf("RunCommand returned (%q, %v) off another writer's block", r.out, r.err)
+	default:
+	}
+
+	conn.answerCommand(t, "mine")
+
+	select {
+	case r := <-got:
+		if r.err != nil {
+			t.Fatalf("RunCommand: %v", r.err)
+		}
+		if r.out != "mine" {
+			t.Fatalf("RunCommand = %q, want %q", r.out, "mine")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunCommand never got the block its own write provoked")
+	}
+}
+
+// TestOrphanBaselineTerminatorKeepsTheQueueAligned covers a stream introduced
+// by something ParseControlLine does not strip, so the baseline's %begin parses
+// as data and only its terminator arrives. Nothing was bound, so the right
+// answer is to drop the orphan; treating it as a desync instead failed every
+// command and re-dialled forever.
+func TestOrphanBaselineTerminatorKeepsTheQueueAligned(t *testing.T) {
+	d := &recordingDialer{baseline: "\x1bP1001p%begin 1700000000 1 0\r\n%end 1700000000 1 0\r\n"}
+	cc := NewControlClient("test")
+	cc.dial = d.dial
+	cc.backoff = time.Millisecond
+
+	sentinel := cc.Subscribe("%9")
+
+	if err := cc.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = cc.Close() }()
+	conn := d.connAt(t, 0)
+	conn.ackAttach(t)
+
+	const command = "display-message -p mine"
+	got := make(chan commandResponse, 1)
+	go func() {
+		out, err := cc.RunCommand(command)
+		got <- commandResponse{output: out, err: err}
+	}()
+	waitForWrite(t, conn, command)
+	conn.answerCommand(t, "mine")
+
+	select {
+	case r := <-got:
+		if r.err != nil {
+			t.Fatalf("RunCommand: %v", r.err)
+		}
+		if r.output != "mine" {
+			t.Fatalf("RunCommand = %q, want %q", r.output, "mine")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunCommand never got the block its own write provoked")
+	}
+
+	conn.sync(t, sentinel)
+	d.mu.Lock()
+	dials := len(d.conns)
+	d.mu.Unlock()
+	if dials != 1 {
+		t.Fatalf("dialled %d times; the orphan terminator dropped the connection", dials)
+	}
+}
+
+// TestFirstBlockOfAConnectionBindsToNoCommand proves a fresh connection owes
+// three blocks and that the first of them answers nobody: tmux replies to the
+// dialer's own attach-session before houston has written a byte. Every block
+// carries a body naming the command it belongs to, because bodiless %ends are
+// interchangeable — with empty bodies an off-by-one delivers the wrong block and
+// still reads as a pass.
+func TestFirstBlockOfAConnectionBindsToNoCommand(t *testing.T) {
+	d := &recordingDialer{baseline: "\x1bP1000p%begin 1700000000 1 0\r\nbaseline\r\n%end 1700000000 1 0\r\n"}
+	cc := NewControlClient("test")
+	cc.dial = d.dial
+	cc.backoff = time.Millisecond
+
+	if err := cc.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = cc.Close() }()
+
+	conn := d.connAt(t, 0)
+	waitForWrite(t, conn, ignoreSizeCmd)
+
+	// Enrolled while ignore-size is still outstanding, so all three blocks are
+	// owed at once. Answering ignore-size first would empty the queue ahead of
+	// this write, and then a baseline that wrongly claimed an entry would
+	// still leave every later block on the right one.
+	const command = "display-message -p mine"
+	got := make(chan commandResponse, 1)
+	go func() {
+		out, err := cc.RunCommand(command)
+		got <- commandResponse{output: out, err: err}
+	}()
+	waitForWrite(t, conn, command)
+
+	conn.answerCommand(t, "ignore-size")
+	conn.answerCommand(t, "mine")
+
+	select {
+	case r := <-got:
+		if r.err != nil {
+			t.Fatalf("RunCommand: %v", r.err)
+		}
+		if r.output != "mine" {
+			t.Fatalf("RunCommand = %q, want %q — the connection's unowed first block was bound to a command", r.output, "mine")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunCommand never got the block its own write provoked")
+	}
+}
+
+// TestSecondConnectionAlsoDropsItsBaselineBlock runs the same three-block drive
+// against connection 1. It is the only test that fails when the baseline marker
+// is a ControlClient field rather than a readLoop local — a per-client marker is
+// already set by connection 0, so every connection after the first stays one
+// block out of step while every other test in this file still passes. Connection
+// 0 is dropped holding two unanswered enrollments, so this also proves the new
+// connection's queue starts empty instead of inheriting them.
+func TestSecondConnectionAlsoDropsItsBaselineBlock(t *testing.T) {
+	d := &recordingDialer{baseline: "\x1bP1000p%begin 1700000000 1 0\r\nbaseline\r\n%end 1700000000 1 0\r\n"}
+	cc := NewControlClient("test")
+	cc.dial = d.dial
+	cc.backoff = time.Millisecond
+
+	if err := cc.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = cc.Close() }()
+
+	first := d.connAt(t, 0)
+	waitForWrite(t, first, ignoreSizeCmd)
+	if err := cc.SendSpecialKey("%1", "C-c"); err != nil {
+		t.Fatalf("SendSpecialKey: %v", err)
+	}
+	waitForWrite(t, first, "send-keys -t %1 C-c")
+	_ = first.pw.Close() // neither block answered; supervise re-dials
+
+	conn := d.connAt(t, 1)
+	waitForWrite(t, conn, ignoreSizeCmd)
+
+	// Enrolled while ignore-size is still outstanding, so the queue holds two
+	// entries when the blocks arrive. Answering ignore-size first would empty
+	// the queue ahead of this write and let an off-by-one pass.
+	const command = "display-message -p mine"
+	got := make(chan commandResponse, 1)
+	go func() {
+		out, err := cc.RunCommand(command)
+		got <- commandResponse{output: out, err: err}
+	}()
+	waitForWrite(t, conn, command)
+
+	conn.answerCommand(t, "ignore-size")
+	conn.answerCommand(t, "mine")
+
+	select {
+	case r := <-got:
+		if r.err != nil {
+			t.Fatalf("RunCommand: %v", r.err)
+		}
+		if r.output != "mine" {
+			t.Fatalf("RunCommand = %q, want %q — connection 1 bound its baseline block to a command", r.output, "mine")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunCommand never got its own block — connection 1 carried connection 0's queue over")
+	}
+}
+
+// TestMismatchedTerminatorReleasesTheWaiter feeds a block whose %end disagrees
+// with its %begin, which makes the queue head's owner unknowable. The waiter
+// must come back with an error rather than stay parked: parked here is
+// expireGap's timer goroutine never returning, so the gap is never re-armed and
+// never marked, and the pane stays dark — the failure this whole change exists
+// to prevent. The connection has to go too, since a desynchronised stream is
+// terminal until a re-attach resets the queue.
+func TestMismatchedTerminatorReleasesTheWaiter(t *testing.T) {
+	d := &recordingDialer{}
+	cc := NewControlClient("test")
+	cc.dial = d.dial
+	cc.backoff = time.Millisecond
+
+	if err := cc.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = cc.Close() }()
+
+	conn := d.connAt(t, 0)
+	conn.ackAttach(t)
+
+	const command = "display-message -p mine"
+	got := make(chan commandResponse, 1)
+	go func() {
+		out, err := cc.RunCommand(command)
+		got <- commandResponse{output: out, err: err}
+	}()
+	waitForWrite(t, conn, command)
+
+	num := conn.nextBlock()
+	conn.feedLine(t, fmt.Sprintf("%%begin 1700000000 %d 0", num))
+	conn.feedLine(t, "mine")
+	conn.feedLine(t, fmt.Sprintf("%%end 1700000000 %d 0", num+1))
+
+	select {
+	case r := <-got:
+		if r.err == nil {
+			t.Fatalf("RunCommand returned (%q, nil) off a block whose terminator did not match its %%begin", r.output)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunCommand stayed parked on a mismatched block")
+	}
+
+	d.connAt(t, 1) // the desynchronised connection must be torn down and re-dialled
+}
+
+// TestDesyncRecoversOnTheNextConnection follows that teardown through to the
+// end: a desynchronised stream is terminal until a re-attach resets the queue,
+// so the subscribers must re-seed and the fresh connection must accept commands
+// again.
+//
+// The desync is driven through a plain command rather than a paused pane on
+// purpose. A paused pane would put expireGap's re-arm in a race with
+// markAllDirty's sweep and whichever won would decide the assertion, so do not
+// "restore" that variant.
+func TestDesyncRecoversOnTheNextConnection(t *testing.T) {
+	d := &recordingDialer{}
+	cc := NewControlClient("test")
+	cc.dial = d.dial
+	cc.backoff = time.Millisecond
+
+	sub := cc.Subscribe("%1")
+
+	if err := cc.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = cc.Close() }()
+
+	first := d.connAt(t, 0)
+	first.ackAttach(t)
+
+	const command = "display-message -p mine"
+	got := make(chan commandResponse, 1)
+	go func() {
+		out, err := cc.RunCommand(command)
+		got <- commandResponse{output: out, err: err}
+	}()
+	waitForWrite(t, first, command)
+
+	num := first.nextBlock()
+	first.feedLine(t, fmt.Sprintf("%%begin 1700000000 %d 0", num))
+	first.feedLine(t, fmt.Sprintf("%%end 1700000000 %d 0", num+1))
+
+	// Only that it failed: desync() answers the waiter and then drops the
+	// connection, so whether this reads errCmdDesync or errConnLost is a real
+	// race between the reply and the close of gone.
+	select {
+	case r := <-got:
+		if r.err == nil {
+			t.Fatalf("RunCommand returned (%q, nil) off a desynchronised connection", r.output)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunCommand stayed parked on a desynchronised connection")
+	}
+
+	expectDirty(t, sub, "subscriber after the desynchronised connection was replaced")
+
+	second := d.connAt(t, 1)
+	second.ackAttach(t)
+
+	go func() {
+		out, err := cc.RunCommand(command)
+		got <- commandResponse{output: out, err: err}
+	}()
+	waitForWrite(t, second, command)
+	second.answerCommand(t, "mine")
+
+	select {
+	case r := <-got:
+		if r.err != nil || r.output != "mine" {
+			t.Fatalf("RunCommand on the fresh connection = (%q, %v), want (%q, nil)", r.output, r.err, "mine")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the fresh connection never answered a command")
+	}
+}
+
+// TestFailedWriteLeavesNoPhantomEnrollment covers the entry writeCommandLocked
+// deliberately leaves in the queue when the write fails: a short write may have
+// delivered half a command line, so the queue can no longer be reasoned about
+// and every later command must fail instead of being answered from a block it
+// did not provoke.
+//
+// The re-dial is suppressed on purpose. Left alone, the teardown installs a
+// fresh connection with an empty queue, the second command writes to it and
+// parks in RunCommand — which has no timeout — so the test would hang the whole
+// run instead of failing. TestMismatchedTerminatorReleasesTheWaiter wants that
+// re-dial; this one must not have it.
+func TestFailedWriteLeavesNoPhantomEnrollment(t *testing.T) {
+	d := &recordingDialer{}
+	cc := NewControlClient("test")
+	cc.backoff = time.Millisecond
+	first := true
+	cc.dial = func() (io.ReadCloser, io.Writer, func() error, error) {
+		if !first {
+			return nil, nil, nil, errors.New("no reconnect in this test")
+		}
+		first = false // Start()'s own call; every later one runs in supervise's goroutine, so the two never race
+		return d.dial()
+	}
+
+	if err := cc.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = cc.Close() }()
+
+	conn := d.connAt(t, 0)
+	conn.ackAttach(t)
+
+	conn.mu.Lock()
+	conn.writeErr = errors.New("stdin is gone")
+	conn.mu.Unlock()
+
+	if err := cc.SendSpecialKey("%1", "C-c"); err == nil {
+		t.Fatal("SendSpecialKey reported success against a failing stdin")
+	}
+
+	// The entry is only harmless because the queue now reports itself
+	// unreasonable: the next writer is turned away before it can append an entry
+	// the phantom would answer ahead of. A raw stdin error here instead of
+	// errCmdDesync means nothing recorded the failure and the queue is still
+	// being treated as aligned.
+	if err := cc.SendSpecialKey("%1", "C-c"); !errors.Is(err, errCmdDesync) {
+		t.Fatalf("second send after a failed write = %v, want %v", err, errCmdDesync)
+	}
+
+	if out, err := cc.RunCommand("display-message -p mine"); err == nil {
+		t.Fatalf("RunCommand returned (%q, nil) after a failed write left the queue unreasonable", out)
+	}
+}
+
+// TestConcurrentWriterNeverStealsAReply is the reviewer's own reproduction,
+// scaled down: an unwaited writer racing a stream of RunCommand calls, each
+// asserting it got its own body back. cmdMu does not serialize the unwaited
+// writer, so before the queue existed a RunCommand holding cmdMu could be
+// handed a send-keys' block.
+//
+// The answerer owes a block to every line the client wrote, ignore-size
+// included, because replies are bound by order and a skipped line stalls every
+// reply behind it. It tracks a cursor into the buffer rather than diffing
+// written(), and it reports failures over a channel: t.Fatalf from a non-test
+// goroutine does not stop the test.
+func TestConcurrentWriterNeverStealsAReply(t *testing.T) {
+	d := &recordingDialer{}
+	cc := NewControlClient("test")
+	cc.dial = d.dial
+	cc.backoff = time.Millisecond
+
+	if err := cc.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = cc.Close() }()
+	conn := d.connAt(t, 0)
+
+	stop := make(chan struct{})
+	fail := make(chan string, 1)
+	answererDone := make(chan struct{})
+	writerDone := make(chan struct{})
+
+	go func() {
+		defer close(answererDone)
+		cursor := 0
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			buf := conn.written()
+			nl := strings.IndexByte(buf[cursor:], '\n')
+			if nl < 0 {
+				time.Sleep(100 * time.Microsecond)
+				continue
+			}
+			line := buf[cursor : cursor+nl]
+			cursor += nl + 1
+
+			// Only a display-message is waited on, so only it needs a body the
+			// caller can recognise; the rest just need their block.
+			body, _ := strings.CutPrefix(line, "display-message -p ")
+			num := conn.nextBlock()
+			block := fmt.Sprintf("%%begin 1700000000 %d 0\n", num)
+			if body != line {
+				block += body + "\n"
+			}
+			block += fmt.Sprintf("%%end 1700000000 %d 0\n", num)
+			if _, err := io.WriteString(conn.pw, block); err != nil {
+				select {
+				case fail <- fmt.Sprintf("answering %q: %v", line, err):
+				default:
+				}
+				return
+			}
+		}
+	}()
+
+	go func() {
+		defer close(writerDone)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if err := cc.SendSpecialKey("%1", "C-c"); err != nil {
+				select {
+				case fail <- fmt.Sprintf("SendSpecialKey: %v", err):
+				default:
+				}
+				return
+			}
+			time.Sleep(100 * time.Microsecond)
+		}
+	}()
+
+	for i := range 200 {
+		want := fmt.Sprintf("r%d", i)
+		out, err := cc.RunCommand("display-message -p " + want)
+		if err != nil {
+			t.Fatalf("RunCommand %d: %v", i, err)
+		}
+		if out != want {
+			t.Fatalf("RunCommand %d = %q, want %q — a concurrent writer's block was delivered to it", i, out, want)
+		}
+	}
+
+	close(stop)
+	<-writerDone
+	<-answererDone
+	select {
+	case msg := <-fail:
+		t.Fatal(msg)
+	default:
+	}
 }
 
 // TestIgnoreSizeIsFirstWriteOnEveryAttach characterizes a rule the CC client
@@ -651,6 +1577,112 @@ func assertIgnoreSizeFirst(t *testing.T, c *recordedConn) {
 	waitForWrite(t, c, want)
 	if got := c.written(); !strings.HasPrefix(got, want) {
 		t.Fatalf("first write on the connection = %q, want %q first", got, want)
+	}
+}
+
+// TestAttachWriteFailureTearsDownItsOwnConnection pins that attach's own
+// ignore-size write, when it fails, tears down the connection attach just
+// installed. It has that connection's close fn in scope as a parameter and
+// hands it to the teardown, rather than letting the teardown pick a connection
+// out of a field — which, on the first attach, holds nothing yet, and later
+// holds whichever connection is current by then. Closed through the wrong one,
+// this connection would stay installed with connOK true and nothing ever
+// re-dialling.
+//
+// What tells the two apart is a second connection appearing at all, with
+// ignore-size written on it.
+func TestAttachWriteFailureTearsDownItsOwnConnection(t *testing.T) {
+	d := &recordingDialer{
+		onDial: func(i int, c *recordedConn) {
+			if i == 0 { // connection 0 only: arming every connection hot-loops the dialer
+				c.writeErr = errors.New("stdin is gone")
+			}
+		},
+	}
+	cc := NewControlClient("test")
+	cc.dial = d.dial
+	cc.backoff = time.Millisecond
+
+	if err := cc.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = cc.Close() }()
+
+	if got := d.connAt(t, 0).written(); got != "" {
+		t.Fatalf("the failing connection recorded %q, want nothing", got)
+	}
+	assertIgnoreSizeFirst(t, d.connAt(t, 1))
+}
+
+// TestFailedWriteTearsDownTheConnectionItActuallyWroteTo pins that a write
+// failure closes the connection the bytes were going out on, not whichever
+// connection happens to be current when the write finally returns. A write
+// stalls inside the PTY while holding stdinMu; nothing about retiring that
+// connection and attaching the next one needs stdinMu, so the whole
+// EOF → retire → backoff → dial → attach cycle can complete underneath it —
+// attach installs the new closeCur under connMu long before it reaches its own
+// stdinMu section. Reading the teardown target from a field after unlocking
+// therefore names the *new* connection, and the stale write kills a healthy
+// one. What tells the two apart is a third dial: the wrongly-closed connection
+// EOFs at once and supervise re-dials.
+func TestFailedWriteTearsDownTheConnectionItActuallyWroteTo(t *testing.T) {
+	d := &recordingDialer{}
+	cc := NewControlClient("test")
+	cc.dial = d.dial
+	cc.backoff = time.Millisecond
+
+	if err := cc.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = cc.Close() }()
+
+	conn0 := d.connAt(t, 0)
+	conn0.ackAttach(t)
+
+	// Driven through local channels only: Write nils the fields the instant it
+	// parks, so reading them back would find nil and close(nil) panics.
+	park, parked := make(chan struct{}), make(chan struct{})
+	conn0.mu.Lock()
+	conn0.parkWrite, conn0.parked, conn0.writeErr = park, parked, errors.New("stdin is gone")
+	conn0.mu.Unlock()
+
+	go func() { _ = cc.SendSpecialKey("%1", "C-c") }()
+
+	select {
+	case <-parked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the send never reached the parked write")
+	}
+
+	// Connection 0's read side dies, so readLoop EOFs and supervise retires it
+	// and re-dials — none of which needs the stdinMu the parked write holds.
+	_ = conn0.pw.Close()
+
+	// Not waitRetired: with a 1ms backoff the retired window can close before a
+	// poll ever sees it. The second dial is the sound barrier — supervise
+	// clears connOK before dialling — and Connected() after it means attach's
+	// connMu section has completed for connection 1 while its own stdinMu
+	// section is still queued behind the parked write. That is the window the
+	// bug needs.
+	d.connAt(t, 1)
+	waitConnected(t, cc)
+
+	close(park)
+
+	deadline := time.After(200 * time.Millisecond)
+	for {
+		d.mu.Lock()
+		n := len(d.conns)
+		d.mu.Unlock()
+		if n >= 3 {
+			t.Fatal("a third connection was dialled: connection 1 was torn down through a stale closeCur")
+		}
+		select {
+		case <-deadline:
+			assertIgnoreSizeFirst(t, d.connAt(t, 1))
+			return
+		case <-time.After(time.Millisecond):
+		}
 	}
 }
 
@@ -725,6 +1757,99 @@ func TestReattachClearsGapState(t *testing.T) {
 
 	if len(sub.C()) != 0 {
 		t.Fatal("continue on the new connection re-seeded a subscriber left over from the dropped connection's gap")
+	}
+}
+
+// TestClearGapsDisarmsEveryDeadline is necessarily white-box, because
+// clearGapsLocked's timer.Stop() loop has no behavioural witness and
+// structurally cannot have one: once the map entry is deleted, a surviving
+// timer's *gap can never again equal cc.gaps[paneID] — a later gap on the pane
+// is a fresh allocation — so it loses expireGap's identity check and does
+// nothing observable. Removing the loop costs one leaked timer per swept pane
+// for up to gapDeadline, and that is all this test can speak to.
+//
+// The hour deadline is a precondition, not a style choice: Stop() also reports
+// false for a timer that has already fired, so a short deadline would let a
+// real firing satisfy the assertion.
+func TestClearGapsDisarmsEveryDeadline(t *testing.T) {
+	cc := NewControlClient("test")
+	cc.gapDeadline = time.Hour
+
+	cc.openGap("%1")
+	cc.openGap("%2")
+
+	gaps := []*gap{cc.gapFor("%1"), cc.gapFor("%2")}
+	for i, g := range gaps {
+		if g == nil {
+			t.Fatalf("gap %d never opened", i)
+		}
+	}
+
+	cc.clearGaps()
+
+	if n := cc.gapCount(); n != 0 {
+		t.Fatalf("%d gaps survived clearGaps, want 0", n)
+	}
+	for i, g := range gaps {
+		if g.timer.Stop() {
+			t.Fatalf("gap %d's deadline was still armed after clearGaps", i)
+		}
+	}
+}
+
+// TestReconnectDisarmsAnOpenGapsDeadline is the behavioural tripwire for the
+// two guards in the gap lifecycle, and measurement says it witnesses only their
+// conjunction: removing either one alone leaves it green. Without the Stop()
+// loop the timer does fire, but it loses expireGap's identity check and writes
+// nothing; without the identity check the timer was stopped and never fires at
+// all. Remove both and a deadline the re-attach dropped resumes the pane on the
+// fresh connection, which is what this catches. Neither guard is covered
+// individually here — TestClearGapsDisarmsEveryDeadline and
+// TestStaleDeadlineDoesNotClaimANewerGap are. What it adds over
+// TestReattachClearsGapState is the timer path: that one proves only that a
+// %continue on the new connection re-seeds nobody.
+//
+// The deadline has to be short enough to fire inside the test, or the assertion
+// is about a timer that was never going to do anything.
+func TestReconnectDisarmsAnOpenGapsDeadline(t *testing.T) {
+	d := &recordingDialer{}
+	cc := NewControlClient("test")
+	cc.dial = d.dial // the re-dial is the point here; no pin
+	cc.backoff = time.Millisecond
+	cc.gapDeadline = 150 * time.Millisecond
+
+	sentinel := cc.Subscribe("%9")
+	sub := cc.Subscribe("%1")
+
+	if err := cc.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = cc.Close() }()
+
+	first := d.connAt(t, 0)
+	first.ackAttach(t)
+
+	first.feedLine(t, "%pause %1")
+	first.sync(t, sentinel)
+	if cc.gapFor("%1") == nil {
+		t.Fatalf("no gap open after %%pause")
+	}
+
+	_ = first.pw.Close() // dropped well inside the deadline
+	expectDirty(t, sub, "subscriber after re-attach")
+
+	second := d.connAt(t, 1)
+	second.ackAttach(t)
+
+	time.Sleep(3 * cc.gapDeadline)
+	if n := cc.gapCount(); n != 0 {
+		t.Fatalf("%d gaps survived the re-attach, want 0", n)
+	}
+	if strings.Contains(second.written(), resume1) {
+		t.Fatalf("a gap the re-attach dropped still resumed its pane: %q", second.written())
+	}
+	if strings.Contains(first.written(), resume1) {
+		t.Fatalf("resume written onto the dead connection: %q", first.written())
 	}
 }
 
