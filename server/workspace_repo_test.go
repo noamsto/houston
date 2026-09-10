@@ -2,16 +2,33 @@ package server
 
 import (
 	"errors"
+	"os"
 	"os/exec"
 	"testing"
 )
 
 // runGit runs a git command in dir and fails the test on error, mirroring
-// the setup shape tmux/client_test.go's own worktree fixtures use.
+// the setup shape tmux/client_test.go's own worktree fixtures use. HOME and
+// XDG_CONFIG_HOME are pinned to an empty per-test directory (git falls back
+// to $XDG_CONFIG_HOME/git/config for global config when it's set, bypassing
+// a HOME override alone) and the author/committer identity is injected via
+// env, so the commit doesn't depend on the runner having a global git
+// identity — or any other global gitconfig, e.g. commit.gpgsign — configured.
+// See ec46684 for the same fix applied to the host allowlist.
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
+	home := t.TempDir()
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"HOME="+home,
+		"XDG_CONFIG_HOME="+home,
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_AUTHOR_NAME=test",
+		"GIT_AUTHOR_EMAIL=test@example.com",
+		"GIT_COMMITTER_NAME=test",
+		"GIT_COMMITTER_EMAIL=test@example.com",
+	)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v\n%s", args, err, out)
 	}
