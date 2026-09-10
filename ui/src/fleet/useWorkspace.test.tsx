@@ -94,4 +94,17 @@ describe('useWorkspace lifecycle', () => {
     expect(result.current.workspace).toEqual(workspace('first'))
     expect(result.current.error).toBe('network down')
   })
+
+  it('a rejected first fetch sets error, leaves workspace null, and stops loading', async () => {
+    fetchWorkspaceMock.mockRejectedValueOnce(new Error('network down'))
+    const { result } = renderHook(useWorkspaceProbe)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    expect(result.current.workspace).toBeNull()
+    expect(result.current.error).toBe('network down')
+    expect(result.current.loading).toBe(false)
+  })
 })

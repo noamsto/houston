@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"log/slog"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -52,7 +53,8 @@ func gitCommonDir(root string) (string, error) {
 // isMainCheckout is true iff root's own .git is a direct child of root — a
 // linked worktree's common dir resolves to the original repo's .git,
 // somewhere else entirely. An error (git missing, root no longer exists)
-// caches false rather than asserting "main" on uncertain information.
+// returns false WITHOUT caching it, so a transient failure gets retried on
+// the next call instead of wedging root into the wrong bucket forever.
 func (c *repoClassifier) isMainCheckout(root string) bool {
 	c.mu.Lock()
 	if v, ok := c.cache[root]; ok {
@@ -61,7 +63,10 @@ func (c *repoClassifier) isMainCheckout(root string) bool {
 	}
 	c.mu.Unlock()
 
-	v := c.classify(root)
+	v, err := c.classify(root)
+	if err != nil {
+		return false
+	}
 
 	c.mu.Lock()
 	c.cache[root] = v
@@ -70,11 +75,12 @@ func (c *repoClassifier) isMainCheckout(root string) bool {
 	return v
 }
 
-func (c *repoClassifier) classify(root string) bool {
+func (c *repoClassifier) classify(root string) (bool, error) {
 	commonDir, err := c.commonDir(root)
 	if err != nil {
-		return false
+		slog.Warn("workspace: git classify failed", "root", root, "error", err)
+		return false, err
 	}
 
-	return filepath.Dir(commonDir) == root
+	return filepath.Dir(commonDir) == root, nil
 }

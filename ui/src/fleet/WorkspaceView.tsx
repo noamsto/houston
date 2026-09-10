@@ -24,7 +24,7 @@ function renderWindows(windows: WorkspaceWindow[], onOpen?: (runId: string) => v
             key={pane.id}
             type="button"
             className="ws-pane agent"
-            onClick={() => onOpen?.(pane.run_id!)}
+            onClick={() => onOpen?.(pane.run_id)}
           >
             {pane.active && <span className="ws-pane-dot" />}
             <span>{pane.command}</span>

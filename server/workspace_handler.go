@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 )
 
@@ -18,11 +19,13 @@ func (s *Server) handleWorkspace(w http.ResponseWriter, _ *http.Request) {
 
 	wins, err := s.wsTmux.ListWindowOptions()
 	if err != nil {
+		slog.Error("workspace: list window options failed", "error", err)
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
 	panes, err := s.wsTmux.ListPaneOptions()
 	if err != nil {
+		slog.Error("workspace: list pane options failed", "error", err)
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}

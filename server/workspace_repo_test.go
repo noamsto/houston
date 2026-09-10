@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"os/exec"
 	"testing"
 )
@@ -67,5 +68,28 @@ func TestRepoClassifier_CachesAfterFirstCall(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Errorf("calls after second isMainCheckout = %d, want 1 (cached, no re-shell-out)", calls)
+	}
+}
+
+func TestRepoClassifier_DoesNotCacheOnClassifyError(t *testing.T) {
+	c := newRepoClassifier()
+	calls := 0
+	c.commonDir = func(root string) (string, error) {
+		calls++
+		return "", errors.New("git not found")
+	}
+
+	if c.isMainCheckout("/some/root") {
+		t.Fatalf("first call: isMainCheckout = true, want false on classify error")
+	}
+	if calls != 1 {
+		t.Fatalf("calls after first isMainCheckout = %d, want 1", calls)
+	}
+
+	if c.isMainCheckout("/some/root") {
+		t.Fatalf("second call: isMainCheckout = true, want false on classify error")
+	}
+	if calls != 2 {
+		t.Errorf("calls after second isMainCheckout = %d, want 2 (not cached, retries on error)", calls)
 	}
 }
