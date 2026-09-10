@@ -31,6 +31,34 @@ in: `tmux/options.go` gains a `Target()` method so C2 does not hand-duplicate
 `windowsByTarget`'s join-key logic, the handler guards a nil `wsTmux`, and the
 UI test step gains a `vi.mock` plan and DOM-distinguishable fixtures.
 
+**Revised again mid-execute, per an explicit dispatcher directive (human
+decision, not a suggestion).** A plain session→window→pane mirror was
+rejected: measured live on this machine, one tmux session commonly spans
+several different `@git_root` values (five, in one case), so the session
+level alone does not tell a viewer which windows are "the real checkout" and
+which are throwaway worktrees. A crew-based grouping was rejected too — most
+runs on this machine carry a codename but an empty crew-bus id, so grouping
+by crew would strand the majority of panes in a no-crew bucket. A
+user-toggleable grouping was rejected as unbuilt, untested surface for a
+choice a human does not want to keep making. The fixed shape instead: each
+session groups its windows into **main checkout** (the window(s) whose
+`@git_root` IS a repo's main checkout) and **worktrees** (everything else
+under that repo), derived from repo identity via `git rev-parse
+--path-format=absolute --git-common-dir` — not from the session name, which
+the measurement above already falsifies as a repo proxy. This exact
+git-common-dir technique already exists in this codebase for the same kind of
+per-root keying: `runs/crewsource.go`'s `CrewSource.crewDir` resolves it (with
+a plain `--git-common-dir`, then a manual relative-path fixup this plan's
+`--path-format=absolute` variant skips) once per distinct root and caches the
+result — this plan reuses that discipline, not the function, since `crewDir`
+answers a different question (where the crew bus lives) with a different
+cache lifetime (owned by `CrewSource`, ticking every 3s) than this plan needs
+(owned by the HTTP handler, answering once per request but caching across
+requests). A window with an empty `@git_root` belongs to no repo and must
+stay reachable rather than being silently dropped — it lands in a third,
+unlabelled-by-repo bucket. See the revised `I2` in Step 5 and the new
+`repoClassifier` in Step 8a below for exactly how this composes.
+
 ## Why this is a plain `GET`, not a stream
 
 The design spec's API surface table (line 266) lists `GET /api/workspace` next
@@ -129,8 +157,11 @@ caller.
           Sessions []WorkspaceSession `json:"sessions"`
       }
       type WorkspaceSession struct {
-          Name    string            `json:"name"`
-          Windows []WorkspaceWindow `json:"windows"`
+          Name         string            `json:"name"`
+          WindowCount  int               `json:"window_count"`
+          MainCheckout []WorkspaceWindow `json:"main_checkout,omitempty"`
+          Worktrees    []WorkspaceWindow `json:"worktrees,omitempty"`
+          Other        []WorkspaceWindow `json:"other,omitempty"` // no @git_root — belongs to no repo, still reachable
       }
       type WorkspaceWindow struct {
           Index        int             `json:"index"`
@@ -158,8 +189,30 @@ caller.
       wonder why" trap `I2`'s own reasoning warns against. If a future plan
       wants a coloured accent here, exporting `tmuxColorToHex` is that plan's
       job, not this one's.
+
+      Bucketing a window into `MainCheckout`/`Worktrees`/`Other` is not this
+      function's decision alone — it needs to know, for each distinct
+      non-empty `@git_root`, whether that root is a main checkout. That
+      answer comes from a real `git` subprocess call (Step 8a), which
+      `buildWorkspace` itself must not perform — it stays pure and
+      fixture-testable, per the retro's own "prove it" standard. The caller
+      resolves the map once (one call per **distinct** root, not per pane or
+      per window — `crewDir`'s own discipline) and hands it in.
 - [ ] **Step 6: `buildWorkspace`.** Pure function
-      `buildWorkspace(wins []tmux.WindowOptions, panes []tmux.PaneOptions, snap []runs.Run) Workspace`.
+      `buildWorkspace(wins []tmux.WindowOptions, panes []tmux.PaneOptions, snap []runs.Run, mainCheckouts map[string]bool) Workspace`.
+      `mainCheckouts[root] == true` means that `@git_root` is a repo's main
+      checkout; `false` or an absent key means a linked worktree (this
+      includes a root whose `git rev-parse` lookup failed — the classifier in
+      Step 8a resolves an error to `false` rather than asserting "main" on
+      uncertain information, and caches that like any other answer, mirroring
+      `crewDir`'s own accepted "caches negative results for the process
+      lifetime" trade-off from the state-of-play defect list — not a new
+      problem this plan is introducing). Bucket each window: `w.GitRoot == ""`
+      → `Other`; `mainCheckouts[w.GitRoot]` → `MainCheckout`; else →
+      `Worktrees`. Windows keep their original per-session `Index` ordering
+      within whichever bucket they land in. `WindowCount = len(wins for this session)`,
+      counted before bucketing (a session's total window count regardless of
+      which bucket a window ends up in).
       First pass over `snap`: for every `r` with `r.Tmux != nil`, record
       `paneToRun[r.Tmux.PaneID] = r.ID`. Index windows by `w.Target()` (`I1`)
       and group panes onto their window by `p.Target` — the same field name,
@@ -205,10 +258,19 @@ caller.
       opinion alone, with no composed run, still does not make it routable); a
       pane whose window is absent from `wins` (asserts it is skipped); ordering
       (sessions/windows/panes out of tmux's own emission order come back
-      sorted). Revert the sort, the "no matching window" skip, and the
-      `Agent = RunID != ""` derivation (swap it for `p.ClaudeStatus != ""`) in
-      turn and confirm each test goes red before restoring — the state-of-play
-      retro requires this, not "it passed."
+      sorted). **Bucketing**: one session with three windows sharing session
+      name — one whose `GitRoot` is a key in `mainCheckouts` with value
+      `true` (asserts it lands in `MainCheckout`), one whose `GitRoot` is a
+      key with value `false` (asserts `Worktrees`), one whose `GitRoot` is
+      `""` (asserts `Other`) — plus a fourth window whose `GitRoot` is
+      non-empty but **absent** from `mainCheckouts` entirely (asserts
+      `Worktrees`, the same as an explicit `false`, proving the "absent key"
+      reading from Step 6's spec, not just the explicit-`false` one); assert
+      `WindowCount == 4` regardless of bucket. Revert the sort, the "no
+      matching window" skip, the `Agent = RunID != ""` derivation (swap it for
+      `p.ClaudeStatus != ""`), and the bucketing logic (swap it for "everything
+      goes to `Worktrees`") in turn and confirm each test goes red before
+      restoring — the state-of-play retro requires this, not "it passed."
 
 ## C3 — the HTTP handler
 
@@ -228,27 +290,67 @@ caller.
       `tmuxClient` already constructed in `New` (`*tmux.Client` satisfies the
       interface structurally — no change to the existing `s.tmux` field or its
       35+ call sites).
+- [ ] **Step 8a: the repo classifier.** New `server/workspace_repo.go`.
+
+      **`I4` — `mainCheckoutChecker`**, narrow enough to fake in tests:
+      ```go
+      type mainCheckoutChecker interface {
+          isMainCheckout(root string) bool
+      }
+      ```
+      Real implementation `repoClassifier`, a `sync.Mutex`-guarded
+      `map[string]bool` cache plus one `git` call per cache miss:
+      `exec.CommandContext(ctx, "git", "-C", root, "rev-parse", "--path-format=absolute", "--git-common-dir")`,
+      bounded by a timeout constant (mirror `crewDirTimeout`'s 5s in
+      `runs/crewsource.go`). `root` is a main checkout iff the call succeeds
+      AND `filepath.Dir(strings.TrimSpace(commonDir)) == root` — a linked
+      worktree's common dir resolves to the *original* repo's `.git`,
+      somewhere else entirely, while the main checkout's own `.git` is a
+      direct child of `root`. An error (git missing, root no longer exists)
+      caches `false`, not an error state — Step 6 already documents why
+      "uncertain" reads as "not main" rather than blocking the tree. The
+      cache is keyed on `root` only and never invalidated — a worktree
+      changing identity under a live root without the process restarting is
+      not a case this plan is taking on, matching `crewDir`'s own accepted
+      "caches negative results for the process lifetime" trade-off.
+      Add `wsRepos mainCheckoutChecker` to `Server`, defaulted to
+      `newRepoClassifier()` in `New`.
+      Tests in `server/workspace_repo_test.go`: a real temp dir `git init`'d
+      as the main checkout → `true`; `git worktree add` a second temp dir from
+      it → `false` for the worktree's root, `true` still for the original; a
+      nonexistent path → `false`, not a panic or a hung call; a second call on
+      an already-cached root does not shell out again (assert via a call
+      counter on a fake `exec`-driving seam, or simply time-bound the test and
+      trust the mutex-guarded map — pick whichever this codebase's existing
+      `crewDir` test, if any, already established as the pattern).
 - [ ] **Step 9: `handleWorkspace`.**
-      `GET /api/workspace` → `Workspace`. 503 when `s.runs == nil` or
-      `s.wsTmux == nil` (unstarted registry, or a hand-built `&Server{}` in a
-      test that never set the default — matches `handleRunsSnapshot`'s own
-      guard for the first case; the second exists because server tests
-      construct `&Server{...}` by hand, per `server/runs_reply_test.go`, and a
-      nil interface call panics rather than degrading to 502). On a
-      `ListWindowOptions`/`ListPaneOptions` error, 502 with the tmux error
-      text — no special-casing of "no server running" the way
-      `ListSessions` does: houston's own purpose is monitoring a live tmux, so
-      a dead tmux server is a genuine failure to surface, not a quiet empty
-      tree. Otherwise `buildWorkspace(wins, panes, s.runs.Snapshot())`,
+      `GET /api/workspace` → `Workspace`. 503 when `s.runs == nil`,
+      `s.wsTmux == nil` or `s.wsRepos == nil` (unstarted registry, or a
+      hand-built `&Server{}` in a test that never set the defaults — matches
+      `handleRunsSnapshot`'s own guard for the first case; the rest exist
+      because server tests construct `&Server{...}` by hand, per
+      `server/runs_reply_test.go`, and a nil interface call panics rather than
+      degrading to 502). On a `ListWindowOptions`/`ListPaneOptions` error, 502
+      with the tmux error text — no special-casing of "no server running" the
+      way `ListSessions` does: houston's own purpose is monitoring a live
+      tmux, so a dead tmux server is a genuine failure to surface, not a quiet
+      empty tree. Otherwise: collect the distinct non-empty `w.GitRoot` values
+      across `wins`, call `s.wsRepos.isMainCheckout(root)` once per distinct
+      root (never once per window or per pane — the whole point of the cache),
+      build `mainCheckouts`, then
+      `buildWorkspace(wins, panes, s.runs.Snapshot(), mainCheckouts)`,
       `Content-Type: application/json`, 200.
 - [ ] **Step 10: register it.** One line in `server/server.go`:
       `apiMux.HandleFunc("GET /api/workspace", s.handleWorkspace)` — on
       `apiMux`, inheriting the token/origin/Host gates unchanged, matching
       Step 11 of the Crews plan verbatim in shape.
 - [ ] **Step 11: tests.** `server/workspace_handler_test.go`, mirroring
-      `runs_api_test.go`'s shape: 503 without a registry; 200 with a fake
-      `wsTmux` and a registry carrying one composed run, decoding the body and
-      asserting the joined pane's `run_id`; 502 when the fake `wsTmux` errors;
+      `runs_api_test.go`'s shape: 503 without a registry (and separately,
+      without `wsRepos`); 200 with a fake `wsTmux`, a fake `wsRepos` (returning
+      a canned answer per root — no real `git` call in this test file, that
+      belongs to Step 8a's own test), and a registry carrying one composed
+      run, decoding the body and asserting the joined pane's `run_id` AND that
+      it landed in the right bucket; 502 when the fake `wsTmux` errors;
       `TestWorkspaceRouteIsBehindTheAuthGate` through `s.Handler()` exactly
       like `TestRunsRoutesAreBehindTheAuthGate` (401 unauthenticated) — a new
       route registered outside `apiMux` would reopen the hole #4 closed, so
@@ -262,10 +364,15 @@ caller.
       ```ts
       export interface WorkspacePane { id: string; index: number; active: boolean; command: string; agent: boolean; run_id?: string }
       export interface WorkspaceWindow { index: number; name: string; active: boolean; branch?: string; task?: string; crew_codename?: string; panes: WorkspacePane[] }
-      export interface WorkspaceSession { name: string; windows: WorkspaceWindow[] }
+      export interface WorkspaceSession { name: string; window_count: number; main_checkout?: WorkspaceWindow[]; worktrees?: WorkspaceWindow[]; other?: WorkspaceWindow[] }
       export interface Workspace { host: string; sessions: WorkspaceSession[] }
       export async function fetchWorkspace(): Promise<Workspace>
       ```
+      (This superseded an earlier flat `windows: WorkspaceWindow[]` shape on
+      `WorkspaceSession` — see the mid-execute revision note near the top of
+      this plan for why. `useWorkspace` (Step 14) is unaffected: it only
+      fetches and polls an opaque `Workspace` blob, never inspects
+      `sessions[].*` itself.)
       `fetchWorkspace` throws on a non-2xx (the hook below is what turns that
       into a UI state) — same relative-URL, same-origin-cookie pattern
       `replyRun` already uses; no explicit `credentials` needed.
@@ -298,35 +405,46 @@ caller.
 ## C5 — the Workspace view
 
 Design it twice, on purpose (the task's own instruction) — nesting is real:
-session → window → pane is three levels, names run long (branch names,
-worktree paths), and this has to stay one-thumb usable.
+session → repo-bucket → window → pane is four levels now (the repo roll-up
+added one, mid-execute — see the revision note near the top of this plan),
+names run long (branch names, worktree paths), and this has to stay
+one-thumb usable.
 
-**Option A — collapsible accordion.** Sessions (and optionally windows)
-start collapsed; tapping a header expands it in place. Pro: with many
-sessions, a phone shows more at a glance by default. **Rejected**: this
-codebase has zero existing disclosure-widget precedent — no collapse state,
-no expand/collapse animation, no `aria-expanded` pattern anywhere in
-`ui/src/fleet/` — and Fleet/Crews have already trained the user on one
-interaction model, "scan a flat list under a section header, tap a card."
-Inventing a second interaction primitive on top of that for one tab is a
-second visual *and* interaction language, which the task explicitly forbids.
-It also doesn't earn its complexity at this data's actual scale — a personal
-dev machine carries a handful of tmux sessions, not hundreds — so the
-"more at a glance" win is close to zero in practice.
+**Option A — collapsible accordion.** Sessions (and optionally the
+main-checkout/worktrees buckets) start collapsed; tapping a header expands it
+in place. Pro: with many sessions, a phone shows more at a glance by default.
+**Rejected**: this codebase has zero existing disclosure-widget precedent —
+no collapse state, no expand/collapse animation, no `aria-expanded` pattern
+anywhere in `ui/src/fleet/` — and Fleet/Crews have already trained the user
+on one interaction model, "scan a flat list under a section header, tap a
+card." Inventing a second interaction primitive on top of that for one tab is
+a second visual *and* interaction language, which the task explicitly
+forbids. It also doesn't earn its complexity at this data's actual scale — a
+personal dev machine carries a handful of tmux sessions, not hundreds — so
+the "more at a glance" win is close to zero in practice. The dispatcher's own
+phrase for the `Worktrees` bucket, "collapsed under a count", means labelled
+and de-emphasised under one small header, **not** hidden behind a tap — the
+tab's whole purpose is that every pane stays reachable, and an accordion
+would put the worktree panes (often where the actual agent work lives) behind
+an extra gesture.
 
-**Option B — flat grouped scroll (chosen).** No collapse state at all.
-Sessions render as `.fleet-group`-style section headers (exact reuse of the
-class Fleet already uses for its host grouping — same visual weight, same
-place in the eye). Within a session, each window is a compact one-line
-sub-header (index/name, plus a branch chip and a crew-codename chip *only*
-when present, reusing `.run-chip`/`.run-chip.codename` verbatim). Panes render
-as a tight list of one-line rows under their window — `command` as the label,
-a small dot for `active`, and a tap target only when `pane.agent` (which by
-Step 6's construction always carries a `run_id` when true — a plain pane
-renders inert, same "affordance from capability, not from type" rule `Caps`
-already uses for runs). This is a pure scroll, costs zero new CSS interaction
-states, and is legible with long names because nothing needs to fit next to a
-disclosure triangle.
+**Option B — flat grouped scroll (chosen).** No collapse state at all, one
+extra nesting level over the original two-level design. Sessions render as
+`.fleet-group`-style section headers (exact reuse of the class Fleet already
+uses for its host grouping — same visual weight, same place in the eye),
+carrying the session name and `window_count`. Within a session, up to three
+repo-bucket sub-groups render in a fixed order — Main checkout, Worktrees
+(N), Other — each only when its window list is non-empty (a session with no
+worktree windows shows no `Worktrees` header at all, not an empty one).
+Within a bucket, each window is a compact one-line sub-header (index/name,
+plus a branch chip and a crew-codename chip *only* when present, reusing
+`.run-chip`/`.run-chip.codename` verbatim). Panes render as a tight list of
+one-line rows under their window — `command` as the label, a small dot for
+`active`, and a tap target only when `pane.agent` (which by Step 6's
+construction always carries a `run_id` when true — a plain pane renders
+inert, same "affordance from capability, not from type" rule `Caps` already
+uses for runs). Still a pure scroll, still zero new CSS interaction states —
+the extra level is a heavier section header, not a new gesture.
 
 - [ ] **Step 17: `ui/src/fleet/WorkspaceView.tsx`.** Props: `{ onOpen?: (runId: string) => void }`
       (deliberately takes a bare `run_id` string, not a `Run` — `WorkspaceView`
@@ -337,31 +455,47 @@ disclosure triangle.
       `Run[]` at all — correlation already happened server-side (C3), so this
       is the one place in `ui/src/fleet/` that does not consume `useRuns()`,
       and the file's top comment says why in one line, pointing at this plan.
-      Loading state before the first successful fetch; error state on
-      `error && !workspace` (an error *with* a prior workspace renders the
-      tree, stale, same instinct as Step 14); empty state when `sessions.length === 0`.
+      A small internal helper renders one `[label, windows]` bucket
+      (`("Main checkout", session.main_checkout)`, `("Worktrees (N)",
+      session.worktrees)` with `N = session.worktrees?.length ?? 0` baked into
+      the label, `("Other", session.other)`) and is called up to three times
+      per session, skipping any bucket whose list is empty/undefined — this
+      keeps the "only when non-empty" rule in one place instead of three
+      near-identical `{cond && …}` blocks. Loading state before the first
+      successful fetch; error state on `error && !workspace` (an error *with*
+      a prior workspace renders the tree, stale, same instinct as Step 14);
+      empty state when `sessions.length === 0`.
 - [ ] **Step 18: CSS.** New rules in `ui/src/fleet/fleet.css` (same file every
       other fleet view already extends — no second stylesheet): `.workspace`
-      (root, mirrors `.crews`/`.fleet`), `.ws-window` (window sub-header row),
-      `.ws-pane` (pane row, plain and inert by default), `.ws-pane.agent`
-      (tappable — cursor/hover per the existing `.run-card:active` scale-down
-      convention). Reuses `.fleet-group`, `.run-chip`, `.run-chip.codename`
-      unmodified.
+      (root, mirrors `.crews`/`.fleet`), `.ws-bucket` (the Main
+      checkout/Worktrees/Other sub-header, one visual step lighter than
+      `.fleet-group` so the session header stays the dominant grouping level),
+      `.ws-window` (window sub-header row), `.ws-pane` (pane row, plain and
+      inert by default), `.ws-pane.agent` (tappable — cursor/hover per the
+      existing `.run-card:active` scale-down convention). Reuses
+      `.fleet-group`, `.run-chip`, `.run-chip.codename` unmodified.
 - [ ] **Step 19: tests.** `WorkspaceView.test.tsx`, `vi.mock('./useWorkspace')`
       (the `RunDetail.test.tsx`/`TerminalPane.test.tsx` pattern of mocking the
       owning hook rather than the network) returning a fixed `Workspace`
       fixture per case — no interval to fake here, since the hook itself is
-      replaced wholesale. Fixture: two sessions; one window with a branch +
-      `crew_codename` holding one agent pane (`agent: true, run_id: "pane-1"`,
-      `command: "claude"`); a second, plain window holding two non-agent panes
-      that are otherwise distinguishable (different `id`/`command`, e.g. a
-      `"zsh"` pane and a `"vim"` pane, both `agent: false`, no `run_id`) —
-      assert via `container.querySelector('.ws-pane')` (the `CrewsView.test.tsx`
-      style) that clicking the agent pane calls `onOpen` with exactly
-      `"pane-1"`, and that clicking either plain pane does not call `onOpen`
-      at all. Session headers and the crew-codename chip get their own
-      assertions. Loading/error/empty states each get one case (mock the hook
-      to return each state directly).
+      replaced wholesale. Fixture: one session with `main_checkout` holding one
+      window with a branch + `crew_codename` and one agent pane
+      (`agent: true, run_id: "pane-1"`, `command: "claude"`); the same session's
+      `worktrees` holding a plain window with two non-agent panes that are
+      otherwise distinguishable (different `id`/`command`, e.g. a `"zsh"` pane
+      and a `"vim"` pane, both `agent: false`, no `run_id`); no `other` on this
+      session (asserts no `Other` bucket header renders at all) — plus a
+      *second* session whose only window has an empty `branch`/`GitRoot`
+      surfaced through `other` (asserts an `Other` header DOES render when the
+      data calls for it, closing the "only render when non-empty" claim from
+      both directions). Assert: the `Main checkout` and `Worktrees` bucket
+      headers render for session one with the right window under each (and the
+      worktree count in the `Worktrees` label matches); clicking the agent
+      pane's DOM element (via `container.querySelector('.ws-pane')`, the
+      `CrewsView.test.tsx` style) calls `onOpen` with exactly `"pane-1"`; and
+      clicking either plain pane does not call `onOpen` at all. Loading/error/
+      empty states each get one case (mock the hook to return each state
+      directly).
 - [ ] **Step 20: verify C5.** `npx tsc -b`, `npx eslint .`, `npx vitest run`.
 
 ## C6 — Shell wiring
@@ -391,8 +525,9 @@ disclosure triangle.
 - [ ] **Step 23: full gate.** Go build, vet, test; UI typecheck, lint, tests;
       `gofmt -l` clean on touched files.
 - [ ] **Step 24: bundle grep.** `npm run build`, then grep the built CSS for a
-      declaration of `.workspace`, `.ws-window`, `.ws-pane`, `.ws-pane.agent`,
-      and the built JS for the string `/api/workspace`. A passing build proves
+      declaration of `.workspace`, `.ws-bucket`, `.ws-window`, `.ws-pane`,
+      `.ws-pane.agent`, and the built JS for the string `/api/workspace`. A
+      passing build proves
       nothing here — the entire Mocha token file once shipped unimported
       behind a fully green build, lint, tests and an Opus review.
 - [ ] **Step 25: live before/after, if a tmux server is reachable in this

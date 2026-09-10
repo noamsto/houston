@@ -4,14 +4,14 @@ import { needsYou } from './staleness'
 import { useNow } from './useNow'
 import { FleetView } from './FleetView'
 import { CrewsView } from './CrewsView'
+import { WorkspaceView } from './WorkspaceView'
 import { RunDetail } from './RunDetail'
 import '../theme/mocha.css'
 import './fleet.css'
 
 type Tab = 'fleet' | 'crews' | 'workspace' | 'dispatch'
 
-const PLACEHOLDER: Record<Exclude<Tab, 'fleet' | 'crews'>, string> = {
-  workspace: 'Workspace arrives next — the tmux tree across every host, including panes that are not agents.',
+const PLACEHOLDER: Record<'dispatch', string> = {
   dispatch: 'Dispatch arrives with the dispatcher milestone — pick a repo, task, tier and engine, and start work from your phone.',
 }
 
@@ -60,7 +60,8 @@ export function Shell() {
             onOpen={(r) => { window.location.hash = `#/fleet/${r.id}/activity` }}
           />
         </div>
-        {tab !== 'fleet' && tab !== 'crews' && <div className="shell-placeholder">{PLACEHOLDER[tab]}</div>}
+        {tab === 'dispatch' && <div className="shell-placeholder">{PLACEHOLDER.dispatch}</div>}
+        {tab === 'workspace' && <WorkspaceView onOpen={(id) => { window.location.hash = `#/fleet/${id}/activity` }} />}
         {/* A stacked overlay, not a `hidden`-swapped replacement of `.fleet` —
             `hidden` maps to display:none, which would collapse `.fleet`'s own
             scroll container and lose its scrollTop on return. */}

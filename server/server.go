@@ -97,8 +97,22 @@ type Server struct {
 	// no command ran, which no assertion about the response alone can prove.
 	replyRunner replyRunner
 
+	// wsRepos classifies a @git_root as a main checkout or a linked
+	// worktree for the Workspace tab's bucketing.
+	wsRepos mainCheckoutChecker
+	// wsTmux lists the raw window/pane options the Workspace tab joins
+	// against a run snapshot. Narrow enough to fake in tests.
+	wsTmux workspaceLister
+
 	auth  *authGate
 	hosts *hostGate
+}
+
+// workspaceLister is the tmux surface handleWorkspace needs — narrow enough
+// to fake in tests without shelling out to a real tmux server.
+type workspaceLister interface {
+	ListWindowOptions() ([]tmux.WindowOptions, error)
+	ListPaneOptions() ([]tmux.PaneOptions, error)
 }
 
 // FontController controls terminal font size.
@@ -151,6 +165,8 @@ func New(cfg Config) (*Server, error) {
 		lastActivity: make(map[string]time.Time),
 		hub:          hub.New(cfg.StatusDir, slog.Default()),
 		replyRunner:  execCrewReply,
+		wsRepos:      newRepoClassifier(),
+		wsTmux:       tmuxClient,
 	}
 
 	// Run the hub in the background. It watches <status-dir>/claude/ and the
@@ -247,6 +263,7 @@ func (s *Server) Handler() http.Handler {
 	apiMux.HandleFunc("/api/runs", s.handleRunsSnapshot)
 	apiMux.HandleFunc("/api/runs/stream", s.handleRunsStream)
 	apiMux.HandleFunc("POST /api/runs/{id}/reply", s.handleRunReply)
+	apiMux.HandleFunc("GET /api/workspace", s.handleWorkspace)
 	mux.Handle("/api/", s.auth.middleware(apiMux))
 
 	// The host gate wraps everything, including "/", so a rebound domain is
