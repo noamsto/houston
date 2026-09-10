@@ -34,6 +34,11 @@ type ControlClient struct {
 
 	mu   sync.RWMutex
 	subs map[string][]*PaneSub // paneID → subscribers
+	gaps map[string]*gap       // paneID → open pause gap, guarded by mu
+
+	// gapDeadline bounds an open gap: past it the pane is resumed and every
+	// subscriber on it re-seeds. Shortened by tests.
+	gapDeadline time.Duration
 
 	// Synchronous command support: one command at a time.
 	// tmux assigns command numbers server-side, so we serialize
@@ -49,15 +54,24 @@ type commandResponse struct {
 	err    error
 }
 
+// gap represents one open %pause on a pane, from %pause to %continue.
+type gap struct {
+	timer *time.Timer // fires expireGap; guarded by ControlClient.mu
+}
+
 const backoffMax = 10 * time.Second
 
 func NewControlClient(session string) *ControlClient {
 	cc := &ControlClient{
 		session: session,
 		subs:    make(map[string][]*PaneSub),
+		gaps:    make(map[string]*gap),
 		pending: make(chan commandResponse, 1),
 		done:    make(chan struct{}),
 		backoff: 250 * time.Millisecond,
+		// Comfortably beyond a healthy seed handshake, short enough that a
+		// pane nothing resumes is not a minute of frozen screen.
+		gapDeadline: 10 * time.Second,
 	}
 	cc.dial = cc.dialTmux
 	return cc
@@ -200,6 +214,9 @@ func (cc *ControlClient) supervise(r io.ReadCloser, closeConn func() error) {
 func (cc *ControlClient) markAllDirty() {
 	cc.mu.Lock()
 	defer cc.mu.Unlock()
+	// Pause state belongs to the connection that raised it; a gap left open
+	// by a dead connection must not let a later, unrelated %continue re-seed.
+	cc.clearGapsLocked()
 	for _, subs := range cc.subs {
 		for _, s := range subs {
 			cc.markDirtyLocked(s)
@@ -240,17 +257,12 @@ func (cc *ControlClient) readLoop(r *bufio.Reader) {
 			cc.dispatch(event.PaneID, []byte(event.Data))
 
 		case EventPause:
-			// tmux discards output while paused, so resuming without a
-			// re-seed would paint on top of a hole. Only %pause marks:
-			// marking on %continue would re-seed straight after every
-			// deliberate seed. The handshake's own pause usually lands
-			// before its subscriber exists — usually, because tmux does not
-			// guarantee %pause precedes that command's %end; the rare
-			// reorder costs one harmless re-seed.
-			cc.markPaneDirty(event.PaneID)
+			// tmux discards output while paused, so the Dirty belongs at the
+			// end of the gap, not here — see openGap.
+			cc.openGap(event.PaneID)
 
 		case EventContinue:
-			slog.Debug("control mode continue", "session", cc.session, "paneID", event.PaneID)
+			cc.closeGap(event.PaneID)
 
 		case EventBegin:
 			inBlock = true
@@ -297,6 +309,7 @@ type PaneEvent struct {
 type PaneSub struct {
 	ch    chan PaneEvent
 	dirty bool // guarded by ControlClient.mu
+	inGap bool // attached before the pane's open gap closed; guarded by ControlClient.mu
 }
 
 // C returns the event stream. Read it until the subscription is released.
@@ -347,6 +360,125 @@ func (cc *ControlClient) markPaneDirty(paneID string) {
 	for _, s := range cc.subs[paneID] {
 		cc.markDirtyLocked(s)
 	}
+}
+
+// openGap records that paneID has entered a pause. %pause is edge-triggered —
+// tmux emits it only on the not-paused → paused transition — so a gap already
+// open on the pane means this one is a repeat and is a no-op. Every current
+// subscriber is flagged inGap so closeGap knows who was here before the gap,
+// as opposed to a subscriber that attaches during it.
+func (cc *ControlClient) openGap(paneID string) {
+	cc.mu.Lock()
+	defer cc.mu.Unlock()
+	cc.openGapLocked(paneID)
+}
+
+// openGapLocked is openGap's body. Caller must hold cc.mu.
+func (cc *ControlClient) openGapLocked(paneID string) {
+	// readLoop keeps parsing already-buffered lines after Close(), so a late
+	// %pause must not arm a full-length timer that outlives the client.
+	if cc.isClosed() {
+		return
+	}
+	if _, open := cc.gaps[paneID]; open {
+		return
+	}
+	for _, s := range cc.subs[paneID] {
+		s.inGap = true
+	}
+	g := &gap{}
+	// Assigned inside the critical section: clearGapsLocked reads g.timer
+	// under cc.mu from a Close() that can run concurrently with readLoop.
+	g.timer = time.AfterFunc(cc.gapDeadline, func() { cc.expireGap(paneID, g) })
+	cc.gaps[paneID] = g
+}
+
+// closeGap ends paneID's pause. Deleting the gap record is the claim: only
+// the caller that removes it marks anyone dirty. An orphan %continue — no gap
+// open — marks nobody. Skipping mid-gap arrivals is a tradeoff, not a
+// guarantee: it spares every deliberate seed a spurious re-seed at its own
+// handshake's %continue, and costs that subscriber whatever tmux discarded
+// between its capture-pane and the %continue.
+func (cc *ControlClient) closeGap(paneID string) {
+	cc.mu.Lock()
+	defer cc.mu.Unlock()
+	g, open := cc.gaps[paneID]
+	if !open {
+		return
+	}
+	g.timer.Stop()
+	delete(cc.gaps, paneID)
+	for _, s := range cc.subs[paneID] {
+		if s.inGap {
+			s.inGap = false
+			cc.markDirtyLocked(s)
+		}
+	}
+}
+
+// expireGap bounds a gap whose %continue never came: it resumes the pane and,
+// once the resume has landed, marks every current subscriber dirty, mid-gap
+// arrivals included — the pause is per control client and houston runs one per
+// session, so one socket's stuck handshake freezes the pane for every socket
+// on it.
+func (cc *ControlClient) expireGap(paneID string, g *gap) {
+	cc.mu.Lock()
+	// A timer whose Stop lost the race may claim only the gap it armed, never
+	// a newer one that has since opened on the pane.
+	if cc.gaps[paneID] != g {
+		cc.mu.Unlock()
+		return
+	}
+	g.timer.Stop()
+	delete(cc.gaps, paneID)
+	// Cleared inside the claim, so a gap opening while the resume is in flight
+	// owns its own flags and the marking below cannot wipe them.
+	for _, s := range cc.subs[paneID] {
+		s.inGap = false
+	}
+	cc.mu.Unlock()
+
+	// Resume first, mark after. Marked first, the consumer would capture-pane
+	// while tmux is still discarding: everything painted before the resume
+	// lands is lost, and the subscriber, having acked, never re-seeds again.
+	if _, err := cc.RunCommand("refresh-client -A " + paneID + ":continue"); err != nil {
+		slog.Warn("gap deadline resume failed",
+			"session", cc.session, "pane", paneID, "error", err)
+		// The pane may still be paused, and %pause is edge-triggered: tmux
+		// will never announce one it already considers paused. Without a
+		// fresh gap nothing would ever retry, and the pane would stay dark
+		// for good. Nobody subscribed means nobody to retry for.
+		cc.mu.Lock()
+		if len(cc.subs[paneID]) > 0 {
+			cc.openGapLocked(paneID)
+		}
+		cc.mu.Unlock()
+		// Marking here would be worse than not marking: the capture would come
+		// off a still-paused pane, and that stale dirty flag makes the retry's
+		// own mark a no-op — the screen would never recover.
+		return
+	}
+	cc.markPaneDirty(paneID)
+}
+
+// clearGapsLocked cancels every armed deadline and forgets all gap state.
+// Caller must hold cc.mu.
+func (cc *ControlClient) clearGapsLocked() {
+	for _, g := range cc.gaps {
+		g.timer.Stop()
+	}
+	clear(cc.gaps)
+	for _, subs := range cc.subs {
+		for _, s := range subs {
+			s.inGap = false
+		}
+	}
+}
+
+func (cc *ControlClient) clearGaps() {
+	cc.mu.Lock()
+	defer cc.mu.Unlock()
+	cc.clearGapsLocked()
 }
 
 // AckReseed resumes delivery after the subscriber has re-seeded from
@@ -572,6 +704,11 @@ func (cc *ControlClient) Close() error {
 	}
 	cc.closed = true
 	cc.closeMu.Unlock()
+
+	// closeMu must be released first: openGapLocked calls isClosed() (which
+	// takes closeMu) while holding cc.mu, so sweeping under closeMu would
+	// invert that order and deadlock.
+	cc.clearGaps()
 
 	cc.connMu.RLock()
 	closeFn := cc.closeCur
