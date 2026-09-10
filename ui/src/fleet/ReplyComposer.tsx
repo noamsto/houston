@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useState } from 'react'
 import { replyRun, type ReplyOutcome } from '../api/runs'
 import './fleet.css'
 
@@ -6,18 +6,12 @@ export function ReplyComposer({ runId }: { runId: string }) {
   const [text, setText] = useState('')
   const [sending, setSending] = useState(false)
   const [outcome, setOutcome] = useState<ReplyOutcome | null>(null)
-  // A ref, not just the `sending` state: two taps can both read `sending`
-  // before either re-render lands. The ref is set synchronously, before the
-  // first await.
-  const inFlight = useRef(false)
 
   async function send() {
     const trimmed = text.trim()
-    if (inFlight.current || !trimmed) return
-    inFlight.current = true
+    if (!trimmed) return
     setSending(true)
     const result = await replyRun(runId, trimmed)
-    inFlight.current = false
     setSending(false)
     setOutcome(result)
     if (result.kind === 'delivered') setText('')

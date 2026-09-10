@@ -27,8 +27,8 @@ describe('ReplyComposer accessibility', () => {
   })
 })
 
-describe('ReplyComposer double-tap guard', () => {
-  it('produces exactly one replyRun call from two rapid clicks', async () => {
+describe('ReplyComposer disabled-while-sending', () => {
+  it('produces exactly one replyRun call from two rapid clicks, because the second click hits a disabled button', async () => {
     let resolve!: (o: ReplyOutcome) => void
     replyRunMock.mockReturnValue(new Promise((r) => { resolve = r }))
 

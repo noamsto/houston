@@ -18,7 +18,7 @@ export function RunCard({ run, now, onOpen }: { run: Run; now: number; onOpen?: 
       type="button"
       className={`run-card${attentionClass}${history ? ' history' : ''}`}
       onClick={() => onOpen?.(run)}
-      style={run.crew?.color ? ({ '--run-accent': run.crew.color } as React.CSSProperties) : undefined}
+      style={{ '--run-accent': run.crew?.color } as React.CSSProperties}
     >
       <div className="run-head">
         <span className="run-dot" style={{ background: `var(--state-${run.state}, var(--text-faint))` }} />
