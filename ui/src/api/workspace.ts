@@ -1,6 +1,6 @@
-// Mirror of server/workspace.go's Workspace contract (I2). A discriminated
-// union on `agent` so the type system enforces what the Go server
-// guarantees: an agent pane always carries a run_id.
+// Mirror of server/workspace.go's Workspace contract. A discriminated union
+// on `agent` so the type system enforces what the Go server guarantees: an
+// agent pane always carries a run_id.
 export type WorkspacePane =
   | { id: string; index: number; active: boolean; command: string; agent: true; run_id: string }
   | { id: string; index: number; active: boolean; command: string; agent: false; run_id?: undefined }

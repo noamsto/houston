@@ -1,7 +1,5 @@
-// Correlation already happened server-side (C2/C3) — the tree the API
-// returns already carries run ids on the panes that have them, so unlike
-// FleetView/CrewsView this view never consumes useRuns(); see
-// docs/superpowers/plans/2026-09-10-workspace-tab.md, C5.
+// The tree already carries run ids on the panes that have them, so unlike
+// FleetView/CrewsView this view never consumes useRuns().
 import { useWorkspace } from './useWorkspace'
 import type { WorkspaceWindow } from '../api/workspace'
 import './fleet.css'
