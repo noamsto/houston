@@ -52,12 +52,22 @@
             src = pkgs.lib.cleanSource ./.;
             vendorHash = "sha256-ArYCbm+rj0VYQV58tiVyYPXGfgiW45hfc+wFGQuQy3U=";
 
-            # tmux/control_integration_test.go drives a real server.
-            nativeCheckInputs = [pkgs.tmux];
+            # tmux/control_integration_test.go drives a real server;
+            # server/workspace_repo_test.go shells out to git.
+            nativeCheckInputs = [pkgs.tmux pkgs.git];
+
+            nativeBuildInputs = [pkgs.makeWrapper];
 
             preBuild = ''
               mkdir -p ui/dist
               cp -r ${ui}/* ui/dist/
+            '';
+
+            # houston shells out to git and tmux at runtime; --suffix lets
+            # the user's own tmux/git win if already on PATH.
+            postFixup = ''
+              wrapProgram $out/bin/houston \
+                --suffix PATH : ${pkgs.lib.makeBinPath [pkgs.git pkgs.tmux]}
             '';
 
             meta = with pkgs.lib; {
