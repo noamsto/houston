@@ -72,6 +72,7 @@
 .run-card.attention { border-color: color-mix(in srgb, var(--state-blocked) 45%, var(--line)); }
 .run-card.attention.muted { border-color: color-mix(in srgb, var(--state-blocked) 22%, var(--line)); }
 .run-card.history { opacity: 0.55; }
+.run-card.selected { background: var(--fill); border-color: var(--accent); }
 .run-card:active { background: var(--fill); transform: scale(0.995); }
 
 .run-head { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }

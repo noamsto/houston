@@ -7,21 +7,14 @@ import { useIsDesktop } from './hooks/useMediaQuery'
 import { useLayout } from './hooks/useLayout'
 import { useSessionsStream } from './hooks/useSessionsStream'
 import { useAttentionNotifications } from './hooks/useAttentionNotifications'
+import { type View, viewForHash } from './view'
 import './theme/tokens.css'
 
-type View = 'agents' | 'panes' | 'fleet'
-
-function initialView(): View {
-  if (window.location.hash === '#/panes') return 'panes'
-  if (window.location.hash.startsWith('#/fleet')) return 'fleet'
-  return 'agents'
-}
-
 export default function App() {
-  const [view, setView] = useState<View>(initialView)
+  const [view, setView] = useState<View>(() => viewForHash(window.location.hash))
 
   useEffect(() => {
-    const onHash = () => setView(initialView())
+    const onHash = () => setView(viewForHash(window.location.hash))
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
   }, [])

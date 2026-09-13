@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useRuns } from '../hooks/useRuns'
 import { needsYou } from './staleness'
 import { useNow } from './useNow'
@@ -6,6 +6,7 @@ import { FleetView } from './FleetView'
 import { CrewsView } from './CrewsView'
 import { WorkspaceView } from './WorkspaceView'
 import { RunDetail } from './RunDetail'
+import { runHash, useDetailRoute } from './routes'
 import '../theme/mocha.css'
 import './fleet.css'
 
@@ -15,29 +16,13 @@ const PLACEHOLDER: Record<'dispatch', string> = {
   dispatch: 'Dispatch arrives with the dispatcher milestone — pick a repo, task, tier and engine, and start work from your phone.',
 }
 
-interface DetailRoute {
-  id: string
-  tab: 'activity' | 'terminal'
-}
-
-function parseDetailRoute(hash: string): DetailRoute | null {
-  const m = hash.match(/^#\/fleet\/([^/]+)\/([^/]+)$/)
-  if (!m) return null
-  return { id: m[1], tab: m[2] === 'terminal' ? 'terminal' : 'activity' }
-}
-
 export function Shell() {
   const [tab, setTab] = useState<Tab>('fleet')
   const { runs, connected, hasSnapshot } = useRuns()
   const now = useNow()
   const attention = runs.some((r) => needsYou(r, now))
 
-  const [detail, setDetail] = useState<DetailRoute | null>(() => parseDetailRoute(window.location.hash))
-  useEffect(() => {
-    const onHash = () => setDetail(parseDetailRoute(window.location.hash))
-    window.addEventListener('hashchange', onHash)
-    return () => window.removeEventListener('hashchange', onHash)
-  }, [])
+  const detail = useDetailRoute()
 
   return (
     <div className="shell mocha">
@@ -49,7 +34,7 @@ export function Shell() {
             runs={runs}
             connected={connected}
             now={now}
-            onOpen={(r) => { window.location.hash = `#/fleet/${r.id}/activity` }}
+            onOpen={(r) => { window.location.hash = runHash(r.id) }}
           />
         </div>
         {/* Kept mounted like FleetView, so a half-typed reply survives a tab switch. */}
@@ -57,11 +42,11 @@ export function Shell() {
           <CrewsView
             runs={runs}
             now={now}
-            onOpen={(r) => { window.location.hash = `#/fleet/${r.id}/activity` }}
+            onOpen={(r) => { window.location.hash = runHash(r.id) }}
           />
         </div>
         {tab === 'dispatch' && <div className="shell-placeholder">{PLACEHOLDER.dispatch}</div>}
-        {tab === 'workspace' && <WorkspaceView onOpen={(id) => { window.location.hash = `#/fleet/${id}/activity` }} />}
+        {tab === 'workspace' && <WorkspaceView onOpen={(id) => { window.location.hash = runHash(id) }} />}
         {/* A stacked overlay, not a `hidden`-swapped replacement of `.fleet` —
             `hidden` maps to display:none, which would collapse `.fleet`'s own
             scroll container and lose its scrollTop on return. */}

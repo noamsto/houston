@@ -65,3 +65,21 @@ describe('RunCard accent', () => {
     expect(card.style.getPropertyValue('--run-accent')).toBe('#d75f87')
   })
 })
+
+describe('RunCard selected', () => {
+  it('sets aria-current and the selected class when selected', () => {
+    const r = run()
+    const { container } = render(<RunCard run={r} now={now} selected />)
+    const card = container.querySelector('.run-card') as HTMLElement
+    expect(card.getAttribute('aria-current')).toBe('true')
+    expect(card.classList.contains('selected')).toBe(true)
+  })
+
+  it('sets neither when not selected', () => {
+    const r = run()
+    const { container } = render(<RunCard run={r} now={now} />)
+    const card = container.querySelector('.run-card') as HTMLElement
+    expect(card.getAttribute('aria-current')).toBeNull()
+    expect(card.classList.contains('selected')).toBe(false)
+  })
+})
