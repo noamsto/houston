@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import type { Run } from '../api/runs'
 import { needsYou } from './staleness'
+import { crewShortId } from './fleetList'
 import { RunCard } from './RunCard'
 import { ReplyComposer } from './ReplyComposer'
 import './fleet.css'
@@ -16,12 +17,6 @@ interface CrewGroup {
   members: Run[]
   blocked: number
   lastActive: number
-}
-
-// The bus carries no crew-level title, only the id — shorten it for the
-// header but keep the full id reachable as the element's `title`.
-function shortId(name: string): string {
-  return name.length > 12 ? `${name.slice(0, 10)}…` : name
 }
 
 export function CrewsView({ runs, now, onOpen }: CrewsViewProps) {
@@ -71,7 +66,7 @@ export function CrewsView({ runs, now, onOpen }: CrewsViewProps) {
       {groups.map((g) => (
         <section key={g.name}>
           <div className="crews-group" title={g.name}>
-            <span>{shortId(g.name)}</span>
+            <span>{crewShortId(g.name)}</span>
             <span>
               {g.members.length} member{g.members.length === 1 ? '' : 's'}
               {g.blocked > 0 ? ` · ${g.blocked} blocked` : ''}

@@ -2,7 +2,7 @@ import type { Run } from '../api/runs'
 import { isFresh, isHistory, needsYou } from './staleness'
 import { agoLabel, nameLabel, subtitle } from './format'
 
-export function RunCard({ run, now, onOpen }: { run: Run; now: number; onOpen?: (r: Run) => void }) {
+export function RunCard({ run, now, onOpen, selected }: { run: Run; now: number; onOpen?: (r: Run) => void; selected?: boolean }) {
   const attention = needsYou(run, now)
   // Stale blocked runs are never in the sort's attention bucket, but they
   // still need a visible marker wherever they land — a muted version of the
@@ -16,7 +16,8 @@ export function RunCard({ run, now, onOpen }: { run: Run; now: number; onOpen?: 
   return (
     <button
       type="button"
-      className={`run-card${attentionClass}${history ? ' history' : ''}`}
+      className={`run-card${attentionClass}${history ? ' history' : ''}${selected ? ' selected' : ''}`}
+      aria-current={selected ? 'true' : undefined}
       onClick={() => onOpen?.(run)}
       style={{ '--run-accent': run.crew?.color } as React.CSSProperties}
     >
