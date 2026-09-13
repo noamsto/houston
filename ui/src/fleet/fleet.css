@@ -333,7 +333,7 @@
 .console-list { border-right: 1px solid var(--line); }
 .console-pane { position: absolute; inset: 0; }
 .console-rail-head { display: flex; align-items: center; justify-content: space-between; padding: 0 6px; }
-.console-rail-head h1 { margin: 0; font-size: 15px; font-weight: 700; color: var(--text); }
+.console-rail-title { font-size: 15px; font-weight: 700; color: var(--text); }
 .console-rail h2 { margin: 0 0 4px; padding: 0 8px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-faint); }
 .console-rail-item { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; padding: 0 8px; border: 0; border-radius: 6px; background: none; color: var(--text-dim); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
 .console-rail-item.static { cursor: default; }

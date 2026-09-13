@@ -96,7 +96,7 @@ export function ConsoleShell({ runs, connected, hasSnapshot, now }: ShellData) {
     <div className="console mocha" aria-label="console">
       <nav className="console-rail" aria-label="rail">
         <div className="console-rail-head">
-          <h1>houston</h1>
+          <span className="console-rail-title">houston</span>
           <button
             type="button"
             className={`fleet-badge${attentionCount === 0 ? ' quiet' : ''}`}

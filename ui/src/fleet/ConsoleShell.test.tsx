@@ -86,9 +86,9 @@ describe('ConsoleShell layout', () => {
 
     const rail = screen.getByLabelText('rail')
     expect(within(rail).getByRole('button', { name: '1 needs you' })).toBeTruthy()
-    expect(within(rail).getByRole('button', { name: /^Active/ }).textContent).toContain('3')
-    expect(within(rail).getByRole('button', { name: /^Needs you/ }).textContent).toContain('2')
-    expect(within(rail).getByRole('button', { name: /^All/ }).textContent).toContain('4')
+    expect(within(rail).getByRole('button', { name: /^Active/ }).querySelector('.console-count')?.textContent).toBe('3')
+    expect(within(rail).getByRole('button', { name: /^Needs you/ }).querySelector('.console-count')?.textContent).toBe('2')
+    expect(within(rail).getByRole('button', { name: /^All/ }).querySelector('.console-count')?.textContent).toBe('4')
   })
 
   it('narrows the fleet list to one crew and shows a clearable "N of M" chip', () => {
@@ -108,9 +108,9 @@ describe('ConsoleShell layout', () => {
     expect(within(list).queryByText('r-y1/b-y1')).toBeNull()
     expect(within(list).queryByText('r-y2/b-y2')).toBeNull()
     expect(within(list).queryByText('r-n1/b-n1')).toBeNull()
-    expect(within(list).getByText(/1 of 4/)).toBeTruthy()
+    expect(within(list).getByText('1 of 4')).toBeTruthy()
     expect(within(list).getByRole('button', { name: 'Clear crew filter' })).toBeTruthy()
-    expect(within(rail).getByRole('button', { name: /^Active/ }).textContent).toContain('4')
+    expect(within(rail).getByRole('button', { name: /^Active/ }).querySelector('.console-count')?.textContent).toBe('4')
 
     fireEvent.click(within(list).getByRole('button', { name: 'Clear crew filter' }))
     expect(within(list).getByText('r-x1/b-x1')).toBeTruthy()
