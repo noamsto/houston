@@ -6,9 +6,8 @@ import { MobileShell } from './MobileShell'
 import '../theme/mocha.css'
 import './fleet.css'
 
-// Hoisting the store above the layout switch means crossing the breakpoint
-// (window resize) swaps layouts without closing and reopening the
-// EventSource — still exactly one data path.
+// The store sits above the layout switch so a resize across the breakpoint
+// swaps layouts without reopening the EventSource.
 export function Shell() {
   const { runs, connected, hasSnapshot } = useRuns()
   const now = useNow()
