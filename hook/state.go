@@ -30,8 +30,12 @@ const (
 	StateToolRunning State = "tool-running"
 	StateWaiting     State = "waiting"
 	StatePermission  State = "waiting:permission"
-	StateCompacting  State = "compacting"
-	StateEnded       State = "ended"
+	// StateIdle means no signal confirms a session is waiting on anyone. It is
+	// used only by transcript discovery's inference (hub/discovery.go) and is
+	// never written by a real hook.
+	StateIdle       State = "idle"
+	StateCompacting State = "compacting"
+	StateEnded      State = "ended"
 )
 
 // SessionState is the document written by every hook invocation.

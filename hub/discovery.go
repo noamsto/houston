@@ -165,7 +165,9 @@ func synthesizeFromTranscript(path string, info fs.FileInfo, cwd string) (hook.S
 	case unmatchedTool != nil, age > 12*time.Hour:
 		state.State = hook.StateEnded
 	default:
-		state.State = hook.StateWaiting
+		// No hook confirms this session is waiting on anyone — idle, not
+		// blocked.
+		state.State = hook.StateIdle
 	}
 	return state, true
 }
