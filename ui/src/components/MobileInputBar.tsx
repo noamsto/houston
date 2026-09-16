@@ -203,6 +203,10 @@ export function MobileInputBar({ target, choices, inputText }: Props) {
         borderTop: '1px solid var(--border)',
         background: 'var(--bg-header)',
         flexShrink: 0,
+        // Clear the home indicator / notch on edge-to-edge phones.
+        paddingBottom: 'env(safe-area-inset-bottom)',
+        paddingLeft: 'env(safe-area-inset-left)',
+        paddingRight: 'env(safe-area-inset-right)',
       }}
     >
       {/* Agent choice buttons */}

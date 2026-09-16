@@ -49,7 +49,8 @@ function ViewSwitch({
     <div
       style={{
         position: 'fixed',
-        bottom: 12,
+        // Clear the home indicator on edge-to-edge phones.
+        bottom: 'calc(12px + env(safe-area-inset-bottom))',
         right: 12,
         zIndex: 300,
         display: 'flex',
