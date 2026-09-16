@@ -27,7 +27,7 @@ func fakeProjectsDir(t *testing.T, files map[string]string) string {
 	return root
 }
 
-func TestDiscoveryFindsWaitingSession(t *testing.T) {
+func TestDiscoveryInfersIdleWhenNoPendingTool(t *testing.T) {
 	body := `{"type":"user","message":{"role":"user","content":"hi"}}
 {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"What do you want me to do?"}]}}
 `
@@ -44,8 +44,8 @@ func TestDiscoveryFindsWaitingSession(t *testing.T) {
 	if s.SessionID != "sess-aaa" {
 		t.Errorf("SessionID = %q, want sess-aaa", s.SessionID)
 	}
-	if s.State != hook.StateWaiting {
-		t.Errorf("State = %q, want waiting (assistant text, no pending tool)", s.State)
+	if s.State != hook.StateIdle {
+		t.Errorf("State = %q, want idle (assistant text, no pending tool, no hook confirmation)", s.State)
 	}
 	if s.TranscriptPath == "" {
 		t.Errorf("TranscriptPath empty")
@@ -160,13 +160,13 @@ func TestHubSeedsDiscoveredSessionOnStart(t *testing.T) {
 	if snap[0].SessionID != "sess-dsc" {
 		t.Errorf("SessionID = %q", snap[0].SessionID)
 	}
-	if snap[0].State != hook.StateWaiting {
-		t.Errorf("State = %q, want waiting", snap[0].State)
+	if snap[0].State != hook.StateIdle {
+		t.Errorf("State = %q, want idle", snap[0].State)
 	}
 }
 
 func TestHubHookStateWinsOverDiscovery(t *testing.T) {
-	// Discovery would mark this as waiting (no pending tool). Then a hook
+	// Discovery would mark this as idle (no pending tool). Then a hook
 	// fires with tool-running state — the hook's state must win.
 	body := `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}`
 	projects := fakeProjectsDir(t, map[string]string{"dual.jsonl": body})
@@ -229,6 +229,32 @@ func TestDiscoveryPrefersTranscriptCWDOverDirName(t *testing.T) {
 	}
 	if got[0].GitBranch != "main" {
 		t.Errorf("GitBranch = %q, want main", got[0].GitBranch)
+	}
+}
+
+func TestDiscoveryDoesNotInferBlockedFromFreshGuess(t *testing.T) {
+	// A discovery-only transcript with no hook confirmation must not read as
+	// blocked, even a few minutes after the last assistant text.
+	body := `{"type":"user","message":{"role":"user","content":"hi"}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"What do you want me to do?"}]}}
+`
+	root := fakeProjectsDir(t, map[string]string{"sess-fresh.jsonl": body})
+
+	path := filepath.Join(root, "-home-me-project", "sess-fresh.jsonl")
+	old := time.Now().Add(-5 * time.Minute)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+
+	got, err := DiscoverClaudeSessions(root, 24*time.Hour)
+	if err != nil {
+		t.Fatalf("DiscoverClaudeSessions: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d sessions, want 1", len(got))
+	}
+	if got[0].State != hook.StateIdle {
+		t.Errorf("State = %q, want idle — no hook confirms this session is waiting on anyone", got[0].State)
 	}
 }
 

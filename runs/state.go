@@ -45,6 +45,8 @@ func FromHookState(s hook.State) State {
 		return StateRunning
 	case hook.StateWaiting, hook.StatePermission:
 		return StateBlocked
+	case hook.StateIdle:
+		return StateIdle
 	case hook.StateCompacting:
 		return StateCompacting
 	case hook.StateEnded:

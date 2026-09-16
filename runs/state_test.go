@@ -13,6 +13,7 @@ func TestFromHookState(t *testing.T) {
 		hook.StateToolRunning: StateRunning,
 		hook.StateWaiting:     StateBlocked,
 		hook.StatePermission:  StateBlocked,
+		hook.StateIdle:        StateIdle,
 		hook.StateCompacting:  StateCompacting,
 		hook.StateEnded:       StateDone,
 	}
