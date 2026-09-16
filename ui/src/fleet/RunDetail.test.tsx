@@ -1,13 +1,42 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { RunDetail } from './RunDetail'
+import { paneWsTarget } from '../api/runs'
 import type { Run } from '../api/runs'
+import type { Terminal } from '@xterm/xterm'
+
+// Subclass the real Terminal so xterm's real DOM/buffer behavior keeps
+// working, while letting tests inspect the instance TerminalPane actually
+// constructed (options, term.input(), ...). Duplicated from
+// TerminalPane.test.tsx — vi.mock is file-scoped, so it can't be shared.
+vi.mock('@xterm/xterm', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@xterm/xterm')>()
+  const instances: InstanceType<typeof actual.Terminal>[] = []
+  class T extends actual.Terminal {
+    constructor(o?: ConstructorParameters<typeof actual.Terminal>[0]) {
+      super(o)
+      instances.push(this)
+    }
+  }
+  return { ...actual, Terminal: T, __instances: instances }
+})
+
+async function lastTerminalInstance(): Promise<Terminal> {
+  const { __instances } = (await import('@xterm/xterm')) as unknown as { __instances: Terminal[] }
+  return __instances[__instances.length - 1]
+}
 
 const now = 1_800_000_000_000 // fixed ms
 
 let mockConnected = true
+const sendInput = vi.fn()
 vi.mock('../hooks/usePaneSocket', () => ({
-  usePaneSocket: () => ({ connected: mockConnected, sendInput: vi.fn(), sendResize: vi.fn() }),
+  usePaneSocket: () => ({ connected: mockConnected, sendInput, sendResize: vi.fn() }),
+}))
+
+let desktop = true
+vi.mock('../hooks/useMediaQuery', () => ({
+  useIsDesktop: () => desktop,
 }))
 
 function run(p: Partial<Run> = {}): Run {
@@ -24,9 +53,20 @@ function liveRun(p: Partial<Run> = {}): Run {
   return run({ tmux: { session: 'sess', window: 0, pane_id: '%1' }, ...p })
 }
 
-afterEach(() => {
+beforeEach(() => {
+  // MobileInputBar sends via raw fetch; an unstubbed real relative-URL fetch
+  // under happy-dom would reject/flake, so stub it globally for every test.
+  vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: true } as Response)))
+})
+
+afterEach(async () => {
   cleanup()
   mockConnected = true
+  desktop = true
+  sendInput.mockClear()
+  vi.unstubAllGlobals()
+  const { __instances } = (await import('@xterm/xterm')) as unknown as { __instances: Terminal[] }
+  __instances.length = 0
 })
 
 describe('RunDetail', () => {
@@ -160,5 +200,50 @@ describe('RunDetail terminal lifecycle', () => {
     // have flagged the pane as dead.
     rerender(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
     expect(screen.queryByText(/session ended/i)).toBeNull()
+  })
+
+  it('desktop: hides the classic PaneHeader (RunDetail supplies its own header/tabs)', () => {
+    const r = liveRun()
+    render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
+
+    // PaneHeader would render the pane target as text (see TerminalPane.test.tsx's
+    // readOnly-block assertions) — it must not appear here.
+    expect(screen.queryByText(paneWsTarget(r.tmux!.pane_id))).toBeNull()
+    // RunDetail's own header/tabs are still present.
+    expect(screen.getByLabelText('Back to Fleet')).toBeTruthy()
+    expect(screen.getByText('Terminal')).toBeTruthy()
+  })
+
+  it('desktop: input is wired — typing into the mounted terminal calls sendInput', async () => {
+    const r = liveRun()
+    render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
+
+    const term = await lastTerminalInstance()
+    act(() => {
+      term.input('a')
+    })
+    expect(sendInput).toHaveBeenCalledWith('a')
+  })
+
+  it('mobile: MobileInputBar renders and sends via fetch, not sendInput', async () => {
+    desktop = false
+    const r = liveRun()
+    render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
+
+    expect(screen.getByPlaceholderText('Send a message...')).toBeTruthy()
+    // Simplest reliable path through MobileInputBar: a quick-action button, not
+    // a real IME-driven text entry (happy-dom's textarea typing is flaky).
+    const yButton = screen.getByRole('button', { name: 'Y' })
+    await act(async () => {
+      yButton.click()
+    })
+
+    const fetchMock = vi.mocked(fetch)
+    const expectedUrl = `/api/pane/${paneWsTarget(r.tmux!.pane_id)}/send`
+    expect(fetchMock).toHaveBeenCalled()
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe(expectedUrl)
+    expect(String(init?.body)).toContain('y')
+    expect(sendInput).not.toHaveBeenCalled()
   })
 })

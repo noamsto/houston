@@ -1,6 +1,27 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { TerminalPane } from './TerminalPane'
+import type { Terminal } from '@xterm/xterm'
+
+// Subclass the real Terminal so other describes in this file (which rely on
+// real xterm DOM/buffer behavior) keep working, while letting tests inspect
+// the instance TerminalPane actually constructed (options, term.input(), ...).
+vi.mock('@xterm/xterm', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@xterm/xterm')>()
+  const instances: InstanceType<typeof actual.Terminal>[] = []
+  class T extends actual.Terminal {
+    constructor(o?: ConstructorParameters<typeof actual.Terminal>[0]) {
+      super(o)
+      instances.push(this)
+    }
+  }
+  return { ...actual, Terminal: T, __instances: instances }
+})
+
+async function lastTerminalInstance(): Promise<Terminal> {
+  const { __instances } = (await import('@xterm/xterm')) as unknown as { __instances: Terminal[] }
+  return __instances[__instances.length - 1]
+}
 
 const sendInput = vi.fn()
 const sendResize = vi.fn()
@@ -51,7 +72,7 @@ vi.mock('../hooks/useTouchGestures', async (importOriginal) => {
 
 const pane = { id: 'pane-1', target: 'sess:0.0' }
 
-afterEach(() => {
+afterEach(async () => {
   cleanup()
   vi.clearAllMocks()
   capturedCallbacks = null
@@ -59,6 +80,8 @@ afterEach(() => {
   touchGesturesMock.translateXRef.current = 0
   touchGesturesMock.termDimsRef.current = { w: 0, h: 0 }
   touchGesturesMock.gestureActiveRef.current = false
+  const { __instances } = (await import('@xterm/xterm')) as unknown as { __instances: Terminal[] }
+  __instances.length = 0
 })
 
 describe('TerminalPane readOnly', () => {
@@ -84,6 +107,46 @@ describe('TerminalPane readOnly', () => {
     desktop = false
     render(<TerminalPane pane={pane} isFocused onFocus={() => {}} onClose={() => {}} readOnly />)
     expect(screen.queryByPlaceholderText('Send a message...')).toBeNull()
+  })
+
+  it('disables stdin and drops input when readOnly', async () => {
+    desktop = true
+    render(<TerminalPane pane={pane} isFocused onFocus={() => {}} onClose={() => {}} readOnly />)
+    const term = await lastTerminalInstance()
+    expect(term.options.disableStdin).toBe(true)
+
+    act(() => {
+      term.input('a')
+    })
+    expect(sendInput).not.toHaveBeenCalled()
+  })
+})
+
+describe('TerminalPane hideHeader', () => {
+  it('suppresses PaneHeader on desktop when hideHeader is set, without affecting input', async () => {
+    desktop = true
+    render(<TerminalPane pane={pane} isFocused onFocus={() => {}} onClose={() => {}} hideHeader />)
+    expect(screen.queryByText(pane.target)).toBeNull()
+
+    const term = await lastTerminalInstance()
+    expect(term.options.disableStdin).toBe(false)
+
+    act(() => {
+      term.input('a')
+    })
+    expect(sendInput).toHaveBeenCalledWith('a')
+  })
+
+  it('does not affect MobileInputBar visibility (governed by readOnly only)', () => {
+    desktop = false
+    render(<TerminalPane pane={pane} isFocused onFocus={() => {}} onClose={() => {}} hideHeader />)
+    expect(screen.getByPlaceholderText('Send a message...')).toBeTruthy()
+  })
+
+  it('defaults to false — PaneHeader still renders on desktop when omitted', () => {
+    desktop = true
+    render(<TerminalPane pane={pane} isFocused onFocus={() => {}} onClose={() => {}} />)
+    expect(screen.getByText(pane.target)).toBeTruthy()
   })
 })
 
