@@ -116,7 +116,7 @@ function RunDetailBody({ run, tab, streamConnected }: { run: Run; tab: Tab; stre
               key={`${run.id}-${lifecycle.attempt}`}
               pane={{ id: run.id, target: paneWsTarget(run.tmux.pane_id) }}
               isFocused
-              readOnly
+              hideHeader
               onFocus={() => {}}
               onClose={goToFleet}
               onConnectionChange={lifecycle.onConnectionChange}

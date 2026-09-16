@@ -20,6 +20,7 @@ interface Props {
   onFocus: () => void
   onClose: () => void
   readOnly?: boolean
+  hideHeader?: boolean
   onConnectionChange?: (connected: boolean) => void
 }
 
@@ -50,7 +51,7 @@ function writeSnapshot(term: Terminal, data: string, onDone?: () => void) {
 const MOBILE_TERM_WIDTH = 960
 const PAD = 6
 
-export function TerminalPane({ pane, isFocused, onFocus, onClose, readOnly = false, onConnectionChange }: Props) {
+export function TerminalPane({ pane, isFocused, onFocus, onClose, readOnly = false, hideHeader = false, onConnectionChange }: Props) {
   // outerRef: observed by ResizeObserver; has padding that creates visual breathing room
   const outerRef = useRef<HTMLDivElement>(null)
   // innerRef: xterm.js is opened here so FitAddon measures the padded inner area
@@ -531,7 +532,7 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose, readOnly = fal
         }
       }}
     >
-      {isDesktop && !readOnly && (
+      {isDesktop && !readOnly && !hideHeader && (
         <PaneHeader
           target={pane.target}
           meta={meta}
