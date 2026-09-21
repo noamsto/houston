@@ -75,6 +75,9 @@ type CrewRef struct {
 	Codename string `json:"codename,omitempty"` // lazytmux @crew_name: this worker's codename. tmux only.
 	Color    string `json:"color,omitempty"`    // "#rrggbb" or "". tmux only.
 	Tier     string `json:"tier,omitempty"`     // Crew bus only.
+	Title    string `json:"title,omitempty"`    // Task title from the dispatch record. Crew bus only.
+	Model    string `json:"model,omitempty"`    // Model the worker was dispatched on. Crew bus only.
+	Detail   string `json:"detail,omitempty"`   // Latest status detail — the live phase. Crew bus only.
 }
 
 // Activity is what the run is doing right now.

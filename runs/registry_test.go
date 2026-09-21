@@ -364,11 +364,11 @@ func TestApplyDoesNotRaceSubscribeClose(t *testing.T) {
 }
 
 func TestPointerRefsReplaceWholesale(t *testing.T) {
-	// Nested refs are swapped, not merged. This is safe only while every source
-	// that publishes one publishes it complete — tmux owns Issue/PR, and hooks
-	// and tmux both publish a full TmuxRef. Crew is the one exception: two
-	// layers now own different fields of it, so it merges field-wise instead —
-	// see TestCrewMergesFieldWise. If another ref ever starts arriving partial
+	// Issue and TmuxRef are swapped, not merged. This is safe only while every
+	// source that publishes one publishes it complete. Crew and PR are the
+	// exceptions: two layers own different fields of each, so they merge
+	// field-wise instead — see TestCrewMergesFieldWise and
+	// TestPRMergesFieldWiseTmuxKeepsItsFields. If another ref ever starts arriving partial
 	// from more than one layer, this test is where that shows up.
 	r := NewRegistry(DefaultOrder)
 	r.Apply(Delta{Source: "tmux", Key: "%1", Run: Run{Issue: &IssueRef{ID: "#1", Title: "rich"}}})
@@ -569,5 +569,58 @@ func TestStaleMarkerBroadcastsAndClears(t *testing.T) {
 	}
 	if got := r.Snapshot(); len(got) != 1 || got[0].Stale {
 		t.Fatalf("Snapshot = %+v, want one non-stale run", got)
+	}
+}
+
+func TestPRMergesFieldWiseTmuxKeepsItsFields(t *testing.T) {
+	r := NewRegistry(DefaultOrder)
+	r.Apply(Delta{Source: "tmux", Key: "%1", Run: Run{
+		Agent: "claude",
+		PR:    &PRRef{Number: "9", State: "OPEN", CheckState: "failure", Mergeable: "MERGEABLE"},
+	}})
+	r.Apply(Delta{Source: "crew", Key: "%1", Run: Run{
+		PR: &PRRef{Number: "9", URL: "https://github.com/x/y/pull/9"},
+	}})
+
+	got := r.Snapshot()[0].PR
+	if got == nil || got.URL != "https://github.com/x/y/pull/9" || got.State != "OPEN" || got.CheckState != "failure" || got.Mergeable != "MERGEABLE" {
+		t.Errorf("PR = %+v, want crew's URL with tmux's State/CheckState/Mergeable intact", got)
+	}
+}
+
+func TestCrewBusFieldsMergeAndReachTheSignature(t *testing.T) {
+	r := NewRegistry(DefaultOrder)
+	r.Apply(Delta{Source: "tmux", Key: "%1", Run: Run{Agent: "claude", Crew: &CrewRef{Codename: "Ferris"}}})
+	r.Apply(Delta{Source: "crew", Key: "%1", Run: Run{Crew: &CrewRef{Name: "c", Title: "fix it", Model: "sonnet", Detail: "review"}}})
+
+	got := r.Snapshot()[0].Crew
+	if got.Title != "fix it" || got.Model != "sonnet" || got.Detail != "review" || got.Codename != "Ferris" {
+		t.Errorf("Crew = %+v", got)
+	}
+
+	base := Run{Agent: "claude", Crew: &CrewRef{Name: "c"}}
+	for name, mod := range map[string]func(*CrewRef){
+		"title": func(c *CrewRef) { c.Title = "t" }, "model": func(c *CrewRef) { c.Model = "m" }, "detail": func(c *CrewRef) { c.Detail = "d" },
+	} {
+		changed := Run{Agent: "claude", Crew: &CrewRef{Name: "c"}}
+		mod(changed.Crew)
+		if runSignature(base) == runSignature(changed) {
+			t.Errorf("signature ignores Crew.%s", name)
+		}
+	}
+	withURL := Run{PR: &PRRef{Number: "1", URL: "u"}}
+	if runSignature(Run{PR: &PRRef{Number: "1"}}) == runSignature(withURL) {
+		t.Error("signature ignores PR.URL")
+	}
+}
+
+func TestPRURLForADifferentNumberIsNotMergedIntoTmuxsPR(t *testing.T) {
+	r := NewRegistry(DefaultOrder)
+	r.Apply(Delta{Source: "tmux", Key: "%1", Run: Run{Agent: "claude", PR: &PRRef{Number: "9", State: "OPEN"}}})
+	r.Apply(Delta{Source: "crew", Key: "%1", Run: Run{PR: &PRRef{Number: "7", URL: "https://github.com/x/y/pull/7"}}})
+
+	got := r.Snapshot()[0].PR
+	if got.URL != "" && got.Number == "9" {
+		t.Errorf("PR = %+v, hybrid of tmux #9 and crew's pull/7 URL", got)
 	}
 }

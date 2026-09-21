@@ -38,6 +38,9 @@ export interface CrewRef {
   codename?: string
   color?: string // always '#rrggbb' when present; never a tmux colour name
   tier?: string
+  title?: string // task title from the dispatch record
+  model?: string
+  detail?: string // latest status detail — the live phase
 }
 
 export interface TrailChip {

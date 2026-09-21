@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { RunCard } from './RunCard'
 import type { Run } from '../api/runs'
 
@@ -102,5 +102,44 @@ describe('RunCard transport-stale', () => {
     const r = run({ stale: true, updated_at: Math.floor(now / 1000) })
     const { container } = render(<RunCard run={r} now={now} />)
     expect(container.querySelector('.run-chip.stale')?.textContent).toBe('stale')
+  })
+})
+
+describe('RunCard crew-bus fields', () => {
+  it('renders title, model chip and live detail', () => {
+    const r = run({ crew: { name: 'c', tier: 'standard', title: 'fix the ws drop', model: 'sonnet', detail: 'code review' } })
+    const { container } = render(<RunCard run={r} now={now} />)
+    expect(container.querySelector('.run-title')?.textContent).toBe('fix the ws drop')
+    expect(container.querySelector('.run-chip.model')?.textContent).toBe('sonnet')
+    expect(container.querySelector('.run-chip.tier')?.textContent).toBe('standard')
+    expect(container.querySelector('.run-detail')?.textContent).toBe('code review')
+  })
+
+  it('hides a detail that just repeats the question', () => {
+    const r = run({ state: 'blocked', crew: { name: 'c', detail: 'Keep it?' }, question: { text: 'Keep it?', via: 'crew' } })
+    const { container } = render(<RunCard run={r} now={now} />)
+    expect(container.querySelector('.run-detail')).toBeNull()
+  })
+
+  it('does not render a link for a non-http PR url', () => {
+    render(<RunCard run={run({ pr: { number: '9', url: 'javascript:alert(1)' } })} now={now} />)
+    expect(screen.queryByRole('link')).toBeNull()
+  })
+
+  it('links the PR chip without opening the run', () => {
+    const onOpen = vi.fn()
+    const r = run({ pr: { number: '9', url: 'https://github.com/x/y/pull/9' } })
+    render(<RunCard run={r} now={now} onOpen={onOpen} />)
+    const a = screen.getByRole('link', { name: '#9' })
+    expect(a.getAttribute('href')).toBe('https://github.com/x/y/pull/9')
+    fireEvent.click(a)
+    expect(onOpen).not.toHaveBeenCalled()
+  })
+
+  it('renders a plain chip when the PR has no url, and PR when it has no number', () => {
+    const { container, rerender } = render(<RunCard run={run({ pr: { number: '9' } })} now={now} />)
+    expect(container.querySelector('span.run-chip.pr')?.textContent).toBe('#9')
+    rerender(<RunCard run={run({ pr: { number: '', url: 'https://x/y' } })} now={now} />)
+    expect(container.querySelector('a.run-chip.pr')?.textContent).toBe('PR')
   })
 })
