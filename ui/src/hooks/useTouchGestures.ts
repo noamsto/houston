@@ -22,7 +22,7 @@ const COLUMN_ZERO_THRESHOLD_PX = 24
 const PAN_EASE_MS = 180
 
 // Double-tap detection: two touchends within this window, at roughly the
-// same point, with neither leg exceeding the pan/scroll direction threshold.
+// same point, with neither leg leaving the drag slop.
 const DOUBLE_TAP_WINDOW_MS = 300
 const DOUBLE_TAP_MAX_DIST_PX = 24
 
@@ -84,10 +84,30 @@ export function computeFollowCursorTranslateX(
   return null
 }
 
+/** Whether a finished drag re-attaches the pane to the live follow position,
+ *  detaches from it, or leaves the state alone. Scrolling back down to the
+ *  bottom edge from above re-attaches, even if the swipe drifted sideways; any
+ *  other real horizontal pan, or ending away from the bottom, detaches. */
+export function decideDetach({
+  movedX,
+  atBottom,
+  startedAtBottom,
+}: {
+  movedX: boolean
+  atBottom: boolean
+  startedAtBottom: boolean
+}): 'attach' | 'detach' | 'keep' {
+  if (!startedAtBottom && atBottom) return 'attach'
+  if (movedX || !atBottom) return 'detach'
+  return 'keep'
+}
+
 /**
  * Touch gesture handler for mobile terminal interaction.
- * Handles: 1-finger vertical scroll, 1-finger horizontal pan (with column-0
- * magnetism and double-tap detection), 2-finger pinch-to-zoom.
+ * Handles: 1-finger free drag (pans horizontally and scrolls vertically at
+ * once, with column-0 magnetism and double-tap detection), 2-finger
+ * pinch-to-zoom. `onDragEnd` reports whether the drag really panned sideways
+ * and whether it began at the bottom of the scrollback.
  */
 export function useTouchGestures(
   innerRef: React.RefObject<HTMLDivElement | null>,
@@ -96,6 +116,7 @@ export function useTouchGestures(
   enabled: boolean,
   onPinchEnd?: (fontSize: number) => void,
   onDoubleTap?: () => void,
+  onDragEnd?: (info: { movedX: boolean; startedAtBottom: boolean }) => void,
 ) {
   const scaleRef = useRef(1)
   const translateXRef = useRef(0)
@@ -114,9 +135,11 @@ export function useTouchGestures(
   // the gesture effect below to re-attach its touch listeners.
   const onPinchEndRef = useRef(onPinchEnd)
   const onDoubleTapRef = useRef(onDoubleTap)
+  const onDragEndRef = useRef(onDragEnd)
   useEffect(() => {
     onPinchEndRef.current = onPinchEnd
     onDoubleTapRef.current = onDoubleTap
+    onDragEndRef.current = onDragEnd
   })
 
   // Reset transform state (called when wide/fit mode changes)
@@ -202,10 +225,18 @@ export function useTouchGestures(
 
     const DIRECTION_THRESHOLD = 8
 
-    let gesture: 'none' | 'scroll' | 'pan' | 'pinch' = 'none'
+    let gesture: 'none' | 'drag' | 'pinch' = 'none'
     let dragOriginX = 0
     let dragOriginY = 0
-    let directionLocked = false
+    // Flips once the finger leaves the tap slop; until then the touch is
+    // still a potential tap.
+    let dragStarted = false
+    // A horizontal pan needs net displacement from the origin (latched, so
+    // finger jitter during a vertical swipe doesn't count) and a translateX
+    // that actually moved (so a swipe on content that can't pan doesn't count).
+    let displacedX = false
+    let txChanged = false
+    let startedAtBottom = true
     let scrollStartY = 0
     let scrollAcc = 0
     let panLastX = 0
@@ -225,8 +256,12 @@ export function useTouchGestures(
       e.stopPropagation()
       gestureActiveRef.current = true
       if (e.touches.length === 1) {
-        gesture = 'scroll'
-        directionLocked = false
+        gesture = 'drag'
+        dragStarted = false
+        displacedX = false
+        txChanged = false
+        const buf = termRef.current?.buffer?.active
+        startedAtBottom = buf ? buf.viewportY >= buf.baseY : true
         dragOriginX = e.touches[0].clientX
         dragOriginY = e.touches[0].clientY
         scrollStartY = e.touches[0].clientY
@@ -254,45 +289,48 @@ export function useTouchGestures(
       e.preventDefault()
       e.stopPropagation()
 
-      if ((gesture === 'scroll' || gesture === 'pan') && e.touches.length === 1) {
-        if (!directionLocked) {
-          const dx = Math.abs(e.touches[0].clientX - dragOriginX)
-          const dy = Math.abs(e.touches[0].clientY - dragOriginY)
-          if (dx < DIRECTION_THRESHOLD && dy < DIRECTION_THRESHOLD) return
-          gesture = dx > dy ? 'pan' : 'scroll'
-          directionLocked = true
+      if (gesture === 'drag' && e.touches.length === 1) {
+        const x = e.touches[0].clientX
+        const y = e.touches[0].clientY
+        if (!dragStarted) {
+          if (
+            Math.abs(x - dragOriginX) < DIRECTION_THRESHOLD &&
+            Math.abs(y - dragOriginY) < DIRECTION_THRESHOLD
+          ) {
+            return
+          }
+          dragStarted = true
           lastTapTime = null // a real drag invalidates any pending double-tap
         }
+        if (Math.abs(x - dragOriginX) >= DIRECTION_THRESHOLD) displacedX = true
 
-        if (gesture === 'scroll') {
-          // Read the real cell height fresh on every move rather than once
-          // at effect setup — pinch-end zoom (below) mutates term.options
-          // .fontSize and rescales termDimsRef at runtime, and a value
-          // closed over at effect scope would go stale the instant the
-          // user zooms.
-          const term = termRef.current
-          const opts = term?.options
-          const lineHeight = computeScrollLineHeight(
-            term?.rows ?? 0,
-            termDimsRef.current.h,
-            opts?.fontSize ?? 13,
-            opts?.lineHeight ?? 1,
-          )
-          const deltaY = scrollStartY - e.touches[0].clientY
-          scrollStartY = e.touches[0].clientY
-          scrollAcc += deltaY
-          const lines = Math.trunc(scrollAcc / lineHeight)
-          if (lines !== 0) {
-            scrollAcc -= lines * lineHeight
-            termRef.current?.scrollLines(lines)
-          }
-        } else {
-          if (inner.style.transition) inner.style.transition = ''
-          const dx = e.touches[0].clientX - panLastX
-          panLastX = e.touches[0].clientX
-          translateXRef.current += dx
-          clampPan()
-          applyTransform()
+        if (inner.style.transition) inner.style.transition = ''
+        const txBefore = translateXRef.current
+        translateXRef.current += x - panLastX
+        panLastX = x
+        clampPan()
+        if (translateXRef.current !== txBefore) txChanged = true
+        applyTransform()
+
+        // Read the real cell height fresh on every move rather than once
+        // at effect setup — pinch-end zoom (below) mutates term.options
+        // .fontSize and rescales termDimsRef at runtime, and a value
+        // closed over at effect scope would go stale the instant the
+        // user zooms.
+        const term = termRef.current
+        const opts = term?.options
+        const lineHeight = computeScrollLineHeight(
+          term?.rows ?? 0,
+          termDimsRef.current.h,
+          opts?.fontSize ?? 13,
+          opts?.lineHeight ?? 1,
+        )
+        scrollAcc += scrollStartY - y
+        scrollStartY = y
+        const lines = Math.trunc(scrollAcc / lineHeight)
+        if (lines !== 0) {
+          scrollAcc -= lines * lineHeight
+          termRef.current?.scrollLines(lines)
         }
       } else if (e.touches.length === 2) {
         if (gesture !== 'pinch') {
@@ -329,10 +367,8 @@ export function useTouchGestures(
       }
     }
 
-    const onTouchEnd = (e: TouchEvent) => {
-      e.stopPropagation()
-      if (e.touches.length !== 0) return
-
+    // A cancelled touch ends the gesture like a lift does, but is never a tap.
+    const endGesture = (cancelled: boolean) => {
       if (gesture === 'pinch') {
         const term = termRef.current
         if (term) {
@@ -344,15 +380,27 @@ export function useTouchGestures(
           clampPan()
           applyTransform()
           onPinchEndRef.current?.(snapped)
+          // A pinch re-pans around its focal point, so it leaves the follow
+          // position like a horizontal drag does.
+          onDragEndRef.current?.({ movedX: true, startedAtBottom: true })
         }
-      } else if (gesture === 'pan') {
-        // Column-0 magnetism: a release within COLUMN_ZERO_THRESHOLD_PX of
-        // the terminal's own left edge eases the rest of the way to exactly
-        // 0 rather than leaving a near-zero-but-not-zero offset.
-        if (translateXRef.current !== 0 && Math.abs(translateXRef.current) <= COLUMN_ZERO_THRESHOLD_PX) {
+      } else if (gesture === 'drag' && dragStarted) {
+        const movedX = displacedX && txChanged
+        // Column-0 magnetism: a horizontal drag released within
+        // COLUMN_ZERO_THRESHOLD_PX of the terminal's own left edge eases the
+        // rest of the way to exactly 0 rather than leaving a near-zero-but-
+        // not-zero offset.
+        if (
+          movedX &&
+          translateXRef.current !== 0 &&
+          Math.abs(translateXRef.current) <= COLUMN_ZERO_THRESHOLD_PX
+        ) {
           easeTranslateXTo(0)
         }
-      } else if (gesture === 'scroll' && !directionLocked) {
+        onDragEndRef.current?.({ movedX, startedAtBottom })
+      } else if (cancelled) {
+        lastTapTime = null
+      } else if (gesture === 'drag') {
         // Neither leg of this touch moved past the direction threshold —
         // it's a tap. Check it against the previous one for a double-tap.
         const now = performance.now()
@@ -373,14 +421,27 @@ export function useTouchGestures(
       gestureActiveRef.current = false
     }
 
+    const onTouchEnd = (e: TouchEvent) => {
+      e.stopPropagation()
+      if (e.touches.length !== 0) return
+      endGesture(false)
+    }
+
+    const onTouchCancel = (e: TouchEvent) => {
+      e.stopPropagation()
+      endGesture(true)
+    }
+
     screen.addEventListener('touchstart', onTouchStart, { passive: true })
     screen.addEventListener('touchmove', onTouchMove, { passive: false })
     screen.addEventListener('touchend', onTouchEnd, { passive: true })
+    screen.addEventListener('touchcancel', onTouchCancel, { passive: true })
 
     return () => {
       screen.removeEventListener('touchstart', onTouchStart)
       screen.removeEventListener('touchmove', onTouchMove)
       screen.removeEventListener('touchend', onTouchEnd)
+      screen.removeEventListener('touchcancel', onTouchCancel)
       if (easeTimerRef.current) {
         clearTimeout(easeTimerRef.current)
         easeTimerRef.current = null

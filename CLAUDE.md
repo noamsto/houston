@@ -216,9 +216,9 @@ The Vite dev server (`ui/vite.config.ts`) proxies `/api` to `http://localhost:90
 ## Mobile Features
 
 - **Wide terminal**: fixed-width container (~120 columns), CSS-scaled to fit the viewport
-- **Touch scrolling**: Single-finger vertical scroll through terminal history
+- **Free one-finger pan**: a single finger drags in both axes at once (after an 8px slop) — horizontal movement pans, vertical movement scrolls terminal history; there is no axis lock
 - **Pinch-to-zoom**: Two-finger pinch with focal-point tracking
-- **Pan**: Single-finger horizontal drag or two-finger drag when zoomed
+- **Detached mode**: horizontal finger movement (≥8px that actually pans, drag, pinch or the column scrubber) or ending a drag scrolled up detaches the view from the live cursor — output no longer auto-pans it, a reconnect reseed with unchanged dims keeps the pan and distance from the bottom, and a "↓ Live" pill appears bottom-centre (a keyboard/container resize still re-snaps vertically). Re-attach = tapping the pill, or a drag that starts scrolled up and ends at the bottom edge; either snaps to the cursor and follows it immediately
 - **Composer** (`MobileInputBar.tsx`, docked under the terminal in the run-detail Terminal tab): multi-line field where Enter inserts a newline and Send (or Ctrl/Cmd+Enter) sends the text followed by Enter; an empty Send presses Enter. Also a voice button (Web Speech API) and file attach.
 - **Quick keys**: one horizontally scrollable row — Esc, ^C, Enter, Tab, Shift+Tab, ↑/↓, 1–5, Y/N, Alt+P, ^O, ^Z, `/copy`. All but `/copy` are keystrokes: for a run address, `POST /api/runs/:id/input` `{type:'key', key:...}` (400 if `key` isn't in the `terminalKeys` allowlist); classic pane views still use the legacy `POST /api/pane/:target/send` with `special=true`. Either way, no implicit Enter, so a digit answers a numbered prompt without a stray Enter.
 - **Choices**: when the pane `meta.choices` is present, each choice renders as a tappable `n. label` button above the row and answers with its ordinal key.
@@ -227,7 +227,7 @@ The Vite dev server (`ui/vite.config.ts`) proxies `/api` to `http://localhost:90
 On desktop the Terminal tab takes keystrokes directly (xterm `onData` → WS `input`); clicking it focuses it.
 
 There is no WIDE/FIT toggle — that affordance was removed. A terminal rework
-(font-size zoom, pan behavior, possibly more) is in progress; revisit this
+(font-size zoom, possibly more) is in progress; revisit this
 section once it ships rather than trusting the bullets above for anything not
 already verified in `TerminalPane.tsx` / `useTouchGestures.ts`.
 
