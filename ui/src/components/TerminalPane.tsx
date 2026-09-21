@@ -9,7 +9,12 @@ import { terminalKey, terminalSocketPath, type TerminalAddress } from '../api/te
 import { useTerminalFontSize } from '../hooks/useLayout'
 import { usePaneSocket } from '../hooks/usePaneSocket'
 import { useIsDesktop } from '../hooks/useMediaQuery'
-import { computeFitFontSize, computeFollowCursorTranslateX, useTouchGestures } from '../hooks/useTouchGestures'
+import {
+  computeFitFontSize,
+  computeFollowCursorTranslateX,
+  decideDetach,
+  useTouchGestures,
+} from '../hooks/useTouchGestures'
 import { darkTheme, lightTheme } from '../lib/xterm'
 import { PaneHeader } from './PaneHeader'
 import { MobileInputBar } from './MobileInputBar'
@@ -78,11 +83,29 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
   // (termDimsRef, applyFontSize, ...). The ref is filled in after the call.
   const handleDoubleTapRef = useRef<() => void>(() => {})
 
+  // Detached: the user panned/scrolled away from the live follow position, so
+  // output and reseeds must not yank the view back. The ref is what async
+  // callbacks read; the state (keyed by target, dropped during render when the
+  // pane switches) drives the "Live" pill.
+  const detachedRef = useRef(false)
+  const [detachedTarget, setDetachedTarget] = useState<string | null>(null)
+  if (detachedTarget !== null && detachedTarget !== key) setDetachedTarget(null)
+  const detached = detachedTarget === key
+  const setDetached = (value: boolean) => {
+    detachedRef.current = value
+    setDetachedTarget(value ? key : null)
+  }
+
+  // Forward-declared like handleDoubleTapRef: the body needs reattach, which
+  // needs values the hook itself returns.
+  const handleDragEndRef = useRef<(info: { movedX: boolean; startedAtBottom: boolean }) => void>(() => {})
+
   const {
     scaleRef,
     minScaleRef,
     termDimsRef,
     translateXRef,
+    translateYRef,
     gestureActiveRef,
     resetTransform,
     clampPan,
@@ -92,6 +115,7 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
   } = useTouchGestures(
     innerRef, outerRef, termRef, !isDesktop && termMounted, setFontSize,
     () => handleDoubleTapRef.current(),
+    (info) => handleDragEndRef.current(info),
   )
 
   // Coarse horizontal position for the mobile column scrubber — polled at
@@ -143,10 +167,48 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
     if (target !== null) easeTranslateXTo(target)
   }
 
+  // Back to the live follow position: bottom of the scrollback, bottom-aligned
+  // vertical pan, cursor in view. Shared by the Live pill and a drag that
+  // scrolls back down to the bottom edge.
+  const reattach = (term: Terminal) => {
+    term.scrollToBottom()
+    setDetached(false)
+    const outer = outerRef.current
+    if (outer) {
+      const outerH = outer.clientHeight - PAD * 2
+      translateYRef.current = Math.min(0, outerH - termDimsRef.current.h * scaleRef.current)
+      clampPan()
+      applyTransform()
+    }
+    followCursor(term)
+  }
+
+  useEffect(() => {
+    handleDragEndRef.current = ({ movedX, startedAtBottom }) => {
+      const term = termRef.current
+      if (!term) return
+      const buf = term.buffer.active
+      const decision = decideDetach({ movedX, atBottom: buf.viewportY >= buf.baseY, startedAtBottom })
+      if (decision === 'attach') reattach(term)
+      else if (decision === 'detach') setDetached(true)
+    }
+  })
+
+  // The view is held still while detached or mid-gesture, so a reseed doesn't
+  // yank it out from under the user's finger.
+  const holdingView = () => detachedRef.current || gestureActiveRef.current
+
   // After a seed lands: a mid-session reseed clears pan (old content is
   // simply gone — nothing to keep centered on), then follow the fresh cursor
-  // unless the user's mid-gesture.
-  const afterSeedWritten = (term: Terminal, isReseed: boolean) => {
+  // unless the user's mid-gesture. A user holding the view keeps their pan and,
+  // if they were scrolled up, their distance from the bottom (keepDistFromBottom).
+  const afterSeedWritten = (term: Terminal, isReseed: boolean, keepDistFromBottom: number | null = null) => {
+    if (isReseed && holdingView()) {
+      clampPan()
+      applyTransform()
+      if (keepDistFromBottom !== null) term.scrollToLine(Math.max(0, term.buffer.active.baseY - keepDistFromBottom))
+      return
+    }
     if (isReseed) {
       translateXRef.current = 0
       applyTransform()
@@ -200,6 +262,7 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
   const pendingSeedIsReseedRef = useRef(false)
 
   const applyDimsAndSeed = (term: Terminal, cols: number, rows: number) => {
+    const prevDims = paneDimsRef.current
     paneDimsRef.current = { cols, rows }
     term.resize(cols, rows)
     const inner = innerRef.current
@@ -221,11 +284,16 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
           const minS = outerW / screenW
           const initScale = Math.max(1.0, minS)
           const visH = screenH * initScale
-          const ty = Math.min(0, outerH - visH)
+          // A reconnect re-sends unchanged dims: a detached user keeps their pan.
+          const keepPan = holdingView() && prevDims?.cols === cols && prevDims.rows === rows
+          const scale = keepPan ? scaleRef.current : initScale
+          const tx = keepPan ? translateXRef.current : 0
+          const ty = keepPan ? translateYRef.current : Math.min(0, outerH - visH)
           inner.style.width = `${screenW}px`
           inner.style.height = `${screenH}px`
-          inner.style.transform = `translate(0px, ${ty}px) scale(${initScale})`
-          resetTransform(minS, { w: screenW, h: screenH }, { scale: initScale, tx: 0, ty })
+          resetTransform(minS, { w: screenW, h: screenH }, { scale, tx, ty })
+          if (keepPan) clampPan()
+          applyTransform()
         } else {
           // Desktop: just size inner to match terminal
           inner.style.width = `${screenW}px`
@@ -260,7 +328,11 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
         pendingSeedIsReseedRef.current = isReseed
         return
       }
-      writeSnapshot(term, data, () => afterSeedWritten(term, isReseed))
+      // writeSnapshot rewrites the buffer, so note how far from the bottom a
+      // scrolled-up user was before it lands.
+      const buf = term.buffer.active
+      const keepDistFromBottom = holdingView() && buf.viewportY < buf.baseY ? buf.baseY - buf.viewportY : null
+      writeSnapshot(term, data, () => afterSeedWritten(term, isReseed, keepDistFromBottom))
     },
     onReseed: (data) => {
       lastSeedRef.current = data
@@ -280,7 +352,7 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
           const buf = outputBufRef.current
           outputBufRef.current = ''
           term.write(buf)
-          if (!gestureActiveRef.current) followCursor(term)
+          if (!gestureActiveRef.current && !detachedRef.current) followCursor(term)
         })
       }
     },
@@ -429,6 +501,7 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
     paneDimsRef.current = null
     pendingSeedRef.current = null
     firstSeedDoneRef.current = false
+    detachedRef.current = false
     const term = termRef.current
     if (term) {
       term.clear()
@@ -465,7 +538,8 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
         }
 
         // Mobile: update position/height when container resizes
-        // (e.g. keyboard opens/closes, quick buttons expand/collapse)
+        // (e.g. keyboard opens/closes, quick buttons expand/collapse).
+        // Re-snapping ty to the bottom here is intentionally not detached-aware.
         if (!isDesktop && innerRef.current) {
           const outerH = container.clientHeight - PAD * 2
           const curScale = innerRef.current.style.transform.match(/scale\(([\d.]+)\)/)
@@ -586,7 +660,7 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
               : { transformOrigin: '0 0' }),
           }}
         />
-        {isScrolledUp && (
+        {isScrolledUp && isDesktop && (
           <button
             onClick={() => {
               termRef.current?.scrollToBottom()
@@ -615,6 +689,33 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
             ↓
           </button>
         )}
+        {detached && !isDesktop && (
+          <button
+            onClick={() => {
+              const term = termRef.current
+              if (term) reattach(term)
+            }}
+            style={{
+              position: 'absolute',
+              bottom: 12,
+              left: '50%',
+              transform: 'translateX(-50%)',
+              background: 'var(--bg-surface)',
+              border: '1px solid var(--border)',
+              borderRadius: 18,
+              height: 36,
+              padding: '0 14px',
+              cursor: 'pointer',
+              color: 'var(--text-secondary)',
+              fontSize: 14,
+              boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+              zIndex: 10,
+            }}
+            title="Follow live output"
+          >
+            ↓ Live
+          </button>
+        )}
       </div>
       {!isDesktop && (
         <ColumnScrubber
@@ -625,6 +726,7 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
           onScrub={(tx) => {
             translateXRef.current = tx
             applyTransform()
+            setDetached(true)
           }}
         />
       )}

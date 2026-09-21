@@ -5,6 +5,7 @@ import {
   computeFitFontSize,
   computeFollowCursorTranslateX,
   computeScrollLineHeight,
+  decideDetach,
   snapFontSize,
   useTouchGestures,
 } from './useTouchGestures'
@@ -40,7 +41,13 @@ function stubDims(el: HTMLElement, rect: { width: number; height: number; left?:
 function setup(
   termOptions: { fontSize?: number; lineHeight?: number },
   onPinchEnd?: (fontSize: number) => void,
-  opts?: { rows?: number; dims?: { w: number; h: number } },
+  opts?: {
+    rows?: number
+    dims?: { w: number; h: number }
+    onDoubleTap?: () => void
+    onDragEnd?: (info: { movedX: boolean; startedAtBottom: boolean }) => void
+    buffer?: { viewportY: number; baseY: number }
+  },
 ) {
   const outer = document.createElement('div')
   const inner = document.createElement('div')
@@ -55,10 +62,17 @@ function setup(
   const innerRef = { current: inner }
   const scrollLines = vi.fn()
   const termRef = {
-    current: { options: termOptions, rows: opts?.rows, scrollLines } as unknown as Terminal,
+    current: {
+      options: termOptions,
+      rows: opts?.rows,
+      scrollLines,
+      buffer: opts?.buffer && { active: opts.buffer },
+    } as unknown as Terminal,
   }
 
-  const { result } = renderHook(() => useTouchGestures(innerRef, outerRef, termRef, true, onPinchEnd))
+  const { result } = renderHook(() =>
+    useTouchGestures(innerRef, outerRef, termRef, true, onPinchEnd, opts?.onDoubleTap, opts?.onDragEnd),
+  )
   result.current.resetTransform(1, opts?.dims ?? { w: 960, h: 300 }, { scale: 1, tx: 0, ty: 0 })
 
   return { screenEl, inner, scrollLines, termRef, result }
@@ -117,6 +131,261 @@ describe('useTouchGestures scroll line-height math', () => {
 
     screenEl.dispatchEvent(touchEvent('touchmove', [{ clientX: 50, clientY: 80 }]))
     expect(scrollLines).not.toHaveBeenCalled()
+  })
+})
+
+/** Fire a one-finger touchstart at `from`, a touchmove per point, then touchend. */
+function drag(
+  screenEl: HTMLElement,
+  from: { clientX: number; clientY: number },
+  moves: { clientX: number; clientY: number }[],
+) {
+  screenEl.dispatchEvent(touchEvent('touchstart', [from]))
+  for (const p of moves) screenEl.dispatchEvent(touchEvent('touchmove', [p]))
+  screenEl.dispatchEvent(touchEvent('touchend', []))
+}
+
+describe('useTouchGestures free one-finger drag', () => {
+  // fontSize 10 * lineHeight 1 = 10px per scrolled line (no measured dims).
+  const term = { fontSize: 10, lineHeight: 1 }
+
+  it('pans and scrolls together on a diagonal drag', () => {
+    const { screenEl, scrollLines, result } = setup(term)
+
+    drag(screenEl, { clientX: 200, clientY: 200 }, [{ clientX: 160, clientY: 170 }])
+
+    expect(result.current.translateXRef.current).toBe(-40)
+    expect(scrollLines).toHaveBeenCalledWith(3)
+  })
+
+  it('still pans on a mostly-vertical drag', () => {
+    const { screenEl, scrollLines, result } = setup(term)
+
+    drag(screenEl, { clientX: 200, clientY: 200 }, [{ clientX: 194, clientY: 100 }])
+
+    expect(result.current.translateXRef.current).toBe(-6)
+    expect(scrollLines).toHaveBeenCalledWith(10)
+  })
+
+  it('still scrolls on a mostly-horizontal drag', () => {
+    const { screenEl, scrollLines, result } = setup(term)
+
+    drag(screenEl, { clientX: 200, clientY: 200 }, [{ clientX: 100, clientY: 175 }])
+
+    expect(result.current.translateXRef.current).toBe(-100)
+    expect(scrollLines).toHaveBeenCalledWith(2)
+  })
+
+  it('leaves translateX untouched on a vertical-only drag', () => {
+    const { screenEl, result } = setup(term)
+    result.current.resetTransform(1, { w: 960, h: 300 }, { scale: 1, tx: -10, ty: 0 })
+
+    drag(screenEl, { clientX: 200, clientY: 200 }, [{ clientX: 200, clientY: 100 }])
+
+    expect(result.current.translateXRef.current).toBe(-10)
+  })
+
+  it('treats a touch that never leaves the slop as a tap and fires onDoubleTap on the second', () => {
+    const onDoubleTap = vi.fn()
+    const onDragEnd = vi.fn()
+    const { screenEl, scrollLines, result } = setup(term, undefined, { onDoubleTap, onDragEnd })
+
+    drag(screenEl, { clientX: 100, clientY: 100 }, [{ clientX: 103, clientY: 102 }])
+    expect(onDoubleTap).not.toHaveBeenCalled()
+    drag(screenEl, { clientX: 101, clientY: 100 }, [])
+
+    expect(onDoubleTap).toHaveBeenCalledTimes(1)
+    expect(onDragEnd).not.toHaveBeenCalled()
+    expect(scrollLines).not.toHaveBeenCalled()
+    expect(result.current.translateXRef.current).toBe(0)
+  })
+
+  it('eases to column 0 when a horizontal drag is released within the magnetism threshold', () => {
+    const { screenEl, result } = setup(term)
+
+    drag(screenEl, { clientX: 200, clientY: 200 }, [{ clientX: 180, clientY: 200 }])
+
+    expect(result.current.translateXRef.current).toBe(0)
+  })
+
+  it('does not jump to column 0 from far away', () => {
+    const { screenEl, result } = setup(term)
+
+    drag(screenEl, { clientX: 200, clientY: 200 }, [{ clientX: 100, clientY: 200 }])
+
+    expect(result.current.translateXRef.current).toBe(-100)
+  })
+
+  it('does not apply magnetism to a vertical drag that leaves a small offset', () => {
+    const { screenEl, result } = setup(term)
+    result.current.resetTransform(1, { w: 960, h: 300 }, { scale: 1, tx: -10, ty: 0 })
+
+    drag(screenEl, { clientX: 200, clientY: 200 }, [{ clientX: 200, clientY: 100 }])
+
+    expect(result.current.translateXRef.current).toBe(-10)
+  })
+
+  it('reports movedX false for x jitter around the origin during a vertical swipe', () => {
+    const onDragEnd = vi.fn()
+    const { screenEl } = setup(term, undefined, { onDragEnd })
+
+    const moves = Array.from({ length: 15 }, (_, i) => ({
+      clientX: 200 + (i % 2 === 0 ? 3 : -3),
+      clientY: 200 - (i + 1) * 10,
+    }))
+    drag(screenEl, { clientX: 200, clientY: 200 }, moves)
+
+    expect(onDragEnd).toHaveBeenCalledWith({ movedX: false, startedAtBottom: true })
+  })
+
+  it('reports movedX for a horizontal drag', () => {
+    const onDragEnd = vi.fn()
+    const { screenEl } = setup(term, undefined, { onDragEnd })
+
+    drag(screenEl, { clientX: 200, clientY: 200 }, [{ clientX: 150, clientY: 203 }])
+
+    expect(onDragEnd).toHaveBeenCalledWith({ movedX: true, startedAtBottom: true })
+  })
+
+  it('does not report movedX when the content cannot pan horizontally', () => {
+    const onDragEnd = vi.fn()
+    // Content narrower than the viewport: translateX is always clamped at 0.
+    const { screenEl, result } = setup(term, undefined, { onDragEnd, dims: { w: 100, h: 300 } })
+
+    drag(screenEl, { clientX: 200, clientY: 200 }, [{ clientX: 150, clientY: 200 }])
+
+    expect(result.current.translateXRef.current).toBe(0)
+    expect(onDragEnd).toHaveBeenCalledWith({ movedX: false, startedAtBottom: true })
+  })
+
+  it('does not report movedX when translateX is clamped at the edge for the whole drag', () => {
+    const onDragEnd = vi.fn()
+    const { screenEl, result } = setup(term, undefined, { onDragEnd })
+    // Already panned to the right edge (visible width 388, content 960).
+    result.current.resetTransform(1, { w: 960, h: 300 }, { scale: 1, tx: -572, ty: 0 })
+
+    drag(screenEl, { clientX: 200, clientY: 200 }, [{ clientX: 100, clientY: 200 }])
+
+    expect(result.current.translateXRef.current).toBe(-572)
+    expect(onDragEnd).toHaveBeenCalledWith({ movedX: false, startedAtBottom: true })
+  })
+
+  it('reports startedAtBottom from the terminal buffer at touchstart', () => {
+    const onDragEnd = vi.fn()
+    const { screenEl } = setup(term, undefined, { onDragEnd, buffer: { viewportY: 10, baseY: 77 } })
+
+    drag(screenEl, { clientX: 200, clientY: 200 }, [{ clientX: 200, clientY: 150 }])
+
+    expect(onDragEnd).toHaveBeenCalledWith({ movedX: false, startedAtBottom: false })
+  })
+
+  it('reports startedAtBottom true when the viewport is at the bottom', () => {
+    const onDragEnd = vi.fn()
+    const { screenEl } = setup(term, undefined, { onDragEnd, buffer: { viewportY: 77, baseY: 77 } })
+
+    drag(screenEl, { clientX: 200, clientY: 200 }, [{ clientX: 200, clientY: 150 }])
+
+    expect(onDragEnd).toHaveBeenCalledWith({ movedX: false, startedAtBottom: true })
+  })
+
+  it('reports movedX true from a pinch end', () => {
+    const onDragEnd = vi.fn()
+    const { screenEl } = setup({ fontSize: 14, lineHeight: 1.2 }, undefined, { onDragEnd })
+
+    screenEl.dispatchEvent(
+      touchEvent('touchstart', [
+        { clientX: 100, clientY: 150 },
+        { clientX: 200, clientY: 150 },
+      ]),
+    )
+    screenEl.dispatchEvent(
+      touchEvent('touchmove', [
+        { clientX: 50, clientY: 150 },
+        { clientX: 250, clientY: 150 },
+      ]),
+    )
+    screenEl.dispatchEvent(touchEvent('touchend', []))
+
+    expect(onDragEnd).toHaveBeenCalledWith({ movedX: true, startedAtBottom: true })
+  })
+})
+
+describe('useTouchGestures touchcancel', () => {
+  const term = { fontSize: 10, lineHeight: 1 }
+
+  it('ends a real drag like a lift: reports onDragEnd and clears the active flag', () => {
+    const onDragEnd = vi.fn()
+    const { screenEl, result } = setup(term, undefined, { onDragEnd })
+
+    screenEl.dispatchEvent(touchEvent('touchstart', [{ clientX: 200, clientY: 200 }]))
+    expect(result.current.gestureActiveRef.current).toBe(true)
+    screenEl.dispatchEvent(touchEvent('touchmove', [{ clientX: 100, clientY: 200 }]))
+    screenEl.dispatchEvent(touchEvent('touchcancel', []))
+
+    expect(onDragEnd).toHaveBeenCalledWith({ movedX: true, startedAtBottom: true })
+    expect(result.current.gestureActiveRef.current).toBe(false)
+  })
+
+  it('handles a pinch like touchend does', () => {
+    const onPinchEnd = vi.fn()
+    const onDragEnd = vi.fn()
+    const { screenEl, result } = setup({ fontSize: 14, lineHeight: 1.2 }, onPinchEnd, { onDragEnd })
+
+    screenEl.dispatchEvent(
+      touchEvent('touchstart', [
+        { clientX: 100, clientY: 150 },
+        { clientX: 200, clientY: 150 },
+      ]),
+    )
+    screenEl.dispatchEvent(
+      touchEvent('touchmove', [
+        { clientX: 50, clientY: 150 },
+        { clientX: 250, clientY: 150 },
+      ]),
+    )
+    screenEl.dispatchEvent(touchEvent('touchcancel', []))
+
+    expect(onPinchEnd).toHaveBeenCalledWith(24)
+    expect(onDragEnd).toHaveBeenCalledWith({ movedX: true, startedAtBottom: true })
+    expect(result.current.gestureActiveRef.current).toBe(false)
+  })
+
+  it('never counts as a tap, so a cancelled touch cannot complete a double-tap', () => {
+    const onDoubleTap = vi.fn()
+    const { screenEl, result } = setup(term, undefined, { onDoubleTap })
+
+    drag(screenEl, { clientX: 100, clientY: 100 }, [])
+    screenEl.dispatchEvent(touchEvent('touchstart', [{ clientX: 101, clientY: 100 }]))
+    screenEl.dispatchEvent(touchEvent('touchcancel', []))
+
+    expect(onDoubleTap).not.toHaveBeenCalled()
+    expect(result.current.gestureActiveRef.current).toBe(false)
+  })
+
+  it('forgets the previous tap, so tap + cancelled touch + tap is not a double-tap', () => {
+    const onDoubleTap = vi.fn()
+    const { screenEl } = setup(term, undefined, { onDoubleTap })
+
+    drag(screenEl, { clientX: 100, clientY: 100 }, [])
+    screenEl.dispatchEvent(touchEvent('touchstart', [{ clientX: 101, clientY: 100 }]))
+    screenEl.dispatchEvent(touchEvent('touchcancel', []))
+    drag(screenEl, { clientX: 100, clientY: 100 }, [])
+
+    expect(onDoubleTap).not.toHaveBeenCalled()
+  })
+})
+
+describe('decideDetach', () => {
+  it.each([
+    { movedX: false, atBottom: true, startedAtBottom: false, expected: 'attach' },
+    { movedX: true, atBottom: true, startedAtBottom: false, expected: 'attach' },
+    { movedX: true, atBottom: true, startedAtBottom: true, expected: 'detach' },
+    { movedX: false, atBottom: true, startedAtBottom: true, expected: 'keep' },
+    { movedX: false, atBottom: false, startedAtBottom: true, expected: 'detach' },
+    { movedX: false, atBottom: false, startedAtBottom: false, expected: 'detach' },
+    { movedX: true, atBottom: false, startedAtBottom: false, expected: 'detach' },
+  ])('$expected for movedX=$movedX atBottom=$atBottom startedAtBottom=$startedAtBottom', ({ expected, ...args }) => {
+    expect(decideDetach(args)).toBe(expected)
   })
 })
 
