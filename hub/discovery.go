@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"context"
 	"errors"
 	"io/fs"
 	"os"
@@ -31,6 +32,12 @@ const DefaultDiscoveryWindow = 24 * time.Hour
 //
 // Nothing is written to disk. The caller seeds the returned states into the hub.
 func DiscoverClaudeSessions(projectsDir string, window time.Duration) ([]hook.SessionState, error) {
+	return discoverClaudeSessions(context.Background(), projectsDir, window)
+}
+
+// discoverClaudeSessions is DiscoverClaudeSessions that stops scanning, with
+// the sessions found so far, once ctx is cancelled.
+func discoverClaudeSessions(ctx context.Context, projectsDir string, window time.Duration) ([]hook.SessionState, error) {
 	if projectsDir == "" {
 		return nil, nil
 	}
@@ -46,6 +53,9 @@ func DiscoverClaudeSessions(projectsDir string, window time.Duration) ([]hook.Se
 
 	var out []hook.SessionState
 	for _, e := range entries {
+		if ctx.Err() != nil {
+			return out, ctx.Err()
+		}
 		if !e.IsDir() {
 			continue
 		}
@@ -57,6 +67,9 @@ func DiscoverClaudeSessions(projectsDir string, window time.Duration) ([]hook.Se
 			continue
 		}
 		for _, f := range files {
+			if ctx.Err() != nil {
+				return out, ctx.Err()
+			}
 			if f.IsDir() || filepath.Ext(f.Name()) != ".jsonl" {
 				continue
 			}

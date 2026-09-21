@@ -140,10 +140,7 @@ func TestHandleWorkspaceTmuxErrorIs502(t *testing.T) {
 func TestWorkspaceRouteIsBehindTheAuthGate(t *testing.T) {
 	// A new route registered outside apiMux would reopen the hole closed in #4.
 	dir := t.TempDir()
-	s, err := New(Config{StatusDir: dir, AuthEnabled: true})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	s := newFullServer(t, Config{StatusDir: dir, AuthEnabled: true})
 
 	req := httptest.NewRequest("GET", "http://127.0.0.1/api/workspace", nil)
 	req.Host = "127.0.0.1"

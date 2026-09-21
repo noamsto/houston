@@ -138,7 +138,7 @@ func (h *Hub) Run(ctx context.Context) error {
 	if err := h.scan(claudeDir); err != nil {
 		h.log.Warn("initial scan failed", "err", err)
 	}
-	h.runDiscovery()
+	h.runDiscovery(ctx)
 
 	// Poll transcripts every 2s (fsnotify only watches state files) and
 	// re-discover every 30s to pick up sessions started without hooks.
@@ -164,23 +164,26 @@ func (h *Hub) Run(ctx context.Context) error {
 		case <-tick.C:
 			h.refreshAllTranscripts()
 		case <-discover.C:
-			h.runDiscovery()
+			h.runDiscovery(ctx)
 		}
 	}
 }
 
 // runDiscovery scans the Claude projects directory and seeds any sessions we
 // don't already know about. Silent no-op when discovery is disabled.
-func (h *Hub) runDiscovery() {
+func (h *Hub) runDiscovery(ctx context.Context) {
 	if h.claudeProjectsDir == "" {
 		return
 	}
-	found, err := DiscoverClaudeSessions(h.claudeProjectsDir, h.discoveryWindow)
+	found, err := discoverClaudeSessions(ctx, h.claudeProjectsDir, h.discoveryWindow)
 	if err != nil {
 		h.log.Debug("discovery failed", "err", err)
 		return
 	}
 	for _, s := range found {
+		if ctx.Err() != nil {
+			return
+		}
 		h.seed(s)
 	}
 }

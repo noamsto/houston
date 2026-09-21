@@ -124,7 +124,20 @@ type Server struct {
 
 	auth  *authGate
 	hosts *hostGate
+
+	// Background goroutines started by New run on ctx; Close cancels it and
+	// waits for them.
+	cancel    context.CancelFunc
+	sourcesWG sync.WaitGroup // hub + run sources: the deltas producers
+	pumpDone  chan struct{}
+	deltas    chan runs.Delta
+	closeOnce sync.Once
+	closeErr  error
 }
+
+// closeTimeout bounds how long Close waits for background goroutines that
+// are mid-exec (tmux, git) and only notice cancellation when the call returns.
+const closeTimeout = 10 * time.Second
 
 // workspaceLister is the tmux surface handleWorkspace needs — narrow enough
 // to fake in tests without shelling out to a real tmux server.
@@ -172,8 +185,11 @@ func New(cfg Config) (*Server, error) {
 		generic.New(), // Must be last (fallback)
 	)
 
+	ctx, cancel := context.WithCancel(context.Background())
 	tmuxClient := tmux.NewClient()
 	s := &Server{
+		cancel:         cancel,
+		pumpDone:       make(chan struct{}),
 		tmux:           tmuxClient,
 		controlMgr:     tmux.NewControlManager(),
 		watcher:        status.NewWatcher(cfg.StatusDir),
@@ -199,8 +215,10 @@ func New(cfg Config) (*Server, error) {
 
 	// Run the hub in the background. It watches <status-dir>/claude/ and the
 	// transcripts referenced from hook state files.
+	s.sourcesWG.Add(1)
 	go func() {
-		if err := s.hub.Run(context.Background()); err != nil && !errors.Is(err, context.Canceled) {
+		defer s.sourcesWG.Done()
+		if err := s.hub.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			slog.Warn("agent hub stopped", "err", err)
 		}
 	}()
@@ -209,7 +227,9 @@ func New(cfg Config) (*Server, error) {
 	s.runs = reg
 
 	deltas := make(chan runs.Delta, 256)
+	s.deltas = deltas
 	go func() {
+		defer close(s.pumpDone)
 		for d := range deltas {
 			reg.Apply(d)
 		}
@@ -221,8 +241,10 @@ func New(cfg Config) (*Server, error) {
 		runs.NewCrewSource(tmuxClient, 3*time.Second),
 		runs.NewConnectionSource(s.controlMgr, tmuxClient, 2*time.Second),
 	} {
+		s.sourcesWG.Add(1)
 		go func(src runs.Source) {
-			if err := src.Run(context.Background(), deltas); err != nil && !errors.Is(err, context.Canceled) {
+			defer s.sourcesWG.Done()
+			if err := src.Run(ctx, deltas); err != nil && !errors.Is(err, context.Canceled) {
 				slog.Warn("run source stopped", "source", src.Name(), "error", err)
 			}
 		}(src)
@@ -242,7 +264,6 @@ func New(cfg Config) (*Server, error) {
 		s.ocManager = opencode.NewManager(s.ocDiscovery)
 
 		// Do initial scan synchronously
-		ctx := context.Background()
 		if cfg.OpenCodeURL != "" {
 			slog.Info("OpenCode scanning", "url", cfg.OpenCodeURL)
 		} else {
@@ -264,6 +285,7 @@ func New(cfg Config) (*Server, error) {
 	if cfg.AuthEnabled {
 		tok, err := LoadOrCreateToken(cfg.StatusDir)
 		if err != nil {
+			_ = s.Close()
 			return nil, fmt.Errorf("api token: %w", err)
 		}
 		gate.token = tok
@@ -272,6 +294,31 @@ func New(cfg Config) (*Server, error) {
 	s.hosts = deriveHosts(cfg.AllowedHosts, cfg.AllowedOrigins)
 
 	return s, nil
+}
+
+// Close stops every background goroutine New started and waits for them, so
+// nothing is still writing under StatusDir once it returns. Safe to call more
+// than once.
+func (s *Server) Close() error {
+	s.closeOnce.Do(func() {
+		s.cancel()
+
+		stopped := make(chan struct{})
+		go func() {
+			s.sourcesWG.Wait()
+			// Every producer has returned, so nothing can send on deltas.
+			close(s.deltas)
+			<-s.pumpDone
+			close(stopped)
+		}()
+
+		select {
+		case <-stopped:
+		case <-time.After(closeTimeout):
+			s.closeErr = errors.New("server: background goroutines did not stop in time")
+		}
+	})
+	return s.closeErr
 }
 
 func (s *Server) Handler() http.Handler {

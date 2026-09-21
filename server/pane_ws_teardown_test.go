@@ -61,11 +61,15 @@ func TestPaneWSTeardownOnClientDisconnect(t *testing.T) {
 	// metaPollLoop. The write loop only notices the dead connection on its
 	// next write attempt, which is pingPane's next 100ms tick — so the
 	// window here is generous relative to that interval.
+	//
+	// NumGoroutine is process-wide, so an unrelated goroutine exiting could
+	// satisfy the count before the teardown has run; wait for the release too.
 	want := n0 - 3
 	deadline := time.Now().Add(3 * time.Second)
-	for runtime.NumGoroutine() > want {
+	for runtime.NumGoroutine() > want || len(cm.releaseClientCalls()) == 0 {
 		if time.Now().After(deadline) {
-			t.Fatalf("goroutine count did not settle: want <= %d, got %d", want, runtime.NumGoroutine())
+			t.Fatalf("teardown did not settle: want <= %d goroutines, got %d; releases = %v",
+				want, runtime.NumGoroutine(), cm.releaseClientCalls())
 		}
 		time.Sleep(50 * time.Millisecond)
 	}

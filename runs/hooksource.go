@@ -60,7 +60,15 @@ func (s *HookSource) Run(ctx context.Context, out chan<- Delta) error {
 			panes = ps
 		}
 		paneCh = make(chan paneSet)
-		go s.pollPanes(ctx, paneCh)
+		pollDone := make(chan struct{})
+		go func() {
+			defer close(pollDone)
+			s.pollPanes(ctx, paneCh)
+		}()
+		defer func() {
+			cancel()
+			<-pollDone
+		}()
 	}
 
 	// endedAt records the state-file time a session was ended at. Hook
