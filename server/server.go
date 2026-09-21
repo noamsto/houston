@@ -210,6 +210,7 @@ func New(cfg Config) (*Server, error) {
 		runs.NewHookSource(s.hub),
 		runs.NewTmuxSource(tmuxClient, 2*time.Second),
 		runs.NewCrewSource(tmuxClient, 3*time.Second),
+		runs.NewConnectionSource(s.controlMgr, tmuxClient, 2*time.Second),
 	} {
 		go func(src runs.Source) {
 			if err := src.Run(context.Background(), deltas); err != nil && !errors.Is(err, context.Canceled) {

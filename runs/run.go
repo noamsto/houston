@@ -29,9 +29,10 @@ type Run struct {
 	// values and says so; it is never a State, because a stale run still has
 	// one.
 	//
-	// No source sets this yet — federated peers will need it once one exists.
-	// mergeInto ORs it stickily, which means nothing can ever clear it once
-	// set; revisit that merge rule when a source actually starts setting it.
+	// ConnectionSource sets it while a run's tmux session has no control
+	// connection, and clears it by dropping that marker layer (Apply replaces
+	// a source's layer wholesale). mergeInto ORs it across layers, so a layer
+	// that publishes no Stale opinion never blanks another's.
 	Stale bool `json:"stale,omitempty"`
 
 	Caps Caps `json:"caps"`

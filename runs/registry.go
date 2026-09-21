@@ -245,6 +245,9 @@ func runSignature(r Run) string {
 	b.WriteByte('|')
 	b.WriteString(r.Activity.Tool + "," + r.Activity.Hint + "," + r.Activity.Message + "," + r.Activity.Task + "," + r.Activity.Preview)
 	b.WriteByte('|')
+	if r.Stale {
+		b.WriteByte('S')
+	}
 	if r.Caps.Terminal {
 		b.WriteByte('T')
 	}

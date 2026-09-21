@@ -83,3 +83,24 @@ describe('RunCard selected', () => {
     expect(card.classList.contains('selected')).toBe(false)
   })
 })
+
+describe('RunCard transport-stale', () => {
+  it('shows a stale chip when run.stale', () => {
+    const r = run({ stale: true })
+    render(<RunCard run={r} now={now} />)
+    expect(screen.getByText('stale')).toBeTruthy()
+  })
+
+  it('omits the stale chip when run.stale is unset', () => {
+    const r = run()
+    const { container } = render(<RunCard run={r} now={now} />)
+    expect(container.querySelector('.run-chip.stale')).toBeNull()
+  })
+
+  it('shows the chip even when the run is time-fresh', () => {
+    // A recent updated_at would otherwise keep the card looking fully live.
+    const r = run({ stale: true, updated_at: Math.floor(now / 1000) })
+    const { container } = render(<RunCard run={r} now={now} />)
+    expect(container.querySelector('.run-chip.stale')?.textContent).toBe('stale')
+  })
+})

@@ -4,6 +4,7 @@ import (
 	"os"
 	"strconv"
 	"testing"
+	"time"
 )
 
 func TestControlManagerGetClient(t *testing.T) {
@@ -53,4 +54,63 @@ func TestControlManagerGetClient(t *testing.T) {
 		t.Error("expected new client after release")
 	}
 	mgr.ReleaseClient(session)
+}
+
+// TestControlManagerSessionStatesAndChanges drives a real ControlClient through
+// a drop and a reconnect and asserts the manager-wide aggregation reflects it,
+// without a tmux binary. This is the producer-path coverage the runs-level
+// regression builds on.
+func TestControlManagerSessionStatesAndChanges(t *testing.T) {
+	release := make(chan struct{})
+	d := &recordingDialer{onDial: func(i int, _ *recordedConn) {
+		if i > 0 {
+			<-release
+		}
+	}}
+	m := NewControlManager()
+	m.newClient = func(session string) *ControlClient {
+		cc := NewControlClient(session)
+		cc.dial = d.dial
+		cc.backoff = time.Millisecond
+		return cc
+	}
+	defer m.Close()
+
+	if _, err := m.GetClient("s"); err != nil {
+		t.Fatalf("GetClient: %v", err)
+	}
+	if !m.SessionStates()["s"] {
+		t.Fatal("session not connected after GetClient")
+	}
+
+	// The client watcher forwards exactly one attach transition; consume it so
+	// the next read is the disconnect edge.
+	select {
+	case <-m.Changes():
+	case <-time.After(2 * time.Second):
+		t.Fatal("no Changes signal after GetClient")
+	}
+
+	conn0 := d.connAt(t, 0)
+	_ = conn0.pw.Close()
+
+	select {
+	case <-m.Changes():
+	case <-time.After(2 * time.Second):
+		t.Fatal("no Changes signal after the connection dropped")
+	}
+	if m.SessionStates()["s"] {
+		t.Fatal("SessionStates()[s] = true while the re-dial is parked")
+	}
+
+	close(release)
+
+	select {
+	case <-m.Changes():
+	case <-time.After(2 * time.Second):
+		t.Fatal("no Changes signal after the re-attach")
+	}
+	if !m.SessionStates()["s"] {
+		t.Fatal("session not connected after re-attach")
+	}
 }

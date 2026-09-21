@@ -526,3 +526,48 @@ func fillNonZero(v reflect.Value) {
 		}
 	}
 }
+
+func TestStaleMarkerBroadcastsAndClears(t *testing.T) {
+	r := NewRegistry(DefaultOrder)
+	sub := r.Subscribe()
+	defer r.Unsubscribe(sub)
+
+	r.Apply(Delta{Source: "tmux", Key: "%1", Run: Run{Agent: "claude", State: StateRunning}})
+	select {
+	case run := <-sub:
+		if run.Stale {
+			t.Fatalf("first listing already stale: %+v", run)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no broadcast on first listing")
+	}
+
+	r.Apply(Delta{Source: "conn", Key: "%1", Run: Run{Stale: true}})
+	select {
+	case run := <-sub:
+		if !run.Stale {
+			t.Fatal("stale marker did not broadcast as Stale")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no broadcast for the stale marker")
+	}
+	if got := r.Snapshot(); len(got) != 1 || !got[0].Stale {
+		t.Fatalf("Snapshot = %+v, want one stale run", got)
+	}
+
+	r.Apply(Delta{Source: "conn", Key: "%1", Gone: true})
+	select {
+	case run := <-sub:
+		if run.Stale {
+			t.Fatal("clearing the marker still broadcast Stale")
+		}
+		if run.Removed {
+			t.Fatal("clearing the marker removed the run")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no broadcast when the marker cleared")
+	}
+	if got := r.Snapshot(); len(got) != 1 || got[0].Stale {
+		t.Fatalf("Snapshot = %+v, want one non-stale run", got)
+	}
+}

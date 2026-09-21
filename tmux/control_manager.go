@@ -15,11 +15,48 @@ type managedClient struct {
 type ControlManager struct {
 	mu      sync.Mutex
 	clients map[string]*managedClient
+
+	// changes coalesces every tracked client's connect/disconnect transitions
+	// into one signal. A reader re-reads SessionStates(); it does not count
+	// edges. Buffered to one so a transition never blocks a client lifecycle.
+	changes chan struct{}
+
+	// newClient builds the per-session client. Unexported test seam: production
+	// leaves it NewControlClient, in-package tests substitute a client whose
+	// dial is faked so the watcher/aggregation runs without a tmux binary.
+	newClient func(session string) *ControlClient
 }
 
 func NewControlManager() *ControlManager {
 	return &ControlManager{
-		clients: make(map[string]*managedClient),
+		clients:   make(map[string]*managedClient),
+		changes:   make(chan struct{}, 1),
+		newClient: NewControlClient,
+	}
+}
+
+// Changes receives on every tracked client's connection-state transition,
+// coalesced. SessionStates() is the value to re-read on a signal.
+func (m *ControlManager) Changes() <-chan struct{} { return m.changes }
+
+// SessionStates reports connection health for every session with a tracked
+// control client. A session absent from the map has no client and is not
+// "stale" — there is nothing to be stale relative to.
+func (m *ControlManager) SessionStates() map[string]bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[string]bool, len(m.clients))
+	for session, mc := range m.clients {
+		out[session] = mc.client.Connected()
+	}
+	return out
+}
+
+// signalChange wakes Changes' reader without blocking the caller.
+func (m *ControlManager) signalChange() {
+	select {
+	case m.changes <- struct{}{}:
+	default:
 	}
 }
 
@@ -34,7 +71,7 @@ func (m *ControlManager) GetClient(session string) (*ControlClient, error) {
 		return mc.client, nil
 	}
 
-	cc := NewControlClient(session)
+	cc := m.newClient(session)
 	if err := cc.Start(); err != nil {
 		return nil, err
 	}
@@ -49,6 +86,20 @@ func (m *ControlManager) GetClient(session string) (*ControlClient, error) {
 		delete(m.clients, session)
 		m.mu.Unlock()
 		slog.Info("control client closed", "session", session)
+	}()
+
+	// Forward this client's connection-state changes into the manager-wide
+	// signal. Start() has already attached and left one buffered transition,
+	// so this watcher also announces the new session.
+	go func() {
+		for {
+			select {
+			case <-cc.StateChanged():
+				m.signalChange()
+			case <-cc.Done():
+				return
+			}
+		}
 	}()
 
 	return cc, nil
@@ -68,6 +119,7 @@ func (m *ControlManager) ReleaseClient(session string) {
 	if mc.refCount <= 0 {
 		delete(m.clients, session)
 		go func() { _ = mc.client.Close() }()
+		m.signalChange() // the session is no longer tracked; clear any marker
 		slog.Info("closed control client (no more subscribers)", "session", session)
 	}
 }
