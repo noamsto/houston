@@ -119,6 +119,12 @@ houston/
 ├── terminal/
 │   └── font.go          # Terminal font size control (kitty)
 ├── agents/              # Agent type detection (claude-code, amp)
+├── hub/                 # Session discovery + transcript tracking
+├── runs/                # Run registry (tmux/hook/crew sources)
+├── hook/                # Claude hook install/doctor/state
+├── contrib/             # OpenCode plugin
+├── scripts/             # claude-hook.sh
+├── docs/                # Design notes and plans
 ├── parser/              # Terminal output parsing
 ├── status/              # Status file management
 ├── internal/            # Internal utilities
@@ -148,8 +154,6 @@ houston/
 │   ├── vite.config.ts          # Vite config with API proxy
 │   ├── tsconfig.json
 │   └── package.json
-├── views/               # Legacy templ templates (to be removed)
-├── static/              # Legacy static assets (to be removed)
 ├── justfile             # Task runner
 ├── .air.toml            # Hot reload config
 ├── flake.nix            # Nix flake
