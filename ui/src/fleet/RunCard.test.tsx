@@ -112,13 +112,14 @@ describe('RunCard crew-bus fields', () => {
     expect(container.querySelector('.run-title')?.textContent).toBe('fix the ws drop')
     expect(container.querySelector('.run-chip.model')?.textContent).toBe('sonnet')
     expect(container.querySelector('.run-chip.tier')?.textContent).toBe('standard')
-    expect(container.querySelector('.run-detail')?.textContent).toBe('code review')
+    expect(container.querySelector('.run-card-detail')?.textContent).toBe('code review')
+    expect(container.querySelector('.run-detail')).toBeNull()
   })
 
   it('hides a detail that just repeats the question', () => {
     const r = run({ state: 'blocked', crew: { name: 'c', detail: 'Keep it?' }, question: { text: 'Keep it?', via: 'crew' } })
     const { container } = render(<RunCard run={r} now={now} />)
-    expect(container.querySelector('.run-detail')).toBeNull()
+    expect(container.querySelector('.run-card-detail')).toBeNull()
   })
 
   it('does not render a link for a non-http PR url', () => {

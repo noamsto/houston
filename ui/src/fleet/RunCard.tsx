@@ -56,7 +56,7 @@ export function RunCard({ run, now, onOpen, selected, crewLine }: RunCardProps) 
 
       <div className="run-sub">{subtitle(run)}</div>
 
-      {run.crew?.detail && run.crew.detail !== run.question?.text && <div className="run-detail">{run.crew.detail}</div>}
+      {run.crew?.detail && run.crew.detail !== run.question?.text && <div className="run-card-detail">{run.crew.detail}</div>}
 
       {crewLine && <div className="run-crew">{crewLine}</div>}
 
