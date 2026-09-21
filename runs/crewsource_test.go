@@ -612,3 +612,46 @@ func TestKeyFlipBroadcastsTheNewRunThenRemovesTheOldID(t *testing.T) {
 		t.Fatalf("second broadcast = %+v, want Removed for the old id %q", second, idFor(oldKey))
 	}
 }
+
+func TestDeltasFromCrewLogCarriesTitleModelDetailAndPR(t *testing.T) {
+	got := deltasFromCrewLog(strings.NewReader(crewFixture))
+
+	r := got["fix/412"]
+	if r.Crew.Title != "fix the ws drop" || r.Crew.Model != "sonnet" {
+		t.Errorf("Crew = %+v, want title and model from the dispatch record", r.Crew)
+	}
+	if r.Crew.Detail != "Keep the legacy route?" {
+		t.Errorf("Detail = %q, want the latest status detail", r.Crew.Detail)
+	}
+
+	pr := got["feat/413"]
+	if pr.PR == nil || pr.PR.URL != "https://github.com/x/y/pull/9" || pr.PR.Number != "9" {
+		t.Errorf("PR = %+v, want url and number 9 from pr_url", pr.PR)
+	}
+}
+
+func TestDeltasFromCrewLogLaterStatusClearsDetailButKeepsPR(t *testing.T) {
+	log := `{"ts":1,"crew_id":"c","from":"worker:b#s","kind":"status","body":{"state":"pr_open","detail":"opening","pr_url":"https://github.com/x/y/pull/3"}}
+{"ts":2,"crew_id":"c","from":"worker:b#s","kind":"status","body":{"state":"done"}}
+`
+	r := deltasFromCrewLog(strings.NewReader(log))["b"]
+	if r.Crew.Detail != "" {
+		t.Errorf("Detail = %q, want cleared by the newer status", r.Crew.Detail)
+	}
+	if r.PR == nil || r.PR.URL == "" {
+		t.Errorf("PR = %+v, want the URL to stick", r.PR)
+	}
+}
+
+func TestPRNumberFromURL(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://github.com/x/y/pull/9":  "9",
+		"https://github.com/x/y/pull/9x": "",
+		"https://example.com/mr/9":       "",
+		"https://github.com/x/y/pull/":   "",
+	} {
+		if got := prNumberFromURL(in); got != want {
+			t.Errorf("prNumberFromURL(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

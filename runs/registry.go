@@ -232,11 +232,11 @@ func runSignature(r Run) string {
 	}
 	b.WriteByte('|')
 	if r.PR != nil {
-		b.WriteString(r.PR.Number + "," + r.PR.State + "," + r.PR.CheckState + "," + r.PR.Mergeable)
+		b.WriteString(r.PR.Number + "," + r.PR.State + "," + r.PR.CheckState + "," + r.PR.Mergeable + "," + r.PR.URL)
 	}
 	b.WriteByte('|')
 	if r.Crew != nil {
-		b.WriteString(r.Crew.Name + "," + r.Crew.Codename + "," + r.Crew.Color + "," + r.Crew.Tier)
+		b.WriteString(r.Crew.Name + "," + r.Crew.Codename + "," + r.Crew.Color + "," + r.Crew.Tier + "," + r.Crew.Title + "," + r.Crew.Model + "," + r.Crew.Detail)
 	}
 	b.WriteByte('|')
 	if r.Question != nil {
@@ -288,7 +288,32 @@ func mergeInto(dst *Run, src Run) {
 		dst.Issue = src.Issue
 	}
 	if src.PR != nil {
-		dst.PR = src.PR
+		// Field-wise: tmux owns State/CheckState/Mergeable, the crew bus owns
+		// URL. Crew sits above tmux in DefaultOrder, so it can only fill fields
+		// tmux leaves empty or restate the same number.
+		if dst.PR == nil {
+			dst.PR = &PRRef{}
+		}
+		prevNumber := dst.PR.Number
+		if src.PR.Number != "" {
+			dst.PR.Number = src.PR.Number
+		}
+		if src.PR.State != "" {
+			dst.PR.State = src.PR.State
+		}
+		if src.PR.CheckState != "" {
+			dst.PR.CheckState = src.PR.CheckState
+		}
+		if src.PR.Mergeable != "" {
+			dst.PR.Mergeable = src.PR.Mergeable
+		}
+		if src.PR.Draft {
+			dst.PR.Draft = true
+		}
+		// A URL for a different PR than tmux reports would make a hybrid.
+		if src.PR.URL != "" && (src.PR.Number == "" || prevNumber == "" || src.PR.Number == prevNumber) {
+			dst.PR.URL = src.PR.URL
+		}
 	}
 	if src.Crew != nil {
 		// Field-wise, not wholesale: tmux owns Codename/Color and the crew bus
@@ -309,6 +334,15 @@ func mergeInto(dst *Run, src Run) {
 		}
 		if src.Crew.Tier != "" {
 			dst.Crew.Tier = src.Crew.Tier
+		}
+		if src.Crew.Title != "" {
+			dst.Crew.Title = src.Crew.Title
+		}
+		if src.Crew.Model != "" {
+			dst.Crew.Model = src.Crew.Model
+		}
+		if src.Crew.Detail != "" {
+			dst.Crew.Detail = src.Crew.Detail
 		}
 	}
 	if src.Question != nil {

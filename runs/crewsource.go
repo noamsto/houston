@@ -309,6 +309,12 @@ func deltasFromCrewLog(rd io.Reader) map[string]Run {
 		if rec.Tier != "" {
 			r.Crew.Tier = rec.Tier
 		}
+		if rec.Title != "" {
+			r.Crew.Title = rec.Title
+		}
+		if rec.Model != "" {
+			r.Crew.Model = rec.Model
+		}
 		// Engine only appears on the dispatch record, but every status record
 		// for the branch shares this map entry, so it sticks once set. Without
 		// it a crew run carries no agent and the listing predicate would drop
@@ -325,6 +331,12 @@ func deltasFromCrewLog(rd io.Reader) map[string]Run {
 				r.State = FromCrewState(body.State)
 				r.UpdatedAt = rec.TS / 1000
 				lastStatusTS[branch] = rec.TS
+				// Latest status wins, including an empty detail: a stale phase
+				// must not outlive the status that replaced it.
+				r.Crew.Detail = body.Detail
+				if body.PRURL != "" {
+					r.PR = &PRRef{URL: body.PRURL, Number: prNumberFromURL(body.PRURL)}
+				}
 				r.Question = nil
 				if r.State == StateBlocked {
 					r.Question = &Question{Text: crewBlockedNoDetail, Via: "crew"}
@@ -347,6 +359,7 @@ func deltasFromCrewLog(rd io.Reader) map[string]Run {
 		if r.State == StateBlocked && dispatcherReplyTS[branch] > lastStatusTS[branch] {
 			r.State = ""
 			r.Question = nil
+			r.Crew.Detail = ""
 			out[branch] = r
 		}
 	}
@@ -364,4 +377,18 @@ func branchFromWorker(from string) string {
 		rest = rest[:i]
 	}
 	return rest
+}
+
+// prNumberFromURL extracts N from ".../pull/N", or "" when the URL has another
+// shape — an empty number is better than a wrong one.
+func prNumberFromURL(u string) string {
+	i := strings.LastIndex(u, "/pull/")
+	if i < 0 {
+		return ""
+	}
+	n := strings.TrimPrefix(u[i:], "/pull/")
+	if n == "" || strings.Trim(n, "0123456789") != "" {
+		return ""
+	}
+	return n
 }

@@ -88,6 +88,14 @@
   font-family: var(--font-mono); font-size: 12px; color: var(--text-dim);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+.run-title {
+  font-size: 13px; color: var(--text-strong); margin-bottom: 2px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.run-detail {
+  font-size: 12px; color: var(--text-dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .run-question {
   margin-top: 9px; padding: 9px 10px; border-radius: 8px;
   background: var(--bg-sunken); color: var(--text-strong);
@@ -103,6 +111,7 @@
 .run-chip.issue { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
 .run-chip.codename { background: var(--fill); color: var(--text-strong); font-weight: 600; }
 .run-chip.tier { background: var(--bg-sunken); color: var(--text-dim); border: 1px solid var(--line); }
+.run-chip.model { background: var(--bg-sunken); color: var(--text-dim); border: 1px solid var(--line); }
 .run-chip.stale { background: var(--bg-sunken); color: var(--text-faint); font-style: italic; }
 
 .fleet-empty { padding: 40px 20px; text-align: center; color: var(--text-faint); font-size: 13px; }
