@@ -2,6 +2,7 @@ package hub
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -286,5 +287,17 @@ func TestDiscoveryDatesSessionByLastEventNotMtime(t *testing.T) {
 	// claiming a human is required, and counting toward the Fleet badge.
 	if got[0].State != hook.StateEnded {
 		t.Errorf("State = %q, want %q — a transcript two days cold is not waiting on anyone", got[0].State, hook.StateEnded)
+	}
+}
+
+func TestDiscoverClaudeSessionsStopsOnCancelledContext(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "-tmp-proj"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := discoverClaudeSessions(ctx, root, time.Hour); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
 	}
 }

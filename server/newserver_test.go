@@ -18,3 +18,21 @@ func newFullServer(t *testing.T, cfg Config) *Server {
 	})
 	return s
 }
+
+func TestCloseStopsBackgroundGoroutines(t *testing.T) {
+	s, err := New(Config{StatusDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	select {
+	case <-s.pumpDone:
+	default:
+		t.Fatal("deltas pump still running after Close")
+	}
+}

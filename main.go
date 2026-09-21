@@ -239,14 +239,23 @@ func runServer() {
 
 	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	shutdownDone := make(chan struct{})
 	go func() {
+		defer close(shutdownDone)
 		<-sigCtx.Done()
+		stop() // a second signal kills the process instead of being swallowed
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = httpSrv.Shutdown(shutdownCtx)
+		if err := httpSrv.Shutdown(shutdownCtx); err != nil {
+			// SSE streams and WebSockets never go idle; cut them off.
+			_ = httpSrv.Close()
+		}
 	}()
 
 	err = httpSrv.ListenAndServe()
+	if errors.Is(err, http.ErrServerClosed) {
+		<-shutdownDone
+	}
 	if closeErr := srv.Close(); closeErr != nil {
 		slog.Warn("server close", "err", closeErr)
 	}
