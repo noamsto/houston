@@ -15,6 +15,7 @@ vi.mock('../api/dispatch', () => ({
     plans: ['required', 'provided'],
     engines: { claude: ['opus', 'sonnet', 'haiku', 'fable'] },
     engine_order: ['claude'],
+    tier_models: { claude: { trivial: 'haiku', standard: 'sonnet', deep: 'opus' } },
   }),
   submitDispatch: vi.fn(),
 }))

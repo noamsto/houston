@@ -22,6 +22,10 @@ const (
 	dispatchToken  = "dispatch-secret"
 	dispatchOrigin = "http://good.example"
 	dispatchHost   = "127.0.0.1:9090"
+
+	// dispatchTestNewCrewID stands in for the real time.Now()/os.Getpid() mint
+	// so tests can assert on the minted id and force a collision.
+	dispatchTestNewCrewID = "1700000000-4242"
 )
 
 // stubDispatchRunner stands in for the real dispatch invocation. Its call
@@ -84,12 +88,13 @@ func newDispatchServer(t *testing.T, runner dispatchRunner, repos func() ([]disp
 	t.Helper()
 	allowed := []string{dispatchOrigin}
 	return &Server{
-		auth:            &authGate{token: dispatchToken, enabled: true, allowedOrigins: allowed},
-		hosts:           deriveHosts(nil, allowed),
-		dispatchRunner:  runner,
-		dispatchRepos:   repos,
-		dispatchSlot:    make(chan struct{}, 1),
-		dispatchTimeout: 5 * time.Second,
+		auth:              &authGate{token: dispatchToken, enabled: true, allowedOrigins: allowed},
+		hosts:             deriveHosts(nil, allowed),
+		dispatchRunner:    runner,
+		dispatchRepos:     repos,
+		dispatchSlot:      make(chan struct{}, 1),
+		dispatchTimeout:   5 * time.Second,
+		dispatchNewCrewID: func() string { return dispatchTestNewCrewID },
 	}
 }
 
@@ -172,6 +177,9 @@ func TestDispatchValidationFailures(t *testing.T) {
 		{"issue flag shape", func(r *dispatchRequest) { r.Issue = "--pr" }},
 		{"crew missing", func(r *dispatchRequest) { r.Crew = "" }},
 		{"crew bad shape", func(r *dispatchRequest) { r.Crew = "abc" }},
+		{"crew wrong case", func(r *dispatchRequest) { r.Crew = "New" }},
+		{"crew trailing space", func(r *dispatchRequest) { r.Crew = "new " }},
+		{"crew looks like new but isn't", func(r *dispatchRequest) { r.Crew = "newcrew" }},
 	}
 
 	for _, tc := range cases {
@@ -327,6 +335,9 @@ func TestDispatchHappyPath(t *testing.T) {
 			if body.Branch != "feat/1-add-widget" {
 				t.Errorf("branch = %q", body.Branch)
 			}
+			if body.Crew != repo.Crews[0] {
+				t.Errorf("crew = %q, want %q", body.Crew, repo.Crews[0])
+			}
 
 			got := stub.last(t)
 			if !slices.Equal(got.Argv, tc.wantArgv) {
@@ -452,6 +463,103 @@ func TestDispatchConcurrencyCap(t *testing.T) {
 	}
 }
 
+// TestDispatchNewCrew drives crew:"new" through every runner outcome on a
+// repo with no crew/ directory at all, to prove the MkdirAll rather than just
+// the leaf Mkdir.
+func TestDispatchNewCrew(t *testing.T) {
+	cases := []struct {
+		name        string
+		result      dispatchResult
+		wantStatus  int
+		wantDirKept bool
+		wantCrewSet bool
+	}{
+		{"success", dispatchResult{Stdout: "worker_id: worker:feat/1-x#s1\n"}, http.StatusOK, true, true},
+		{"exit 1", dispatchResult{ExitCode: 1, Stderr: "nope"}, http.StatusUnprocessableEntity, false, true},
+		{"runner err", dispatchResult{Err: &exec.Error{Name: "dispatch", Err: exec.ErrNotFound}}, http.StatusBadGateway, false, false},
+		{"deadline", dispatchResult{Err: context.DeadlineExceeded}, http.StatusGatewayTimeout, true, true},
+		{"exit 0 no worker_id", dispatchResult{Stdout: "nothing useful"}, http.StatusBadGateway, true, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := newDispatchTestRepo(t)
+			if err := os.RemoveAll(filepath.Join(repo.commonDir, "crew")); err != nil {
+				t.Fatal(err)
+			}
+
+			stub := &stubDispatchRunner{result: tc.result}
+			s := newDispatchServer(t, stub.run, stubDispatchRepos([]dispatchRepo{repo}, nil))
+			req := validDispatchRequest(repo, dispatchNewCrew)
+
+			rec := doDispatch(t, s, dispatchHTTPRequest("POST", dispatchRequestJSON(t, req)))
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status %d, want %d (body %s)", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+
+			mintedDir := filepath.Join(repo.commonDir, "crew", "crews", dispatchTestNewCrewID)
+			_, err := os.Stat(mintedDir)
+			if exists := err == nil; exists != tc.wantDirKept {
+				t.Errorf("minted dir exists = %v, want %v", exists, tc.wantDirKept)
+			}
+
+			body := decodeDispatchResponse(t, rec)
+			switch {
+			case tc.wantCrewSet && body.Crew != dispatchTestNewCrewID:
+				t.Errorf("crew = %q, want %q", body.Crew, dispatchTestNewCrewID)
+			case !tc.wantCrewSet && body.Crew != "":
+				t.Errorf("crew = %q, want empty", body.Crew)
+			}
+
+			if n := stub.count(); n != 1 {
+				t.Fatalf("runner called %d times, want 1", n)
+			}
+			got := stub.last(t)
+			i := slices.Index(got.Argv, "--crew-id")
+			if i < 0 || i+1 >= len(got.Argv) || got.Argv[i+1] != dispatchTestNewCrewID {
+				t.Errorf("argv %q missing --crew-id %s", got.Argv, dispatchTestNewCrewID)
+			}
+			if slices.Contains(got.Argv, dispatchNewCrew) {
+				t.Errorf("argv %q must never contain %q", got.Argv, dispatchNewCrew)
+			}
+		})
+	}
+}
+
+// TestDispatchNewCrewCollision proves a same-second re-mint is refused
+// without ever invoking the runner, rather than silently reusing the dir.
+func TestDispatchNewCrewCollision(t *testing.T) {
+	repo := newDispatchTestRepo(t, dispatchTestNewCrewID)
+	stub := &stubDispatchRunner{}
+	s := newDispatchServer(t, stub.run, stubDispatchRepos([]dispatchRepo{repo}, nil))
+	req := validDispatchRequest(repo, dispatchNewCrew)
+
+	rec := doDispatch(t, s, dispatchHTTPRequest("POST", dispatchRequestJSON(t, req)))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status %d, want 409 (body %s)", rec.Code, rec.Body.String())
+	}
+	if n := stub.count(); n != 0 {
+		t.Errorf("runner called %d times, want 0", n)
+	}
+}
+
+// TestDispatchTierModelsConsistent keeps dispatchTierModels in step with
+// dispatchModels: every default must itself be a valid model for its engine.
+func TestDispatchTierModelsConsistent(t *testing.T) {
+	for _, engine := range dispatchEngineOrder {
+		for _, tier := range dispatchTiers {
+			model, ok := dispatchTierModels[engine][tier]
+			if !ok || model == "" {
+				t.Errorf("dispatchTierModels[%q][%q] missing", engine, tier)
+				continue
+			}
+			if !slices.Contains(dispatchModels[engine], model) {
+				t.Errorf("dispatchTierModels[%q][%q] = %q not in dispatchModels[%q]", engine, tier, model, engine)
+			}
+		}
+	}
+}
+
 func TestHandleDispatchOptions(t *testing.T) {
 	repo := newDispatchTestRepo(t, "1700000000-123")
 	s := newDispatchServer(t, nil, stubDispatchRepos([]dispatchRepo{repo}, nil))
@@ -476,6 +584,9 @@ func TestHandleDispatchOptions(t *testing.T) {
 	}
 	if len(opts.EngineOrder) == 0 || len(opts.Engines) == 0 {
 		t.Errorf("expected non-empty engines/engine_order")
+	}
+	if got := opts.TierModels["claude"]["standard"]; got != "sonnet" {
+		t.Errorf("tier_models.claude.standard = %q, want %q", got, "sonnet")
 	}
 }
 

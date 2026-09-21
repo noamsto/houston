@@ -23,6 +23,10 @@ const optionsFixture: DispatchOptions = {
     codex: ['gpt-5.6-sol', 'gpt-5.6-terra'],
   },
   engine_order: ['claude', 'codex'],
+  tier_models: {
+    claude: { trivial: 'haiku', standard: 'sonnet', deep: 'opus' },
+    codex: { trivial: 'gpt-5.6-sol', standard: 'gpt-5.6-terra', deep: 'gpt-5.6-sol' },
+  },
 }
 
 async function renderLoaded(): Promise<void> {
