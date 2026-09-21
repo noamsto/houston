@@ -89,11 +89,11 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
   // pane switches) drives the "Live" pill.
   const detachedRef = useRef(false)
   const [detachedTarget, setDetachedTarget] = useState<string | null>(null)
-  if (detachedTarget !== null && detachedTarget !== pane.target) setDetachedTarget(null)
-  const detached = detachedTarget === pane.target
+  if (detachedTarget !== null && detachedTarget !== key) setDetachedTarget(null)
+  const detached = detachedTarget === key
   const setDetached = (value: boolean) => {
     detachedRef.current = value
-    setDetachedTarget(value ? pane.target : null)
+    setDetachedTarget(value ? key : null)
   }
 
   // Forward-declared like handleDoubleTapRef: the body needs reattach, which

@@ -284,9 +284,9 @@ describe('TerminalPane detached mode', () => {
   async function mountMobile() {
     desktop = false
     touchGesturesMock.termDimsRef.current = { w: 800, h: 400 }
-    const { container, rerender } = render(<TerminalPane pane={pane} isFocused onFocus={() => {}} onClose={() => {}} />)
+    const { container, rerender } = render(<TerminalPane address={address} isFocused onFocus={() => {}} onClose={() => {}} />)
     const rerenderTarget = (target: string) =>
-      rerender(<TerminalPane pane={{ ...pane, target }} isFocused onFocus={() => {}} onClose={() => {}} />)
+      rerender(<TerminalPane address={{ kind: 'pane', target }} isFocused onFocus={() => {}} onClose={() => {}} />)
     const outer = container.querySelector('.xterm')!.parentElement!.parentElement as HTMLElement
     Object.defineProperty(outer, 'clientWidth', { value: 400, configurable: true })
     Object.defineProperty(outer, 'clientHeight', { value: 300, configurable: true })
@@ -564,13 +564,13 @@ describe('TerminalPane detached mode', () => {
     expect(livePill()).not.toBeNull()
 
     rerenderTarget('sess:1.0')
-    rerenderTarget(pane.target)
+    rerenderTarget(target)
     expect(livePill()).toBeNull()
   })
 
   it('never shows the Live pill on desktop', () => {
     desktop = true
-    render(<TerminalPane pane={pane} isFocused onFocus={() => {}} onClose={() => {}} />)
+    render(<TerminalPane address={address} isFocused onFocus={() => {}} onClose={() => {}} />)
     dragEnd({ movedX: true, startedAtBottom: true })
     expect(livePill()).toBeNull()
   })
