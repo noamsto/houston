@@ -12,6 +12,7 @@ export interface CrewCounts {
 
 export interface CrewGroup {
   name: string
+  project?: string // main repo name, from the members' runs
   members: Run[]
   counts: CrewCounts
   needsYou: number
@@ -54,6 +55,7 @@ function buildGroup(name: string, runs: Run[], now: number): CrewGroup {
   for (const m of members) counts[bucket(m)]++
   return {
     name,
+    project: members.find((m) => m.project)?.project,
     members,
     counts,
     needsYou: members.filter((m) => needsYou(m, now)).length,

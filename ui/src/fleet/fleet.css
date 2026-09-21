@@ -371,7 +371,7 @@
 }
 .crews-member-main {
   display: flex; flex-direction: column; align-items: stretch; gap: 4px;
-  width: 100%; min-height: var(--tap); padding: 11px 12px;
+  width: 100%; min-height: var(--tap); padding: 11px 12px 6px;
   border: 0; background: none; border-radius: 10px;
   text-align: left; color: inherit; font: inherit; cursor: pointer;
 }
@@ -385,8 +385,11 @@
 .crews-when { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 6px; }
 .crews-title { color: var(--text-strong); font-size: 13px; line-height: 1.35; overflow-wrap: anywhere; }
 .crews-question { min-width: 0; margin-top: 5px; overflow-wrap: anywhere; }
-.crews-pr { margin: 0 12px 10px; text-decoration: none; }
-a.crews-pr { display: inline-flex; align-items: center; min-height: var(--tap); padding: 0 12px; }
+.crews-chips { margin: 0; padding: 10px 12px 13px; }
+.crews-chips .run-chip.pr { text-decoration: none; }
+/* PR chip stays chip-sized in the flow; the ::after grows its tap area to >=44px. */
+a.crews-pr { position: relative; }
+a.crews-pr::after { content: ''; position: absolute; inset: -10px -8px -13px; }
 .crews-member .crew-reply { margin: 0 10px 10px; }
 .crews-hint { margin: 0 12px 10px; font-size: 12px; color: var(--text-faint); }
 

@@ -77,6 +77,14 @@ describe('groupCrews', () => {
     expect(g.members.map((m) => m.id)).toEqual(['blocked', 'run-new', 'run-old', 'done-new'])
   })
 
+  it('carries the first project found among the members', () => {
+    const runs = [
+      run({ id: 'a', crew: { name: 'c' } }),
+      run({ id: 'b', crew: { name: 'c' }, project: 'qa-repo' }),
+    ]
+    expect(groupCrews(runs, now).live[0].project).toBe('qa-repo')
+  })
+
   it('counts states into buckets and tracks needsYou and lastActive', () => {
     const runs = [
       run({ id: 'a', crew: { name: 'c' }, state: 'running' }),

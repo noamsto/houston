@@ -141,6 +141,21 @@ describe('CrewsView', () => {
       expect(container.querySelector('.crews-title')?.textContent).toBe('Do the thing')
     })
 
+    it('shows the crew title, then the issue title, then the branch, and a model chip', () => {
+      const runs = [
+        run({ id: 'a', crew: { name: 'c', title: 'Crew title', model: 'sonnet' }, branch: 'b', issue: { id: 'H-1', title: 'Issue title' }, updated_at: nowSec - 1 }),
+        run({ id: 'b', crew: { name: 'c' }, branch: 'br', issue: { id: 'H-2', title: 'Issue two' }, updated_at: nowSec - 2 }),
+        run({ id: 'd', crew: { name: 'c' }, branch: 'only-branch', updated_at: nowSec - 3 }),
+      ]
+      const { container } = render(<CrewsView runs={runs} now={now} />)
+
+      expect(Array.from(container.querySelectorAll('.crews-title')).map((n) => n.textContent))
+        .toEqual(['Crew title', 'Issue two', 'only-branch'])
+      const models = container.querySelectorAll('.run-chip.model')
+      expect(models.length).toBe(1)
+      expect(models[0].textContent).toBe('sonnet')
+    })
+
     it('shows the state label when the run has no tool', () => {
       const { container } = render(<CrewsView runs={[run({ crew: { name: 'c' }, state: 'thinking' })]} now={now} />)
       expect(container.querySelector('.crews-phase')?.textContent).toBe('thinking')
@@ -235,6 +250,31 @@ describe('CrewsView', () => {
       expect(a.closest('button')).toBeNull()
     })
 
+    it('does not open the run when the PR link is clicked', () => {
+      const onOpen = vi.fn()
+      const runs = [run({ crew: { name: 'c' }, pr: { number: '42', url: 'https://example.com/pull/42' } })]
+      render(<CrewsView runs={runs} now={now} onOpen={onOpen} />)
+
+      const link = screen.getByRole('link', { name: 'Pull request #42' })
+      link.addEventListener('click', (e) => e.preventDefault())
+      fireEvent.click(link)
+      expect(onOpen).not.toHaveBeenCalled()
+    })
+
+    it('sits in the same chip row as the tier, engine and model chips', () => {
+      const runs = [
+        run({ crew: { name: 'c', tier: 'deep', model: 'opus' }, pr: { number: '42', url: 'https://example.com/pull/42' } }),
+      ]
+      const { container } = render(<CrewsView runs={runs} now={now} />)
+
+      const a = container.querySelector('a.run-chip.pr') as HTMLAnchorElement
+      const row = container.querySelector('.crews-chips') as HTMLElement
+      expect(a.parentElement).toBe(row)
+      expect(row.querySelector('.run-chip.tier')).toBeTruthy()
+      expect(row.querySelector('.run-chip.model')).toBeTruthy()
+      expect(container.querySelector('.crews-member-main')?.contains(row)).toBe(false)
+    })
+
     it('is a plain chip when the PR has no url', () => {
       const runs = [run({ crew: { name: 'c' }, pr: { number: '7' } })]
       const { container } = render(<CrewsView runs={runs} now={now} />)
@@ -245,11 +285,50 @@ describe('CrewsView', () => {
   })
 
   describe('dispatch enrichment', () => {
-    it('links Dispatch here without a repo and labels the repo unknown when options do not know the crew', () => {
+    it('labels the repo unknown and renders no Dispatch link when nothing resolves the repo', () => {
       const { container } = render(<CrewsView runs={[run({ crew: { name: 'crew 1' } })]} now={now} />)
 
       expect(screen.getByText('unknown repo')).toBeTruthy()
-      expect(container.querySelector('.crews-dispatch')?.getAttribute('href')).toBe('#/dispatch?crew=crew%201')
+      expect(container.querySelector('.crews-dispatch')).toBeNull()
+    })
+
+    it('titles a bus-only crew by run.project and links it via the repo of that name', async () => {
+      fetchOptions.mockResolvedValue(options([{ path: '/home/me/qa-repo', name: 'qa-repo', crews: [] }]))
+      const runs = [run({ crew: { name: 'crew-9' }, project: 'qa-repo' })]
+      const { container } = render(<CrewsView runs={runs} now={now} />)
+
+      expect(screen.getByText('qa-repo')).toBeTruthy()
+      expect(container.querySelector('.crews-dispatch')).toBeNull()
+      await waitFor(() => expect(container.querySelector('.crews-dispatch')).toBeTruthy())
+      expect(container.querySelector('.crews-dispatch')?.getAttribute('href'))
+        .toBe('#/dispatch?repo=%2Fhome%2Fme%2Fqa-repo&crew=crew-9')
+    })
+
+    it('prefers the repo that lists the crew over one matching run.project', async () => {
+      fetchOptions.mockResolvedValue(
+        options([
+          { path: '/a/listed', name: 'listed', crews: ['c'] },
+          { path: '/b/app', name: 'app', crews: [] },
+        ]),
+      )
+      const { container } = render(<CrewsView runs={[run({ crew: { name: 'c' }, project: 'app' })]} now={now} />)
+
+      await waitFor(() => expect(screen.getByText('listed')).toBeTruthy())
+      expect(container.querySelector('.crews-dispatch')?.getAttribute('href')).toBe('#/dispatch?repo=%2Fa%2Flisted&crew=c')
+    })
+
+    it('omits the Dispatch link when two known repos share the project name', async () => {
+      fetchOptions.mockResolvedValue(
+        options([
+          { path: '/a/app', name: 'app', crews: [] },
+          { path: '/b/app', name: 'app', crews: [] },
+        ]),
+      )
+      const { container } = render(<CrewsView runs={[run({ crew: { name: 'c' }, project: 'app' })]} now={now} />)
+
+      await waitFor(() => expect(fetchOptions).toHaveBeenCalled())
+      expect(screen.getByText('app')).toBeTruthy()
+      expect(container.querySelector('.crews-dispatch')).toBeNull()
     })
 
     it('shows the repo name and includes the repo path once options load', async () => {
@@ -269,6 +348,7 @@ describe('CrewsView', () => {
       await waitFor(() => expect(fetchOptions).toHaveBeenCalled())
       expect(screen.getByText('Apollo')).toBeTruthy()
       expect(screen.getByText('unknown repo')).toBeTruthy()
+      expect(document.querySelector('.crews-dispatch')).toBeNull()
     })
   })
 })
