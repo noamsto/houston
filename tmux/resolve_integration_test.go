@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"errors"
 	"math/rand/v2"
 	"os"
 	"strconv"
@@ -80,8 +81,26 @@ func TestResolvePaneVanishedIntegration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
-	if p, err := NewClient().ResolvePane("%999999"); err == nil {
+	p, err := NewClient().ResolvePane("%999999")
+	if err == nil {
 		t.Fatalf("ResolvePane(%%999999) = %+v, want an error", p)
+	}
+	if !errors.Is(err, ErrPaneNotFound) {
+		t.Errorf("ResolvePane(%%999999) error = %v, want ErrPaneNotFound", err)
+	}
+}
+
+func TestResolvePaneTmuxUnreachableIntegration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	c := &Client{tmuxPath: "/nonexistent/tmux"}
+	p, err := c.ResolvePane("%1")
+	if err == nil {
+		t.Fatalf("ResolvePane(%%1) = %+v, want an error", p)
+	}
+	if errors.Is(err, ErrPaneNotFound) {
+		t.Errorf("ResolvePane(%%1) error = %v, want NOT ErrPaneNotFound", err)
 	}
 }
 

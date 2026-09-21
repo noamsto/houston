@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -135,7 +136,8 @@ func TestRunTerminalResolution(t *testing.T) {
 		// A hook's cached pane ref outlives the pane; only the tmux layer counts.
 		{"stale tmux ref", func(*Server) string { return "pane-43" }, nil, http.StatusConflict, "run has no terminal", 0},
 		{"no pane id", func(*Server) string { return "pane-44" }, nil, http.StatusConflict, "run has no terminal", 0},
-		{"pane vanished", func(*Server) string { return termRunID }, errors.New("can't find pane: %42"), http.StatusConflict, "terminal pane is gone", 1},
+		{"pane vanished", func(*Server) string { return termRunID }, fmt.Errorf("%w: %%42", tmux.ErrPaneNotFound), http.StatusConflict, "terminal pane is gone", 1},
+		{"tmux unavailable", func(*Server) string { return termRunID }, errors.New(`exec: "tmux": executable file not found in $PATH`), http.StatusServiceUnavailable, "tmux unavailable", 1},
 	}
 
 	routes := []struct {
@@ -399,7 +401,7 @@ func TestRunTerminalAuthGates(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			panes := &fakeRunPanes{resolveErr: errors.New("gone")}
+			panes := &fakeRunPanes{resolveErr: fmt.Errorf("%w: gone", tmux.ErrPaneNotFound)}
 			s := newRunTerminalServer(t, panes, termDelta())
 
 			rec := doReply(t, s, tc.req())

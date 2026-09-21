@@ -61,8 +61,13 @@ func (s *Server) runPane(w http.ResponseWriter, r *http.Request) (tmux.Pane, boo
 
 	pane, err := s.runPanes.ResolvePane(run.Tmux.PaneID)
 	if err != nil {
-		slog.Debug("resolve run pane failed", "id", id, "pane_id", run.Tmux.PaneID, "error", err)
-		terminalRefusal(w, id, http.StatusConflict, "terminal pane is gone")
+		if errors.Is(err, tmux.ErrPaneNotFound) {
+			slog.Debug("resolve run pane failed", "id", id, "pane_id", run.Tmux.PaneID, "error", err)
+			terminalRefusal(w, id, http.StatusConflict, "terminal pane is gone")
+			return tmux.Pane{}, false
+		}
+		slog.Warn("resolve run pane failed", "id", id, "pane_id", run.Tmux.PaneID, "error", err)
+		terminalRefusal(w, id, http.StatusServiceUnavailable, "tmux unavailable")
 		return tmux.Pane{}, false
 	}
 	return pane, true

@@ -239,9 +239,10 @@ upgrades to the same bidirectional WebSocket envelope described below. Pane
 resolution happens before the upgrade, so a bad address never reaches
 `Upgrade()` — it comes back as a plain HTTP error: 503 if the run registry
 isn't started, 404 for an unknown run, 409 if the run has no terminal
-capability/pane, 409 again if the pane id no longer resolves in tmux (it
-exited or the session is gone). The legacy `/api/pane/:target/ws` is
-classic-views only, pending removal.
+capability/pane, 409 again if tmux confirms the pane id no longer exists (it
+exited or the session is gone), or 503 `tmux unavailable` if tmux itself
+couldn't be reached (missing binary, timeout). The legacy `/api/pane/:target/ws`
+is classic-views only, pending removal.
 
 Both routes carry a JSON envelope, `{"type":"...","data":{...}}`
 (`server/pane_ws.go`, `ui/src/hooks/usePaneSocket.ts`,
@@ -264,7 +265,7 @@ Non-typing input (quick keys, images) instead goes through a POST route, and
 the allowlist that bounds it lives there, not on the socket:
 
 - `POST /api/runs/:id/input` (run address) — same resolution ladder as the WS
-  route (503/404/409/409) before the body is even read. Body is one of:
+  route (503/404/409/409/503) before the body is even read. Body is one of:
   `{"type":"text","text":"..."}` (literal text, then Enter),
   `{"type":"key","key":"<terminalKeys>"}` (one key, no Enter — 400 if `key`
   isn't in the `terminalKeys` allowlist in `server/runs_terminal.go`: Escape,

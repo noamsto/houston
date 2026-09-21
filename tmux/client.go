@@ -3,6 +3,7 @@ package tmux
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"regexp"
@@ -10,6 +11,10 @@ import (
 	"strings"
 	"time"
 )
+
+// ErrPaneNotFound indicates tmux ran and confirmed the pane is gone, as
+// opposed to tmux being unreachable or timing out.
+var ErrPaneNotFound = errors.New("pane not found")
 
 var tmuxEscapeRe = regexp.MustCompile(`#\[[^\]]*\]`)
 
@@ -302,16 +307,30 @@ func (c *Client) GetPaneID(p Pane) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// ResolvePane looks up a pane id's current session, window and index. tmux
-// exits non-zero for a pane that no longer exists, which surfaces as the error.
+// ResolvePane looks up a pane id's current session, window and index. A gone
+// pane surfaces two ways depending on whether the tmux server has any other
+// session left: with none, display-message exits 1 ("no server running");
+// with one, -p's target resolution fails silently and it exits 0 with every
+// requested field blank instead of erroring.
 func (c *Client) ResolvePane(paneID string) (Pane, error) {
 	out, err := c.output("display-message", "-t", paneID, "-p", "#{window_index} #{pane_index} #{session_name}")
 	if err != nil {
+		// Exit code 1 is tmux itself refusing ("can't find pane", or no
+		// server running) — the pane is confirmed gone. Anything else (exec
+		// failing to start, the cmdTimeout context killing it) is tmux being
+		// unreachable, not an answer about the pane.
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			return Pane{}, fmt.Errorf("%w: %s", ErrPaneNotFound, paneID)
+		}
 		return Pane{}, err
 	}
 	// Session last, and only the newline trimmed: session names may contain
 	// spaces.
 	line := strings.TrimSuffix(string(out), "\n")
+	if strings.TrimSpace(line) == "" {
+		return Pane{}, fmt.Errorf("%w: %s", ErrPaneNotFound, paneID)
+	}
 	parts := strings.SplitN(line, " ", 3)
 	if len(parts) != 3 {
 		return Pane{}, fmt.Errorf("unexpected display-message output for %s: %q", paneID, line)
