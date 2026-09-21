@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { sendImage, sendKey, sendText, type TerminalAddress } from '../api/terminal'
+import { composerMaxHeight } from './composerMaxHeight'
 
 interface Props {
   address: TerminalAddress
@@ -176,7 +177,9 @@ export function MobileInputBar({ address, choices, inputText, agent }: Props) {
 
   const autoGrow = (el: HTMLTextAreaElement) => {
     el.style.height = 'auto'
-    el.style.height = Math.min(el.scrollHeight, 4 * 24) + 'px'
+    const max = composerMaxHeight(window.visualViewport?.height ?? window.innerHeight)
+    el.style.height = Math.min(el.scrollHeight, max) + 'px'
+    el.style.overflowY = el.scrollHeight > max ? 'auto' : 'hidden'
   }
 
   const handleFileAttach = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -316,7 +319,10 @@ export function MobileInputBar({ address, choices, inputText, agent }: Props) {
             outline: 'none',
             resize: 'none',
             fontFamily: 'inherit',
-            overflow: 'hidden',
+            overflowY: 'hidden',
+            // Native touch scrolling inside the field; never chain to the terminal.
+            touchAction: 'pan-y',
+            overscrollBehavior: 'contain',
           }}
         />
 
