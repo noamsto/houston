@@ -407,6 +407,14 @@
 .dispatch-field textarea:disabled { opacity: 0.6; }
 .dispatch-field textarea { min-height: 120px; resize: vertical; font-family: var(--font-mono); }
 .dispatch-hint { font-size: 12px; color: var(--text-faint); }
+.dispatch-field textarea.dispatch-task { resize: none; }
+.dispatch-notice { margin: 12px 0 0; padding: 0 14px; font-size: 12px; color: var(--state-blocked); }
+
+.dispatch-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.dispatch-grid > .dispatch-field { min-width: 0; }
+@media (max-width: 320px) {
+  .dispatch-grid { grid-template-columns: 1fr; }
+}
 
 .dispatch-submit {
   min-height: var(--tap); border-radius: 8px; border: 1px solid var(--line-strong);
@@ -418,6 +426,7 @@
 .dispatch-result { margin: 0 14px 20px; padding: 12px 14px; border-radius: 10px; background: var(--bg-sunken); border: 1px solid var(--line); font-size: 13px; line-height: 1.5; }
 .dispatch-result.success { color: var(--state-running); }
 .dispatch-result.failure { color: var(--state-failed); }
+.dispatch-result a { color: var(--accent); }
 .dispatch-result pre { white-space: pre-wrap; word-break: break-word; font-family: var(--font-mono); font-size: 12px; margin: 4px 0 0; color: inherit; }
 
 .dispatch-field input:focus-visible,

@@ -1,9 +1,31 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
-import { fetchDispatchOptions, submitDispatch, type DispatchOptions, type DispatchOutcome } from '../api/dispatch'
+import { fetchDispatchOptions, submitDispatch, NEW_CREW, type DispatchOptions, type DispatchOutcome } from '../api/dispatch'
+import type { Run } from '../api/runs'
+import {
+  crewAgeLabel,
+  defaultCrew,
+  defaultModel,
+  findDispatchedRun,
+  loadPrefs,
+  resolveInitial,
+  savePrefs,
+  taskMaxHeight,
+} from './dispatchForm'
+import { runHash, useDispatchRoute } from './routes'
+import { useNow } from './useNow'
 import './fleet.css'
 
-export function DispatchView() {
+const UNKNOWN_REPO_NOTICE = "Linked repo isn't one houston knows — pick one below."
+
+function autoGrow(el: HTMLTextAreaElement): void {
+  el.style.height = 'auto'
+  const cap = taskMaxHeight(window.visualViewport?.height ?? window.innerHeight)
+  el.style.height = `${Math.min(Math.max(el.scrollHeight, 120), cap)}px`
+  el.style.overflowY = el.scrollHeight > cap ? 'auto' : 'hidden'
+}
+
+export function DispatchView({ runs }: { runs: Run[] }) {
   const [options, setOptions] = useState<DispatchOptions | null>(null)
   const [optionsError, setOptionsError] = useState<string | null>(null)
   const [loadingOptions, setLoadingOptions] = useState(true)
@@ -11,21 +33,55 @@ export function DispatchView() {
   const [repo, setRepo] = useState('')
   const [title, setTitle] = useState('')
   const [spec, setSpec] = useState('')
-  const [tier, setTier] = useState('standard')
-  const [engine, setEngine] = useState('claude')
+  const [tier, setTier] = useState('')
+  const [engine, setEngine] = useState('')
   const [model, setModel] = useState('')
-  const [effort, setEffort] = useState('high')
+  const [effort, setEffort] = useState('')
   const [crew, setCrew] = useState('')
   const [issue, setIssue] = useState('')
+  const [linkNotice, setLinkNotice] = useState<string | null>(null)
 
   const [submitting, setSubmitting] = useState(false)
   const [outcome, setOutcome] = useState<DispatchOutcome | null>(null)
+  const [outcomeWasNewCrew, setOutcomeWasNewCrew] = useState(false)
   const resultRef = useRef<HTMLDivElement>(null)
+  const taskRef = useRef<HTMLTextAreaElement>(null)
+  const now = useNow()
+
+  const route = useDispatchRoute()
+  const [appliedSeq, setAppliedSeq] = useState<number | null>(null)
+
+  // Adjusted during render rather than in an effect: each hashchange (seq)
+  // applies its link exactly once, and a link that arrived before the options
+  // is held until they load. Only repo/crew are touched, so a draft survives.
+  if (options && route && route.seq !== appliedSeq) {
+    setAppliedSeq(route.seq)
+    if (route.repo || route.crew) {
+      const link = resolveInitial(options, { repo }, route)
+      setRepo(link.repo)
+      setCrew(link.crew)
+      setLinkNotice(link.linkRepoUnknown ? UNKNOWN_REPO_NOTICE : null)
+    }
+  }
+
+  // Once applied, drop the params so a reload doesn't re-apply a stale link
+  // over a hand-edited repo/crew; following the same link again changes the
+  // hash, which fires hashchange and bumps seq.
+  const hasLinkParams = !!(route?.repo || route?.crew)
+  useEffect(() => {
+    if (route && hasLinkParams && route.seq === appliedSeq) {
+      history.replaceState(null, '', '#/dispatch')
+    }
+  }, [route, hasLinkParams, appliedSeq])
 
   // The result lands below the submit button — off-screen on a phone.
   useEffect(() => {
     if (outcome) resultRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
   }, [outcome])
+
+  useEffect(() => {
+    if (taskRef.current) autoGrow(taskRef.current)
+  }, [spec, options])
 
   // Pure fetch: every setState it makes happens inside a promise callback,
   // never synchronously in the caller's tick, so it's safe to invoke directly
@@ -35,15 +91,14 @@ export function DispatchView() {
     fetchDispatchOptions()
       .then((o) => {
         if (cancelled) return
+        const init = resolveInitial(o, loadPrefs(), null)
         setOptions(o)
-        const firstRepo = o.repos[0]
-        setRepo(firstRepo?.path ?? '')
-        setCrew(firstRepo?.crews[0] ?? '')
-        const firstEngine = o.engine_order[0] ?? ''
-        setEngine(firstEngine)
-        setModel(o.engines[firstEngine]?.[0] ?? '')
-        setTier(o.tiers.includes('standard') ? 'standard' : (o.tiers[0] ?? ''))
-        setEffort(o.efforts.includes('high') ? 'high' : (o.efforts[0] ?? ''))
+        setRepo(init.repo)
+        setCrew(init.crew)
+        setEngine(init.engine)
+        setTier(init.tier)
+        setModel(init.model)
+        setEffort(init.effort)
         setLoadingOptions(false)
       })
       .catch((e: unknown) => {
@@ -67,20 +122,25 @@ export function DispatchView() {
 
   function chooseRepo(path: string): void {
     setRepo(path)
-    const r = options?.repos.find((x) => x.path === path)
-    setCrew(r?.crews[0] ?? '')
+    setCrew(defaultCrew(options?.repos.find((x) => x.path === path)))
+    setLinkNotice(null)
   }
 
   function chooseEngine(eng: string): void {
     setEngine(eng)
-    setModel(options?.engines[eng]?.[0] ?? '')
+    if (options) setModel(defaultModel(options, eng, tier))
+  }
+
+  function chooseTier(t: string): void {
+    setTier(t)
+    if (options) setModel(defaultModel(options, engine, t))
   }
 
   async function handleSubmit(e: FormEvent): Promise<void> {
     e.preventDefault()
-    if (submitting || !title.trim() || !crew) return
+    if (submitting || !title.trim()) return
     setSubmitting(true)
-    const result = await submitDispatch({
+    const req = {
       repo,
       title: title.trim(),
       spec: spec || undefined,
@@ -90,20 +150,37 @@ export function DispatchView() {
       effort,
       crew,
       issue: issue.trim() || undefined,
-    })
+    }
+    const result = await submitDispatch(req)
     setSubmitting(false)
     setOutcome(result)
-    if (result.kind === 'started') {
-      setTitle('')
-      setSpec('')
+    setOutcomeWasNewCrew(req.crew === NEW_CREW)
+    if (result.kind !== 'started') return
+    savePrefs({ repo: req.repo, engine: req.engine, model: req.model, tier: req.tier, effort: req.effort })
+    setTitle('')
+    setSpec('')
+    const minted = result.crew
+    if (req.crew === NEW_CREW && minted) {
+      // Join the minted crew on the next dispatch instead of minting another.
+      setOptions((o) => o && {
+        ...o,
+        repos: o.repos.map((r) => (r.path === req.repo ? { ...r, crews: [minted, ...r.crews] } : r)),
+      })
+      setCrew(minted)
     }
   }
+
+  const dispatchedRun =
+    outcome?.kind === 'started' ? findDispatchedRun(runs, outcome.branch, outcome.crew || undefined) : undefined
+  const issueUrl = outcome?.kind === 'started' ? (outcome.issueUrl ?? dispatchedRun?.issue?.url) : undefined
 
   return (
     <div className="dispatch mocha">
       <header className="fleet-nav">
         <h1>Dispatch</h1>
       </header>
+
+      {linkNotice && <p className="dispatch-notice" role="status">{linkNotice}</p>}
 
       {loadingOptions && <div className="fleet-empty">Loading dispatch options…</div>}
 
@@ -141,49 +218,54 @@ export function DispatchView() {
             <label htmlFor="dispatch-spec">Task</label>
             <textarea
               id="dispatch-spec"
+              ref={taskRef}
+              className="dispatch-task"
               value={spec}
               disabled={submitting}
+              style={{ touchAction: 'pan-y' }}
               onChange={(e) => setSpec(e.target.value)}
             />
             <span className="dispatch-hint">Up to 64 KB. Falls back to the title when left empty.</span>
           </div>
 
-          <div className="dispatch-field">
-            <label htmlFor="dispatch-tier">Tier</label>
-            <select id="dispatch-tier" value={tier} onChange={(e) => setTier(e.target.value)}>
-              {options.tiers.map((t) => <option key={t} value={t}>{t}</option>)}
-            </select>
-          </div>
+          <div className="dispatch-grid">
+            <div className="dispatch-field">
+              <label htmlFor="dispatch-tier">Tier</label>
+              <select id="dispatch-tier" value={tier} onChange={(e) => chooseTier(e.target.value)}>
+                {options.tiers.map((t) => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </div>
 
-          <div className="dispatch-field">
-            <label htmlFor="dispatch-engine">Engine</label>
-            <select id="dispatch-engine" value={engine} onChange={(e) => chooseEngine(e.target.value)}>
-              {options.engine_order.map((eng) => <option key={eng} value={eng}>{eng}</option>)}
-            </select>
-          </div>
+            <div className="dispatch-field">
+              <label htmlFor="dispatch-engine">Engine</label>
+              <select id="dispatch-engine" value={engine} onChange={(e) => chooseEngine(e.target.value)}>
+                {options.engine_order.map((eng) => <option key={eng} value={eng}>{eng}</option>)}
+              </select>
+            </div>
 
-          <div className="dispatch-field">
-            <label htmlFor="dispatch-model">Model</label>
-            <select id="dispatch-model" value={model} onChange={(e) => setModel(e.target.value)}>
-              {models.map((m) => <option key={m} value={m}>{m}</option>)}
-            </select>
-          </div>
+            <div className="dispatch-field">
+              <label htmlFor="dispatch-model">Model</label>
+              <select id="dispatch-model" value={model} onChange={(e) => setModel(e.target.value)}>
+                {models.map((m) => <option key={m} value={m}>{m}</option>)}
+              </select>
+            </div>
 
-          <div className="dispatch-field">
-            <label htmlFor="dispatch-effort">Effort</label>
-            <select id="dispatch-effort" value={effort} onChange={(e) => setEffort(e.target.value)}>
-              {options.efforts.map((ef) => <option key={ef} value={ef}>{ef}</option>)}
-            </select>
+            <div className="dispatch-field">
+              <label htmlFor="dispatch-effort">Effort</label>
+              <select id="dispatch-effort" value={effort} onChange={(e) => setEffort(e.target.value)}>
+                {options.efforts.map((ef) => <option key={ef} value={ef}>{ef}</option>)}
+              </select>
+            </div>
           </div>
 
           <div className="dispatch-field">
             <label htmlFor="dispatch-crew">Crew</label>
-            {selectedRepo && selectedRepo.crews.length > 0 ? (
-              <select id="dispatch-crew" value={crew} onChange={(e) => setCrew(e.target.value)}>
-                {selectedRepo.crews.map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
-            ) : (
-              <p className="dispatch-hint">No crews for this repo — start one with <code>crew new</code> in that repo.</p>
+            <select id="dispatch-crew" value={crew} onChange={(e) => setCrew(e.target.value)}>
+              {selectedRepo?.crews.map((c) => <option key={c} value={c}>{crewAgeLabel(c, now)}</option>)}
+              <option value={NEW_CREW}>New crew</option>
+            </select>
+            {selectedRepo && selectedRepo.crews.length === 0 && (
+              <span className="dispatch-hint">No crew yet — dispatching starts a new one.</span>
             )}
           </div>
 
@@ -198,7 +280,7 @@ export function DispatchView() {
             />
           </div>
 
-          <button type="submit" className="dispatch-submit" disabled={submitting || !title.trim() || !crew}>
+          <button type="submit" className="dispatch-submit" disabled={submitting || !title.trim()}>
             {submitting ? 'Dispatching…' : 'Dispatch'}
           </button>
         </form>
@@ -208,10 +290,17 @@ export function DispatchView() {
         {outcome?.kind === 'started' && (
           <div className="dispatch-result success">
             <p>Worker <strong>{outcome.workerId}</strong> started on <code>{outcome.branch}</code>.</p>
-            {outcome.issueUrl && (
-              <p><a href={outcome.issueUrl} target="_blank" rel="noreferrer">View issue</a></p>
+            {outcome.crew && (
+              <p>Crew <code>{outcome.crew}</code>{outcomeWasNewCrew && ' (new crew)'}</p>
             )}
-            <p className="dispatch-hint">It will appear in Fleet shortly.</p>
+            {dispatchedRun ? (
+              <p><a href={runHash(dispatchedRun.id)}>Open run</a></p>
+            ) : (
+              <p className="dispatch-hint">Waiting for it to appear in Fleet…</p>
+            )}
+            {issueUrl && (
+              <p><a href={issueUrl} target="_blank" rel="noreferrer">View issue</a></p>
+            )}
           </div>
         )}
 

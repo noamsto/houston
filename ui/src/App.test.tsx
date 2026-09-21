@@ -21,6 +21,7 @@ describe('viewForHash', () => {
     ['#/nonsense', 'fleet'],
     ['#/agents', 'agents'],
     ['#/panes', 'panes'],
+    ['#/dispatch?repo=%2Fr&crew=new', 'fleet'],
   ] as const)('%s -> %s', (hash, expected) => {
     expect(viewForHash(hash)).toBe(expected)
   })

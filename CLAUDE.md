@@ -292,23 +292,38 @@ execution from an HTTP request, so the handler is closed by construction:
 
 - `GET /api/dispatch/options` — the repos houston knows (each distinct tmux
   `@git_root` resolved to its main repo, with that repo's crews from
-  `<git-common-dir>/crew/crews/`), tiers, efforts, plans, and the per-engine
-  model allowlist (`engines`, displayed in `engine_order`).
+  `<git-common-dir>/crew/crews/`), tiers, efforts, plans, the per-engine model
+  allowlist (`engines`, displayed in `engine_order`), and `tier_models` (the
+  default model per engine+tier; keep in step with dispatch's tier map, like
+  `dispatchModels`).
 - `POST /api/dispatch` — `{repo, title, spec?, tier, engine, model, effort,
   plan?, crew, issue?}`. Every argv value is an enum, an allowlisted model, or
-  an anchored-regex match; `repo` must be in the options set and `crew` must
-  exist in that repo. The title is the only free text — one argv element that
-  may not start with `-`, equal `resume`, or look like an issue id (dispatch has
-  no `--`). The task body goes to a 0600 temp file passed as `DISPATCH_SPEC` and
-  removed afterwards; it is never logged.
+  an anchored-regex match; `repo` must be in the options set and `crew` must be
+  `"new"` or exist in that repo. The title is the only free text — one argv
+  element that may not start with `-`, equal `resume`, or look like an issue id
+  (dispatch has no `--`). The task body goes to a 0600 temp file passed as
+  `DISPATCH_SPEC` and removed afterwards; it is never logged. The response
+  carries `crew` (the supplied id, or the one houston minted) on success, on a
+  dispatch-side failure (422), and on timeout (504).
+- `crew: "new"` mints a crew itself rather than requiring an existing one:
+  `<unix>-<pid>` (houston's own pid), created under `<git-common-dir>/crew/crews/`
+  inside the dispatch slot so only one request can mint per second; a
+  same-second collision is 409 (retry). The literal `"new"` never reaches
+  argv — `--crew-id` always carries the minted or supplied id. The minted
+  directory is removed only when dispatch couldn't be started or exited
+  non-zero; it's kept on timeout, on success, and on the rare exit-0-without-
+  `worker_id` case. A houston-minted crew has no dispatcher process (no
+  `pid`/`pane` files) — its workers report into the bus and Fleet only;
+  `crew adopt <id>` attaches a dispatcher to it later.
 - One dispatch at a time (429 otherwise), 120 s timeout. The run is detached
   from the request, so a dropped phone connection doesn't abort a half-built
   worktree; on timeout the process group gets SIGTERM (dispatch's trap clears
   its branch lock), then SIGKILL.
-- An unknown crew is refused by houston itself (404) before dispatch runs;
-  dispatch's own refusals (tier↔model map, budget) come back as 422 with its
-  stderr verbatim. The new run then appears in Fleet through the
-  crew source — nothing else to wire.
+- An unknown crew id (anything other than `"new"` not found under the repo) is
+  refused by houston itself (404) before dispatch runs; dispatch's own
+  refusals (tier↔model map, budget) come back as 422 with its stderr verbatim.
+  The new run then appears in Fleet through the crew source — nothing else to
+  wire.
 - The model allowlist is a Go constant (`dispatchModels`); keep it in step with
   dispatch's tier map when models change.
 - houston's environment must provide what dispatch needs: `dispatch`, `crew`,
@@ -317,6 +332,9 @@ execution from an HTTP request, so the handler is closed by construction:
   missing tool fails inside dispatch and comes back as a 422 with its stderr.
 - `-no-auth` leaves this endpoint enabled: that mode already exposes
   `/api/pane/:target/send`, which is equivalent command execution.
+- `#/dispatch?repo=<path>&crew=<id|new>` prefills the form (repo and crew
+  only) from a link; after applying it the UI replaces the hash with
+  `#/dispatch`.
 
 ## Security
 

@@ -15,6 +15,7 @@ vi.mock('../hooks/usePaneSocket', () => ({
 // DispatchView is kept mounted like Crews/Workspace, so it fetches on every
 // render of this shell — never a real fetch in tests.
 vi.mock('../api/dispatch', () => ({
+  NEW_CREW: 'new',
   fetchDispatchOptions: () => Promise.resolve({
     repos: [{ path: '/repo', name: 'repo', crews: ['1-1'] }],
     tiers: ['trivial', 'standard', 'deep'],
@@ -180,5 +181,24 @@ describe('ConsoleShell layout', () => {
 
     fireEvent.click(within(rail).getByRole('button', { name: /^Active/ }))
     expect(screen.getByRole('heading', { level: 1, name: 'Active' })).toBeTruthy()
+  })
+
+  it('opens on the Dispatch section for a dispatch link', () => {
+    window.location.hash = '#/dispatch?repo=%2Frepo&crew=new'
+    render(<ConsoleShell runs={[]} connected hasSnapshot now={now} />)
+
+    const rail = screen.getByLabelText('rail')
+    expect(within(rail).getByRole('button', { name: 'Dispatch' }).getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('switches to Dispatch when the hash becomes a dispatch link', () => {
+    render(<ConsoleShell runs={[]} connected hasSnapshot now={now} />)
+    const rail = screen.getByLabelText('rail')
+    expect(within(rail).getByRole('button', { name: 'Dispatch' }).getAttribute('aria-pressed')).toBe('false')
+
+    // happy-dom fires hashchange itself on a changing hash assignment.
+    act(() => { window.location.hash = '#/dispatch?repo=%2Frepo' })
+
+    expect(within(rail).getByRole('button', { name: 'Dispatch' }).getAttribute('aria-pressed')).toBe('true')
   })
 })

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { Run } from '../api/runs'
 import { needsYou } from './staleness'
 import { filterRuns, groupByHost, crewShortId, type Filter } from './fleetList'
@@ -7,7 +7,7 @@ import { CrewsView } from './CrewsView'
 import { WorkspaceView } from './WorkspaceView'
 import { DispatchView } from './DispatchView'
 import { RunDetail } from './RunDetail'
-import { runHash, useDetailRoute } from './routes'
+import { parseDispatchRoute, runHash, useDetailRoute } from './routes'
 import type { ShellData } from './MobileShell'
 import '../theme/mocha.css'
 import './fleet.css'
@@ -21,10 +21,16 @@ const FILTER_LABEL: Record<Filter, string> = {
 }
 
 export function ConsoleShell({ runs, connected, hasSnapshot, now }: ShellData) {
-  const [section, setSection] = useState<Section>('fleet')
+  const [section, setSection] = useState<Section>(() => (parseDispatchRoute(window.location.hash) ? 'dispatch' : 'fleet'))
   const [filter, setFilter] = useState<Filter>('active')
   const [crew, setCrew] = useState<string | null>(null)
   const route = useDetailRoute()
+
+  useEffect(() => {
+    const onHash = () => { if (parseDispatchRoute(window.location.hash)) setSection('dispatch') }
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+  }, [])
 
   const attentionCount = useMemo(
     () => runs.filter((r) => needsYou(r, now)).length,
@@ -230,7 +236,7 @@ export function ConsoleShell({ runs, connected, hasSnapshot, now }: ShellData) {
         )}
 
         <div hidden={section !== 'dispatch'} className="console-pane">
-          <DispatchView />
+          <DispatchView runs={runs} />
         </div>
       </section>
 
