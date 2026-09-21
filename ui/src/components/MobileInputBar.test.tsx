@@ -198,4 +198,51 @@ describe('MobileInputBar send failures', () => {
     await click(screen.getByRole('button', { name: '1. Yes' }))
     expect(screen.getByTestId('key-error').textContent).toContain('offline')
   })
+
+  describe('file attach', () => {
+    async function attach() {
+      const input = document.querySelector('input[type="file"]') as HTMLInputElement
+      const file = new File(['x'], 'a.png', { type: 'image/png' })
+      await act(async () => {
+        fireEvent.change(input, { target: { files: [file] } })
+        await new Promise((r) => setTimeout(r, 20))
+      })
+    }
+
+    it('keeps the text and shows the error when the upload fails', async () => {
+      vi.mocked(fetch).mockResolvedValue({ ok: false, status: 500 } as Response)
+      const field = typeAndSend('look at this')
+      await attach()
+      expect(field.value).toBe('look at this')
+      expect(screen.getByTestId('send-error').textContent).toContain('HTTP 500')
+    })
+
+    it('keeps the text and shows offline when fetch rejects', async () => {
+      vi.mocked(fetch).mockRejectedValue(new TypeError('x'))
+      const field = typeAndSend('look at this')
+      await attach()
+      expect(field.value).toBe('look at this')
+      expect(screen.getByTestId('send-error').textContent).toContain('offline')
+    })
+
+    it('keeps text typed during the upload and blocks a concurrent Send', async () => {
+      let resolve!: (r: Response) => void
+      vi.mocked(fetch).mockReturnValue(new Promise<Response>((r) => { resolve = r }))
+      const field = typeAndSend('look at this')
+      await attach()
+      const send = screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement
+      expect(send.disabled).toBe(true)
+      fireEvent.change(field, { target: { value: 'next message' } })
+      await act(async () => resolve({ ok: true } as Response))
+      expect(field.value).toBe('next message')
+      expect(fetch).toHaveBeenCalledTimes(1)
+    })
+
+    it('clears the text on success', async () => {
+      const field = typeAndSend('look at this')
+      await attach()
+      expect(field.value).toBe('')
+      expect(screen.queryByTestId('send-error')).toBeNull()
+    })
+  })
 })

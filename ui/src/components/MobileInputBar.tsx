@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 interface Props {
   target: string
@@ -42,19 +42,32 @@ const SpeechRecognitionCtor = (window as unknown as Record<string, unknown>).Spe
   | undefined
 
 // Resolves to a short reason on failure, null on success.
-async function post(target: string, params: Record<string, string>): Promise<string | null> {
+async function request(url: string, init: RequestInit): Promise<string | null> {
   try {
-    const res = await fetch(`/api/pane/${target}/send`, {
-      method: 'POST',
-      body: new URLSearchParams(params),
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    })
+    const res = await fetch(url, { method: 'POST', signal: AbortSignal.timeout(15000), ...init })
     if (res.ok) return null
     return res.status === 401 ? 'session expired — reload' : `HTTP ${res.status}`
-  } catch {
-    return 'offline'
+  } catch (e) {
+    return e instanceof DOMException && e.name === 'TimeoutError' ? 'timed out' : 'offline'
   }
 }
+
+const post = (target: string, params: Record<string, string>) =>
+  request(`/api/pane/${target}/send`, {
+    body: new URLSearchParams(params),
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+  })
+
+const readBase64 = (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve((reader.result as string).replace(/^data:[^;]+;base64,/, ''))
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(file)
+  })
+
+const postJSON = (url: string, body: unknown) =>
+  request(url, { body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' } })
 
 const sendText = (target: string, text: string) => post(target, { input: text })
 const sendSpecial = (target: string, key: string) => post(target, { input: key, special: 'true' })
@@ -108,12 +121,12 @@ const errorStyle: React.CSSProperties = {
 export function MobileInputBar({ target, choices, inputText, agent }: Props) {
   const [text, setText] = useState('')
   const [listening, setListening] = useState(false)
-  const [uploading, setUploading] = useState(false)
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState<string | null>(null)
   const [keyError, setKeyError] = useState<string | null>(null)
   const sendingRef = useRef(false)
   const keyErrorTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  useEffect(() => () => clearTimeout(keyErrorTimer.current), [])
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -128,7 +141,7 @@ export function MobileInputBar({ target, choices, inputText, agent }: Props) {
     sendingRef.current = false
     setSending(false)
     if (err) {
-      setSendError(err)
+      setSendError(`${err} — tap Send to retry`)
       return
     }
     // Keep anything typed while the request was in flight.
@@ -173,6 +186,7 @@ export function MobileInputBar({ target, choices, inputText, agent }: Props) {
     rec.onresult = (e: SpeechRecognitionEvent) => {
       const transcript = e.results[0]?.[0]?.transcript ?? ''
       setText(transcript)
+      setSendError(null)
     }
 
     rec.onend = () => setListening(false)
@@ -189,36 +203,30 @@ export function MobileInputBar({ target, choices, inputText, agent }: Props) {
 
   const handleFileAttach = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
-    if (!file) return
+    // Reset so the same file can be selected again
+    e.target.value = ''
+    if (!file || sendingRef.current) return
 
-    setUploading(true)
-    try {
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader()
-        reader.onload = () => {
-          const result = reader.result as string
-          resolve(result.replace(/^data:[^;]+;base64,/, ''))
-        }
-        reader.onerror = reject
-        reader.readAsDataURL(file)
-      })
-
-      await fetch(`/api/pane/${target}/send-with-images`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          text: text.trim(),
-          images: [{ name: file.name, type: file.type, data: base64 }],
+    const sent = text
+    sendingRef.current = true
+    setSending(true)
+    setSendError(null)
+    const err = await readBase64(file).then(
+      (data) =>
+        postJSON(`/api/pane/${target}/send-with-images`, {
+          text: sent.trim(),
+          images: [{ name: file.name, type: file.type, data }],
         }),
-      })
-
-      setText('')
-      if (textareaRef.current) textareaRef.current.style.height = 'auto'
-    } finally {
-      setUploading(false)
-      // Reset so the same file can be selected again
-      if (fileInputRef.current) fileInputRef.current.value = ''
+      () => 'could not read file',
+    )
+    sendingRef.current = false
+    setSending(false)
+    if (err) {
+      setSendError(`attachment ${err} — pick the file again`)
+      return
     }
+    setText((cur) => (cur === sent ? '' : cur))
+    if (textareaRef.current) textareaRef.current.style.height = 'auto'
   }
 
   const hasSpeech = !!SpeechRecognitionCtor
@@ -297,7 +305,7 @@ export function MobileInputBar({ target, choices, inputText, agent }: Props) {
 
       {sendError && (
         <div role="alert" data-testid="send-error" style={errorStyle}>
-          Not sent: {sendError} — tap Send to retry
+          Not sent: {sendError}
         </div>
       )}
 
@@ -369,13 +377,13 @@ export function MobileInputBar({ target, choices, inputText, agent }: Props) {
         />
         <button
           onClick={() => fileInputRef.current?.click()}
-          disabled={uploading}
+          disabled={sending}
           style={{
-            background: uploading ? 'var(--accent-working)' : 'var(--bg-surface)',
+            background: sending ? 'var(--accent-working)' : 'var(--bg-surface)',
             border: '1px solid var(--border)',
             borderRadius: 6,
-            color: uploading ? '#fff' : 'var(--text-secondary)',
-            cursor: uploading ? 'default' : 'pointer',
+            color: sending ? '#fff' : 'var(--text-secondary)',
+            cursor: sending ? 'default' : 'pointer',
             fontSize: 16,
             width: 44,
             height: 44,
@@ -383,11 +391,11 @@ export function MobileInputBar({ target, choices, inputText, agent }: Props) {
             alignItems: 'center',
             justifyContent: 'center',
             flexShrink: 0,
-            opacity: uploading ? 0.7 : 1,
+            opacity: sending ? 0.7 : 1,
           }}
           title="Attach file"
         >
-          {uploading ? '...' : '📎'}
+          {sending ? '...' : '📎'}
         </button>
 
         <button

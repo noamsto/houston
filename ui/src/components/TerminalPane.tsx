@@ -628,6 +628,7 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose, hideHeader = f
       )}
       {!isDesktop && (
         <MobileInputBar
+          key={pane.target}
           target={pane.target}
           choices={meta?.choices}
           inputText={meta?.input_text}
