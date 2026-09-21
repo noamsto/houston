@@ -195,11 +195,14 @@ houston/
 ├── parser/
 │   ├── parser.go        # ANSI/control sequence parsing
 │   └── message_parser.go # Status message extraction
-├── views/
-│   └── *.templ          # HTML templates (templ)
-└── static/
-    ├── app.js           # Client-side JS
-    └── favicon.svg      # Icon
+├── hub/                 # Session discovery + transcripts
+├── runs/                # Run registry (tmux/hook/crew sources)
+├── hook/                # Claude hook install/doctor/state
+├── agents/              # Agent type detection
+├── opencode/            # OpenCode client + discovery
+├── terminal/            # Terminal font control
+├── ui/                  # React frontend (Vite)
+└── docs/                # Design notes and plans
 ```
 
 ## Development
@@ -224,12 +227,6 @@ go test ./...
 
 # Lint
 golangci-lint run
-
-# Format templates
-templ fmt ./views
-
-# Generate template Go code
-templ generate
 ```
 
 ### Testing
