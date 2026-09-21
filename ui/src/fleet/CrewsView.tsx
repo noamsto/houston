@@ -70,6 +70,7 @@ function Member({ run, now, onOpen }: { run: Run; now: number; onOpen?: (r: Run)
               href={run.pr.url}
               target="_blank"
               rel="noreferrer"
+              aria-label={`Pull request #${run.pr.number}`}
             >
               #{run.pr.number}
             </a>

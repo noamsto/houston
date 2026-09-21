@@ -250,6 +250,17 @@ describe('CrewsView', () => {
       expect(a.closest('button')).toBeNull()
     })
 
+    it('does not open the run when the PR link is clicked', () => {
+      const onOpen = vi.fn()
+      const runs = [run({ crew: { name: 'c' }, pr: { number: '42', url: 'https://example.com/pull/42' } })]
+      render(<CrewsView runs={runs} now={now} onOpen={onOpen} />)
+
+      const link = screen.getByRole('link', { name: 'Pull request #42' })
+      link.addEventListener('click', (e) => e.preventDefault())
+      fireEvent.click(link)
+      expect(onOpen).not.toHaveBeenCalled()
+    })
+
     it('sits in the same chip row as the tier, engine and model chips', () => {
       const runs = [
         run({ crew: { name: 'c', tier: 'deep', model: 'opus' }, pr: { number: '42', url: 'https://example.com/pull/42' } }),
@@ -293,6 +304,19 @@ describe('CrewsView', () => {
         .toBe('#/dispatch?repo=%2Fhome%2Fme%2Fqa-repo&crew=crew-9')
     })
 
+    it('prefers the repo that lists the crew over one matching run.project', async () => {
+      fetchOptions.mockResolvedValue(
+        options([
+          { path: '/a/listed', name: 'listed', crews: ['c'] },
+          { path: '/b/app', name: 'app', crews: [] },
+        ]),
+      )
+      const { container } = render(<CrewsView runs={[run({ crew: { name: 'c' }, project: 'app' })]} now={now} />)
+
+      await waitFor(() => expect(screen.getByText('listed')).toBeTruthy())
+      expect(container.querySelector('.crews-dispatch')?.getAttribute('href')).toBe('#/dispatch?repo=%2Fa%2Flisted&crew=c')
+    })
+
     it('omits the Dispatch link when two known repos share the project name', async () => {
       fetchOptions.mockResolvedValue(
         options([
@@ -324,6 +348,7 @@ describe('CrewsView', () => {
       await waitFor(() => expect(fetchOptions).toHaveBeenCalled())
       expect(screen.getByText('Apollo')).toBeTruthy()
       expect(screen.getByText('unknown repo')).toBeTruthy()
+      expect(document.querySelector('.crews-dispatch')).toBeNull()
     })
   })
 })
