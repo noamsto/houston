@@ -185,6 +185,19 @@ describe('useTouchGestures free one-finger drag', () => {
     expect(result.current.translateXRef.current).toBe(-10)
   })
 
+  it('cancels the touchend that completes a double-tap so xterm gets no dblclick', () => {
+    const { screenEl } = setup(term, undefined, { onDoubleTap: vi.fn() })
+    const end = () => {
+      const e = touchEvent('touchend', [])
+      screenEl.dispatchEvent(touchEvent('touchstart', [{ clientX: 100, clientY: 100 }]))
+      screenEl.dispatchEvent(e)
+      return e
+    }
+    expect(end().defaultPrevented).toBe(false)
+    expect(end().defaultPrevented).toBe(true)
+    expect(end().defaultPrevented).toBe(false)
+  })
+
   it('treats a touch that never leaves the slop as a tap and fires onDoubleTap on the second', () => {
     const onDoubleTap = vi.fn()
     const onDragEnd = vi.fn()
