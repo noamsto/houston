@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { RunDetail } from './RunDetail'
 import type { Run } from '../api/runs'
 import type { Terminal } from '@xterm/xterm'
@@ -255,5 +255,159 @@ describe('RunDetail terminal lifecycle', () => {
     expect(url).toBe(`/api/runs/${r.id}/input`)
     expect(JSON.parse(String(init?.body))).toEqual({ type: 'key', key: 'y' })
     expect(sendInput).not.toHaveBeenCalled()
+  })
+})
+
+describe('RunDetail activity timeline', () => {
+  const chips = (n: number) => Array.from({ length: n }, (_, i) => ({ tool: `tool${i}`, hint: `hint${i}`, done: true }))
+  const renderActivity = (p: Partial<Run>) => {
+    const r = run(p)
+    return render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="activity" />)
+  }
+  const rowTools = (c: HTMLElement) => Array.from(c.querySelectorAll('.activity-tool')).map((e) => e.textContent)
+
+  it('renders the trail oldest first with the newest last', () => {
+    const { container } = renderActivity({ activity: { trail: chips(3) } })
+    expect(rowTools(container)).toEqual(['tool0', 'tool1', 'tool2'])
+  })
+
+  it('shows the last 10 rows and reveals earlier ones on demand', () => {
+    const { container } = renderActivity({ activity: { trail: chips(15) } })
+    expect(rowTools(container)).toEqual(chips(15).slice(5).map((t) => t.tool))
+
+    fireEvent.click(screen.getByRole('button', { name: /show earlier \(5\)/i }))
+    expect(rowTools(container)).toHaveLength(15)
+    expect(screen.queryByRole('button', { name: /show earlier/i })).toBeNull()
+  })
+
+  it('collapses consecutive repeats of a tool into one row with a count', () => {
+    const { container } = renderActivity({
+      activity: { trail: [
+        { tool: 'read', hint: 'a', done: true },
+        { tool: 'read', hint: 'b', done: true },
+        { tool: 'read', hint: 'c', done: true },
+        { tool: 'edit', hint: 'd', done: true },
+      ] },
+    })
+    expect(rowTools(container)).toEqual(['read', 'edit'])
+    expect(screen.getByText('×3')).toBeTruthy()
+    expect(screen.getByText('c')).toBeTruthy()
+    expect(screen.queryByText('a')).toBeNull()
+  })
+
+  it('highlights an error row and does not merge it into its neighbours', () => {
+    const { container } = renderActivity({
+      activity: { trail: [
+        { tool: 'bash', hint: 'ok', done: true },
+        { tool: 'bash', hint: 'boom', done: true, error: true },
+        { tool: 'bash', hint: 'ok2', done: true },
+      ] },
+    })
+    const rows = container.querySelectorAll('.activity-row')
+    expect(rows).toHaveLength(3)
+    expect(rows[1].classList.contains('error')).toBe(true)
+    expect(rows[0].classList.contains('error')).toBe(false)
+  })
+
+  it('pins the question after the timeline, outside the scroller', () => {
+    const { container } = renderActivity({
+      activity: { trail: chips(2) },
+      question: { text: 'Deploy to prod?', via: 'pane' },
+    })
+    const question = screen.getByText('Deploy to prod?')
+    const timeline = container.querySelector('.activity-timeline') as HTMLElement
+    expect(timeline.contains(question)).toBe(false)
+    expect(timeline.compareDocumentPosition(question) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('keeps the terminal excerpt collapsed until toggled', () => {
+    renderActivity({ activity: { preview: 'raw terminal text' } })
+    expect(screen.queryByText('raw terminal text')).toBeNull()
+
+    const toggle = screen.getByRole('button', { name: /terminal excerpt/i })
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(toggle)
+    expect(screen.getByText('raw terminal text')).toBeTruthy()
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('omits the terminal excerpt toggle when there is no preview', () => {
+    renderActivity({ activity: { message: 'hi' } })
+    expect(screen.queryByRole('button', { name: /terminal excerpt/i })).toBeNull()
+  })
+
+  it('clamps the last message and expands it on tap', () => {
+    renderActivity({ activity: { message: 'a long assistant message' } })
+    const message = screen.getByRole('button', { name: 'a long assistant message' })
+    expect(message.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(message)
+    expect(message.getAttribute('aria-expanded')).toBe('true')
+    expect(message.classList.contains('open')).toBe(true)
+  })
+
+  it('shows the turn and age in the glance row', () => {
+    renderActivity({ activity: { turn: 7 }, updated_at: Math.floor(now / 1000) - 120 })
+    expect(screen.getByText('Turn 7')).toBeTruthy()
+    const glance = document.querySelector('.activity-glance') as HTMLElement
+    expect(glance.textContent).toContain('2m')
+  })
+
+  describe('latest pill', () => {
+    const proto = HTMLElement.prototype
+    const saved = {
+      scrollHeight: Object.getOwnPropertyDescriptor(proto, 'scrollHeight'),
+      clientHeight: Object.getOwnPropertyDescriptor(proto, 'clientHeight'),
+    }
+    beforeEach(() => {
+      Object.defineProperty(proto, 'scrollHeight', { configurable: true, get: () => 1000 })
+      Object.defineProperty(proto, 'clientHeight', { configurable: true, get: () => 200 })
+    })
+    afterEach(() => {
+      for (const key of ['scrollHeight', 'clientHeight'] as const) {
+        const d = saved[key]
+        if (d) Object.defineProperty(proto, key, d)
+        else delete (proto as unknown as Record<string, unknown>)[key]
+      }
+    })
+
+    it('appears after scrolling up and scrolls back to the bottom on tap', () => {
+      const { container } = renderActivity({ activity: { trail: chips(3) } })
+      const timeline = container.querySelector('.activity-timeline') as HTMLElement
+      expect(screen.queryByRole('button', { name: /latest/i })).toBeNull()
+
+      timeline.scrollTop = 100
+      fireEvent.scroll(timeline)
+      const pill = screen.getByRole('button', { name: /latest/i })
+      expect(timeline.contains(pill)).toBe(false)
+
+      fireEvent.click(pill)
+      expect(timeline.scrollTop).toBe(1000)
+      expect(screen.queryByRole('button', { name: /latest/i })).toBeNull()
+    })
+
+    it('does not yank the view down on new events once the user scrolled up', () => {
+      const r = run({ activity: { trail: chips(3) } })
+      const { container, rerender } = render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="activity" />)
+      const timeline = container.querySelector('.activity-timeline') as HTMLElement
+      timeline.scrollTop = 100
+      fireEvent.scroll(timeline)
+
+      const next = run({ activity: { trail: chips(4) } })
+      rerender(<RunDetail runs={[next]} hasSnapshot streamConnected now={now} id={next.id} tab="activity" />)
+      expect(timeline.scrollTop).toBe(100)
+    })
+
+    it('resets to the bottom when the shown run changes', () => {
+      const a = run({ id: 'a', activity: { trail: chips(3) } })
+      const b = run({ id: 'b', activity: { trail: chips(3) } })
+      const { container, rerender } = render(<RunDetail runs={[a, b]} hasSnapshot streamConnected now={now} id="a" tab="activity" />)
+      const timeline = container.querySelector('.activity-timeline') as HTMLElement
+      timeline.scrollTop = 100
+      fireEvent.scroll(timeline)
+      expect(screen.getByRole('button', { name: /latest/i })).toBeTruthy()
+
+      rerender(<RunDetail runs={[a, b]} hasSnapshot streamConnected now={now} id="b" tab="activity" />)
+      expect(screen.queryByRole('button', { name: /latest/i })).toBeNull()
+    })
   })
 })
