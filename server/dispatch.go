@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -23,6 +24,10 @@ const (
 	maxDispatchSpec       = 64 << 10
 	dispatchTitleMaxRunes = 200
 	dispatchTimeout       = 120 * time.Second
+
+	// dispatchNewCrew is the sentinel that tells handleDispatch to mint a
+	// crew id itself rather than requiring one of dispatchCrewRe's shape.
+	dispatchNewCrew = "new"
 )
 
 // dispatchTiers, dispatchEfforts and dispatchPlans are closed enums dispatch
@@ -47,6 +52,21 @@ var (
 			"openrouter/deepseek/deepseek-v4-pro",
 			"openrouter/deepseek/deepseek-v4.1-flash",
 			"openrouter/deepseek/deepseek-v4-flash",
+		},
+	}
+
+	// dispatchTierModels is the default model per engine+tier, mirroring
+	// dispatch's own tier-map rows — the form's starting point only; tier↔model
+	// fit is still dispatch's call, not enforced here. Keep in step with
+	// dispatchModels when dispatch's tier map changes.
+	dispatchTierModels = map[string]map[string]string{
+		"claude": {"trivial": "haiku", "standard": "sonnet", "deep": "opus"},
+		"codex":  {"trivial": "gpt-5.6-luna", "standard": "gpt-5.6-terra", "deep": "gpt-5.6-sol"},
+		"cursor": {"trivial": "cursor-grok-4.6-low", "standard": "cursor-grok-4.6-medium", "deep": "kimi-k3-high"},
+		"pi": {
+			"trivial":  "openrouter/deepseek/deepseek-v4-flash",
+			"standard": "openrouter/deepseek/deepseek-v4.1-flash",
+			"deep":     "openrouter/deepseek/deepseek-v4-pro",
 		},
 	}
 )
@@ -91,12 +111,13 @@ type dispatchRepo struct {
 // of truth so the UI never hardcodes an allowlist the server could disagree
 // with.
 type dispatchOptions struct {
-	Repos       []dispatchRepo      `json:"repos"`
-	Tiers       []string            `json:"tiers"`
-	Efforts     []string            `json:"efforts"`
-	Plans       []string            `json:"plans"`
-	Engines     map[string][]string `json:"engines"`
-	EngineOrder []string            `json:"engine_order"`
+	Repos       []dispatchRepo               `json:"repos"`
+	Tiers       []string                     `json:"tiers"`
+	Efforts     []string                     `json:"efforts"`
+	Plans       []string                     `json:"plans"`
+	Engines     map[string][]string          `json:"engines"`
+	EngineOrder []string                     `json:"engine_order"`
+	TierModels  map[string]map[string]string `json:"tier_models"`
 }
 
 // dispatchResponse covers every documented response shape: an error alone, a
@@ -108,6 +129,7 @@ type dispatchResponse struct {
 	Branch   string `json:"branch,omitempty"`
 	IssueURL string `json:"issue_url,omitempty"`
 	Output   string `json:"output,omitempty"`
+	Crew     string `json:"crew,omitempty"`
 }
 
 // dispatchError is a validation failure. msg names the field and the reason
@@ -170,8 +192,8 @@ func validateDispatch(req dispatchRequest) (dispatchRequest, *dispatchError) {
 	}
 	// Required, not optional: the fallback would be houston's own inherited
 	// $CREW_ID — whichever crew launched houston, possibly another repo's.
-	if !dispatchCrewRe.MatchString(out.Crew) {
-		return out, &dispatchError{"crew", http.StatusBadRequest, "crew is required and must look like <unix>-<pid>"}
+	if out.Crew != dispatchNewCrew && !dispatchCrewRe.MatchString(out.Crew) {
+		return out, &dispatchError{"crew", http.StatusBadRequest, `crew is required and must be "new" or look like <unix>-<pid>`}
 	}
 
 	return out, nil
@@ -299,6 +321,7 @@ func (s *Server) handleDispatchOptions(w http.ResponseWriter, _ *http.Request) {
 		Plans:       dispatchPlans,
 		Engines:     dispatchModels,
 		EngineOrder: dispatchEngineOrder,
+		TierModels:  dispatchTierModels,
 	})
 }
 
@@ -365,11 +388,13 @@ func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 	// repo is now a known path, so it's safe to log in full.
 	dlog.setValidated(valid, repo.Path)
 
-	crewDir := filepath.Join(repo.commonDir, "crew", "crews", valid.Crew)
-	if info, err := os.Stat(crewDir); err != nil || !info.IsDir() {
-		dlog.status = http.StatusNotFound
-		writeDispatchJSON(w, http.StatusNotFound, dispatchResponse{Error: "crew is not a crew of this repo"})
-		return
+	if valid.Crew != dispatchNewCrew {
+		crewDir := filepath.Join(repo.commonDir, "crew", "crews", valid.Crew)
+		if info, err := os.Stat(crewDir); err != nil || !info.IsDir() {
+			dlog.status = http.StatusNotFound
+			writeDispatchJSON(w, http.StatusNotFound, dispatchResponse{Error: "crew is not a crew of this repo"})
+			return
+		}
 	}
 
 	select {
@@ -379,6 +404,33 @@ func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 		dlog.status = http.StatusTooManyRequests
 		writeDispatchJSON(w, http.StatusTooManyRequests, dispatchResponse{Error: "another dispatch is already running"})
 		return
+	}
+
+	// minted is the crew leaf this request created, if any — removed only
+	// when dispatch could not be started or exited non-zero, since those
+	// are the outcomes where the crew never got used.
+	var minted string
+	if valid.Crew == dispatchNewCrew {
+		id := s.dispatchNewCrewID()
+		crewsDir := filepath.Join(repo.commonDir, "crew", "crews")
+		if err := os.MkdirAll(crewsDir, 0o755); err != nil {
+			dlog.status = http.StatusInternalServerError
+			writeDispatchJSON(w, http.StatusInternalServerError, dispatchResponse{Error: "could not create crew: " + err.Error()})
+			return
+		}
+		if err := os.Mkdir(filepath.Join(crewsDir, id), 0o755); err != nil {
+			if errors.Is(err, fs.ErrExist) {
+				dlog.status = http.StatusConflict
+				writeDispatchJSON(w, http.StatusConflict, dispatchResponse{Error: "a new crew was just started in this second — retry"})
+				return
+			}
+			dlog.status = http.StatusInternalServerError
+			writeDispatchJSON(w, http.StatusInternalServerError, dispatchResponse{Error: "could not create crew: " + err.Error()})
+			return
+		}
+		minted = filepath.Join(crewsDir, id)
+		valid.Crew = id
+		dlog.crew = id
 	}
 
 	// Detached from the request: a phone dropping its connection mid-dispatch
@@ -399,6 +451,7 @@ func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(res.Err, context.DeadlineExceeded):
 		body := dispatchResponse{
 			Error: "dispatch timed out — the worker window may exist without an agent or stall-watch and may need `dispatch resume` from that worktree",
+			Crew:  valid.Crew,
 		}
 		if id := dispatchWorkerID(res.Stdout); id != "" {
 			body.WorkerID = id
@@ -407,20 +460,29 @@ func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 		dlog.status = http.StatusGatewayTimeout
 		writeDispatchJSON(w, http.StatusGatewayTimeout, body)
 	case res.Err != nil:
+		if minted != "" {
+			_ = os.Remove(minted)
+		}
 		dlog.status = http.StatusBadGateway
 		writeDispatchJSON(w, http.StatusBadGateway, dispatchResponse{Error: "could not run dispatch: " + res.Err.Error()})
 	case res.ExitCode != 0:
+		// Only report a crew that still exists; a minted one was just removed.
+		crew := valid.Crew
+		if minted != "" {
+			_ = os.Remove(minted)
+			crew = ""
+		}
 		errMsg := res.Stderr
 		if errMsg == "" {
 			errMsg = "dispatch failed"
 		}
 		dlog.status = http.StatusUnprocessableEntity
-		writeDispatchJSON(w, http.StatusUnprocessableEntity, dispatchResponse{Error: errMsg, Output: res.Stdout})
+		writeDispatchJSON(w, http.StatusUnprocessableEntity, dispatchResponse{Error: errMsg, Output: res.Stdout, Crew: crew})
 	default:
 		id := dispatchWorkerID(res.Stdout)
 		if id == "" {
 			dlog.status = http.StatusBadGateway
-			writeDispatchJSON(w, http.StatusBadGateway, dispatchResponse{Error: "dispatch exited 0 without printing a worker_id", Output: res.Stdout})
+			writeDispatchJSON(w, http.StatusBadGateway, dispatchResponse{Error: "dispatch exited 0 without printing a worker_id", Output: res.Stdout, Crew: valid.Crew})
 			return
 		}
 		dlog.workerID = id
@@ -430,6 +492,7 @@ func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 			Branch:   dispatchBranch(id),
 			IssueURL: dispatchIssueURL(res.Stdout, res.Stderr),
 			Output:   res.Stdout,
+			Crew:     valid.Crew,
 		})
 	}
 }

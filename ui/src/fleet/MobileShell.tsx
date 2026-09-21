@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { Run } from '../api/runs'
 import { needsYou } from './staleness'
 import { FleetView } from './FleetView'
@@ -6,7 +6,7 @@ import { CrewsView } from './CrewsView'
 import { WorkspaceView } from './WorkspaceView'
 import { DispatchView } from './DispatchView'
 import { RunDetail } from './RunDetail'
-import { runHash, useDetailRoute } from './routes'
+import { parseDispatchRoute, runHash, useDetailRoute } from './routes'
 import { useKeyboardInset } from '../hooks/useKeyboardInset'
 
 type Tab = 'fleet' | 'crews' | 'workspace' | 'dispatch'
@@ -19,11 +19,17 @@ export interface ShellData {
 }
 
 export function MobileShell({ runs, connected, hasSnapshot, now }: ShellData) {
-  const [tab, setTab] = useState<Tab>('fleet')
+  const [tab, setTab] = useState<Tab>(() => (parseDispatchRoute(window.location.hash) ? 'dispatch' : 'fleet'))
   const attention = runs.some((r) => needsYou(r, now))
 
   const detail = useDetailRoute()
   const keyboardInset = useKeyboardInset()
+
+  useEffect(() => {
+    const onHash = () => { if (parseDispatchRoute(window.location.hash)) setTab('dispatch') }
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+  }, [])
 
   return (
     <div
@@ -51,7 +57,7 @@ export function MobileShell({ runs, connected, hasSnapshot, now }: ShellData) {
         </div>
         {/* Kept mounted like Crews, so a half-typed dispatch form survives a tab switch. */}
         <div hidden={tab !== 'dispatch'}>
-          <DispatchView />
+          <DispatchView runs={runs} />
         </div>
         {tab === 'workspace' && <WorkspaceView onOpen={(id) => { window.location.hash = runHash(id) }} />}
         {/* A stacked overlay, not a `hidden`-swapped replacement of `.fleet` —

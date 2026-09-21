@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -117,6 +118,9 @@ type Server struct {
 	// two at once against one repo is not something it is designed for.
 	dispatchSlot    chan struct{}
 	dispatchTimeout time.Duration
+	// dispatchNewCrewID mints a crew id in crew's <unix>-<pid> format for a
+	// "new" crew request. A field so a test can force a same-second collision.
+	dispatchNewCrewID func() string
 
 	auth  *authGate
 	hosts *hostGate
@@ -188,6 +192,9 @@ func New(cfg Config) (*Server, error) {
 		},
 		dispatchSlot:    make(chan struct{}, 1),
 		dispatchTimeout: dispatchTimeout,
+		dispatchNewCrewID: func() string {
+			return strconv.FormatInt(time.Now().Unix(), 10) + "-" + strconv.Itoa(os.Getpid())
+		},
 	}
 
 	// Run the hub in the background. It watches <status-dir>/claude/ and the

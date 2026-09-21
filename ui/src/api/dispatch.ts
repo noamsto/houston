@@ -12,7 +12,10 @@ export interface DispatchOptions {
   plans: string[]
   engines: Record<string, string[]>
   engine_order: string[] // display order; engines is a map and has none of its own
+  tier_models: Record<string, Record<string, string>> // default model per engine+tier
 }
+
+export const NEW_CREW = 'new'
 
 export interface DispatchRequest {
   repo: string
@@ -31,8 +34,8 @@ export interface DispatchRequest {
 // non-200 status: `error` is dispatch's own stderr on 422, or
 // houston's own reason otherwise, always shown verbatim.
 export type DispatchOutcome =
-  | { kind: 'started'; workerId: string; branch: string; issueUrl?: string }
-  | { kind: 'failed'; status: number; error: string; output?: string; workerId?: string }
+  | { kind: 'started'; workerId: string; branch: string; issueUrl?: string; crew?: string }
+  | { kind: 'failed'; status: number; error: string; output?: string; workerId?: string; crew?: string }
 
 export async function fetchDispatchOptions(): Promise<DispatchOptions> {
   const res = await fetch('/api/dispatch/options')
@@ -47,12 +50,14 @@ interface DispatchSuccessBody {
   branch: string
   issue_url?: string
   output: string
+  crew?: string
 }
 
 interface DispatchErrorBody {
   error: string
   output?: string
   worker_id?: string
+  crew?: string
 }
 
 export async function submitDispatch(req: DispatchRequest): Promise<DispatchOutcome> {
@@ -70,14 +75,14 @@ export async function submitDispatch(req: DispatchRequest): Promise<DispatchOutc
   if (res.ok) {
     try {
       const body = JSON.parse(text) as DispatchSuccessBody
-      return { kind: 'started', workerId: body.worker_id, branch: body.branch, issueUrl: body.issue_url }
+      return { kind: 'started', workerId: body.worker_id, branch: body.branch, issueUrl: body.issue_url, crew: body.crew }
     } catch {
       return { kind: 'failed', status: res.status, error: 'malformed response: ' + text.trim() }
     }
   }
   try {
     const body = JSON.parse(text) as DispatchErrorBody
-    return { kind: 'failed', status: res.status, error: body.error, output: body.output, workerId: body.worker_id }
+    return { kind: 'failed', status: res.status, error: body.error, output: body.output, workerId: body.worker_id, crew: body.crew }
   } catch {
     return { kind: 'failed', status: res.status, error: text.trim() }
   }

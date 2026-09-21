@@ -27,7 +27,33 @@ describe('submitDispatch', () => {
     )
 
     const outcome = await submitDispatch(req)
-    expect(outcome).toEqual({ kind: 'started', workerId: 'worker:feat/1-x#s1', branch: 'feat/1-x', issueUrl: undefined })
+    expect(outcome).toEqual({
+      kind: 'started',
+      workerId: 'worker:feat/1-x#s1',
+      branch: 'feat/1-x',
+      issueUrl: undefined,
+      crew: undefined,
+    })
+  })
+
+  it('200 JSON body with a minted crew carries it on the outcome', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve(
+          jsonResponse(200, '{"worker_id":"worker:feat/1-x#s1","branch":"feat/1-x","crew":"1700000000-4242"}'),
+        ),
+      ),
+    )
+
+    const outcome = await submitDispatch(req)
+    expect(outcome).toEqual({
+      kind: 'started',
+      workerId: 'worker:feat/1-x#s1',
+      branch: 'feat/1-x',
+      issueUrl: undefined,
+      crew: '1700000000-4242',
+    })
   })
 
   it('200 non-JSON body returns failed with malformed response', async () => {
@@ -41,7 +67,33 @@ describe('submitDispatch', () => {
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(jsonResponse(422, '{"error":"dispatch failed","output":"log"}'))))
 
     const outcome = await submitDispatch(req)
-    expect(outcome).toEqual({ kind: 'failed', status: 422, error: 'dispatch failed', output: 'log', workerId: undefined })
+    expect(outcome).toEqual({
+      kind: 'failed',
+      status: 422,
+      error: 'dispatch failed',
+      output: 'log',
+      workerId: undefined,
+      crew: undefined,
+    })
+  })
+
+  it('422 JSON error with a minted crew carries it on the outcome', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve(jsonResponse(422, '{"error":"dispatch failed","output":"log","crew":"1700000000-4242"}')),
+      ),
+    )
+
+    const outcome = await submitDispatch(req)
+    expect(outcome).toEqual({
+      kind: 'failed',
+      status: 422,
+      error: 'dispatch failed',
+      output: 'log',
+      workerId: undefined,
+      crew: '1700000000-4242',
+    })
   })
 
   it('network rejection returns failed with status 0', async () => {
