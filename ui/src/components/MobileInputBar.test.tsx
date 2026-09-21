@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { MobileInputBar } from './MobileInputBar'
 import type { TerminalAddress } from '../api/terminal'
+import { composerMaxHeight } from './composerMaxHeight'
 
 const target = 'sess:0.0'
 const paneAddress: TerminalAddress = { kind: 'pane', target }
@@ -338,5 +339,29 @@ describe('run address', () => {
     for (const [url] of vi.mocked(fetch).mock.calls) {
       expect(String(url)).not.toContain('/api/pane/')
     }
+  })
+})
+
+describe('composer auto-grow', () => {
+  it('caps at 40% of the viewport', () => {
+    expect(composerMaxHeight(800)).toBe(320)
+    expect(composerMaxHeight(400)).toBe(160)
+  })
+
+  it('grows to the cap then scrolls internally', () => {
+    vi.stubGlobal('visualViewport', { height: 500 })
+    render(<MobileInputBar address={paneAddress} />)
+    const field = screen.getByPlaceholderText('Send a message...') as HTMLTextAreaElement
+    expect(field.style.touchAction).toBe('pan-y')
+
+    Object.defineProperty(field, 'scrollHeight', { configurable: true, value: 120 })
+    fireEvent.change(field, { target: { value: 'a\nb\nc' } })
+    expect(field.style.height).toBe('120px')
+    expect(field.style.overflowY).toBe('hidden')
+
+    Object.defineProperty(field, 'scrollHeight', { configurable: true, value: 900 })
+    fireEvent.change(field, { target: { value: 'x\n'.repeat(30) } })
+    expect(field.style.height).toBe('200px')
+    expect(field.style.overflowY).toBe('auto')
   })
 })
