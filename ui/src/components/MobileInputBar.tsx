@@ -250,7 +250,6 @@ export function MobileInputBar({ target, choices, inputText, agent }: Props) {
         </div>
       )}
 
-      {/* Quick keys — one horizontally scrollable row */}
       <div
         data-testid="quick-keys"
         style={{ display: 'flex', gap: 6, padding: '8px 8px 0', overflowX: 'auto' }}
