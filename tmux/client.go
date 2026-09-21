@@ -2,6 +2,7 @@
 package tmux
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -311,17 +312,20 @@ func (c *Client) GetPaneID(p Pane) (string, error) {
 // pane surfaces two ways depending on whether the tmux server has any other
 // session left: with none, display-message exits 1 ("no server running");
 // with one, -p's target resolution fails silently and it exits 0 with every
-// requested field blank instead of erroring.
+// requested field blank instead of erroring. tmux also exits 1 for reasons
+// that have nothing to do with the pane — a stale socket left behind after a
+// NixOS switch upgrades the tmux version, or a permissions problem — so exit
+// 1 only counts as ErrPaneNotFound when stderr itself says the pane/server
+// is missing; any other exit-1 message is surfaced as-is.
 func (c *Client) ResolvePane(paneID string) (Pane, error) {
 	out, err := c.output("display-message", "-t", paneID, "-p", "#{window_index} #{pane_index} #{session_name}")
 	if err != nil {
-		// Exit code 1 is tmux itself refusing ("can't find pane", or no
-		// server running) — the pane is confirmed gone. Anything else (exec
-		// failing to start, the cmdTimeout context killing it) is tmux being
-		// unreachable, not an answer about the pane.
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
-			return Pane{}, fmt.Errorf("%w: %s", ErrPaneNotFound, paneID)
+			if bytes.Contains(exitErr.Stderr, []byte("can't find")) || bytes.Contains(exitErr.Stderr, []byte("No such file or directory")) {
+				return Pane{}, fmt.Errorf("%w: %s", ErrPaneNotFound, paneID)
+			}
+			return Pane{}, fmt.Errorf("tmux display-message: %w: %s", err, bytes.TrimSpace(exitErr.Stderr))
 		}
 		return Pane{}, err
 	}

@@ -241,8 +241,10 @@ resolution happens before the upgrade, so a bad address never reaches
 isn't started, 404 for an unknown run, 409 if the run has no terminal
 capability/pane, 409 again if tmux confirms the pane id no longer exists (it
 exited or the session is gone), or 503 `tmux unavailable` if tmux itself
-couldn't be reached (missing binary, timeout). The legacy `/api/pane/:target/ws`
-is classic-views only, pending removal.
+couldn't be reached (missing binary, timeout, wrong socket permissions, or a
+client/server protocol mismatch after an upgrade left a stale tmux server
+running). The legacy `/api/pane/:target/ws` is classic-views only, pending
+removal.
 
 Both routes carry a JSON envelope, `{"type":"...","data":{...}}`
 (`server/pane_ws.go`, `ui/src/hooks/usePaneSocket.ts`,

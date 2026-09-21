@@ -3,6 +3,10 @@ package tmux
 
 import (
 	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -53,6 +57,48 @@ func TestPaneTarget(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := tc.pane.Target(); got != tc.want {
 				t.Errorf("Target() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// fakeTmux writes a script that prints stderrMsg to stderr and exits 1,
+// standing in for tmux itself so ResolvePane's exit-1 classification can be
+// tested without a real tmux server.
+func fakeTmux(t *testing.T, stderrMsg string) *Client {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "faketmux")
+	script := "#!/bin/sh\necho " + strconv.Quote(stderrMsg) + " >&2\nexit 1\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake tmux: %v", err)
+	}
+	return &Client{tmuxPath: path}
+}
+
+func TestResolvePaneExitOneClassification(t *testing.T) {
+	cases := []struct {
+		name         string
+		stderr       string
+		wantNotFound bool
+		wantMsgInErr bool
+	}{
+		{"can't find pane", "can't find pane: %9", true, false},
+		{"no server socket", "error connecting to /tmp/x (No such file or directory)", true, false},
+		{"protocol version mismatch", "protocol version mismatch (client 8, server 7)", false, true},
+		{"permission denied", "error connecting to /tmp/x (Permission denied)", false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := fakeTmux(t, tc.stderr)
+			_, err := c.ResolvePane("%1")
+			if err == nil {
+				t.Fatalf("ResolvePane() = nil error, want one")
+			}
+			if got := errors.Is(err, ErrPaneNotFound); got != tc.wantNotFound {
+				t.Errorf("errors.Is(err, ErrPaneNotFound) = %v, want %v (err: %v)", got, tc.wantNotFound, err)
+			}
+			if tc.wantMsgInErr && !strings.Contains(err.Error(), tc.stderr) {
+				t.Errorf("error %q does not contain tmux stderr %q", err, tc.stderr)
 			}
 		})
 	}
