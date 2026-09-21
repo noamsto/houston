@@ -6,6 +6,7 @@ import { CrewsView } from './CrewsView'
 import { WorkspaceView } from './WorkspaceView'
 import { RunDetail } from './RunDetail'
 import { runHash, useDetailRoute } from './routes'
+import { useKeyboardInset } from '../hooks/useKeyboardInset'
 import { DISPATCH_PLACEHOLDER } from './copy'
 
 type Tab = 'fleet' | 'crews' | 'workspace' | 'dispatch'
@@ -22,9 +23,13 @@ export function MobileShell({ runs, connected, hasSnapshot, now }: ShellData) {
   const attention = runs.some((r) => needsYou(r, now))
 
   const detail = useDetailRoute()
+  const keyboardInset = useKeyboardInset()
 
   return (
-    <div className="shell mocha">
+    <div
+      className={`shell mocha${keyboardInset > 0 ? ' keyboard-open' : ''}`}
+      style={keyboardInset > 0 ? { bottom: keyboardInset } : undefined}
+    >
       <div className="shell-body">
         {/* Kept mounted across tabs: switching tabs must not lose the chosen
             filter or reopen the EventSource with a fresh snapshot. */}

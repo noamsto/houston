@@ -203,8 +203,12 @@ The Vite dev server (`ui/vite.config.ts`) proxies `/api` to `http://localhost:90
 - **Touch scrolling**: Single-finger vertical scroll through terminal history
 - **Pinch-to-zoom**: Two-finger pinch with focal-point tracking
 - **Pan**: Single-finger horizontal drag or two-finger drag when zoomed
-- **Quick actions**: Number keys (1-5), Y/N, with expandable section for ^C, arrows, Esc, Tab, Shift+Tab, Alt+P, Ctrl+O, Ctrl+Z
-- **Voice input**: Web Speech API microphone button
+- **Composer** (`MobileInputBar.tsx`, docked under the terminal in the run-detail Terminal tab): multi-line field where Enter inserts a newline and Send (or Ctrl/Cmd+Enter) sends the text followed by Enter; an empty Send presses Enter. Also a voice button (Web Speech API) and file attach.
+- **Quick keys**: one horizontally scrollable row — Esc, ^C, Enter, Tab, Shift+Tab, ↑/↓, 1–5, Y/N, Alt+P, ^O, ^Z, `/copy`. All but `/copy` are keystrokes sent through `POST /api/pane/:target/send` with `special=true` (no implicit Enter, so a digit answers a numbered prompt without a stray Enter).
+- **Choices**: when the pane `meta.choices` is present, each choice renders as a tappable `n. label` button above the row and answers with its ordinal key.
+- **Keyboard**: `useKeyboardInset` tracks the on-screen keyboard via `visualViewport`; `MobileShell` shortens itself to sit above it and hides the tab bar so the terminal and composer keep the space.
+
+On desktop the Terminal tab takes keystrokes directly (xterm `onData` → WS `input`); clicking it focuses it.
 
 There is no WIDE/FIT toggle — that affordance was removed. A terminal rework
 (font-size zoom, pan behavior, possibly more) is in progress; revisit this

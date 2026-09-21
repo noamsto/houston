@@ -126,6 +126,12 @@
 
 .shell { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--bg); }
 .shell-body { flex: 1; position: relative; overflow: hidden; }
+/* Keyboard up: the shell is shortened to sit above it, and the tab bar yields
+   its row so the terminal + composer keep the space. */
+.shell.keyboard-open .shell-tabs { display: none; }
+/* .shell-tabs already clears the home indicator; the composer's own inset
+   would double it (and is moot while the keyboard covers it). */
+.shell .mobile-input-bar { padding-bottom: 0 !important; }
 
 .shell-tabs {
   display: flex; flex: none;
@@ -192,6 +198,7 @@
 }
 
 .run-detail-body { padding: 4px 14px 24px; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.run-detail-body.terminal { padding: 4px 0 0; }
 .run-detail-activity { display: flex; flex-direction: column; gap: 10px; padding-top: 8px; }
 .run-detail-line {
   font-family: var(--font-mono); font-size: 13px; color: var(--text-dim);

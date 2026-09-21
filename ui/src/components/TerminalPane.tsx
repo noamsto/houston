@@ -19,7 +19,6 @@ interface Props {
   isFocused: boolean
   onFocus: () => void
   onClose: () => void
-  readOnly?: boolean
   hideHeader?: boolean
   onConnectionChange?: (connected: boolean) => void
 }
@@ -51,7 +50,7 @@ function writeSnapshot(term: Terminal, data: string, onDone?: () => void) {
 const MOBILE_TERM_WIDTH = 960
 const PAD = 6
 
-export function TerminalPane({ pane, isFocused, onFocus, onClose, readOnly = false, hideHeader = false, onConnectionChange }: Props) {
+export function TerminalPane({ pane, isFocused, onFocus, onClose, hideHeader = false, onConnectionChange }: Props) {
   // outerRef: observed by ResizeObserver; has padding that creates visual breathing room
   const outerRef = useRef<HTMLDivElement>(null)
   // innerRef: xterm.js is opened here so FitAddon measures the padded inner area
@@ -331,7 +330,7 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose, readOnly = fal
       lineHeight: 1.2,
       cursorBlink: false,
       allowProposedApi: true,
-      disableStdin: readOnly || !isDesktop,
+      disableStdin: !isDesktop,
       // convertEol is OFF: %output from CC mode delivers raw terminal data
       // with proper \r\n. Adding implicit \r to bare \n breaks TUI cursor
       // positioning. The seed data uses \r\n from the backend.
@@ -398,7 +397,7 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose, readOnly = fal
       setIsScrolledUp(buf.viewportY < buf.baseY)
     })
 
-    if (isDesktop && !readOnly) {
+    if (isDesktop) {
       // Ensure xterm.js handles all keys (including Escape) instead of
       // letting the browser consume them.
       term.attachCustomKeyEventHandler(() => true)
@@ -532,7 +531,7 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose, readOnly = fal
         }
       }}
     >
-      {isDesktop && !readOnly && !hideHeader && (
+      {isDesktop && !hideHeader && (
         <PaneHeader
           target={pane.target}
           meta={meta}
@@ -627,11 +626,12 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose, readOnly = fal
           }}
         />
       )}
-      {!isDesktop && !readOnly && (
+      {!isDesktop && (
         <MobileInputBar
           target={pane.target}
           choices={meta?.choices}
           inputText={meta?.input_text}
+          agent={meta?.agent}
         />
       )}
     </div>
