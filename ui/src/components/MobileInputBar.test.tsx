@@ -1,13 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { MobileInputBar } from './MobileInputBar'
+import type { TerminalAddress } from '../api/terminal'
 
 const target = 'sess:0.0'
+const paneAddress: TerminalAddress = { kind: 'pane', target }
+const runAddress: TerminalAddress = { kind: 'run', id: 'run-1' }
 
 function lastRequest(): { url: string; params: URLSearchParams } {
   const calls = vi.mocked(fetch).mock.calls
   const [url, init] = calls[calls.length - 1]
   return { url: String(url), params: new URLSearchParams(String(init?.body)) }
+}
+
+function lastJSONRequest(): { url: string; body: unknown } {
+  const calls = vi.mocked(fetch).mock.calls
+  const [url, init] = calls[calls.length - 1]
+  return { url: String(url), body: JSON.parse(String(init?.body)) }
 }
 
 beforeEach(() => {
@@ -27,7 +36,7 @@ async function click(el: HTMLElement) {
 
 describe('MobileInputBar composer', () => {
   it('Send posts the typed text (server appends Enter) and clears the field', async () => {
-    render(<MobileInputBar target={target} />)
+    render(<MobileInputBar address={paneAddress} />)
     const field = screen.getByPlaceholderText('Send a message...') as HTMLTextAreaElement
     fireEvent.change(field, { target: { value: 'echo hi' } })
 
@@ -42,7 +51,7 @@ describe('MobileInputBar composer', () => {
   })
 
   it('Send with an empty field presses Enter', async () => {
-    render(<MobileInputBar target={target} />)
+    render(<MobileInputBar address={paneAddress} />)
     await click(screen.getByRole('button', { name: 'Send' }))
     const { params } = lastRequest()
     expect(params.get('input')).toBe('Enter')
@@ -50,7 +59,7 @@ describe('MobileInputBar composer', () => {
   })
 
   it('plain Enter inserts a newline; Ctrl+Enter sends', async () => {
-    render(<MobileInputBar target={target} />)
+    render(<MobileInputBar address={paneAddress} />)
     const field = screen.getByPlaceholderText('Send a message...')
     fireEvent.change(field, { target: { value: 'line1\nline2' } })
 
@@ -64,7 +73,7 @@ describe('MobileInputBar composer', () => {
   })
 
   it('uses the placeholder from the agent input text when given', () => {
-    render(<MobileInputBar target={target} inputText="Type a reply" />)
+    render(<MobileInputBar address={paneAddress} inputText="Type a reply" />)
     expect(screen.getByPlaceholderText('Type a reply')).toBeTruthy()
   })
 })
@@ -89,7 +98,7 @@ describe('MobileInputBar quick keys', () => {
     ['Ctrl+O', 'C-o'],
     ['Ctrl+Z', 'C-z'],
   ])('%s sends the %s key via the special route', async (label, key) => {
-    render(<MobileInputBar target={target} />)
+    render(<MobileInputBar address={paneAddress} />)
     await click(screen.getByRole('button', { name: label }))
     const { url, params } = lastRequest()
     expect(url).toBe(`/api/pane/${target}/send`)
@@ -100,7 +109,7 @@ describe('MobileInputBar quick keys', () => {
 
 describe('MobileInputBar choices', () => {
   it('/copy is sent as text (with Enter), not a keystroke', async () => {
-    render(<MobileInputBar target={target} />)
+    render(<MobileInputBar address={paneAddress} />)
     await click(screen.getByRole('button', { name: '/copy' }))
     const { params } = lastRequest()
     expect(params.get('input')).toBe('/copy')
@@ -108,14 +117,14 @@ describe('MobileInputBar choices', () => {
   })
 
   it('renders no choice group when the agent shows no prompt', () => {
-    render(<MobileInputBar target={target} />)
+    render(<MobileInputBar address={paneAddress} />)
     expect(screen.queryByTestId('choices')).toBeNull()
-    render(<MobileInputBar target={target} choices={[]} />)
+    render(<MobileInputBar address={paneAddress} choices={[]} />)
     expect(screen.queryByTestId('choices')).toBeNull()
   })
 
   it('renders each choice as a numbered button and answers with its ordinal key', async () => {
-    render(<MobileInputBar target={target} agent="claude-code" choices={['Yes', 'Yes, always', 'No']} />)
+    render(<MobileInputBar address={paneAddress} agent="claude-code" choices={['Yes', 'Yes, always', 'No']} />)
     const group = screen.getByTestId('choices')
     expect(group.querySelectorAll('button')).toHaveLength(3)
 
@@ -126,7 +135,7 @@ describe('MobileInputBar choices', () => {
   })
 
   it('non-Claude agents keep label + Enter (ordinals would be wrong once Amp reorders)', async () => {
-    render(<MobileInputBar target={target} agent="amp" choices={['Allow All', 'Yes', 'No']} />)
+    render(<MobileInputBar address={paneAddress} agent="amp" choices={['Allow All', 'Yes', 'No']} />)
     await click(screen.getByRole('button', { name: 'Yes' }))
     const { params } = lastRequest()
     expect(params.get('input')).toBe('Yes')
@@ -136,7 +145,7 @@ describe('MobileInputBar choices', () => {
 
 describe('MobileInputBar send failures', () => {
   function typeAndSend(text: string) {
-    render(<MobileInputBar target={target} />)
+    render(<MobileInputBar address={paneAddress} />)
     const field = screen.getByPlaceholderText('Send a message...') as HTMLTextAreaElement
     fireEvent.change(field, { target: { value: text } })
     return field
@@ -187,14 +196,14 @@ describe('MobileInputBar send failures', () => {
 
   it('quick-key failure surfaces a transient indicator', async () => {
     vi.mocked(fetch).mockResolvedValue({ ok: false, status: 500 } as Response)
-    render(<MobileInputBar target={target} />)
+    render(<MobileInputBar address={paneAddress} />)
     await click(screen.getByRole('button', { name: 'Ctrl+C' }))
     expect(screen.getByTestId('key-error').textContent).toContain('HTTP 500')
   })
 
   it('choice failure surfaces the indicator', async () => {
     vi.mocked(fetch).mockRejectedValue(new TypeError('x'))
-    render(<MobileInputBar target={target} agent="claude-code" choices={['Yes']} />)
+    render(<MobileInputBar address={paneAddress} agent="claude-code" choices={['Yes']} />)
     await click(screen.getByRole('button', { name: '1. Yes' }))
     expect(screen.getByTestId('key-error').textContent).toContain('offline')
   })
@@ -244,5 +253,90 @@ describe('MobileInputBar send failures', () => {
       expect(field.value).toBe('')
       expect(screen.queryByTestId('send-error')).toBeNull()
     })
+  })
+})
+
+// #59: same composer, addressed at a run instead of a raw pane target. Every
+// request must land on /api/runs/:id/input — never a /api/pane/ URL.
+describe('run address', () => {
+  function typeAndSend(text: string) {
+    render(<MobileInputBar address={runAddress} />)
+    const field = screen.getByPlaceholderText('Send a message...') as HTMLTextAreaElement
+    fireEvent.change(field, { target: { value: text } })
+    return field
+  }
+
+  it('Send posts {type: text} to /api/runs/:id/input', async () => {
+    const field = typeAndSend('echo hi')
+    await click(screen.getByRole('button', { name: 'Send' }))
+    const { url, body } = lastJSONRequest()
+    expect(url).toBe('/api/runs/run-1/input')
+    expect(body).toEqual({ type: 'text', text: 'echo hi' })
+    expect(field.value).toBe('')
+  })
+
+  it('Send with an empty field posts {type: key, key: Enter}', async () => {
+    render(<MobileInputBar address={runAddress} />)
+    await click(screen.getByRole('button', { name: 'Send' }))
+    const { url, body } = lastJSONRequest()
+    expect(url).toBe('/api/runs/run-1/input')
+    expect(body).toEqual({ type: 'key', key: 'Enter' })
+  })
+
+  it('Esc posts {type: key, key: Escape}', async () => {
+    render(<MobileInputBar address={runAddress} />)
+    await click(screen.getByRole('button', { name: 'Esc' }))
+    expect(lastJSONRequest().body).toEqual({ type: 'key', key: 'Escape' })
+  })
+
+  it('a claude-code choice tap posts its ordinal as a key', async () => {
+    render(<MobileInputBar address={runAddress} agent="claude-code" choices={['Yes', 'No']} />)
+    await click(screen.getByRole('button', { name: '2. No' }))
+    expect(lastJSONRequest().body).toEqual({ type: 'key', key: '2' })
+  })
+
+  it('a non-claude choice tap posts its label as text', async () => {
+    render(<MobileInputBar address={runAddress} agent="amp" choices={['Allow All']} />)
+    await click(screen.getByRole('button', { name: 'Allow All' }))
+    expect(lastJSONRequest().body).toEqual({ type: 'text', text: 'Allow All' })
+  })
+
+  it('attach posts {type: image} with the caption and encoded image', async () => {
+    const field = typeAndSend('look at this')
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    const file = new File(['x'], 'a.png', { type: 'image/png' })
+    await act(async () => {
+      fireEvent.change(input, { target: { files: [file] } })
+      await new Promise((r) => setTimeout(r, 20))
+    })
+    const { url, body } = lastJSONRequest()
+    expect(url).toBe('/api/runs/run-1/input')
+    expect(body).toMatchObject({ type: 'image', text: 'look at this' })
+    expect(field.value).toBe('')
+  })
+
+  it('offline then retry: keeps the text, shows send-error, then succeeds', async () => {
+    vi.mocked(fetch).mockRejectedValueOnce(new TypeError('Failed to fetch'))
+    const field = typeAndSend('echo hi')
+    await click(screen.getByRole('button', { name: 'Send' }))
+    expect(field.value).toBe('echo hi')
+    expect(screen.getByTestId('send-error').textContent).toContain('offline')
+
+    await click(screen.getByRole('button', { name: 'Send' }))
+    expect(field.value).toBe('')
+    expect(screen.queryByTestId('send-error')).toBeNull()
+  })
+
+  it('never builds a /api/pane/ URL for a run address', async () => {
+    render(<MobileInputBar address={runAddress} agent="claude-code" choices={['Yes']} />)
+    const field = screen.getByPlaceholderText('Send a message...')
+    fireEvent.change(field, { target: { value: 'echo hi' } })
+    await click(screen.getByRole('button', { name: 'Send' }))
+    await click(screen.getByRole('button', { name: 'Esc' }))
+    await click(screen.getByRole('button', { name: '1. Yes' }))
+
+    for (const [url] of vi.mocked(fetch).mock.calls) {
+      expect(String(url)).not.toContain('/api/pane/')
+    }
   })
 })

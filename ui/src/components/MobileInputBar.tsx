@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { sendImage, sendKey, sendText, type TerminalAddress } from '../api/terminal'
 
 interface Props {
-  target: string
+  address: TerminalAddress
   choices?: string[]
   inputText?: string
   agent?: string
@@ -41,23 +42,6 @@ const SpeechRecognitionCtor = (window as unknown as Record<string, unknown>).Spe
   | (new () => SpeechRecognitionLike)
   | undefined
 
-// Resolves to a short reason on failure, null on success.
-async function request(url: string, init: RequestInit): Promise<string | null> {
-  try {
-    const res = await fetch(url, { method: 'POST', signal: AbortSignal.timeout(15000), ...init })
-    if (res.ok) return null
-    return res.status === 401 ? 'session expired — reload' : `HTTP ${res.status}`
-  } catch (e) {
-    return e instanceof DOMException && e.name === 'TimeoutError' ? 'timed out' : 'offline'
-  }
-}
-
-const post = (target: string, params: Record<string, string>) =>
-  request(`/api/pane/${target}/send`, {
-    body: new URLSearchParams(params),
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-  })
-
 const readBase64 = (file: File) =>
   new Promise<string>((resolve, reject) => {
     const reader = new FileReader()
@@ -65,12 +49,6 @@ const readBase64 = (file: File) =>
     reader.onerror = () => reject(reader.error)
     reader.readAsDataURL(file)
   })
-
-const postJSON = (url: string, body: unknown) =>
-  request(url, { body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' } })
-
-const sendText = (target: string, text: string) => post(target, { input: text })
-const sendSpecial = (target: string, key: string) => post(target, { input: key, special: 'true' })
 
 type QuickAction = { label: string; action: 'text' | 'special'; value: string; title?: string }
 
@@ -118,7 +96,7 @@ const errorStyle: React.CSSProperties = {
   padding: '6px 10px 0',
 }
 
-export function MobileInputBar({ target, choices, inputText, agent }: Props) {
+export function MobileInputBar({ address, choices, inputText, agent }: Props) {
   const [text, setText] = useState('')
   const [listening, setListening] = useState(false)
   const [sending, setSending] = useState(false)
@@ -137,7 +115,7 @@ export function MobileInputBar({ target, choices, inputText, agent }: Props) {
     sendingRef.current = true
     setSending(true)
     setSendError(null)
-    const err = line ? await sendText(target, line) : await sendSpecial(target, 'Enter')
+    const err = line ? await sendText(address, line) : await sendKey(address, 'Enter')
     sendingRef.current = false
     setSending(false)
     if (err) {
@@ -161,13 +139,13 @@ export function MobileInputBar({ target, choices, inputText, agent }: Props) {
   // cursor), so an ordinal would be wrong there — they keep label + Enter.
   const handleChoice = async (index: number, label: string) => {
     reportKeyError(
-      agent === 'claude-code' ? await sendSpecial(target, String(index + 1)) : await sendText(target, label),
+      agent === 'claude-code' ? await sendKey(address, String(index + 1)) : await sendText(address, label),
     )
   }
 
   const handleQuickAction = useCallback(async (action: 'text' | 'special', value: string) => {
-    reportKeyError(action === 'special' ? await sendSpecial(target, value) : await sendText(target, value))
-  }, [target, reportKeyError])
+    reportKeyError(action === 'special' ? await sendKey(address, value) : await sendText(address, value))
+  }, [address, reportKeyError])
 
   const handleVoice = () => {
     if (!SpeechRecognitionCtor) return
@@ -212,11 +190,7 @@ export function MobileInputBar({ target, choices, inputText, agent }: Props) {
     setSending(true)
     setSendError(null)
     const err = await readBase64(file).then(
-      (data) =>
-        postJSON(`/api/pane/${target}/send-with-images`, {
-          text: sent.trim(),
-          images: [{ name: file.name, type: file.type, data }],
-        }),
+      (data) => sendImage(address, sent.trim(), { name: file.name, type: file.type, data }),
       () => 'could not read file',
     )
     sendingRef.current = false

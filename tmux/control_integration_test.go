@@ -88,6 +88,7 @@ func TestGapDeadlineResumeActuallyResumesThePane(t *testing.T) {
 		t.Skip("skipping integration test")
 	}
 
+	isolateTmux(t)
 	client := NewClient()
 	session := "houston-test-gapresume-" + strconv.Itoa(os.Getpid())
 	err := client.run("new-session", "-d", "-s", session, "-x", "80", "-y", "24")

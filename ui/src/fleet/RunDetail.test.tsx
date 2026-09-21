@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { RunDetail } from './RunDetail'
-import { paneWsTarget } from '../api/runs'
 import type { Run } from '../api/runs'
 import type { Terminal } from '@xterm/xterm'
 
@@ -29,9 +28,13 @@ async function lastTerminalInstance(): Promise<Terminal> {
 const now = 1_800_000_000_000 // fixed ms
 
 let mockConnected = true
+let lastSocketPath: string | null = null
 const sendInput = vi.fn()
 vi.mock('../hooks/usePaneSocket', () => ({
-  usePaneSocket: () => ({ connected: mockConnected, sendInput, sendResize: vi.fn() }),
+  usePaneSocket: (path: string | null) => {
+    lastSocketPath = path
+    return { connected: mockConnected, sendInput, sendResize: vi.fn() }
+  },
 }))
 
 let desktop = true
@@ -62,6 +65,7 @@ beforeEach(() => {
 afterEach(async () => {
   cleanup()
   mockConnected = true
+  lastSocketPath = null
   desktop = true
   sendInput.mockClear()
   vi.unstubAllGlobals()
@@ -105,6 +109,12 @@ describe('RunDetail terminal lifecycle', () => {
     render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
     expect(screen.queryByText(/coming soon/i)).toBeNull()
     expect(screen.queryByText(/session ended/i)).toBeNull()
+  })
+
+  it('addresses the terminal socket at the run, not the pane', () => {
+    const r = liveRun()
+    render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
+    expect(lastSocketPath).toBe(`/api/runs/${r.id}/terminal`)
   })
 
   it('case 1: shows "session ended" (not a silent Activity fallback) when caps.terminal drops after going live, and unmounts the terminal', () => {
@@ -204,10 +214,12 @@ describe('RunDetail terminal lifecycle', () => {
 
   it('desktop: hides the classic PaneHeader (RunDetail supplies its own header/tabs)', () => {
     const r = liveRun()
-    render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
+    const { container } = render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
 
-    // PaneHeader would render the pane target as text — it must not appear here.
-    expect(screen.queryByText(paneWsTarget(r.tmux!.pane_id))).toBeNull()
+    // PaneHeader would render the pane id as text — neither it nor any
+    // /api/pane reference must appear here (RunDetail addresses the run).
+    expect(screen.queryByText(r.tmux!.pane_id)).toBeNull()
+    expect(container.textContent).not.toContain('/api/pane')
     // RunDetail's own header/tabs are still present.
     expect(screen.getByLabelText('Back to Fleet')).toBeTruthy()
     expect(screen.getByText('Terminal')).toBeTruthy()
@@ -238,11 +250,10 @@ describe('RunDetail terminal lifecycle', () => {
     })
 
     const fetchMock = vi.mocked(fetch)
-    const expectedUrl = `/api/pane/${paneWsTarget(r.tmux!.pane_id)}/send`
     expect(fetchMock).toHaveBeenCalled()
     const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe(expectedUrl)
-    expect(String(init?.body)).toContain('y')
+    expect(url).toBe(`/api/runs/${r.id}/input`)
+    expect(JSON.parse(String(init?.body))).toEqual({ type: 'key', key: 'y' })
     expect(sendInput).not.toHaveBeenCalled()
   })
 })

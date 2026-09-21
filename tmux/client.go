@@ -2,7 +2,9 @@
 package tmux
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"regexp"
@@ -10,6 +12,10 @@ import (
 	"strings"
 	"time"
 )
+
+// ErrPaneNotFound indicates tmux ran and confirmed the pane is gone, as
+// opposed to tmux being unreachable or timing out.
+var ErrPaneNotFound = errors.New("pane not found")
 
 var tmuxEscapeRe = regexp.MustCompile(`#\[[^\]]*\]`)
 
@@ -43,6 +49,9 @@ type Pane struct {
 	Session string `json:"session"`
 	Window  int    `json:"window"`
 	Index   int    `json:"index"`
+	// ID is the tmux pane id, e.g. %307; when set, Target() addresses exactly
+	// this pane.
+	ID string `json:"-"`
 }
 
 type PaneInfo struct {
@@ -54,6 +63,9 @@ type PaneInfo struct {
 }
 
 func (p Pane) Target() string {
+	if p.ID != "" {
+		return p.ID
+	}
 	// If window/pane are default (0), just use session name
 	// This lets tmux pick the active window/pane
 	if p.Window == 0 && p.Index == 0 {
@@ -294,6 +306,59 @@ func (c *Client) GetPaneID(p Pane) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// goneServerStderrMarkers are the stderr substrings tmux is known to print
+// on exit 1 when the pane/server it was asked about no longer exists:
+// "can't find" (session/window/pane resolution failed on a live server),
+// "No such file or directory" (the socket path itself is absent), and
+// "no server running" (the socket file survives but its server has exited,
+// e.g. last session ended, kill-server, or a crash).
+var goneServerStderrMarkers = [][]byte{
+	[]byte("can't find"),
+	[]byte("No such file or directory"),
+	[]byte("no server running"),
+}
+
+// ResolvePane looks up a pane id's current session, window and index. tmux
+// reports a gone pane either by exiting 0 with every field blank (a live
+// server that doesn't know the id) or by exiting 1 with one of
+// goneServerStderrMarkers. Any other exit-1 failure, such as a protocol
+// mismatch with an older running server or an unreadable socket, means tmux
+// is unreachable and is returned with tmux's own message.
+func (c *Client) ResolvePane(paneID string) (Pane, error) {
+	out, err := c.output("display-message", "-t", paneID, "-p", "#{window_index} #{pane_index} #{session_name}")
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			for _, marker := range goneServerStderrMarkers {
+				if bytes.Contains(exitErr.Stderr, marker) {
+					return Pane{}, fmt.Errorf("%w: %s", ErrPaneNotFound, paneID)
+				}
+			}
+			return Pane{}, fmt.Errorf("tmux display-message: %w: %s", err, bytes.TrimSpace(exitErr.Stderr))
+		}
+		return Pane{}, err
+	}
+	// Session last, and only the newline trimmed: session names may contain
+	// spaces.
+	line := strings.TrimSuffix(string(out), "\n")
+	if strings.TrimSpace(line) == "" {
+		return Pane{}, fmt.Errorf("%w: %s", ErrPaneNotFound, paneID)
+	}
+	parts := strings.SplitN(line, " ", 3)
+	if len(parts) != 3 {
+		return Pane{}, fmt.Errorf("unexpected display-message output for %s: %q", paneID, line)
+	}
+	window, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return Pane{}, fmt.Errorf("unexpected window index for %s: %q", paneID, parts[0])
+	}
+	index, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return Pane{}, fmt.Errorf("unexpected pane index for %s: %q", paneID, parts[1])
+	}
+	return Pane{ID: paneID, Session: parts[2], Window: window, Index: index}, nil
 }
 
 // SendRawKeys sends literal text to a pane using hex encoding (-H).

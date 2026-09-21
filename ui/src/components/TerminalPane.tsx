@@ -5,7 +5,8 @@ import { UnicodeGraphemesAddon } from '@xterm/addon-unicode-graphemes'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import type { WSMeta } from '../api/types'
-import { useTerminalFontSize, type PaneInstance } from '../hooks/useLayout'
+import { terminalKey, terminalSocketPath, type TerminalAddress } from '../api/terminal'
+import { useTerminalFontSize } from '../hooks/useLayout'
 import { usePaneSocket } from '../hooks/usePaneSocket'
 import { useIsDesktop } from '../hooks/useMediaQuery'
 import { computeFitFontSize, computeFollowCursorTranslateX, useTouchGestures } from '../hooks/useTouchGestures'
@@ -15,7 +16,7 @@ import { MobileInputBar } from './MobileInputBar'
 import { ColumnScrubber } from './ColumnScrubber'
 
 interface Props {
-  pane: PaneInstance
+  address: TerminalAddress
   isFocused: boolean
   onFocus: () => void
   onClose: () => void
@@ -50,7 +51,8 @@ function writeSnapshot(term: Terminal, data: string, onDone?: () => void) {
 const MOBILE_TERM_WIDTH = 960
 const PAD = 6
 
-export function TerminalPane({ pane, isFocused, onFocus, onClose, hideHeader = false, onConnectionChange }: Props) {
+export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader = false, onConnectionChange }: Props) {
+  const key = terminalKey(address)
   // outerRef: observed by ResizeObserver; has padding that creates visual breathing room
   const outerRef = useRef<HTMLDivElement>(null)
   // innerRef: xterm.js is opened here so FitAddon measures the padded inner area
@@ -240,7 +242,7 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose, hideHeader = f
     }
   }
 
-  const { connected, sendInput, sendResize } = usePaneSocket(pane.target, {
+  const { connected, sendInput, sendResize } = usePaneSocket(terminalSocketPath(address), {
     onDims: ({ cols, rows }) => {
       const term = termRef.current
       if (!term) return
@@ -368,7 +370,7 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose, hideHeader = f
 
     termRef.current = term
     fitAddonRef.current = fitAddon
-    console.debug('[input] xterm mounted — isDesktop:', isDesktop, 'disableStdin:', term.options.disableStdin, 'target:', pane.target)
+    console.debug('[input] xterm mounted — isDesktop:', isDesktop, 'disableStdin:', term.options.disableStdin, 'key:', key)
 
     // Defer initial fit so the DOM has its final layout before measuring.
     // Replay cached seed — when isDesktop changes, xterm remounts but the
@@ -420,8 +422,8 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose, hideHeader = f
     }
   }, [isDesktop]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Reset state when switching pane targets — clear terminal so old content
-  // doesn't linger as "ghost text" while waiting for the new seed.
+  // Reset state when switching terminal addresses — clear terminal so old
+  // content doesn't linger as "ghost text" while waiting for the new seed.
   useEffect(() => {
     lastSeedRef.current = null
     paneDimsRef.current = null
@@ -431,7 +433,7 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose, hideHeader = f
     if (term) {
       term.clear()
     }
-  }, [pane.target])
+  }, [key])
 
   // Resize observer — refit when outer container dimensions change
   useEffect(() => {
@@ -533,7 +535,7 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose, hideHeader = f
     >
       {isDesktop && !hideHeader && (
         <PaneHeader
-          target={pane.target}
+          target={address.kind === 'pane' ? address.target : address.id}
           meta={meta}
           connected={connected}
           onClose={onClose}
@@ -628,8 +630,8 @@ export function TerminalPane({ pane, isFocused, onFocus, onClose, hideHeader = f
       )}
       {!isDesktop && (
         <MobileInputBar
-          key={pane.target}
-          target={pane.target}
+          key={key}
+          address={address}
           choices={meta?.choices}
           inputText={meta?.input_text}
           agent={meta?.agent}

@@ -91,7 +91,8 @@ type Server struct {
 	hub *hub.Hub
 
 	// runs composes the hook, tmux and crew sources into one Run per key.
-	runs *runs.Registry
+	runs     *runs.Registry
+	runPanes runPaneOps
 
 	// replyRunner delivers a crew answer. It exists so a test can observe that
 	// no command ran, which no assertion about the response alone can prove.
@@ -180,6 +181,7 @@ func New(cfg Config) (*Server, error) {
 		replyRunner:    execCrewReply,
 		wsRepos:        newRepoClassifier(),
 		wsTmux:         tmuxClient,
+		runPanes:       tmuxClient,
 		dispatchRunner: execDispatch,
 		dispatchRepos: func() ([]dispatchRepo, error) {
 			return listDispatchRepos(tmuxClient, gitCommonDir)
@@ -283,6 +285,8 @@ func (s *Server) Handler() http.Handler {
 	apiMux.HandleFunc("/api/runs", s.handleRunsSnapshot)
 	apiMux.HandleFunc("/api/runs/stream", s.handleRunsStream)
 	apiMux.HandleFunc("POST /api/runs/{id}/reply", s.handleRunReply)
+	apiMux.HandleFunc("GET /api/runs/{id}/terminal", s.handleRunTerminal)
+	apiMux.HandleFunc("POST /api/runs/{id}/input", s.handleRunInput)
 	apiMux.HandleFunc("GET /api/workspace", s.handleWorkspace)
 	apiMux.HandleFunc("POST /api/dispatch", s.handleDispatch)
 	apiMux.HandleFunc("GET /api/dispatch/options", s.handleDispatchOptions)
@@ -845,39 +849,20 @@ func (s *Server) handlePaneSend(w http.ResponseWriter, r *http.Request, pane tmu
 	w.WriteHeader(http.StatusOK)
 }
 
-func (s *Server) handlePaneSendWithImages(w http.ResponseWriter, r *http.Request, pane tmux.Pane) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+type imageUpload struct {
+	Name string `json:"name"`
+	Type string `json:"type"`
+	Data string `json:"data"` // base64 encoded
+}
 
-	r.Body = http.MaxBytesReader(w, r.Body, 50*1024*1024) // 50MB limit
-
-	var req struct {
-		Text   string `json:"text"`
-		Images []struct {
-			Name string `json:"name"`
-			Type string `json:"type"`
-			Data string `json:"data"` // base64 encoded
-		} `json:"images"`
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		slog.Error("failed to decode images request", "error", err)
-		http.Error(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	if len(req.Images) == 0 {
-		http.Error(w, "no images provided", http.StatusBadRequest)
-		return
-	}
-
-	// Process all images and create temp files
+// saveImages writes each upload to /tmp and schedules its removal after an
+// hour. On failure it removes whatever it already wrote and returns the HTTP
+// status and message to report.
+func saveImages(images []imageUpload) (paths []string, status int, err error) {
 	var tmpFiles []string
 	var cleanupOnError []string
 
-	for i, img := range req.Images {
+	for i, img := range images {
 		// Decode base64 image
 		imageData, err := base64.StdEncoding.DecodeString(img.Data)
 		if err != nil {
@@ -886,8 +871,7 @@ func (s *Server) handlePaneSendWithImages(w http.ResponseWriter, r *http.Request
 			for _, f := range cleanupOnError {
 				_ = os.Remove(f)
 			}
-			http.Error(w, fmt.Sprintf("invalid image data at index %d", i), http.StatusBadRequest)
-			return
+			return nil, http.StatusBadRequest, fmt.Errorf("invalid image data at index %d", i)
 		}
 
 		// Write image to temp file with sanitized filename
@@ -900,8 +884,7 @@ func (s *Server) handlePaneSendWithImages(w http.ResponseWriter, r *http.Request
 			for _, f := range cleanupOnError {
 				_ = os.Remove(f)
 			}
-			http.Error(w, "failed to save image", http.StatusInternalServerError)
-			return
+			return nil, http.StatusInternalServerError, errors.New("failed to save image")
 		}
 
 		if _, err := tmpFile.Write(imageData); err != nil {
@@ -912,8 +895,7 @@ func (s *Server) handlePaneSendWithImages(w http.ResponseWriter, r *http.Request
 			for _, f := range cleanupOnError {
 				_ = os.Remove(f)
 			}
-			http.Error(w, "failed to save image", http.StatusInternalServerError)
-			return
+			return nil, http.StatusInternalServerError, errors.New("failed to save image")
 		}
 		_ = tmpFile.Close()
 
@@ -927,6 +909,38 @@ func (s *Server) handlePaneSendWithImages(w http.ResponseWriter, r *http.Request
 		time.AfterFunc(1*time.Hour, func() {
 			_ = os.Remove(path)
 		})
+	}
+	return tmpFiles, 0, nil
+}
+
+func (s *Server) handlePaneSendWithImages(w http.ResponseWriter, r *http.Request, pane tmux.Pane) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 50*1024*1024) // 50MB limit
+
+	var req struct {
+		Text   string        `json:"text"`
+		Images []imageUpload `json:"images"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		slog.Error("failed to decode images request", "error", err)
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.Images) == 0 {
+		http.Error(w, "no images provided", http.StatusBadRequest)
+		return
+	}
+
+	tmpFiles, status, err := saveImages(req.Images)
+	if err != nil {
+		http.Error(w, err.Error(), status)
+		return
 	}
 
 	// Send all image paths and text to Claude Code as a single prompt line
