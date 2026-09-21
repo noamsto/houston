@@ -1,8 +1,10 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { Run } from '../api/runs'
-import { needsYou } from './staleness'
+import { fetchDispatchOptions } from '../api/dispatch'
+import { isFresh } from './staleness'
+import { agoLabel } from './format'
 import { crewShortId } from './fleetList'
-import { RunCard } from './RunCard'
+import { countsLabel, dispatchHref, groupCrews, type CrewGroup } from './crewsModel'
 import { ReplyComposer } from './ReplyComposer'
 import './fleet.css'
 
@@ -12,46 +14,117 @@ interface CrewsViewProps {
   onOpen?: (r: Run) => void
 }
 
-interface CrewGroup {
+interface CrewRepo {
   name: string
-  members: Run[]
-  blocked: number
-  lastActive: number
+  path: string
+}
+
+function phase(run: Run): string {
+  if (run.state === 'blocked') return run.activity.message || 'waiting on you'
+  const { tool, hint } = run.activity
+  if (tool) return hint ? `${tool} · ${hint}` : tool
+  return run.state
+}
+
+function Member({ run, now, onOpen }: { run: Run; now: number; onOpen?: (r: Run) => void }) {
+  const stale = !isFresh(run, now)
+  return (
+    <div className="crews-member">
+      <button type="button" className="crews-member-main" onClick={() => onOpen?.(run)}>
+        <span className="crews-member-head">
+          <span className="crews-swatch" style={{ background: run.crew?.color || 'var(--text-faint)' }} />
+          <span className="crews-codename">{run.crew?.codename || 'worker'}</span>
+          <span className="crews-when">
+            <span className="run-dot" style={{ background: `var(--state-${run.state}, var(--text-faint))` }} />
+            <span className={`run-age${stale ? ' stale' : ''}`}>{agoLabel(run.updated_at, now)}</span>
+          </span>
+        </span>
+        <span className="crews-title">{run.issue?.title || run.branch}</span>
+        <span className="run-sub crews-phase">{phase(run)}</span>
+        {run.question && <span className="run-question crews-question">{run.question.text}</span>}
+        <span className="run-chips">
+          {run.crew?.tier && <span className="run-chip tier">{run.crew.tier}</span>}
+          <span className="run-chip">{run.agent}</span>
+          {run.issue && <span className="run-chip issue">{run.issue.id}</span>}
+          {run.stale === true && <span className="run-chip stale">stale</span>}
+        </span>
+      </button>
+      {run.pr &&
+        (run.pr.url ? (
+          <a
+            className={`run-chip pr crews-pr${run.pr.check_state === 'failure' ? ' failing' : ''}`}
+            href={run.pr.url}
+            target="_blank"
+            rel="noreferrer"
+          >
+            #{run.pr.number}
+          </a>
+        ) : (
+          <span className={`run-chip pr crews-pr${run.pr.check_state === 'failure' ? ' failing' : ''}`}>
+            #{run.pr.number}
+          </span>
+        ))}
+      {run.question?.via === 'crew' && <ReplyComposer runId={run.id} />}
+      {run.question?.via === 'pane' && <div className="crews-hint">Answer in the terminal — tap to open.</div>}
+    </div>
+  )
+}
+
+function Crew({
+  group,
+  repo,
+  now,
+  onOpen,
+}: {
+  group: CrewGroup
+  repo: CrewRepo | undefined
+  now: number
+  onOpen?: (r: Run) => void
+}) {
+  return (
+    <section className="crews-crew">
+      <div className="crews-head">
+        <span className="crews-repo">{repo?.name ?? 'unknown repo'}</span>
+        <span className="crews-id" title={group.name}>
+          {crewShortId(group.name)}
+        </span>
+        <span className="crews-counts">{countsLabel(group.counts)}</span>
+        <a className="crews-dispatch" href={dispatchHref(repo?.path, group.name)}>
+          Dispatch here
+        </a>
+      </div>
+      {group.members.map((r) => (
+        <Member key={r.id} run={r} now={now} onOpen={onOpen} />
+      ))}
+    </section>
+  )
 }
 
 export function CrewsView({ runs, now, onOpen }: CrewsViewProps) {
-  const groups = useMemo<CrewGroup[]>(() => {
-    const byCrew = new Map<string, Run[]>()
-    for (const r of runs) {
-      // No crew, or a crew with no id, belongs to no group — the Fleet tab
-      // already lists every run; this would just be a second fleet list.
-      const name = r.crew?.name
-      if (!name) continue
-      const list = byCrew.get(name)
-      if (list) list.push(r)
-      else byCrew.set(name, [r])
-    }
+  const { live, finished } = useMemo(() => groupCrews(runs, now), [runs, now])
+  const [showFinished, setShowFinished] = useState(false)
+  const [repos, setRepos] = useState<Map<string, CrewRepo>>(() => new Map())
 
-    const entries = Array.from(byCrew.entries()).map(([name, members]) => {
-      const sorted = [...members].sort((a, b) => {
-        const an = needsYou(a, now) ? 1 : 0
-        const bn = needsYou(b, now) ? 1 : 0
-        if (an !== bn) return bn - an
-        return b.updated_at - a.updated_at
+  // Optional enrichment for repo name/path. A failure is tolerated silently, and
+  // it is not refetched, so a crew created later shows no repo name until reload.
+  useEffect(() => {
+    let cancelled = false
+    fetchDispatchOptions()
+      .then((opts) => {
+        if (cancelled) return
+        const byCrew = new Map<string, CrewRepo>()
+        for (const r of opts.repos) {
+          for (const crew of r.crews) byCrew.set(crew, { name: r.name, path: r.path })
+        }
+        setRepos(byCrew)
       })
-      const blocked = sorted.filter((m) => needsYou(m, now)).length
-      const lastActive = sorted.reduce((max, m) => Math.max(max, m.updated_at), 0)
-      return { name, members: sorted, blocked, lastActive }
-    })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
-    entries.sort((a, b) => {
-      const ab = a.blocked > 0 ? 1 : 0
-      const bb = b.blocked > 0 ? 1 : 0
-      if (ab !== bb) return bb - ab
-      return b.lastActive - a.lastActive
-    })
-    return entries
-  }, [runs, now])
+  const none = live.length === 0 && finished.length === 0
 
   return (
     <div className="crews mocha">
@@ -59,27 +132,27 @@ export function CrewsView({ runs, now, onOpen }: CrewsViewProps) {
         <h1>Crews</h1>
       </header>
 
-      {groups.length === 0 && (
-        <div className="fleet-empty">No crews yet — runs appear here once they carry a crew id.</div>
-      )}
+      {none && <div className="fleet-empty">No crews yet — runs appear here once they carry a crew id.</div>}
+      {!none && live.length === 0 && <div className="fleet-empty crews-none-live">No live crews.</div>}
 
-      {groups.map((g) => (
-        <section key={g.name}>
-          <div className="crews-group" title={g.name}>
-            <span>{crewShortId(g.name)}</span>
-            <span>
-              {g.members.length} member{g.members.length === 1 ? '' : 's'}
-              {g.blocked > 0 ? ` · ${g.blocked} blocked` : ''}
-            </span>
-          </div>
-          {g.members.map((r) => (
-            <div key={r.id}>
-              <RunCard run={r} now={now} onOpen={onOpen} />
-              {r.question?.via === 'crew' && <ReplyComposer runId={r.id} />}
-            </div>
-          ))}
-        </section>
+      {live.map((g) => (
+        <Crew key={g.name} group={g} repo={repos.get(g.name)} now={now} onOpen={onOpen} />
       ))}
+
+      {finished.length > 0 && (
+        <>
+          <button
+            type="button"
+            className="crews-finished-toggle"
+            aria-expanded={showFinished}
+            onClick={() => setShowFinished((v) => !v)}
+          >
+            Finished ({finished.length})
+          </button>
+          {showFinished &&
+            finished.map((g) => <Crew key={g.name} group={g} repo={repos.get(g.name)} now={now} onOpen={onOpen} />)}
+        </>
+      )}
     </div>
   )
 }
