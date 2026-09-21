@@ -77,10 +77,47 @@ func TestResolvePaneIntegration(t *testing.T) {
 	}
 }
 
+// TestResolvePaneVanishedIntegration covers the "server up, pane gone"
+// branch of ResolvePane: with a live session present, tmux resolves -t for
+// an unknown pane id by exiting 0 with every requested field blank instead
+// of erroring. A session is created first so this branch runs regardless of
+// what else is on the machine.
 func TestResolvePaneVanishedIntegration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
+	c := NewClient()
+	newResolveSession(t, c, "houston-test-resolve-vanished")
+
+	p, err := c.ResolvePane("%999999")
+	if err == nil {
+		t.Fatalf("ResolvePane(%%999999) = %+v, want an error", p)
+	}
+	if !errors.Is(err, ErrPaneNotFound) {
+		t.Errorf("ResolvePane(%%999999) error = %v, want ErrPaneNotFound", err)
+	}
+}
+
+// TestResolvePaneNoServerIntegration covers the "no server running" branch
+// of ResolvePane: display-message exits 1 when there is no tmux server at
+// all. TMUX_TMPDIR is pointed at a fresh, empty directory (and TMUX cleared)
+// so tmux can't find or attach to any server, including the user's real one.
+// Unix socket paths are capped around 100 bytes, so this uses a short
+// os.MkdirTemp("/tmp", ...) directory rather than t.TempDir(), whose path is
+// usually too long.
+func TestResolvePaneNoServerIntegration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	dir, err := os.MkdirTemp("/tmp", "hx")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+
+	t.Setenv("TMUX", "")
+	t.Setenv("TMUX_TMPDIR", dir)
+
 	p, err := NewClient().ResolvePane("%999999")
 	if err == nil {
 		t.Fatalf("ResolvePane(%%999999) = %+v, want an error", p)
