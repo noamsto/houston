@@ -4,6 +4,7 @@ import (
 	"errors"
 	"math/rand/v2"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -17,11 +18,35 @@ import (
 func newResolveSession(t *testing.T, c *Client, prefix string) string {
 	t.Helper()
 	name := prefix + "-" + strconv.Itoa(os.Getpid()) + "-" + strconv.FormatUint(rand.Uint64(), 36)
-	if err := c.run("new-session", "-d", "-s", name, "-x", "80", "-y", "24"); err != nil {
-		t.Fatalf("new-session %q: %v", name, err)
-	}
+	tmuxRun(t, c, "new-session", "-d", "-s", name, "-x", "80", "-y", "24")
 	t.Cleanup(func() { _ = c.run("kill-session", "-t", name) })
 	return name
+}
+
+// isolateTmux points tmux at a fresh private server directory for the test.
+// On a machine with no other tmux server, killing the last session tears the
+// default server down asynchronously, so the next test's new-session can race
+// that exit and fail with "server exited unexpectedly". A server per test
+// removes the shared-teardown race, and keeps the user's real server out of
+// it. Unix socket paths are capped near 100 bytes, hence /tmp, not t.TempDir().
+func isolateTmux(t *testing.T) {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "hx")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	t.Setenv("TMUX", "")
+	t.Setenv("TMUX_TMPDIR", dir)
+}
+
+// tmuxRun runs a tmux command on the client's server and reports tmux's own
+// stderr on failure, which Client.run discards.
+func tmuxRun(t *testing.T, c *Client, args ...string) {
+	t.Helper()
+	if out, err := exec.Command(c.tmuxPath, args...).CombinedOutput(); err != nil {
+		t.Fatalf("tmux %s: %v: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
 }
 
 func paneIDOf(t *testing.T, c *Client, target string) string {
@@ -37,27 +62,19 @@ func TestResolvePaneIntegration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
+	isolateTmux(t)
 	c := NewClient()
 	session := newResolveSession(t, c, "houston-test-resolve")
 
-	// A window 0 / pane 0 regardless of the user's base-index, plus a split
+	// A window 0 / pane 0 regardless of the user's base-index (-k replaces
+	// window 0 when base-index is 0 and it already exists), plus a split
 	// pane in another window, so both the bare-session case and a
 	// non-default position are resolved.
-	if err := c.run("new-window", "-d", "-t", session+":0"); err != nil {
-		t.Fatalf("new-window: %v", err)
-	}
-	if err := c.run("set-option", "-w", "-t", session+":0", "pane-base-index", "0"); err != nil {
-		t.Fatalf("pane-base-index: %v", err)
-	}
-	if err := c.run("new-window", "-d", "-t", session+":3"); err != nil {
-		t.Fatalf("new-window: %v", err)
-	}
-	if err := c.run("set-option", "-w", "-t", session+":3", "pane-base-index", "0"); err != nil {
-		t.Fatalf("pane-base-index: %v", err)
-	}
-	if err := c.run("split-window", "-d", "-t", session+":3"); err != nil {
-		t.Fatalf("split-window: %v", err)
-	}
+	tmuxRun(t, c, "new-window", "-d", "-k", "-t", session+":0")
+	tmuxRun(t, c, "set-option", "-w", "-t", session+":0", "pane-base-index", "0")
+	tmuxRun(t, c, "new-window", "-d", "-t", session+":3")
+	tmuxRun(t, c, "set-option", "-w", "-t", session+":3", "pane-base-index", "0")
+	tmuxRun(t, c, "split-window", "-d", "-t", session+":3")
 
 	cases := []struct {
 		target        string
@@ -88,6 +105,7 @@ func TestResolvePaneVanishedIntegration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
+	isolateTmux(t)
 	c := NewClient()
 	newResolveSession(t, c, "houston-test-resolve-vanished")
 
@@ -204,6 +222,7 @@ func TestResolvePaneSessionWithSpaceIntegration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
+	isolateTmux(t)
 	c := NewClient()
 	session := newResolveSession(t, c, "houston test resolve")
 
