@@ -91,8 +91,7 @@ type Server struct {
 	hub *hub.Hub
 
 	// runs composes the hook, tmux and crew sources into one Run per key.
-	runs *runs.Registry
-	// runPanes resolves and drives a run's pane for the run terminal routes.
+	runs     *runs.Registry
 	runPanes runPaneOps
 
 	// replyRunner delivers a crew answer. It exists so a test can observe that

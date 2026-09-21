@@ -166,9 +166,9 @@ func (s *Server) handleRunInput(w http.ResponseWriter, r *http.Request) {
 	inputOutcome(w, id, pane, in, http.StatusNoContent, "delivered")
 }
 
-// inputOutcome logs the attempt and writes its result. Unlike the legacy pane
-// routes it never logs a client string verbatim — only text length, and the
-// type and key names once they are known to be ours.
+// inputOutcome logs the attempt and writes its result. It never logs a client
+// string verbatim: only text length, and the type and key names once they are
+// known to be ours.
 func inputOutcome(w http.ResponseWriter, id string, pane tmux.Pane, in runInput, code int, detail string) {
 	attrs := []any{"id", id, "pane", pane.Target(), "status", code, "outcome", detail}
 	switch in.Type {

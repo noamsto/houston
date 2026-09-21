@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
-// #59 moved fleet/ to run-addressed terminal I/O; the legacy /api/pane/*
-// routes must stay confined to the classic views (api/terminal.ts's pane
-// branch, SplitContainer). This is a static guard, not a behavioral test —
-// scans non-test sources only, so it can't see itself or other test files.
+// The legacy /api/pane/* routes stay confined to the classic views (the pane
+// branch of api/terminal.ts). Scans non-test sources only, so the literal in
+// this file and in other tests' assertions doesn't trip it.
 const fleetSources = import.meta.glob('./**/*.{ts,tsx}', { query: '?raw', import: 'default', eager: true }) as Record<
   string,
   string

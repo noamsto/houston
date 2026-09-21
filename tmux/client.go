@@ -320,16 +320,12 @@ var goneServerStderrMarkers = [][]byte{
 	[]byte("no server running"),
 }
 
-// ResolvePane looks up a pane id's current session, window and index. A gone
-// pane surfaces two ways depending on whether the tmux server has any other
-// session left: with none, display-message exits 1 with one of
-// goneServerStderrMarkers; with one, -p's target resolution fails silently
-// and it exits 0 with every requested field blank instead of erroring. tmux
-// also exits 1 for reasons that have nothing to do with the pane — a stale
-// socket left behind after a NixOS switch upgrades the tmux version, or a
-// permissions problem — so exit 1 only counts as ErrPaneNotFound when
-// stderr itself says the pane/server is missing; any other exit-1 message is
-// surfaced as-is.
+// ResolvePane looks up a pane id's current session, window and index. tmux
+// reports a gone pane either by exiting 0 with every field blank (a live
+// server that doesn't know the id) or by exiting 1 with one of
+// goneServerStderrMarkers. Any other exit-1 failure, such as a protocol
+// mismatch with an older running server or an unreadable socket, means tmux
+// is unreachable and is returned with tmux's own message.
 func (c *Client) ResolvePane(paneID string) (Pane, error) {
 	out, err := c.output("display-message", "-t", paneID, "-p", "#{window_index} #{pane_index} #{session_name}")
 	if err != nil {
