@@ -96,7 +96,7 @@ describe('Shell layout selection', () => {
       flip(true)
 
       expect(screen.getByLabelText('console')).toBeTruthy()
-      expect(screen.getByText('repo-a/branch-a')).toBeTruthy()
+      expect(screen.getByText('branch-a').closest('.run-card')).toBeTruthy()
       expect(events.instances.length).toBe(1)
       expect(events.instances[0].closed).toBe(false)
     } finally {

@@ -1,13 +1,11 @@
 package server
 
 import (
-	"context"
 	"log/slog"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"sync"
-	"time"
+
+	"github.com/noamsto/houston/runs"
 )
 
 // mainCheckoutChecker answers whether a @git_root is a repo's main checkout,
@@ -15,10 +13,6 @@ import (
 type mainCheckoutChecker interface {
 	isMainCheckout(root string) bool
 }
-
-// repoClassifierTimeout bounds the git call below so a hung git cannot park
-// a request forever. Mirrors runs/crewsource.go's crewDirTimeout.
-const repoClassifierTimeout = 5 * time.Second
 
 // repoClassifier answers isMainCheckout by shelling out to git once per
 // distinct root and caching the result for the process lifetime — the same
@@ -39,16 +33,7 @@ func newRepoClassifier() *repoClassifier {
 	return &repoClassifier{cache: make(map[string]bool), commonDir: gitCommonDir}
 }
 
-func gitCommonDir(root string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), repoClassifierTimeout)
-	defer cancel()
-
-	out, err := exec.CommandContext(ctx, "git", "-C", root, "rev-parse", "--path-format=absolute", "--git-common-dir").Output()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(out)), nil
-}
+func gitCommonDir(root string) (string, error) { return runs.GitCommonDir(root) }
 
 // isMainCheckout is true iff root's own .git is a direct child of root — a
 // linked worktree's common dir resolves to the original repo's .git,

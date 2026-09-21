@@ -87,6 +87,8 @@ export interface Run {
   agent: string
   state: RunState
   repo?: string
+  project?: string // main repo name, stable across a repo's worktrees
+  role?: 'dispatcher' | 'worker' // absent = solo
   branch?: string
   worktree?: string
   tmux?: TmuxRef

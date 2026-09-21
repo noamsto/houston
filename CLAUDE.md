@@ -231,6 +231,15 @@ There is no WIDE/FIT toggle — that affordance was removed. A terminal rework
 section once it ships rather than trusting the bullets above for anything not
 already verified in `TerminalPane.tsx` / `useTouchGestures.ts`.
 
+## Project and role (Fleet)
+
+Every run can carry `project` and `role` (`runs/project.go`, `runs/tmuxsource.go`, `runs/crewsource.go`).
+
+- **`project`** is the main repo's name: `git rev-parse --git-common-dir` of the window's `@git_root`, so a linked worktree resolves to its main repo rather than its own directory name. Crew-bus runs derive it from the bus directory (`<common>/crew`) with no extra git call. Hook-only runs (no tmux window) get no `project`; the UI falls back to `repo`, which `repoAndBranch` already strips of the worktree leaf.
+- **`role`** is `dispatcher` when the window's `@crew_name` is the literal `dispatcher` (the dispatcher launcher, `adapters/core/dispatcher.sh`, sets it), `worker` for any other non-empty `@crew_name` and for every crew-bus run, and absent for a solo session. A dispatcher started any other way reads as solo. `worker` never overwrites `dispatcher` when layers merge.
+- A dispatcher card's `N workers · M blocked` line counts the workers with the same project and host; it is hidden when more than one live dispatcher shares that project and host, because the bus's crew id is not on the dispatcher's own run.
+- The Fleet list's **Group by project** toggle (`houston-fleet-group-by-project` in localStorage) is off by default: the flat list keeps needs-you-first across all repos, and the project chip is always visible.
+
 ## WebSocket Protocol
 
 The primary terminal route is `GET /api/runs/:id/terminal`

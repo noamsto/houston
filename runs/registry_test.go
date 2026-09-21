@@ -254,6 +254,65 @@ func TestSignatureCoversCrewColor(t *testing.T) {
 	}
 }
 
+func TestSignatureCoversProjectAndRole(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		a, b Run
+	}{
+		{"project", Run{Agent: "claude", Project: "a"}, Run{Agent: "claude", Project: "b"}},
+		{"role", Run{Agent: "claude", Role: RoleWorker}, Run{Agent: "claude", Role: RoleDispatcher}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			r := NewRegistry(DefaultOrder)
+			sub := r.Subscribe()
+			defer r.Unsubscribe(sub)
+
+			r.Apply(Delta{Source: "tmux", Key: "%1", Run: tt.a})
+			r.Apply(Delta{Source: "tmux", Key: "%1", Run: tt.b})
+
+			if n := len(sub); n != 2 {
+				t.Fatalf("%d broadcasts, want 2 — a %s change must reach a subscriber", n, tt.name)
+			}
+		})
+	}
+}
+
+func TestMergeIntoRole(t *testing.T) {
+	tests := []struct {
+		name     string
+		dst, src string
+		want     string
+	}{
+		{"empty src keeps dst", RoleWorker, "", RoleWorker},
+		{"worker fills empty", "", RoleWorker, RoleWorker},
+		{"dispatcher fills empty", "", RoleDispatcher, RoleDispatcher},
+		{"worker never demotes dispatcher", RoleDispatcher, RoleWorker, RoleDispatcher},
+		{"dispatcher promotes worker", RoleWorker, RoleDispatcher, RoleDispatcher},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dst := Run{Role: tt.dst, Project: "keep"}
+			mergeInto(&dst, Run{Role: tt.src})
+			if dst.Role != tt.want {
+				t.Errorf("Role = %q, want %q", dst.Role, tt.want)
+			}
+			if dst.Project != "keep" {
+				t.Errorf("Project = %q, an unset src Project must not blank it", dst.Project)
+			}
+		})
+	}
+}
+
+func TestDispatcherRoleSurvivesCrewLayer(t *testing.T) {
+	r := NewRegistry(DefaultOrder)
+	r.Apply(Delta{Source: "tmux", Key: "%1", Run: Run{Agent: "claude", Role: RoleDispatcher}})
+	r.Apply(Delta{Source: "crew", Key: "%1", Run: Run{Role: RoleWorker}})
+
+	if got := r.Snapshot()[0].Role; got != RoleDispatcher {
+		t.Errorf("Role = %q, want dispatcher — the crew layer's worker must not demote it", got)
+	}
+}
+
 func TestSignatureCoversQuestionVia(t *testing.T) {
 	r := NewRegistry(DefaultOrder)
 	sub := r.Subscribe()

@@ -2,13 +2,14 @@ import { useEffect, useMemo, useState } from 'react'
 import type { Run } from '../api/runs'
 import { needsYou } from './staleness'
 import { filterRuns, groupByHost, crewShortId, type Filter } from './fleetList'
-import { RunCard } from './RunCard'
+import { RunList } from './RunList'
 import { CrewsView } from './CrewsView'
 import { WorkspaceView } from './WorkspaceView'
 import { DispatchView } from './DispatchView'
 import { RunDetail } from './RunDetail'
 import { parseDispatchRoute, runHash, useDetailRoute } from './routes'
 import type { ShellData } from './MobileShell'
+import { useGroupByProject } from '../hooks/useLayout'
 import '../theme/mocha.css'
 import './fleet.css'
 
@@ -24,6 +25,7 @@ export function ConsoleShell({ runs, connected, hasSnapshot, now }: ShellData) {
   const [section, setSection] = useState<Section>(() => (parseDispatchRoute(window.location.hash) ? 'dispatch' : 'fleet'))
   const [filter, setFilter] = useState<Filter>('active')
   const [crew, setCrew] = useState<string | null>(null)
+  const [grouped, setGrouped] = useGroupByProject()
   const route = useDetailRoute()
 
   useEffect(() => {
@@ -198,13 +200,23 @@ export function ConsoleShell({ runs, connected, hasSnapshot, now }: ShellData) {
           <div className="fleet mocha">
             <header className="fleet-nav">
               <h1>{FILTER_LABEL[filter]}</h1>
-              {crew && (
-                <div className="fleet-nav-actions">
-                  <span className="run-chip codename">{crewShortId(crew)}</span>
-                  <span className="console-narrow">{visible.length} of {base.length}</span>
-                  <button type="button" className="fleet-classic" aria-label="Clear crew filter" onClick={() => setCrew(null)}>Clear</button>
-                </div>
-              )}
+              <div className="fleet-nav-actions">
+                {crew && (
+                  <>
+                    <span className="run-chip codename">{crewShortId(crew)}</span>
+                    <span className="console-narrow">{visible.length} of {base.length}</span>
+                    <button type="button" className="fleet-classic" aria-label="Clear crew filter" onClick={() => setCrew(null)}>Clear</button>
+                  </>
+                )}
+                <button
+                  type="button"
+                  className={`fleet-group-toggle${grouped ? ' on' : ''}`}
+                  aria-pressed={grouped}
+                  onClick={() => setGrouped(!grouped)}
+                >
+                  Group by project
+                </button>
+              </div>
             </header>
 
             {visible.length === 0 && (
@@ -213,17 +225,7 @@ export function ConsoleShell({ runs, connected, hasSnapshot, now }: ShellData) {
               </div>
             )}
 
-            {groups.map(([host, list]) => (
-              <section key={host}>
-                <div className="fleet-group">
-                  <span className={host === 'local' ? 'host-local' : 'host-remote'}>{host}</span>
-                  <span>{list.length}</span>
-                </div>
-                {list.map((r) => (
-                  <RunCard key={r.id} run={r} now={now} onOpen={open} selected={route?.id === r.id} />
-                ))}
-              </section>
-            ))}
+            <RunList groups={groups} allRuns={runs} now={now} onOpen={open} selectedId={route?.id} groupByProject={grouped} />
           </div>
         </div>
 

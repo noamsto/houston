@@ -143,3 +143,54 @@ describe('RunCard crew-bus fields', () => {
     expect(container.querySelector('a.run-chip.pr')?.textContent).toBe('PR')
   })
 })
+
+describe('RunCard project and role', () => {
+  it('shows the project chip from run.project and the branch as the name', () => {
+    const r = run({ project: 'houston', repo: 'houston-feat', branch: 'feat/77' })
+    const { container } = render(<RunCard run={r} now={now} />)
+    expect(container.querySelector('.run-project')?.textContent).toBe('houston')
+    expect(container.querySelector('.run-name')?.textContent).toBe('feat/77')
+  })
+
+  it('falls back to repo for the project chip', () => {
+    const r = run({ repo: 'houston', branch: 'main' })
+    const { container } = render(<RunCard run={r} now={now} />)
+    expect(container.querySelector('.run-project')?.textContent).toBe('houston')
+  })
+
+  it('falls back to the run id for the name when there is no branch or repo', () => {
+    const { container } = render(<RunCard run={run()} now={now} />)
+    expect(container.querySelector('.run-project')?.textContent).toBe('unknown')
+    expect(container.querySelector('.run-name')?.textContent).toBe('pane-1')
+  })
+
+  it('renders a role badge for a dispatcher and a worker, none for solo', () => {
+    const { container, rerender } = render(<RunCard run={run({ role: 'dispatcher' })} now={now} />)
+    expect(container.querySelector('.run-role.dispatcher')?.textContent).toBe('dispatcher')
+
+    rerender(<RunCard run={run({ role: 'worker' })} now={now} />)
+    expect(container.querySelector('.run-role.worker')?.textContent).toBe('worker')
+    expect(container.querySelector('.run-role.dispatcher')).toBeNull()
+
+    rerender(<RunCard run={run()} now={now} />)
+    expect(container.querySelector('.run-role')).toBeNull()
+  })
+
+  it('shows the crew line on a dispatcher card only when given', () => {
+    const r = run({ role: 'dispatcher' })
+    const { container, rerender } = render(<RunCard run={r} now={now} crewLine="3 workers · 1 blocked" />)
+    expect(container.querySelector('.run-crew')?.textContent).toBe('3 workers · 1 blocked')
+
+    rerender(<RunCard run={r} now={now} crewLine={null} />)
+    expect(container.querySelector('.run-crew')).toBeNull()
+  })
+
+  it('hides the redundant codename chip on a dispatcher but keeps it on a worker', () => {
+    const crew = { name: 'crew-42', codename: 'dispatcher' }
+    const { container, rerender } = render(<RunCard run={run({ role: 'dispatcher', crew })} now={now} />)
+    expect(container.querySelector('.run-chip.codename')).toBeNull()
+
+    rerender(<RunCard run={run({ role: 'worker', crew: { name: 'crew-42', codename: 'blush' } })} now={now} />)
+    expect(container.querySelector('.run-chip.codename')?.textContent).toBe('blush')
+  })
+})

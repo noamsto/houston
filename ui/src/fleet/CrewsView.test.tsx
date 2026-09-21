@@ -30,7 +30,7 @@ function run(p: Partial<Run> = {}): Run {
 }
 
 function options(repos: { path: string; name: string; crews: string[] }[]) {
-  return { repos, tiers: [], efforts: [], plans: [], engines: {}, engine_order: [] }
+  return { repos, tiers: [], efforts: [], plans: [], engines: {}, engine_order: [], tier_models: {} }
 }
 
 const fetchOptions = vi.mocked(fetchDispatchOptions)

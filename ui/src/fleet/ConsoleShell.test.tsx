@@ -44,6 +44,7 @@ function cardFor(container: HTMLElement, label: string): HTMLElement {
 
 afterEach(() => {
   cleanup()
+  localStorage.clear()
   window.location.hash = ''
 })
 
@@ -68,7 +69,7 @@ describe('ConsoleShell layout', () => {
     expect(within(detail).getByText('repo-b/branch-b')).toBeTruthy()
 
     const list = screen.getByLabelText('fleet list')
-    expect(cardFor(list, 'repo-b/branch-b').getAttribute('aria-current')).toBe('true')
+    expect(cardFor(list, 'branch-b').getAttribute('aria-current')).toBe('true')
   })
 
   it('clicking a card writes the hash and the detail follows on hashchange', () => {
@@ -79,15 +80,15 @@ describe('ConsoleShell layout', () => {
     render(<ConsoleShell runs={runs} connected hasSnapshot now={now} />)
 
     const list = screen.getByLabelText('fleet list')
-    fireEvent.click(cardFor(list, 'repo-a/branch-a'))
+    fireEvent.click(cardFor(list, 'branch-a'))
     expect(window.location.hash).toBe('#/fleet/a/activity')
 
     act(() => { window.dispatchEvent(new HashChangeEvent('hashchange')) })
 
     const detail = screen.getByLabelText('detail')
     expect(within(detail).getByText('repo-a/branch-a')).toBeTruthy()
-    expect(cardFor(list, 'repo-a/branch-a').getAttribute('aria-current')).toBe('true')
-    expect(cardFor(list, 'repo-b/branch-b').getAttribute('aria-current')).toBeNull()
+    expect(cardFor(list, 'branch-a').getAttribute('aria-current')).toBe('true')
+    expect(cardFor(list, 'branch-b').getAttribute('aria-current')).toBeNull()
   })
 
   it('shows global rail counts over all runs', () => {
@@ -119,19 +120,19 @@ describe('ConsoleShell layout', () => {
     fireEvent.click(within(rail).getByTitle('X'))
 
     const list = screen.getByLabelText('fleet list')
-    expect(within(list).getByText('r-x1/b-x1')).toBeTruthy()
-    expect(within(list).queryByText('r-y1/b-y1')).toBeNull()
-    expect(within(list).queryByText('r-y2/b-y2')).toBeNull()
-    expect(within(list).queryByText('r-n1/b-n1')).toBeNull()
+    expect(within(list).getByText('b-x1')).toBeTruthy()
+    expect(within(list).queryByText('b-y1')).toBeNull()
+    expect(within(list).queryByText('b-y2')).toBeNull()
+    expect(within(list).queryByText('b-n1')).toBeNull()
     expect(within(list).getByText('1 of 4')).toBeTruthy()
     expect(within(list).getByRole('button', { name: 'Clear crew filter' })).toBeTruthy()
     expect(within(rail).getByRole('button', { name: /^Active/ }).querySelector('.console-count')?.textContent).toBe('4')
 
     fireEvent.click(within(list).getByRole('button', { name: 'Clear crew filter' }))
-    expect(within(list).getByText('r-x1/b-x1')).toBeTruthy()
-    expect(within(list).getByText('r-y1/b-y1')).toBeTruthy()
-    expect(within(list).getByText('r-y2/b-y2')).toBeTruthy()
-    expect(within(list).getByText('r-n1/b-n1')).toBeTruthy()
+    expect(within(list).getByText('b-x1')).toBeTruthy()
+    expect(within(list).getByText('b-y1')).toBeTruthy()
+    expect(within(list).getByText('b-y2')).toBeTruthy()
+    expect(within(list).getByText('b-n1')).toBeTruthy()
     expect(within(list).queryByText(/ of /)).toBeNull()
   })
 
@@ -200,5 +201,42 @@ describe('ConsoleShell layout', () => {
     act(() => { window.location.hash = '#/dispatch?repo=%2Frepo' })
 
     expect(within(rail).getByRole('button', { name: 'Dispatch' }).getAttribute('aria-pressed')).toBe('true')
+  })
+})
+
+describe('ConsoleShell project grouping', () => {
+  const runs = [
+    run({ id: 'w1', project: 'houston', branch: 'w-one', role: 'worker', state: 'blocked', crew: { name: 'X' } }),
+    run({ id: 'o1', project: 'other', branch: 'o-one' }),
+    run({ id: 'd', project: 'houston', branch: 'main', role: 'dispatcher', crew: { name: 'X' } }),
+    run({ id: 'w2', project: 'houston', branch: 'w-two', role: 'worker', crew: { name: 'Y' } }),
+  ]
+
+  it('shows the project chip in the default flat list', () => {
+    render(<ConsoleShell runs={runs} connected hasSnapshot now={now} />)
+    const list = screen.getByLabelText('fleet list')
+    expect(list.querySelectorAll('.fleet-project-group').length).toBe(0)
+    expect(cardFor(list, 'w-one').querySelector('.run-project')?.textContent).toBe('houston')
+  })
+
+  it('groups by project with counts and dispatcher before its workers', () => {
+    render(<ConsoleShell runs={runs} connected hasSnapshot now={now} />)
+    const list = screen.getByLabelText('fleet list')
+    fireEvent.click(within(list).getByRole('button', { name: 'Group by project' }))
+
+    const headers = Array.from(list.querySelectorAll('.fleet-project-group'))
+    expect(headers.map((h) => h.querySelector('.fleet-project-name')?.textContent)).toEqual(['houston', 'other'])
+    expect(headers[0].textContent).toContain('3')
+    expect(headers[0].textContent).toContain('1 need you')
+    const names = Array.from(list.querySelectorAll('.run-name')).map((e) => e.textContent)
+    expect(names).toEqual(['main', 'w-one', 'w-two', 'o-one'])
+  })
+
+  it('keeps the dispatcher crew summary complete while a crew narrows the list', () => {
+    render(<ConsoleShell runs={runs} connected hasSnapshot now={now} />)
+    fireEvent.click(within(screen.getByLabelText('rail')).getByTitle('X'))
+    const list = screen.getByLabelText('fleet list')
+    expect(within(list).queryByText('w-two')).toBeNull()
+    expect(cardFor(list, 'main').querySelector('.run-crew')?.textContent).toBe('2 workers · 1 blocked')
   })
 })

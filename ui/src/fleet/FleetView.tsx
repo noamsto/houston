@@ -2,7 +2,8 @@ import { useMemo, useState } from 'react'
 import type { Run } from '../api/runs'
 import { needsYou } from './staleness'
 import { filterRuns, groupByHost, type Filter } from './fleetList'
-import { RunCard } from './RunCard'
+import { RunList } from './RunList'
+import { useGroupByProject } from '../hooks/useLayout'
 import './fleet.css'
 
 interface FleetViewProps {
@@ -14,6 +15,7 @@ interface FleetViewProps {
 
 export function FleetView({ runs, connected, now, onOpen }: FleetViewProps) {
   const [filter, setFilter] = useState<Filter>('active')
+  const [grouped, setGrouped] = useGroupByProject()
 
   const attentionCount = useMemo(
     () => runs.filter((r) => needsYou(r, now)).length,
@@ -53,23 +55,24 @@ export function FleetView({ runs, connected, now, onOpen }: FleetViewProps) {
         <button aria-pressed={filter === 'all'} className={filter === 'all' ? 'on' : ''} onClick={() => setFilter('all')}>All</button>
       </nav>
 
+      <div className="fleet-group-row">
+        <button
+          type="button"
+          className={`fleet-group-toggle${grouped ? ' on' : ''}`}
+          aria-pressed={grouped}
+          onClick={() => setGrouped(!grouped)}
+        >
+          Group by project
+        </button>
+      </div>
+
       {visible.length === 0 && (
         <div className="fleet-empty">
           {connected ? 'No runs match this filter.' : 'Connecting to the run stream…'}
         </div>
       )}
 
-      {groups.map(([host, list]) => (
-        <section key={host}>
-          <div className="fleet-group">
-            <span className={host === 'local' ? 'host-local' : 'host-remote'}>{host}</span>
-            <span>{list.length}</span>
-          </div>
-          {list.map((r) => (
-            <RunCard key={r.id} run={r} now={now} onOpen={onOpen} />
-          ))}
-        </section>
-      ))}
+      <RunList groups={groups} allRuns={runs} now={now} onOpen={onOpen} groupByProject={grouped} />
     </div>
   )
 }

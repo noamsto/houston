@@ -3,11 +3,16 @@ package runs
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/noamsto/houston/tmux"
 )
+
+// fakeProject stands in for the resolver so deltasFromTmux tests never shell
+// out to git.
+func fakeProject(root string) string { return "proj-" + filepath.Base(root) }
 
 func TestDeltasFromTmuxJoinsPanesToWindows(t *testing.T) {
 	wins := []tmux.WindowOptions{{
@@ -19,7 +24,7 @@ func TestDeltasFromTmuxJoinsPanesToWindows(t *testing.T) {
 		PaneID: "%459", Target: "lazytmux:2", ClaudeStatus: "processing 1788 ",
 	}}
 
-	got := deltasFromTmux(wins, panes)
+	got := deltasFromTmux(wins, panes, fakeProject)
 	if len(got) != 1 {
 		t.Fatalf("%d deltas, want 1", len(got))
 	}
@@ -57,6 +62,7 @@ func TestDeltasFromTmuxOmitsAbsentEnrichment(t *testing.T) {
 	got := deltasFromTmux(
 		[]tmux.WindowOptions{{Session: "houston", Window: 1, Branch: "main"}},
 		[]tmux.PaneOptions{{PaneID: "%1", Target: "houston:1"}},
+		fakeProject,
 	)
 	d := got[0].Run
 	if d.Issue != nil || d.PR != nil || d.Crew != nil {
@@ -68,7 +74,7 @@ func TestDeltasFromTmuxOmitsAbsentEnrichment(t *testing.T) {
 }
 
 func TestDeltasFromTmuxSkipsPanesWithNoWindow(t *testing.T) {
-	got := deltasFromTmux(nil, []tmux.PaneOptions{{PaneID: "%9", Target: "ghost:1"}})
+	got := deltasFromTmux(nil, []tmux.PaneOptions{{PaneID: "%9", Target: "ghost:1"}}, fakeProject)
 	if len(got) != 0 {
 		t.Fatalf("%d deltas for a pane whose window was not listed, want 0", len(got))
 	}
@@ -80,6 +86,7 @@ func TestDeltasFromTmuxLeavesAgentEmptyWithNoClaudeStatus(t *testing.T) {
 	got := deltasFromTmux(
 		[]tmux.WindowOptions{{Session: "houston", Window: 1, Branch: "main"}},
 		[]tmux.PaneOptions{{PaneID: "%1", Target: "houston:1"}},
+		fakeProject,
 	)
 	if got[0].Run.Agent != "" {
 		t.Fatalf("Agent = %q, want empty — no @claude_status means no agent", got[0].Run.Agent)
@@ -199,11 +206,42 @@ func TestDeltasFromTmuxDropsNoneSentinel(t *testing.T) {
 	}}
 	panes := []tmux.PaneOptions{{PaneID: "%1", Target: "s:1", ClaudeStatus: "idle 1 "}}
 
-	r := deltasFromTmux(wins, panes)[0].Run
+	r := deltasFromTmux(wins, panes, fakeProject)[0].Run
 	if r.Issue != nil {
 		t.Errorf("Issue = %+v, want nil", r.Issue)
 	}
 	if r.PR == nil || r.PR.Number != "7" || r.PR.State != "" || r.PR.CheckState != "" || r.PR.Mergeable != "" {
 		t.Errorf("PR = %+v, want number only", r.PR)
+	}
+}
+
+func TestDeltasFromTmuxProjectAndRole(t *testing.T) {
+	tests := []struct {
+		name        string
+		win         tmux.WindowOptions
+		wantProject string
+		wantRole    string
+	}{
+		{"dispatcher", tmux.WindowOptions{CrewName: "dispatcher", GitRoot: "/g/houston"}, "proj-houston", RoleDispatcher},
+		{"worker", tmux.WindowOptions{CrewName: "mauve", GitRoot: "/g/houston"}, "proj-houston", RoleWorker},
+		{"solo", tmux.WindowOptions{GitRoot: "/g/houston"}, "proj-houston", ""},
+		{"no git root", tmux.WindowOptions{CrewName: "mauve"}, "", RoleWorker},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.win.Session, tt.win.Window = "s", 1
+			got := deltasFromTmux(
+				[]tmux.WindowOptions{tt.win},
+				[]tmux.PaneOptions{{PaneID: "%1", Target: "s:1", ClaudeStatus: "idle 1 "}},
+				fakeProject,
+			)
+			r := got[0].Run
+			if r.Project != tt.wantProject {
+				t.Errorf("Project = %q, want %q", r.Project, tt.wantProject)
+			}
+			if r.Role != tt.wantRole {
+				t.Errorf("Role = %q, want %q", r.Role, tt.wantRole)
+			}
+		})
 	}
 }
