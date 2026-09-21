@@ -174,10 +174,10 @@ func (cc *ControlClient) Start() error {
 func (cc *ControlClient) attach(w io.Writer, closeFn func() error) {
 	// Installed before the first enrolled write: that write can fail, and
 	// gone is what RunCommand reads to decide whether a connection is live
-	// (connOK is Connected()'s field, with no production reader today). Left
-	// stale, it would advertise the previous connection as current for the
-	// length of this write. Write order is unaffected, since the stdinMu
-	// section below spans both the cc.stdin assignment and the write.
+	// (connOK is what ControlManager.SessionStates and the pane lifecycle
+	// read). Left stale, it would advertise the previous connection as current
+	// for the length of this write. Write order is unaffected, since the
+	// stdinMu section below spans both the cc.stdin assignment and the write.
 	cc.connMu.Lock()
 	cc.closeCur = closeFn
 	cc.connOK = true

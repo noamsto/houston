@@ -20,9 +20,11 @@ type connStates interface {
 }
 
 // ConnectionSource marks runs stale while their tmux session's control
-// connection is down. It publishes a marker layer keyed by pane id, so it
-// clears itself by going Gone for that layer and never removes a run — the
-// tmux and hooks layers that own the run keep it listed.
+// connection is down — or while the tmux pane list itself cannot be read, so
+// a tmux-server outage still marks the retained runs stale even when no pane
+// WebSocket ever opened a control client. It publishes a marker layer keyed by
+// pane id, so it clears itself by going Gone for that layer and never removes
+// a run — the tmux and hooks layers that own the run keep it listed.
 type ConnectionSource struct {
 	conns connStates
 	panes lister
@@ -81,10 +83,28 @@ func (s *ConnectionSource) Run(ctx context.Context, out chan<- Delta) error {
 // session map rather than diffing against an empty one, which is what lets a
 // dead tmux server still produce Stale instead of clearing every marker.
 func (s *ConnectionSource) tick(ctx context.Context, out chan<- Delta) error {
-	if panes, err := s.panes.ListPaneOptions(); err == nil {
+	panes, listErr := s.panes.ListPaneOptions()
+	listOK := listErr == nil
+	if listOK {
 		s.session = sessionsByPane(panes)
 	}
 	states := s.conns.SessionStates()
+
+	// A run is stale when its session's tracked control client is down, or
+	// when the tmux pane list itself cannot be read — the tmux source has
+	// stopped reporting and every retained run is last-known. A session with
+	// no tracked client and a healthy list is not stale: there is no
+	// connection to be down.
+	staleFor := func(session string) bool {
+		if session == "" {
+			return false
+		}
+		if !listOK {
+			return true
+		}
+		connected, tracked := states[session]
+		return tracked && !connected
+	}
 
 	emit := func(d Delta) error {
 		select {
@@ -96,8 +116,7 @@ func (s *ConnectionSource) tick(ctx context.Context, out chan<- Delta) error {
 	}
 
 	for key, session := range s.session {
-		connected, tracked := states[session]
-		if tracked && !connected && !s.stale[key] {
+		if staleFor(session) && !s.stale[key] {
 			s.stale[key] = true
 			if err := emit(Delta{Source: s.Name(), Key: key, Run: Run{Stale: true}}); err != nil {
 				return err
@@ -105,9 +124,7 @@ func (s *ConnectionSource) tick(ctx context.Context, out chan<- Delta) error {
 		}
 	}
 	for key := range s.stale {
-		session := s.session[key]
-		connected, tracked := states[session]
-		if !tracked || connected || session == "" {
+		if !staleFor(s.session[key]) {
 			delete(s.stale, key)
 			if err := emit(Delta{Source: s.Name(), Key: key, Gone: true}); err != nil {
 				return err

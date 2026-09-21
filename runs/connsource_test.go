@@ -190,6 +190,46 @@ func TestConnectionSourceKeepsMarkingStaleWhenListFails(t *testing.T) {
 	}
 }
 
+// TestConnectionSourceNoTrackedClientNotStaleWhileListHealthy pins the other
+// side of the boundary: with no control client and a healthy pane list, a
+// session is not "down" and its run must not be marked stale.
+func TestConnectionSourceNoTrackedClientNotStaleWhileListHealthy(t *testing.T) {
+	conns := newFakeConnStates() // no tracked sessions
+	panes := &fakePaneLister{panes: []tmux.PaneOptions{{PaneID: "%1", Target: "s:1"}}}
+	src := NewConnectionSource(conns, panes, time.Second)
+
+	out := make(chan Delta, 8)
+	if err := src.tick(context.Background(), out); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if ds := drainDeltas(out); len(ds) != 0 {
+		t.Fatalf("marker emitted with no control client: %+v", ds)
+	}
+}
+
+// TestConnectionSourceListFailureMarksStaleWithoutAClient covers the fleet
+// list with no pane WebSocket open: no control client exists, but a tmux-server
+// outage still makes list-panes fail, and the retained runs must be marked
+// stale rather than keep rendering live.
+func TestConnectionSourceListFailureMarksStaleWithoutAClient(t *testing.T) {
+	conns := newFakeConnStates() // no tracked sessions
+	panes := &fakePaneLister{panes: []tmux.PaneOptions{{PaneID: "%1", Target: "s:1"}}}
+	src := NewConnectionSource(conns, panes, time.Second)
+
+	out := make(chan Delta, 8)
+	if err := src.tick(context.Background(), out); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	panes.err = context.DeadlineExceeded
+	if err := src.tick(context.Background(), out); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if d := recvDelta(t, out); d.Gone || d.Key != "%1" || !d.Run.Stale {
+		t.Fatalf("list-failure tick with no client = %+v, want Stale for the retained run", d)
+	}
+}
+
 // TestConnectionSourceMarksRunStaleWithoutRemovingIt is the run-level
 // acceptance mapping: registry composition keeps the run listed and flips
 // Stale off again on reconnect.
