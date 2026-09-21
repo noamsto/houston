@@ -53,8 +53,10 @@
             vendorHash = "sha256-ArYCbm+rj0VYQV58tiVyYPXGfgiW45hfc+wFGQuQy3U=";
 
             # tmux/control_integration_test.go drives a real server;
-            # server/workspace_repo_test.go shells out to git.
-            nativeCheckInputs = [pkgs.tmux pkgs.git];
+            # server/workspace_repo_test.go shells out to git;
+            # server/dispatch_exec_test.go writes a fake dispatch with bash's
+            # absolute path (the sandbox has no /usr/bin/env).
+            nativeCheckInputs = [pkgs.tmux pkgs.git pkgs.bash];
 
             nativeBuildInputs = [pkgs.makeWrapper];
 

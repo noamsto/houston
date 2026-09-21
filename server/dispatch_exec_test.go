@@ -20,8 +20,12 @@ import (
 // test proves they never reach the child.
 func installFakeDispatch(t *testing.T, body string) {
 	t.Helper()
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not found")
+	}
 	bin := t.TempDir()
-	script := "#!/usr/bin/env bash\n" + body
+	script := "#!" + bash + "\n" + body
 	if err := os.WriteFile(filepath.Join(bin, "dispatch"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
