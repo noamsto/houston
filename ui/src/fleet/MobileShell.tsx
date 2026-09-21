@@ -4,10 +4,10 @@ import { needsYou } from './staleness'
 import { FleetView } from './FleetView'
 import { CrewsView } from './CrewsView'
 import { WorkspaceView } from './WorkspaceView'
+import { DispatchView } from './DispatchView'
 import { RunDetail } from './RunDetail'
 import { runHash, useDetailRoute } from './routes'
 import { useKeyboardInset } from '../hooks/useKeyboardInset'
-import { DISPATCH_PLACEHOLDER } from './copy'
 
 type Tab = 'fleet' | 'crews' | 'workspace' | 'dispatch'
 
@@ -49,7 +49,10 @@ export function MobileShell({ runs, connected, hasSnapshot, now }: ShellData) {
             onOpen={(r) => { window.location.hash = runHash(r.id) }}
           />
         </div>
-        {tab === 'dispatch' && <div className="shell-placeholder">{DISPATCH_PLACEHOLDER}</div>}
+        {/* Kept mounted like Crews, so a half-typed dispatch form survives a tab switch. */}
+        <div hidden={tab !== 'dispatch'}>
+          <DispatchView />
+        </div>
         {tab === 'workspace' && <WorkspaceView onOpen={(id) => { window.location.hash = runHash(id) }} />}
         {/* A stacked overlay, not a `hidden`-swapped replacement of `.fleet` —
             `hidden` maps to display:none, which would collapse `.fleet`'s own

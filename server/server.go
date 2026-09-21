@@ -104,6 +104,19 @@ type Server struct {
 	// against a run snapshot. Narrow enough to fake in tests.
 	wsTmux workspaceLister
 
+	// dispatchRunner launches a worker via the dispatch CLI. A field, like
+	// replyRunner, so a test can observe the resolved argv/env/dir without
+	// running a real command.
+	dispatchRunner dispatchRunner
+	// dispatchRepos computes the known-repo set fresh per request. A field so
+	// tests can fake it without a real tmux server or git checkout.
+	dispatchRepos func() ([]dispatchRepo, error)
+	// dispatchSlot caps in-flight dispatches at one: dispatch mutates the
+	// repo (worktrees, branches, the crew bus, GitHub issues), and running
+	// two at once against one repo is not something it is designed for.
+	dispatchSlot    chan struct{}
+	dispatchTimeout time.Duration
+
 	auth  *authGate
 	hosts *hostGate
 }
@@ -156,17 +169,23 @@ func New(cfg Config) (*Server, error) {
 
 	tmuxClient := tmux.NewClient()
 	s := &Server{
-		tmux:         tmuxClient,
-		controlMgr:   tmux.NewControlManager(),
-		watcher:      status.NewWatcher(cfg.StatusDir),
-		registry:     registry,
-		font:         cfg.FontController,
-		uiFS:         cfg.UIFS,
-		lastActivity: make(map[string]time.Time),
-		hub:          hub.New(cfg.StatusDir, slog.Default()),
-		replyRunner:  execCrewReply,
-		wsRepos:      newRepoClassifier(),
-		wsTmux:       tmuxClient,
+		tmux:           tmuxClient,
+		controlMgr:     tmux.NewControlManager(),
+		watcher:        status.NewWatcher(cfg.StatusDir),
+		registry:       registry,
+		font:           cfg.FontController,
+		uiFS:           cfg.UIFS,
+		lastActivity:   make(map[string]time.Time),
+		hub:            hub.New(cfg.StatusDir, slog.Default()),
+		replyRunner:    execCrewReply,
+		wsRepos:        newRepoClassifier(),
+		wsTmux:         tmuxClient,
+		dispatchRunner: execDispatch,
+		dispatchRepos: func() ([]dispatchRepo, error) {
+			return listDispatchRepos(tmuxClient, gitCommonDir)
+		},
+		dispatchSlot:    make(chan struct{}, 1),
+		dispatchTimeout: dispatchTimeout,
 	}
 
 	// Run the hub in the background. It watches <status-dir>/claude/ and the
@@ -264,6 +283,8 @@ func (s *Server) Handler() http.Handler {
 	apiMux.HandleFunc("/api/runs/stream", s.handleRunsStream)
 	apiMux.HandleFunc("POST /api/runs/{id}/reply", s.handleRunReply)
 	apiMux.HandleFunc("GET /api/workspace", s.handleWorkspace)
+	apiMux.HandleFunc("POST /api/dispatch", s.handleDispatch)
+	apiMux.HandleFunc("GET /api/dispatch/options", s.handleDispatchOptions)
 	mux.Handle("/api/", s.auth.middleware(apiMux))
 
 	// The host gate wraps everything, including "/", so a rebound domain is

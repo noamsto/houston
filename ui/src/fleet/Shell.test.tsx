@@ -9,6 +9,19 @@ const now = 1_800_000_000_000 // fixed ms
 vi.mock('./useWorkspace', () => ({
   useWorkspace: () => ({ workspace: null, error: null, loading: false }),
 }))
+// DispatchView is kept mounted like Crews/Workspace in both shells, so it
+// fetches on mount — never a real fetch in tests.
+vi.mock('../api/dispatch', () => ({
+  fetchDispatchOptions: () => Promise.resolve({
+    repos: [{ path: '/repo', name: 'repo', crews: ['1-1'] }],
+    tiers: ['trivial', 'standard', 'deep'],
+    efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    plans: ['required', 'provided'],
+    engines: { claude: ['opus', 'sonnet', 'haiku', 'fable'] },
+    engine_order: ['claude'],
+  }),
+  submitDispatch: vi.fn(),
+}))
 
 function run(p: Partial<Run> = {}): Run {
   return {
