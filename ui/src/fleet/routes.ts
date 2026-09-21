@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 export type DetailTab = 'activity' | 'terminal'
 
@@ -71,4 +71,48 @@ export function useDispatchRoute(): DispatchRoute | null {
     return () => window.removeEventListener('hashchange', onHash)
   }, [])
   return route
+}
+
+export type ShellTab = 'fleet' | 'crews' | 'workspace' | 'dispatch'
+
+export const TAB_LABEL: Record<ShellTab, string> = {
+  fleet: 'Fleet',
+  crews: 'Crews',
+  workspace: 'Workspace',
+  dispatch: 'Dispatch',
+}
+
+export function parseTabRoute(hash: string): ShellTab | null {
+  if (hash === '' || hash === '#' || hash === '#/' || hash === '#/fleet') return 'fleet'
+  if (hash === '#/crews') return 'crews'
+  if (hash === '#/workspace') return 'workspace'
+  if (parseDispatchRoute(hash)) return 'dispatch'
+  return null
+}
+
+export function tabHash(tab: ShellTab): string {
+  return `#/${tab}`
+}
+
+/** A detail or other non-tab hash leaves the tab as it was, so the tab under
+ *  a run-detail overlay is the one Back returns to. `closeDetail` is for the
+ *  mobile overlay, which a tab tap must dismiss; the desktop detail is a
+ *  persistent pane, so with a run selected a tab switch is state-only. */
+export function useShellTab(): [ShellTab, (tab: ShellTab, closeDetail?: boolean) => void] {
+  const [tab, setTab] = useState<ShellTab>(() => parseTabRoute(window.location.hash) ?? 'fleet')
+  useEffect(() => {
+    const onHash = () => {
+      const next = parseTabRoute(window.location.hash)
+      if (next) setTab(next)
+    }
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+  }, [])
+  const goTab = useCallback((next: ShellTab, closeDetail = false) => {
+    setTab(next)
+    if (closeDetail || parseDetailRoute(window.location.hash) === null) {
+      window.location.hash = tabHash(next)
+    }
+  }, [])
+  return [tab, goTab]
 }

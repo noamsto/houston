@@ -240,3 +240,38 @@ describe('ConsoleShell project grouping', () => {
     expect(cardFor(list, 'main').querySelector('.run-crew')?.textContent).toBe('2 workers · 1 blocked')
   })
 })
+
+describe('ConsoleShell tab routes', () => {
+  const runs = [run({ id: 'b', repo: 'repo-b', branch: 'branch-b' })]
+
+  it('keeps the detail pane when a rail filter is chosen', () => {
+    window.location.hash = '#/fleet/b'
+    render(<ConsoleShell runs={runs} connected hasSnapshot now={now} />)
+
+    fireEvent.click(within(screen.getByLabelText('rail')).getByRole('button', { name: /^All/ }))
+
+    expect(window.location.hash).toBe('#/fleet/b')
+    expect(within(screen.getByLabelText('detail')).getByText('repo-b/branch-b')).toBeTruthy()
+  })
+
+  it('switches the list to Crews while the detail stays open', () => {
+    window.location.hash = '#/fleet/b'
+    render(<ConsoleShell runs={runs} connected hasSnapshot now={now} />)
+
+    const crewsButton = within(screen.getByLabelText('rail')).getByRole('button', { name: 'Crews' })
+    fireEvent.click(crewsButton)
+
+    expect(crewsButton.getAttribute('aria-pressed')).toBe('true')
+    expect(within(screen.getByLabelText('detail')).getByText('repo-b/branch-b')).toBeTruthy()
+  })
+
+  it('the detail back button returns to the current section', () => {
+    window.location.hash = '#/fleet/b'
+    render(<ConsoleShell runs={runs} connected hasSnapshot now={now} />)
+    fireEvent.click(within(screen.getByLabelText('rail')).getByRole('button', { name: 'Crews' }))
+
+    fireEvent.click(within(screen.getByLabelText('detail')).getByRole('button', { name: 'Back to Crews' }))
+
+    expect(window.location.hash).toBe('#/crews')
+  })
+})

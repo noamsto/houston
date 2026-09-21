@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { Run } from '../api/runs'
 import { needsYou } from './staleness'
 import { filterRuns, groupByHost, crewShortId, type Filter } from './fleetList'
@@ -7,13 +7,11 @@ import { CrewsView } from './CrewsView'
 import { WorkspaceView } from './WorkspaceView'
 import { DispatchView } from './DispatchView'
 import { RunDetail } from './RunDetail'
-import { parseDispatchRoute, runHash, useDetailRoute } from './routes'
+import { runHash, tabHash, TAB_LABEL, useDetailRoute, useShellTab } from './routes'
 import type { ShellData } from './MobileShell'
 import { useGroupByProject } from '../hooks/useLayout'
 import '../theme/mocha.css'
 import './fleet.css'
-
-type Section = 'fleet' | 'crews' | 'workspace' | 'dispatch'
 
 const FILTER_LABEL: Record<Filter, string> = {
   active: 'Active',
@@ -22,17 +20,11 @@ const FILTER_LABEL: Record<Filter, string> = {
 }
 
 export function ConsoleShell({ runs, connected, hasSnapshot, now }: ShellData) {
-  const [section, setSection] = useState<Section>(() => (parseDispatchRoute(window.location.hash) ? 'dispatch' : 'fleet'))
+  const [section, goTab] = useShellTab()
   const [filter, setFilter] = useState<Filter>('active')
   const [crew, setCrew] = useState<string | null>(null)
   const [grouped, setGrouped] = useGroupByProject()
   const route = useDetailRoute()
-
-  useEffect(() => {
-    const onHash = () => { if (parseDispatchRoute(window.location.hash)) setSection('dispatch') }
-    window.addEventListener('hashchange', onHash)
-    return () => window.removeEventListener('hashchange', onHash)
-  }, [])
 
   const attentionCount = useMemo(
     () => runs.filter((r) => needsYou(r, now)).length,
@@ -84,7 +76,7 @@ export function ConsoleShell({ runs, connected, hasSnapshot, now }: ShellData) {
   const groups = useMemo(() => groupByHost(visible), [visible])
 
   function chooseFilter(f: Filter): void {
-    setSection('fleet')
+    goTab('fleet')
     setFilter(f)
     // Needs-you must show every blocked run, fresh or stale — a lingering
     // crew filter would silently hide the ones that live in another crew.
@@ -92,7 +84,7 @@ export function ConsoleShell({ runs, connected, hasSnapshot, now }: ShellData) {
   }
 
   function toggleCrew(name: string): void {
-    setSection('fleet')
+    goTab('fleet')
     setCrew((c) => (c === name ? null : name))
   }
 
@@ -175,9 +167,9 @@ export function ConsoleShell({ runs, connected, hasSnapshot, now }: ShellData) {
 
         <div>
           <h2>Views</h2>
-          <button type="button" className="console-rail-item" aria-pressed={section === 'crews'} onClick={() => setSection('crews')}>Crews</button>
-          <button type="button" className="console-rail-item" aria-pressed={section === 'workspace'} onClick={() => setSection('workspace')}>Workspace</button>
-          <button type="button" className="console-rail-item" aria-pressed={section === 'dispatch'} onClick={() => setSection('dispatch')}>Dispatch</button>
+          <button type="button" className="console-rail-item" aria-pressed={section === 'crews'} onClick={() => goTab('crews')}>Crews</button>
+          <button type="button" className="console-rail-item" aria-pressed={section === 'workspace'} onClick={() => goTab('workspace')}>Workspace</button>
+          <button type="button" className="console-rail-item" aria-pressed={section === 'dispatch'} onClick={() => goTab('dispatch')}>Dispatch</button>
         </div>
 
         <div className="console-rail-foot">
@@ -251,6 +243,8 @@ export function ConsoleShell({ runs, connected, hasSnapshot, now }: ShellData) {
             now={now}
             id={route.id}
             tab={route.tab}
+            onBack={() => { window.location.hash = tabHash(section) }}
+            backLabel={TAB_LABEL[section]}
           />
         ) : (
           <div className="console-detail-empty">Select a run</div>

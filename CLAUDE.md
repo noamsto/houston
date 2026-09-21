@@ -231,6 +231,10 @@ There is no WIDE/FIT toggle — that affordance was removed. A terminal rework
 section once it ships rather than trusting the bullets above for anything not
 already verified in `TerminalPane.tsx` / `useTouchGestures.ts`.
 
+## Navigation
+
+Every shell tab is a hash route — `#/fleet`, `#/crews`, `#/workspace`, `#/dispatch` (`ui/src/fleet/routes.ts`, `useShellTab`) — so Back/Forward move between tabs and reload restores the tab. A run detail (`#/fleet/<id>/<tab>`) keeps the tab it was opened from, and its back button returns there. On mobile a tab tap always writes the hash (closing the detail overlay); on desktop the detail is a persistent pane, so a rail switch while a run is selected is state-only (no history entry, not restored on reload).
+
 ## Project and role (Fleet)
 
 Every run can carry `project` and `role` (`runs/project.go`, `runs/tmuxsource.go`, `runs/crewsource.go`).

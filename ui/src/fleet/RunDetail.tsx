@@ -15,6 +15,8 @@ interface RunDetailProps {
   now: number
   id: string
   tab: Tab
+  onBack?: () => void
+  backLabel?: string
 }
 
 function goToFleet(): void {
@@ -30,7 +32,7 @@ function goToTab(id: string, tab: Tab): void {
  * sibling layer over `.fleet` (see Shell.tsx) rather than in place of it, so
  * `.fleet`'s own scroll position survives a visit here and back.
  */
-export function RunDetail({ runs, hasSnapshot, streamConnected, now, id, tab }: RunDetailProps) {
+export function RunDetail({ runs, hasSnapshot, streamConnected, now, id, tab, onBack = goToFleet, backLabel = 'Fleet' }: RunDetailProps) {
   // `hasSnapshot` distinguishes "haven't heard from the stream yet" (loading)
   // from "heard from it, this id isn't in it" (really not found) — without
   // it, every cold deep link would flash "not found" for the one tick before
@@ -40,8 +42,8 @@ export function RunDetail({ runs, hasSnapshot, streamConnected, now, id, tab }: 
   return (
     <div className="run-detail">
       <header className="run-detail-header">
-        <button type="button" className="run-detail-back" onClick={goToFleet} aria-label="Back to Fleet">
-          <span aria-hidden>‹</span> Fleet
+        <button type="button" className="run-detail-back" onClick={onBack} aria-label={`Back to ${backLabel}`}>
+          <span aria-hidden>‹</span> {backLabel}
         </button>
         {run && (
           <div className="run-detail-heading">
@@ -57,16 +59,16 @@ export function RunDetail({ runs, hasSnapshot, streamConnected, now, id, tab }: 
       ) : !run ? (
         <div className="run-detail-empty">
           <p>This run is no longer available.</p>
-          <button type="button" className="run-detail-back-cta" onClick={goToFleet}>Back to Fleet</button>
+          <button type="button" className="run-detail-back-cta" onClick={onBack}>Back to {backLabel}</button>
         </div>
       ) : (
-        <RunDetailBody run={run} tab={tab} streamConnected={streamConnected} now={now} />
+        <RunDetailBody run={run} tab={tab} streamConnected={streamConnected} now={now} onBack={onBack} />
       )}
     </div>
   )
 }
 
-function RunDetailBody({ run, tab, streamConnected, now }: { run: Run; tab: Tab; streamConnected: boolean; now: number }) {
+function RunDetailBody({ run, tab, streamConnected, now, onBack }: { run: Run; tab: Tab; streamConnected: boolean; now: number; onBack: () => void }) {
   const capable = run.caps.terminal && Boolean(run.tmux)
   const lifecycle = useTerminalLifecycle(run.id, capable, tab === 'terminal', streamConnected)
 
@@ -119,7 +121,7 @@ function RunDetailBody({ run, tab, streamConnected, now }: { run: Run; tab: Tab;
               isFocused
               hideHeader
               onFocus={() => {}}
-              onClose={goToFleet}
+              onClose={onBack}
               onConnectionChange={lifecycle.onConnectionChange}
             />
           </>

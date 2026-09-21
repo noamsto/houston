@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { MobileShell } from './MobileShell'
 
 vi.mock('./useWorkspace', () => ({
@@ -104,5 +104,34 @@ describe('MobileShell tabs', () => {
     fireEvent.click(dispatchTab())
 
     expect((screen.getByLabelText('Task') as HTMLTextAreaElement).value).toBe('half a thought')
+  })
+
+  it('follows Back to the empty hash and returns to Fleet', () => {
+    render(<MobileShell runs={[]} connected hasSnapshot now={0} />)
+    fireEvent.click(screen.getByRole('button', { name: /crews/i }))
+    act(() => { window.dispatchEvent(new HashChangeEvent('hashchange')) })
+    expect(window.location.hash).toBe('#/crews')
+
+    act(() => { window.location.hash = '' })
+
+    expect(screen.getByRole('button', { name: /^.?Fleet/ }).getAttribute('aria-current')).toBe('true')
+  })
+
+  it('restores the tab from the hash on load', () => {
+    window.location.hash = '#/workspace'
+    render(<MobileShell runs={[]} connected hasSnapshot now={0} />)
+
+    expect(screen.getByRole('button', { name: /workspace/i }).getAttribute('aria-current')).toBe('true')
+  })
+
+  it('keeps the prior tab under a run detail and Back returns to it', () => {
+    window.location.hash = '#/crews'
+    render(<MobileShell runs={[]} connected hasSnapshot now={0} />)
+
+    act(() => { window.location.hash = '#/fleet/gone/activity' })
+    expect(within(screen.getByRole('navigation', { name: 'sections' })).getByRole('button', { name: /crews/i }).getAttribute('aria-current')).toBe('true')
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Back to Crews' })[0])
+    expect(window.location.hash).toBe('#/crews')
   })
 })
