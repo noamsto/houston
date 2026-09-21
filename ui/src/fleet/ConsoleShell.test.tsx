@@ -12,6 +12,19 @@ vi.mock('./useWorkspace', () => ({
 vi.mock('../hooks/usePaneSocket', () => ({
   usePaneSocket: () => ({ connected: true, sendInput: vi.fn(), sendResize: vi.fn() }),
 }))
+// DispatchView is kept mounted like Crews/Workspace, so it fetches on every
+// render of this shell — never a real fetch in tests.
+vi.mock('../api/dispatch', () => ({
+  fetchDispatchOptions: () => Promise.resolve({
+    repos: [{ path: '/repo', name: 'repo', crews: ['1-1'] }],
+    tiers: ['trivial', 'standard', 'deep'],
+    efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    plans: ['required', 'provided'],
+    engines: { claude: ['opus', 'sonnet', 'haiku', 'fable'] },
+    engine_order: ['claude'],
+  }),
+  submitDispatch: vi.fn(),
+}))
 
 function run(p: Partial<Run> = {}): Run {
   return {
@@ -148,7 +161,7 @@ describe('ConsoleShell layout', () => {
     expect(within(list).queryByRole('button', { name: 'Clear crew filter' })).toBeNull()
   })
 
-  it('switches the list column between Fleet, Crews, Workspace and Dispatch', () => {
+  it('switches the list column between Fleet, Crews, Workspace and Dispatch', async () => {
     const runs = [run({ id: 'a' })]
     render(<ConsoleShell runs={runs} connected hasSnapshot now={now} />)
 
@@ -162,7 +175,7 @@ describe('ConsoleShell layout', () => {
     expect(screen.getByRole('heading', { level: 1, name: 'Workspace' })).toBeTruthy()
 
     fireEvent.click(within(rail).getByRole('button', { name: 'Dispatch' }))
-    expect(screen.getByText(/dispatcher milestone/)).toBeTruthy()
+    expect(await screen.findByLabelText('Title')).toBeTruthy()
 
     fireEvent.click(within(rail).getByRole('button', { name: /^Active/ }))
     expect(screen.getByRole('heading', { level: 1, name: 'Active' })).toBeTruthy()

@@ -5,9 +5,9 @@ import { filterRuns, groupByHost, crewShortId, type Filter } from './fleetList'
 import { RunCard } from './RunCard'
 import { CrewsView } from './CrewsView'
 import { WorkspaceView } from './WorkspaceView'
+import { DispatchView } from './DispatchView'
 import { RunDetail } from './RunDetail'
 import { runHash, useDetailRoute } from './routes'
-import { DISPATCH_PLACEHOLDER } from './copy'
 import type { ShellData } from './MobileShell'
 import '../theme/mocha.css'
 import './fleet.css'
@@ -229,7 +229,9 @@ export function ConsoleShell({ runs, connected, hasSnapshot, now }: ShellData) {
           <WorkspaceView onOpen={(id) => { window.location.hash = runHash(id) }} />
         )}
 
-        {section === 'dispatch' && <div className="shell-placeholder">{DISPATCH_PLACEHOLDER}</div>}
+        <div hidden={section !== 'dispatch'} className="console-pane">
+          <DispatchView />
+        </div>
       </section>
 
       <section className="console-detail" aria-label="detail">

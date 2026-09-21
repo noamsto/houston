@@ -64,6 +64,8 @@ Houston scans ports 4096-4100 by default. Use `--no-opencode` to disable.
 │  POST /api/pane/:target/send - Send text/special keys │
 │  GET  /api/font/bigger       - Increase terminal font │
 │  GET  /api/font/smaller      - Decrease terminal font │
+│  GET  /api/dispatch/options  - Dispatch form choices  │
+│  POST /api/dispatch          - Start a worker         │
 │  GET  /*                     - Serve React SPA        │
 │                                                       │
 │  React SPA embedded via go:embed at compile time      │
@@ -237,6 +239,40 @@ legacy REST route `POST /api/pane/:target/send` (`server/server.go`): when
 `special=true`, `input` is sent as a key name (C-c, Up, Down, Escape, Tab,
 BTab, M-p, C-o, C-z) rather than literal text. `MobileInputBar.tsx` uses this
 route for quick actions instead of the WebSocket.
+
+## Dispatch
+
+The Dispatch tab starts a worker by running the host's `dispatch` CLI
+(`server/dispatch.go`, `server/dispatch_exec.go`). This is remote command
+execution from an HTTP request, so the handler is closed by construction:
+
+- `GET /api/dispatch/options` — the repos houston knows (each distinct tmux
+  `@git_root` resolved to its main repo, with that repo's crews from
+  `<git-common-dir>/crew/crews/`), tiers, efforts, plans, and the per-engine
+  model allowlist (`engines`, displayed in `engine_order`).
+- `POST /api/dispatch` — `{repo, title, spec?, tier, engine, model, effort,
+  plan?, crew, issue?}`. Every argv value is an enum, an allowlisted model, or
+  an anchored-regex match; `repo` must be in the options set and `crew` must
+  exist in that repo. The title is the only free text — one argv element that
+  may not start with `-`, equal `resume`, or look like an issue id (dispatch has
+  no `--`). The task body goes to a 0600 temp file passed as `DISPATCH_SPEC` and
+  removed afterwards; it is never logged.
+- One dispatch at a time (429 otherwise), 120 s timeout. The run is detached
+  from the request, so a dropped phone connection doesn't abort a half-built
+  worktree; on timeout the process group gets SIGTERM (dispatch's trap clears
+  its branch lock), then SIGKILL.
+- An unknown crew is refused by houston itself (404) before dispatch runs;
+  dispatch's own refusals (tier↔model map, budget) come back as 422 with its
+  stderr verbatim. The new run then appears in Fleet through the
+  crew source — nothing else to wire.
+- The model allowlist is a Go constant (`dispatchModels`); keep it in step with
+  dispatch's tier map when models change.
+- houston's environment must provide what dispatch needs: `dispatch`, `crew`,
+  `git`, an authenticated `gh`, `wt`, `direnv`, and a running tmux server on
+  `PATH`. A 502 means `dispatch` itself could not be started; any other
+  missing tool fails inside dispatch and comes back as a 422 with its stderr.
+- `-no-auth` leaves this endpoint enabled: that mode already exposes
+  `/api/pane/:target/send`, which is equivalent command execution.
 
 ## Security
 
