@@ -142,3 +142,29 @@ func TestGitCommonDirResolvesWorktreeToMainRepo(t *testing.T) {
 		}
 	}
 }
+
+func TestProjectResolverResolvedNeverReturnsTheFallback(t *testing.T) {
+	f := &fakeCommonDir{err: errors.New("not a repo")}
+	clock := time.Unix(1000, 0)
+	p := newFakeResolver(f, &clock)
+
+	if got := p.resolved("/wt/feat"); got != "" {
+		t.Fatalf("resolved = %q on a git failure, want \"\"", got)
+	}
+	// The second call is a cache hit on the failed entry.
+	if got := p.resolved("/wt/feat"); got != "" {
+		t.Fatalf("resolved = %q on a cached failure, want \"\"", got)
+	}
+	if f.calls != 1 {
+		t.Fatalf("commonDir called %d times within the window, want 1", f.calls)
+	}
+
+	f.err, f.dir = nil, "/x/houston/.git"
+	clock = clock.Add(projectRetryAfter + time.Second)
+	if got := p.resolved("/wt/feat"); got != "houston" {
+		t.Errorf("resolved = %q after the window, want houston", got)
+	}
+	if got := p.resolved(""); got != "" {
+		t.Errorf("resolved(\"\") = %q, want \"\"", got)
+	}
+}

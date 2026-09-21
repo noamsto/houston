@@ -279,7 +279,10 @@ func mergeInto(dst *Run, src Run) {
 	if src.Repo != "" {
 		dst.Repo = src.Repo
 	}
-	if src.Project != "" {
+	// First opinion wins, unlike the fields around it: a hook's cwd drifts
+	// (a `cd` into another checkout) and must not overwrite the project a
+	// lower layer took from the window's @git_root.
+	if src.Project != "" && dst.Project == "" {
 		dst.Project = src.Project
 	}
 	// A dispatcher window also carries a crew record, so the crew source's

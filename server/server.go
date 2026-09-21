@@ -216,7 +216,7 @@ func New(cfg Config) (*Server, error) {
 	}()
 
 	for _, src := range []runs.Source{
-		runs.NewHookSource(s.hub),
+		runs.NewHookSource(s.hub, tmuxClient),
 		runs.NewTmuxSource(tmuxClient, 2*time.Second),
 		runs.NewCrewSource(tmuxClient, 3*time.Second),
 		runs.NewConnectionSource(s.controlMgr, tmuxClient, 2*time.Second),

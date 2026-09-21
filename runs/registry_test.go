@@ -683,3 +683,64 @@ func TestPRURLForADifferentNumberIsNotMergedIntoTmuxsPR(t *testing.T) {
 		t.Errorf("PR = %+v, hybrid of tmux #9 and crew's pull/7 URL", got)
 	}
 }
+
+func TestEndedHooksRunWithoutATmuxLayerStaysListedAsDone(t *testing.T) {
+	r := NewRegistry(DefaultOrder)
+	r.Apply(Delta{Source: "hooks", Key: "%1", Run: Run{Agent: "claude", State: StateDone, Repo: "houston"}})
+
+	got := r.Snapshot()
+	if len(got) != 1 {
+		t.Fatalf("%d runs, want 1 — an ended run stays listed so it can age into history", len(got))
+	}
+	if got[0].State != StateDone {
+		t.Errorf("State = %q, want done", got[0].State)
+	}
+	if got[0].Caps.Terminal {
+		t.Errorf("Caps.Terminal = true, want false without a tmux layer")
+	}
+	if got[0].Question != nil {
+		t.Errorf("Question = %+v, want none on a done run", got[0].Question)
+	}
+}
+
+func TestQuestionOnACrewLayerForcesBlockedOverEndedHooks(t *testing.T) {
+	// Chosen behaviour: the registry's Question invariant outranks hooks'
+	// done. An ended hook layer does not clear a crew-bus question; only the
+	// crew layer answering (or going Gone) does.
+	r := NewRegistry(DefaultOrder)
+	r.Apply(Delta{Source: "crew", Key: "%1", Run: Run{
+		Agent:    "claude",
+		State:    StateBlocked,
+		Question: &Question{Text: "run tests?", Via: "crew"},
+	}})
+	r.Apply(Delta{Source: "hooks", Key: "%1", Run: Run{Agent: "claude", State: StateDone}})
+
+	got := r.Snapshot()[0]
+	if got.State != StateBlocked {
+		t.Fatalf("State = %q, want blocked while the crew question stands", got.State)
+	}
+}
+
+func TestProjectKeepsTheLowestLayersOpinion(t *testing.T) {
+	r := NewRegistry(DefaultOrder)
+	r.Apply(Delta{Source: "tmux", Key: "%1", Run: Run{Agent: "claude", Project: "from-git-root"}})
+	r.Apply(Delta{Source: "hooks", Key: "%1", Run: Run{Agent: "claude", Project: "from-a-drifted-cwd"}})
+
+	if got := r.Snapshot()[0].Project; got != "from-git-root" {
+		t.Errorf("Project = %q, want the tmux layer's — a hook cwd must not override it", got)
+	}
+
+	r.Apply(Delta{Source: "hooks", Key: "%2", Run: Run{Agent: "claude", Project: "hook-only"}})
+	var hookOnly *Run
+	for _, run := range r.Snapshot() {
+		if run.ID == "pane-2" {
+			hookOnly = &run
+		}
+	}
+	if hookOnly == nil {
+		t.Fatal("pane-2 missing from the snapshot")
+	}
+	if hookOnly.Project != "hook-only" {
+		t.Errorf("Project = %q, want the hook's when no lower layer has one", hookOnly.Project)
+	}
+}

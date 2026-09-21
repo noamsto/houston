@@ -93,6 +93,9 @@ func Dispatch(event string, stateDir string, stdin io.Reader) error {
 func apply(s *SessionState, event string, ev Event, now int64) {
 	clearTool := func() { s.Tool = ""; s.ToolInputHint = "" }
 	s.Since = now
+	if event != EventNotification {
+		s.LastMessage = ""
+	}
 	switch event {
 	case EventSessionStart:
 		s.State = StateStarting
