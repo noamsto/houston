@@ -1,5 +1,8 @@
 import type { Run } from '../api/runs'
 
+/** The slice of a run the freshness rules read; a Workspace pane carries it too. */
+export type Freshness = { state: string; updated_at: number }
+
 /**
  * How recently a run must have reported to count as fresh.
  *
@@ -10,7 +13,7 @@ import type { Run } from '../api/runs'
  */
 export const FRESH_MS = 60 * 60 * 1000
 
-export function isFresh(run: Run, now: number): boolean {
+export function isFresh(run: Freshness, now: number): boolean {
   if (!run.updated_at) return false
   return now - run.updated_at * 1000 <= FRESH_MS
 }
@@ -20,7 +23,7 @@ export function isFresh(run: Run, now: number): boolean {
  * is almost always a session that ended while waiting, and counting it would
  * leave the badge permanently lit — but see isHistory: it is still shown.
  */
-export function needsYou(run: Run, now: number): boolean {
+export function needsYou(run: Freshness, now: number): boolean {
   return run.state === 'blocked' && isFresh(run, now)
 }
 

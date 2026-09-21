@@ -17,6 +17,11 @@ function run(p: Partial<Run>): Run {
 const agoSec = (ms: number) => Math.floor((now - ms) / 1000)
 
 describe('staleness', () => {
+  it('accepts a bare {state, updated_at} such as a Workspace pane', () => {
+    expect(needsYou({ state: 'blocked', updated_at: agoSec(30 * 60_000) }, now)).toBe(true)
+    expect(needsYou({ state: 'blocked', updated_at: agoSec(2 * 60 * 60_000) }, now)).toBe(false)
+  })
+
   it('counts a recently blocked run as needing you', () => {
     expect(needsYou(run({ state: 'blocked' }), now)).toBe(true)
   })

@@ -24,6 +24,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+  vi.restoreAllMocks()
   vi.useRealTimers()
   fetchWorkspaceMock.mockReset()
 })
@@ -106,5 +107,69 @@ describe('useWorkspace lifecycle', () => {
     expect(result.current.workspace).toBeNull()
     expect(result.current.error).toBe('network down')
     expect(result.current.loading).toBe(false)
+  })
+
+  it('does not poll while the tab is hidden, and fetches immediately when it becomes visible', async () => {
+    fetchWorkspaceMock.mockResolvedValue(workspace())
+    renderHook(useWorkspaceProbe)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(fetchWorkspaceMock).toHaveBeenCalledTimes(1)
+
+    const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(true)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(9000)
+    })
+    expect(fetchWorkspaceMock).toHaveBeenCalledTimes(1)
+
+    hidden.mockReturnValue(false)
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'))
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(fetchWorkspaceMock).toHaveBeenCalledTimes(2)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000)
+    })
+    expect(fetchWorkspaceMock).toHaveBeenCalledTimes(3)
+  })
+
+  it('an older, slower response cannot overwrite a newer one', async () => {
+    let resolveOld!: (w: Workspace) => void
+    fetchWorkspaceMock.mockImplementationOnce(() => new Promise<Workspace>((r) => { resolveOld = r }))
+    const { result } = renderHook(useWorkspaceProbe)
+
+    fetchWorkspaceMock.mockResolvedValueOnce(workspace('new'))
+    await act(async () => {
+      result.current.refresh()
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(result.current.workspace).toEqual(workspace('new'))
+    expect(result.current.refreshing).toBe(false)
+
+    await act(async () => {
+      resolveOld(workspace('old'))
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(result.current.workspace).toEqual(workspace('new'))
+  })
+
+  it('refresh() fetches on demand and clears a previous error', async () => {
+    fetchWorkspaceMock.mockRejectedValueOnce(new Error('network down'))
+    const { result } = renderHook(useWorkspaceProbe)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(result.current.error).toBe('network down')
+
+    fetchWorkspaceMock.mockResolvedValueOnce(workspace('again'))
+    await act(async () => {
+      result.current.refresh()
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(result.current.error).toBeNull()
+    expect(result.current.workspace).toEqual(workspace('again'))
   })
 })

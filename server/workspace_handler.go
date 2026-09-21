@@ -8,7 +8,8 @@ import (
 
 // handleWorkspace returns the full tmux tree across every reachable session,
 // bucketed by repo (main checkout / worktree / no repo) and joined against
-// the run registry so agent panes carry their run_id.
+// the run registry so agent panes carry their run_id plus the run's agent type,
+// state and one-line detail.
 //
 //	GET /api/workspace → Workspace
 func (s *Server) handleWorkspace(w http.ResponseWriter, _ *http.Request) {
