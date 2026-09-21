@@ -95,6 +95,11 @@ func execDispatch(ctx context.Context, x dispatchExec) dispatchResult {
 			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		}
 		res.Err = context.DeadlineExceeded
+	case errors.Is(err, exec.ErrWaitDelay) && cmd.ProcessState != nil:
+		// dispatch itself exited fine but a background child it started
+		// (without redirecting its output) still held stdout/stderr open past
+		// WaitDelay — that's the child's doing, not a dispatch failure.
+		res.ExitCode = cmd.ProcessState.ExitCode()
 	case errors.As(err, &exitErr):
 		res.ExitCode = exitErr.ExitCode()
 	default:

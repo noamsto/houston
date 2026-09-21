@@ -261,14 +261,16 @@ execution from an HTTP request, so the handler is closed by construction:
   from the request, so a dropped phone connection doesn't abort a half-built
   worktree; on timeout the process group gets SIGTERM (dispatch's trap clears
   its branch lock), then SIGKILL.
-- dispatch's own refusals (tier↔model map, budget, missing crew) come back as
-  422 with its stderr verbatim. The new run then appears in Fleet through the
+- An unknown crew is refused by houston itself (404) before dispatch runs;
+  dispatch's own refusals (tier↔model map, budget) come back as 422 with its
+  stderr verbatim. The new run then appears in Fleet through the
   crew source — nothing else to wire.
 - The model allowlist is a Go constant (`dispatchModels`); keep it in step with
   dispatch's tier map when models change.
 - houston's environment must provide what dispatch needs: `dispatch`, `crew`,
   `git`, an authenticated `gh`, `wt`, `direnv`, and a running tmux server on
-  `PATH`. A 502 names the binary that could not be started.
+  `PATH`. A 502 means `dispatch` itself could not be started; any other
+  missing tool fails inside dispatch and comes back as a 422 with its stderr.
 - `-no-auth` leaves this endpoint enabled: that mode already exposes
   `/api/pane/:target/send`, which is equivalent command execution.
 

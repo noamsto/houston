@@ -218,6 +218,38 @@ func readFileOrEmpty(path string) string {
 	return string(b)
 }
 
+// A background child that inherits dispatch's stdout/stderr keeps the pipes
+// open past dispatch's own exit, so cmd.Run's Wait blocks for WaitDelay and
+// returns exec.ErrWaitDelay even though dispatch itself succeeded.
+func TestExecDispatchBackgroundChildHoldsPipes(t *testing.T) {
+	prev := dispatchGrace
+	dispatchGrace = 200 * time.Millisecond
+	t.Cleanup(func() { dispatchGrace = prev })
+
+	dir := t.TempDir()
+	installFakeDispatch(t, `echo "worker_id: worker:feat/1-x#s1"
+sleep 3 &
+echo $! > '`+dir+`/bgpid'
+exit 0
+`)
+	t.Cleanup(func() {
+		if pid, err := strconv.Atoi(strings.TrimSpace(readFileOrEmpty(filepath.Join(dir, "bgpid")))); err == nil {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+		}
+	})
+
+	res := runDispatch(t, 10*time.Second, dispatchExec{Dir: t.TempDir(), Argv: []string{"dispatch"}})
+	if res.Err != nil {
+		t.Errorf("err = %v, want nil", res.Err)
+	}
+	if res.ExitCode != 0 {
+		t.Errorf("exit = %d, want 0", res.ExitCode)
+	}
+	if !strings.Contains(res.Stdout, "worker_id: worker:feat/1-x#s1") {
+		t.Errorf("stdout = %q, want it to contain the worker_id", res.Stdout)
+	}
+}
+
 func TestHandleDispatchWithRealRunner(t *testing.T) {
 	installFakeDispatch(t, "echo 'worker_id: worker:feat/1-x#s1'\n")
 	repo := newDispatchTestRepo(t, "1700000000-123")

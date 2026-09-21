@@ -68,8 +68,12 @@ export async function submitDispatch(req: DispatchRequest): Promise<DispatchOutc
   }
   const text = await res.text()
   if (res.ok) {
-    const body = JSON.parse(text) as DispatchSuccessBody
-    return { kind: 'started', workerId: body.worker_id, branch: body.branch, issueUrl: body.issue_url }
+    try {
+      const body = JSON.parse(text) as DispatchSuccessBody
+      return { kind: 'started', workerId: body.worker_id, branch: body.branch, issueUrl: body.issue_url }
+    } catch {
+      return { kind: 'failed', status: res.status, error: 'malformed response: ' + text.trim() }
+    }
   }
   try {
     const body = JSON.parse(text) as DispatchErrorBody

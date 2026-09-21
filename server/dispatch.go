@@ -131,7 +131,7 @@ func (e *dispatchError) Error() string { return e.msg }
 // every field against a closed enum or an anchored regex. It never touches
 // disk or the known-repo set — that membership check happens in
 // handleDispatch, once a repo is on hand to check crew dirs against.
-func validateDispatch(req dispatchRequest) (dispatchRequest, error) {
+func validateDispatch(req dispatchRequest) (dispatchRequest, *dispatchError) {
 	out := req
 	out.Title = strings.TrimSpace(req.Title)
 	if out.Plan == "" {
@@ -344,10 +344,8 @@ func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	valid, err := validateDispatch(req)
-	if err != nil {
-		var derr *dispatchError
-		errors.As(err, &derr)
+	valid, derr := validateDispatch(req)
+	if derr != nil {
 		dlog.field = derr.field
 		dlog.status = derr.code
 		writeDispatchJSON(w, derr.code, dispatchResponse{Error: derr.msg})
@@ -361,10 +359,6 @@ func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Everything below is validated (bounded, enum, or anchored-regex), so
-	// it is now safe to log in full.
-	dlog.setValidated(valid)
-
 	repoPath := filepath.Clean(valid.Repo)
 	repoIdx := slices.IndexFunc(repos, func(r dispatchRepo) bool { return r.Path == repoPath })
 	if repoIdx < 0 {
@@ -373,6 +367,10 @@ func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	repo := repos[repoIdx]
+
+	// Everything below is validated (bounded, enum, or anchored-regex) and
+	// repo is now a known path, so it's safe to log in full.
+	dlog.setValidated(valid, repo.Path)
 
 	crewDir := filepath.Join(repo.commonDir, "crew", "crews", valid.Crew)
 	if info, err := os.Stat(crewDir); err != nil || !info.IsDir() {
@@ -493,9 +491,9 @@ type dispatchLog struct {
 	workerID                                                    string
 }
 
-func (l *dispatchLog) setValidated(req dispatchRequest) {
+func (l *dispatchLog) setValidated(req dispatchRequest, repoPath string) {
 	l.validated = true
-	l.repo, l.tier, l.engine, l.model = req.Repo, req.Tier, req.Engine, req.Model
+	l.repo, l.tier, l.engine, l.model = repoPath, req.Tier, req.Engine, req.Model
 	l.effort, l.plan, l.crew, l.issue, l.title = req.Effort, req.Plan, req.Crew, req.Issue, req.Title
 }
 
