@@ -249,6 +249,7 @@ export function useTouchGestures(
     let pinchStartTX = 0
     let pinchStartTY = 0
     let lastTapTime: number | null = null
+    let doubleTapped = false
     let lastTapX = 0
     let lastTapY = 0
 
@@ -369,6 +370,7 @@ export function useTouchGestures(
 
     // A cancelled touch ends the gesture like a lift does, but is never a tap.
     const endGesture = (cancelled: boolean) => {
+      doubleTapped = false
       if (gesture === 'pinch') {
         const term = termRef.current
         if (term) {
@@ -410,6 +412,7 @@ export function useTouchGestures(
           Math.hypot(dragOriginX - lastTapX, dragOriginY - lastTapY) < DOUBLE_TAP_MAX_DIST_PX
         if (isDoubleTap) {
           lastTapTime = null
+          doubleTapped = true
           onDoubleTapRef.current?.()
         } else {
           lastTapTime = now
@@ -425,6 +428,9 @@ export function useTouchGestures(
       e.stopPropagation()
       if (e.touches.length !== 0) return
       endGesture(false)
+      // Cancelling the touchend drops the compat mouse events, so xterm never
+      // sees the dblclick that would word/line-select the tapped row.
+      if (doubleTapped && e.cancelable) e.preventDefault()
     }
 
     const onTouchCancel = (e: TouchEvent) => {
@@ -434,7 +440,7 @@ export function useTouchGestures(
 
     screen.addEventListener('touchstart', onTouchStart, { passive: true })
     screen.addEventListener('touchmove', onTouchMove, { passive: false })
-    screen.addEventListener('touchend', onTouchEnd, { passive: true })
+    screen.addEventListener('touchend', onTouchEnd, { passive: false })
     screen.addEventListener('touchcancel', onTouchCancel, { passive: true })
 
     return () => {

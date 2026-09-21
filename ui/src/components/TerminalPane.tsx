@@ -491,6 +491,9 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
       termRef.current = null
       fitAddonRef.current = null
       setTermMounted(false)
+      // A breakpoint flip must not carry a detached pan into a mode that
+      // treats it differently (desktop holdingView() would hold reseeds).
+      setDetached(false)
     }
   }, [isDesktop]) // eslint-disable-line react-hooks/exhaustive-deps
 

@@ -294,7 +294,7 @@ describe('TerminalPane detached mode', () => {
     act(() => {
       callbacks.onDims({ cols: 80, rows: 24 })
     })
-    return { callbacks, term: await lastTerminalInstance(), container, rerenderTarget }
+    return { callbacks, term: await lastTerminalInstance(), container, rerender, rerenderTarget }
   }
 
   // happy-dom has no layout, so xterm's viewport never actually scrolls; report
@@ -566,6 +566,25 @@ describe('TerminalPane detached mode', () => {
     rerenderTarget('sess:1.0')
     rerenderTarget(target)
     expect(livePill()).toBeNull()
+  })
+
+  it('clears detached state when the desktop breakpoint flips', async () => {
+    const { rerender } = await mountMobile()
+    dragEnd({ movedX: true, startedAtBottom: true })
+    expect(livePill()).not.toBeNull()
+
+    desktop = true
+    rerender(<TerminalPane address={address} isFocused onFocus={() => {}} onClose={() => {}} />)
+    desktop = false
+    rerender(<TerminalPane address={address} isFocused onFocus={() => {}} onClose={() => {}} />)
+    expect(livePill()).toBeNull()
+
+    touchGesturesMock.easeTranslateXTo.mockClear()
+    act(() => {
+      capturedCallbacks!.onOutput('x')
+    })
+    await nextFrame()
+    expect(touchGesturesMock.easeTranslateXTo).toHaveBeenCalled()
   })
 
   it('never shows the Live pill on desktop', () => {
