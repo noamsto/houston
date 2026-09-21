@@ -197,3 +197,74 @@ func TestBuildWorkspace_Bucketing(t *testing.T) {
 		t.Errorf("Other = %+v, want just no-repo", s.Other)
 	}
 }
+
+func TestBuildWorkspace_JoinsRunStateAndDetail(t *testing.T) {
+	wins := []tmux.WindowOptions{
+		{Session: "main", Window: 0, Name: "w", IssueID: "#69", PRNumber: "71", PRState: "OPEN", PRCheckState: "failure"},
+	}
+	panes := []tmux.PaneOptions{
+		{PaneID: "%1", Target: "main:0", Command: "claude", Index: 0},
+		{PaneID: "%2", Target: "main:0", Command: "fish", Index: 1},
+	}
+	snap := []runs.Run{{
+		ID: "run-1", Agent: "claude-code", State: runs.StateRunning, UpdatedAt: 1234, Stale: true,
+		Tmux:     &runs.TmuxRef{Session: "main", Window: 0, PaneID: "%1"},
+		Activity: runs.Activity{Tool: "Edit", Hint: "a.go"},
+	}}
+
+	ws := buildWorkspace(wins, panes, snap, nil)
+
+	w := ws.Sessions[0].Other[0]
+	if w.IssueID != "#69" || w.PRNumber != "71" || w.PRState != "OPEN" || w.PRCheckState != "failure" {
+		t.Errorf("issue/PR fields not carried through: %+v", w)
+	}
+	agent, plain := w.Panes[0], w.Panes[1]
+	if agent.AgentType != "claude-code" || agent.State != "running" || agent.UpdatedAt != 1234 || agent.Detail != "Edit · a.go" || !agent.Stale {
+		t.Errorf("run not joined onto agent pane: %+v", agent)
+	}
+	if plain.AgentType != "" || plain.State != "" || plain.Detail != "" || plain.UpdatedAt != 0 || plain.Stale {
+		t.Errorf("plain pane carries run fields: %+v", plain)
+	}
+}
+
+func TestRunDetail(t *testing.T) {
+	tests := []struct {
+		name string
+		run  runs.Run
+		want string
+	}{
+		{"blocked with message", runs.Run{State: runs.StateBlocked, Activity: runs.Activity{Message: "Allow Bash?"}}, "Allow Bash?"},
+		{"blocked without message", runs.Run{State: runs.StateBlocked}, "waiting on you"},
+		{"tool and hint", runs.Run{State: runs.StateRunning, Activity: runs.Activity{Tool: "Read", Hint: "x.go"}}, "Read · x.go"},
+		{"tool only", runs.Run{State: runs.StateRunning, Activity: runs.Activity{Tool: "Read"}}, "Read"},
+		{"task", runs.Run{State: runs.StateThinking, Activity: runs.Activity{Task: "fix bug"}}, "fix bug"},
+		{"pr with checks", runs.Run{State: runs.StateDone, PR: &runs.PRRef{Number: "7", CheckState: "success"}}, "PR #7 · success"},
+		{"pr without checks", runs.Run{State: runs.StateDone, PR: &runs.PRRef{Number: "7"}}, "PR #7"},
+		{"pr with none check state", runs.Run{State: runs.StateDone, PR: &runs.PRRef{Number: "7", CheckState: "none"}}, "PR #7"},
+		{"blocked beats tool", runs.Run{State: runs.StateBlocked, Activity: runs.Activity{Tool: "Edit", Message: "Allow?"}}, "Allow?"},
+		{"tool beats task", runs.Run{State: runs.StateRunning, Activity: runs.Activity{Tool: "Edit", Task: "x"}}, "Edit"},
+		{"multi-line free text collapses", runs.Run{State: runs.StateThinking, Activity: runs.Activity{Task: "line one\n  line two"}}, "line one line two"},
+		{"falls back to state", runs.Run{State: runs.StateIdle}, "idle"},
+	}
+	for _, tt := range tests {
+		if got := runDetail(tt.run); got != tt.want {
+			t.Errorf("%s: runDetail = %q, want %q", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestBuildWorkspace_DropsNoneSentinelOptions(t *testing.T) {
+	wins := []tmux.WindowOptions{
+		{Session: "main", Window: 0, Name: "w", IssueID: "#69", PRNumber: "none", PRState: "none", PRCheckState: "none"},
+	}
+	panes := []tmux.PaneOptions{{PaneID: "%1", Target: "main:0", Index: 0}}
+
+	w := buildWorkspace(wins, panes, nil, nil).Sessions[0].Other[0]
+
+	if w.IssueID != "#69" {
+		t.Errorf("IssueID = %q, want #69", w.IssueID)
+	}
+	if w.PRNumber != "" || w.PRState != "" || w.PRCheckState != "" {
+		t.Errorf("none sentinel leaked: %+v", w)
+	}
+}

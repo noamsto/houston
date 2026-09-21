@@ -2,6 +2,7 @@ package server
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/noamsto/houston/runs"
 	"github.com/noamsto/houston/tmux"
@@ -27,6 +28,10 @@ type WorkspaceWindow struct {
 	Branch       string          `json:"branch,omitempty"`
 	Task         string          `json:"task,omitempty"`
 	CrewCodename string          `json:"crew_codename,omitempty"`
+	IssueID      string          `json:"issue_id,omitempty"`
+	PRNumber     string          `json:"pr_number,omitempty"`
+	PRState      string          `json:"pr_state,omitempty"`
+	PRCheckState string          `json:"pr_check_state,omitempty"`
 	Panes        []WorkspacePane `json:"panes"`
 }
 
@@ -37,6 +42,14 @@ type WorkspacePane struct {
 	Command string `json:"command"`          // #{pane_current_command}; the plain-pane label (spec: never the parser)
 	Agent   bool   `json:"agent"`            // a composed Run joined this pane id — see buildWorkspace
 	RunID   string `json:"run_id,omitempty"` // set whenever Agent is true; the two can never disagree
+
+	// Set only when a Run joined this pane, so the tab can say what is
+	// running there without a second stream.
+	AgentType string `json:"agent_type,omitempty"`
+	State     string `json:"state,omitempty"`
+	UpdatedAt int64  `json:"updated_at,omitempty"`
+	Detail    string `json:"detail,omitempty"`
+	Stale     bool   `json:"stale,omitempty"`
 }
 
 // windowGroup accumulates a matched window's own panes as buildWorkspace
@@ -58,10 +71,10 @@ type windowGroup struct {
 // fixture-testable: it never performs the git call itself, only buckets by
 // the answers it's handed.
 func buildWorkspace(wins []tmux.WindowOptions, panes []tmux.PaneOptions, snap []runs.Run, mainCheckouts map[string]bool) Workspace {
-	paneToRun := make(map[string]string, len(snap))
+	paneToRun := make(map[string]runs.Run, len(snap))
 	for _, r := range snap {
 		if r.Tmux != nil {
-			paneToRun[r.Tmux.PaneID] = r.ID
+			paneToRun[r.Tmux.PaneID] = r
 		}
 	}
 
@@ -106,15 +119,22 @@ func buildWorkspace(wins []tmux.WindowOptions, panes []tmux.PaneOptions, snap []
 
 			wp := make([]WorkspacePane, 0, len(g.panes))
 			for _, p := range g.panes {
-				runID := paneToRun[p.PaneID]
-				wp = append(wp, WorkspacePane{
+				pane := WorkspacePane{
 					ID:      p.PaneID,
 					Index:   p.Index,
 					Active:  p.Active,
 					Command: p.Command,
-					Agent:   runID != "",
-					RunID:   runID,
-				})
+				}
+				if r, ok := paneToRun[p.PaneID]; ok && r.ID != "" {
+					pane.Agent = true
+					pane.RunID = r.ID
+					pane.AgentType = r.Agent
+					pane.State = string(r.State)
+					pane.UpdatedAt = r.UpdatedAt
+					pane.Detail = runDetail(r)
+					pane.Stale = r.Stale
+				}
+				wp = append(wp, pane)
 			}
 
 			win := WorkspaceWindow{
@@ -124,6 +144,10 @@ func buildWorkspace(wins []tmux.WindowOptions, panes []tmux.PaneOptions, snap []
 				Branch:       g.win.Branch,
 				Task:         g.win.Task,
 				CrewCodename: g.win.CrewName,
+				IssueID:      optionValue(g.win.IssueID),
+				PRNumber:     optionValue(g.win.PRNumber),
+				PRState:      optionValue(g.win.PRState),
+				PRCheckState: optionValue(g.win.PRCheckState),
 				Panes:        wp,
 			}
 
@@ -141,4 +165,44 @@ func buildWorkspace(wins []tmux.WindowOptions, panes []tmux.PaneOptions, snap []
 	}
 
 	return ws
+}
+
+// runDetail is the one line saying what a run is doing right now. It mirrors
+// ui/src/fleet/format.ts's subtitle so a workspace row and a run card never
+// disagree. Whitespace is collapsed because message and task are free text.
+func runDetail(r runs.Run) string {
+	return strings.Join(strings.Fields(runDetailRaw(r)), " ")
+}
+
+func runDetailRaw(r runs.Run) string {
+	a := r.Activity
+	if r.State == runs.StateBlocked {
+		if a.Message != "" {
+			return a.Message
+		}
+		return "waiting on you"
+	}
+	switch {
+	case a.Tool != "" && a.Hint != "":
+		return a.Tool + " · " + a.Hint
+	case a.Tool != "":
+		return a.Tool
+	case a.Task != "":
+		return a.Task
+	case r.PR != nil:
+		if cs := optionValue(r.PR.CheckState); cs != "" {
+			return "PR #" + r.PR.Number + " · " + cs
+		}
+		return "PR #" + r.PR.Number
+	}
+	return string(r.State)
+}
+
+// optionValue drops lazytmux's "none" sentinel, which it writes into a window
+// option when there is nothing to record (no PR yet, no checks).
+func optionValue(v string) string {
+	if v == "none" {
+		return ""
+	}
+	return v
 }
