@@ -475,10 +475,10 @@ func TestDispatchNewCrew(t *testing.T) {
 		wantCrewSet bool
 	}{
 		{"success", dispatchResult{Stdout: "worker_id: worker:feat/1-x#s1\n"}, http.StatusOK, true, true},
-		{"exit 1", dispatchResult{ExitCode: 1, Stderr: "nope"}, http.StatusUnprocessableEntity, false, true},
+		{"exit 1", dispatchResult{ExitCode: 1, Stderr: "nope"}, http.StatusUnprocessableEntity, false, false},
 		{"runner err", dispatchResult{Err: &exec.Error{Name: "dispatch", Err: exec.ErrNotFound}}, http.StatusBadGateway, false, false},
 		{"deadline", dispatchResult{Err: context.DeadlineExceeded}, http.StatusGatewayTimeout, true, true},
-		{"exit 0 no worker_id", dispatchResult{Stdout: "nothing useful"}, http.StatusBadGateway, true, false},
+		{"exit 0 no worker_id", dispatchResult{Stdout: "nothing useful"}, http.StatusBadGateway, true, true},
 	}
 
 	for _, tc := range cases {
@@ -523,6 +523,26 @@ func TestDispatchNewCrew(t *testing.T) {
 				t.Errorf("argv %q must never contain %q", got.Argv, dispatchNewCrew)
 			}
 		})
+	}
+}
+
+// TestDispatchExistingCrewFailureKeepsCrew proves a 422 for a client-supplied
+// (not minted) crew still returns that crew id, since the crew itself
+// existed before the request and isn't touched by the failure.
+func TestDispatchExistingCrewFailureKeepsCrew(t *testing.T) {
+	repo := newDispatchTestRepo(t, "1700000000-123")
+	stub := &stubDispatchRunner{result: dispatchResult{ExitCode: 1, Stderr: "nope"}}
+	s := newDispatchServer(t, stub.run, stubDispatchRepos([]dispatchRepo{repo}, nil))
+	req := validDispatchRequest(repo, repo.Crews[0])
+
+	rec := doDispatch(t, s, dispatchHTTPRequest("POST", dispatchRequestJSON(t, req)))
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status %d, want 422 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	body := decodeDispatchResponse(t, rec)
+	if body.Crew != repo.Crews[0] {
+		t.Errorf("crew = %q, want %q", body.Crew, repo.Crews[0])
 	}
 }
 

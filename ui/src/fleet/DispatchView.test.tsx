@@ -260,6 +260,28 @@ describe('DispatchView submit', () => {
     expect(screen.queryByText(/No crew yet/)).toBeNull()
   })
 
+  it('a new-crew timeout still joins the minted crew', async () => {
+    await renderLoaded()
+    change('Repo', '/repo/b')
+    submitDispatchMock.mockResolvedValue({ kind: 'failed', status: 504, error: 'dispatch timed out', crew: '300-9' })
+    await submitTitle()
+
+    expect(await screen.findByText('dispatch timed out')).toBeTruthy()
+    expect(value('Crew')).toBe('300-9')
+    const values = within(screen.getByLabelText('Crew')).getAllByRole('option').map((o) => (o as HTMLOptionElement).value)
+    expect(values).toEqual(['300-9', 'new'])
+  })
+
+  it('a new-crew 422 without a minted crew leaves crew as new', async () => {
+    await renderLoaded()
+    change('Repo', '/repo/b')
+    submitDispatchMock.mockResolvedValue({ kind: 'failed', status: 422, error: 'dispatch: bad model' })
+    await submitTitle()
+
+    expect(await screen.findByText('dispatch: bad model')).toBeTruthy()
+    expect(value('Crew')).toBe('new')
+  })
+
   it('links to the run once it appears in the stream', async () => {
     const { rerender } = await renderLoaded()
     submitDispatchMock.mockResolvedValue({ kind: 'started', workerId: 'w', branch: 'feat/7-x', crew: '200-1' })
@@ -346,7 +368,7 @@ describe('DispatchView task field', () => {
   }
 
   it('grows to the viewport cap, then scrolls internally', async () => {
-    vi.stubGlobal('visualViewport', { height: 500 })
+    vi.stubGlobal('visualViewport', { height: 500, addEventListener: vi.fn(), removeEventListener: vi.fn() })
     await renderLoaded()
     const task = screen.getByLabelText('Task') as HTMLTextAreaElement
     expect(task.style.touchAction).toBe('pan-y')
@@ -360,5 +382,24 @@ describe('DispatchView task field', () => {
     change('Task', 'short')
     expect(task.style.height).toBe('120px')
     expect(task.style.overflowY).toBe('hidden')
+  })
+
+  it('re-grows the cap on a visualViewport resize', async () => {
+    let handler: (() => void) | undefined
+    const vv = {
+      height: 500,
+      addEventListener: (_type: string, cb: () => void) => { handler = cb },
+      removeEventListener: vi.fn(),
+    }
+    vi.stubGlobal('visualViewport', vv)
+    await renderLoaded()
+    const task = screen.getByLabelText('Task') as HTMLTextAreaElement
+    stubScrollHeight(task, 900)
+    change('Task', 'long\n'.repeat(80))
+    expect(task.style.height).toBe('200px')
+
+    vv.height = 1000
+    act(() => { handler?.() })
+    expect(task.style.height).toBe('400px')
   })
 })

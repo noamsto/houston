@@ -406,8 +406,9 @@ func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// minted is the crew leaf this request created, if any — removed on a
-	// failure that means dispatch never ran or produced no worker.
+	// minted is the crew leaf this request created, if any — removed only
+	// when dispatch could not be started or exited non-zero, since those
+	// are the outcomes where the crew never got used.
 	var minted string
 	if valid.Crew == dispatchNewCrew {
 		id := s.dispatchNewCrewID()
@@ -465,20 +466,25 @@ func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 		dlog.status = http.StatusBadGateway
 		writeDispatchJSON(w, http.StatusBadGateway, dispatchResponse{Error: "could not run dispatch: " + res.Err.Error()})
 	case res.ExitCode != 0:
+		// A minted crew is removed here (unused), so its id doesn't go
+		// back to the client; a client-supplied crew still exists, so its
+		// id does.
+		crew := valid.Crew
 		if minted != "" {
 			_ = os.Remove(minted)
+			crew = ""
 		}
 		errMsg := res.Stderr
 		if errMsg == "" {
 			errMsg = "dispatch failed"
 		}
 		dlog.status = http.StatusUnprocessableEntity
-		writeDispatchJSON(w, http.StatusUnprocessableEntity, dispatchResponse{Error: errMsg, Output: res.Stdout, Crew: valid.Crew})
+		writeDispatchJSON(w, http.StatusUnprocessableEntity, dispatchResponse{Error: errMsg, Output: res.Stdout, Crew: crew})
 	default:
 		id := dispatchWorkerID(res.Stdout)
 		if id == "" {
 			dlog.status = http.StatusBadGateway
-			writeDispatchJSON(w, http.StatusBadGateway, dispatchResponse{Error: "dispatch exited 0 without printing a worker_id", Output: res.Stdout})
+			writeDispatchJSON(w, http.StatusBadGateway, dispatchResponse{Error: "dispatch exited 0 without printing a worker_id", Output: res.Stdout, Crew: valid.Crew})
 			return
 		}
 		dlog.workerID = id

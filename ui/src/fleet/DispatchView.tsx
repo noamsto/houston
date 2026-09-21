@@ -83,6 +83,17 @@ export function DispatchView({ runs }: { runs: Run[] }) {
     if (taskRef.current) autoGrow(taskRef.current)
   }, [spec, options])
 
+  // The cap tracks visualViewport height (keyboard open/close, rotation), so
+  // it must re-run when that changes, not just when the textarea content does.
+  useEffect(() => {
+    const target: VisualViewport | Window = window.visualViewport ?? window
+    const onResize = () => {
+      if (taskRef.current) autoGrow(taskRef.current)
+    }
+    target.addEventListener('resize', onResize)
+    return () => target.removeEventListener('resize', onResize)
+  }, [])
+
   // Pure fetch: every setState it makes happens inside a promise callback,
   // never synchronously in the caller's tick, so it's safe to invoke directly
   // from the mount effect as well as from the Retry button's click handler.
@@ -155,19 +166,22 @@ export function DispatchView({ runs }: { runs: Run[] }) {
     setSubmitting(false)
     setOutcome(result)
     setOutcomeWasNewCrew(req.crew === NEW_CREW)
+    const minted = result.crew
+    if (req.crew === NEW_CREW && minted) {
+      // Join the minted crew on the next attempt — success or a retryable
+      // failure alike — instead of minting another.
+      setOptions((o) => o && {
+        ...o,
+        repos: o.repos.map((r) =>
+          r.path === req.repo && !r.crews.includes(minted) ? { ...r, crews: [minted, ...r.crews] } : r,
+        ),
+      })
+      setCrew(minted)
+    }
     if (result.kind !== 'started') return
     savePrefs({ repo: req.repo, engine: req.engine, model: req.model, tier: req.tier, effort: req.effort })
     setTitle('')
     setSpec('')
-    const minted = result.crew
-    if (req.crew === NEW_CREW && minted) {
-      // Join the minted crew on the next dispatch instead of minting another.
-      setOptions((o) => o && {
-        ...o,
-        repos: o.repos.map((r) => (r.path === req.repo ? { ...r, crews: [minted, ...r.crews] } : r)),
-      })
-      setCrew(minted)
-    }
   }
 
   const dispatchedRun =
