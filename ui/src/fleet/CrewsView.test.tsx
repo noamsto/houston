@@ -1,12 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { CrewsView } from './CrewsView'
 import type { Run } from '../api/runs'
 import { fetchDispatchOptions } from '../api/dispatch'
+import { replyRun } from '../api/runs'
 
 vi.mock('../api/dispatch', () => ({
   fetchDispatchOptions: vi.fn(),
   submitDispatch: vi.fn(),
+}))
+
+vi.mock('../api/runs', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../api/runs')>()),
+  replyRun: vi.fn(),
 }))
 
 const now = 1_800_000_000_000 // fixed ms
@@ -28,6 +34,7 @@ function options(repos: { path: string; name: string; crews: string[] }[]) {
 }
 
 const fetchOptions = vi.mocked(fetchDispatchOptions)
+const replyRunMock = vi.mocked(replyRun)
 
 beforeEach(() => {
   fetchOptions.mockResolvedValue(options([]))
@@ -139,6 +146,12 @@ describe('CrewsView', () => {
       expect(container.querySelector('.crews-phase')?.textContent).toBe('thinking')
     })
 
+    it('exposes the run state as a text alternative on the state dot', () => {
+      const { container } = render(<CrewsView runs={[run({ crew: { name: 'c' }, state: 'running' })]} now={now} />)
+      expect(container.querySelector('.run-dot')?.getAttribute('aria-label')).toBe('running')
+      expect(screen.getByRole('img', { name: 'running' })).toBeTruthy()
+    })
+
     it('marks a run with a down control connection as stale', () => {
       const { container } = render(<CrewsView runs={[run({ crew: { name: 'c' }, stale: true })]} now={now} />)
       expect(container.querySelector('.run-chip.stale')).toBeTruthy()
@@ -168,6 +181,23 @@ describe('CrewsView', () => {
       expect(container.querySelectorAll('.crew-reply').length).toBe(1)
       expect(screen.getByText('proceed?')).toBeTruthy()
       expect(screen.getByText('y/n?')).toBeTruthy()
+    })
+
+    it('sends a reply to the member whose composer was used', async () => {
+      replyRunMock.mockResolvedValue({ kind: 'delivered' })
+      const runs = [
+        run({ id: 'first', crew: { name: 'c', codename: 'First' }, state: 'blocked', question: { text: 'one?', via: 'crew' }, updated_at: nowSec }),
+        run({ id: 'second', crew: { name: 'c', codename: 'Second' }, state: 'blocked', question: { text: 'two?', via: 'crew' }, updated_at: nowSec - 5 }),
+      ]
+      const { container } = render(<CrewsView runs={runs} now={now} />)
+
+      const row = container.querySelectorAll('.crews-member')[1] as HTMLElement
+      expect(row.textContent).toContain('Second')
+      fireEvent.change(within(row).getByLabelText(/reply to the crew/i), { target: { value: 'go ahead' } })
+      fireEvent.click(within(row).getByRole('button', { name: /send/i }))
+
+      await waitFor(() => expect(replyRunMock).toHaveBeenCalledTimes(1))
+      expect(replyRunMock).toHaveBeenCalledWith('second', 'go ahead')
     })
 
     it('hints to answer in the terminal for a pane question', () => {

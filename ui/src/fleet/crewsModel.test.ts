@@ -46,6 +46,18 @@ describe('groupCrews', () => {
     expect(groupCrews(runs, now).live).toEqual([])
   })
 
+  it('does not let a ghost running member that stopped reporting keep its crew live', () => {
+    const runs = [run({ id: 'a', crew: { name: 'c' }, state: 'running', updated_at: old })]
+    const { live, finished } = groupCrews(runs, now)
+    expect(live).toEqual([])
+    expect(finished.map((g) => g.name)).toEqual(['c'])
+  })
+
+  it('counts a freshly reporting running member as live', () => {
+    const runs = [run({ id: 'a', crew: { name: 'c' }, state: 'running', updated_at: nowSec - 30 })]
+    expect(groupCrews(runs, now).live.map((g) => g.name)).toEqual(['c'])
+  })
+
   it('treats a recently updated finished crew as live (updated_at is seconds, now is ms)', () => {
     const runs = [run({ id: 'a', crew: { name: 'c' }, state: 'done', updated_at: nowSec - 60 })]
     expect(groupCrews(runs, now).live.map((g) => g.name)).toEqual(['c'])

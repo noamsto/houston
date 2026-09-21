@@ -35,7 +35,13 @@ function Member({ run, now, onOpen }: { run: Run; now: number; onOpen?: (r: Run)
           <span className="crews-swatch" style={{ background: run.crew?.color || 'var(--text-faint)' }} />
           <span className="crews-codename">{run.crew?.codename || 'worker'}</span>
           <span className="crews-when">
-            <span className="run-dot" style={{ background: `var(--state-${run.state}, var(--text-faint))` }} />
+            <span
+              className="run-dot"
+              role="img"
+              aria-label={run.state}
+              title={run.state}
+              style={{ background: `var(--state-${run.state}, var(--text-faint))` }}
+            />
             <span className={`run-age${stale ? ' stale' : ''}`}>{agoLabel(run.updated_at, now)}</span>
           </span>
         </span>

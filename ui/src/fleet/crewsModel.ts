@@ -21,7 +21,7 @@ export interface CrewGroup {
 
 function isLiveMember(run: Run, now: number): boolean {
   const working = run.state === 'running' || run.state === 'thinking' || run.state === 'compacting'
-  return (working && run.stale !== true) || needsYou(run, now)
+  return (working && run.stale !== true && isFresh(run, now)) || needsYou(run, now)
 }
 
 function bucket(run: Run): keyof CrewCounts {
@@ -58,7 +58,7 @@ function buildGroup(name: string, runs: Run[], now: number): CrewGroup {
     counts,
     needsYou: members.filter((m) => needsYou(m, now)).length,
     lastActive: members.reduce((max, m) => Math.max(max, m.updated_at), 0),
-    live: members.some((m) => isLiveMember(m, now) || isFresh(m, now)),
+    live: members.some((m) => isFresh(m, now)),
   }
 }
 

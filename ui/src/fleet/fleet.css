@@ -307,7 +307,7 @@
   display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px;
   padding: 14px 4px 8px;
 }
-.crews-repo { color: var(--text); font-size: 14px; font-weight: 600; }
+.crews-repo { min-width: 0; overflow-wrap: anywhere; color: var(--text); font-size: 14px; font-weight: 600; }
 .crews-id { font-family: var(--font-mono); font-size: 12px; color: var(--text-faint); }
 .crews-counts { flex-basis: 100%; order: 3; font-size: 12px; color: var(--text-dim); }
 .crews-dispatch {
@@ -335,8 +335,11 @@
 }
 .crews-when { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 6px; }
 .crews-title { color: var(--text-strong); font-size: 13px; line-height: 1.35; overflow-wrap: anywhere; }
-.crews-question { margin-top: 5px; }
-.crews-pr { display: inline-block; margin: 0 12px 10px; text-decoration: none; }
+.crews-question { min-width: 0; margin-top: 5px; overflow-wrap: anywhere; }
+.crews-pr {
+  display: inline-flex; align-items: center; min-height: var(--tap); padding: 0 12px;
+  margin: 0 12px 10px; text-decoration: none;
+}
 .crews-member .crew-reply { margin: 0 10px 10px; }
 .crews-hint { margin: 0 12px 10px; font-size: 12px; color: var(--text-faint); }
 
