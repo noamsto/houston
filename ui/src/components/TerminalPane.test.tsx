@@ -84,41 +84,29 @@ afterEach(async () => {
   __instances.length = 0
 })
 
-describe('TerminalPane readOnly', () => {
+describe('TerminalPane input', () => {
   it('renders PaneHeader on desktop by default', () => {
     desktop = true
     render(<TerminalPane pane={pane} isFocused onFocus={() => {}} onClose={() => {}} />)
     expect(screen.getByText(pane.target)).toBeTruthy()
   })
 
-  it('suppresses PaneHeader on desktop when readOnly', () => {
-    desktop = true
-    render(<TerminalPane pane={pane} isFocused onFocus={() => {}} onClose={() => {}} readOnly />)
-    expect(screen.queryByText(pane.target)).toBeNull()
-  })
-
-  it('renders MobileInputBar on mobile by default', () => {
+  it('renders the composer on mobile', () => {
     desktop = false
     render(<TerminalPane pane={pane} isFocused onFocus={() => {}} onClose={() => {}} />)
     expect(screen.getByPlaceholderText('Send a message...')).toBeTruthy()
   })
 
-  it('suppresses MobileInputBar on mobile when readOnly', () => {
-    desktop = false
-    render(<TerminalPane pane={pane} isFocused onFocus={() => {}} onClose={() => {}} readOnly />)
-    expect(screen.queryByPlaceholderText('Send a message...')).toBeNull()
-  })
-
-  it('disables stdin and drops input when readOnly', async () => {
+  it('forwards desktop keystrokes to the pane socket', async () => {
     desktop = true
-    render(<TerminalPane pane={pane} isFocused onFocus={() => {}} onClose={() => {}} readOnly />)
+    render(<TerminalPane pane={pane} isFocused onFocus={() => {}} onClose={() => {}} />)
     const term = await lastTerminalInstance()
-    expect(term.options.disableStdin).toBe(true)
+    expect(term.options.disableStdin).toBe(false)
 
     act(() => {
       term.input('a')
     })
-    expect(sendInput).not.toHaveBeenCalled()
+    expect(sendInput).toHaveBeenCalledWith('a')
   })
 })
 
@@ -137,7 +125,7 @@ describe('TerminalPane hideHeader', () => {
     expect(sendInput).toHaveBeenCalledWith('a')
   })
 
-  it('does not affect MobileInputBar visibility (governed by readOnly only)', () => {
+  it('does not affect composer visibility on mobile', () => {
     desktop = false
     render(<TerminalPane pane={pane} isFocused onFocus={() => {}} onClose={() => {}} hideHeader />)
     expect(screen.getByPlaceholderText('Send a message...')).toBeTruthy()

@@ -4,6 +4,7 @@ interface Props {
   target: string
   choices?: string[]
   inputText?: string
+  agent?: string
 }
 
 // Web Speech API types (not in TS lib by default)
@@ -58,30 +59,29 @@ async function sendSpecial(target: string, key: string) {
   })
 }
 
-type QuickAction = { label: string; action: 'text' | 'special'; value: string }
+type QuickAction = { label: string; action: 'text' | 'special'; value: string; title?: string }
 
-// Primary row: always visible
-const primaryActions: QuickAction[] = [
-  { label: '1', action: 'text', value: '1' },
-  { label: '2', action: 'text', value: '2' },
-  { label: '3', action: 'text', value: '3' },
-  { label: '4', action: 'text', value: '4' },
-  { label: '5', action: 'text', value: '5' },
-  { label: 'Y', action: 'text', value: 'y' },
-  { label: 'N', action: 'text', value: 'n' },
-]
-
-// Expanded rows: shown when toggle is open
-const extraActions: QuickAction[] = [
-  { label: '^C', action: 'special', value: 'C-c' },
-  { label: '↑', action: 'special', value: 'Up' },
-  { label: '↓', action: 'special', value: 'Down' },
+// One scrollable row. Everything but /copy is a keystroke (special route: no
+// implicit Enter), so a digit answers a numbered prompt without a stray Enter;
+// the composer's Send is what appends Enter.
+const quickActions: QuickAction[] = [
   { label: 'Esc', action: 'special', value: 'Escape' },
+  { label: '^C', action: 'special', value: 'C-c', title: 'Ctrl+C' },
+  { label: '↵', action: 'special', value: 'Enter', title: 'Enter' },
   { label: 'Tab', action: 'special', value: 'Tab' },
-  { label: '⇧Tab', action: 'special', value: 'BTab' },
-  { label: 'A-p', action: 'special', value: 'M-p' },
-  { label: '^O', action: 'special', value: 'C-o' },
-  { label: '^Z', action: 'special', value: 'C-z' },
+  { label: '⇧Tab', action: 'special', value: 'BTab', title: 'Shift+Tab' },
+  { label: '↑', action: 'special', value: 'Up', title: 'Up' },
+  { label: '↓', action: 'special', value: 'Down', title: 'Down' },
+  { label: '1', action: 'special', value: '1' },
+  { label: '2', action: 'special', value: '2' },
+  { label: '3', action: 'special', value: '3' },
+  { label: '4', action: 'special', value: '4' },
+  { label: '5', action: 'special', value: '5' },
+  { label: 'Y', action: 'special', value: 'y' },
+  { label: 'N', action: 'special', value: 'n' },
+  { label: 'A-p', action: 'special', value: 'M-p', title: 'Alt+P' },
+  { label: '^O', action: 'special', value: 'C-o', title: 'Ctrl+O' },
+  { label: '^Z', action: 'special', value: 'C-z', title: 'Ctrl+Z' },
   { label: '/copy', action: 'text', value: '/copy' },
 ]
 
@@ -92,15 +92,16 @@ const pillStyle: React.CSSProperties = {
   color: 'var(--text-secondary)',
   fontSize: 14,
   fontFamily: 'var(--font-mono)',
-  padding: '6px 12px',
+  padding: '0 14px',
+  minHeight: 40,
   cursor: 'pointer',
   whiteSpace: 'nowrap',
+  flexShrink: 0,
 }
 
-export function MobileInputBar({ target, choices, inputText }: Props) {
+export function MobileInputBar({ target, choices, inputText, agent }: Props) {
   const [text, setText] = useState('')
   const [listening, setListening] = useState(false)
-  const [expanded, setExpanded] = useState(false)
   const [uploading, setUploading] = useState(false)
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -118,8 +119,12 @@ export function MobileInputBar({ target, choices, inputText }: Props) {
     await sendText(target, line)
   }
 
-  const handleChoice = async (choice: string) => {
-    await sendText(target, choice)
+  // Claude's prompts are numbered menus answered by their ordinal key. Other
+  // agents' choices aren't (Amp reorders the selected item first and selects by
+  // cursor), so an ordinal would be wrong there — they keep label + Enter.
+  const handleChoice = async (index: number, label: string) => {
+    if (agent === 'claude-code') await sendSpecial(target, String(index + 1))
+    else await sendText(target, label)
   }
 
   const handleQuickAction = useCallback(async (action: 'text' | 'special', value: string) => {
@@ -199,6 +204,7 @@ export function MobileInputBar({ target, choices, inputText }: Props) {
 
   return (
     <div
+      className="mobile-input-bar"
       style={{
         borderTop: '1px solid var(--border)',
         background: 'var(--bg-header)',
@@ -212,73 +218,55 @@ export function MobileInputBar({ target, choices, inputText }: Props) {
       {/* Agent choice buttons */}
       {choices && choices.length > 0 && (
         <div
+          data-testid="choices"
           style={{
             display: 'flex',
-            gap: 6,
-            padding: '6px 8px 0',
+            gap: 8,
+            padding: '8px 8px 0',
             flexWrap: 'wrap',
+            maxHeight: 104,
+            overflowY: 'auto',
             animation: 'slide-up 0.18s ease-out',
           }}
         >
-          {choices.map((c) => (
+          {choices.map((c, i) => (
             <button
-              key={c}
-              onClick={() => handleChoice(c)}
+              key={`${i}-${c}`}
+              onClick={() => void handleChoice(i, c)}
               style={{
                 background: 'var(--bg-surface)',
                 border: '1px solid var(--accent-attention)',
-                borderRadius: 4,
+                borderRadius: 6,
                 color: 'var(--accent-attention)',
-                fontSize: 12,
-                padding: '4px 10px',
+                fontSize: 14,
+                minHeight: 40,
+                padding: '0 12px',
                 cursor: 'pointer',
               }}
             >
-              {c}
+              {agent === 'claude-code' ? `${i + 1}. ${c}` : c}
             </button>
           ))}
         </div>
       )}
 
-      {/* Quick action pills — wrapping grid with expand toggle */}
-      <div style={{ display: 'flex', alignItems: 'flex-start', padding: '6px 8px 0' }}>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, flex: 1 }}>
-          {primaryActions.map((qa) => (
-            <button
-              key={qa.label}
-              className="pill-btn"
-              onClick={() => void handleQuickAction(qa.action, qa.value)}
-              style={pillStyle}
-            >
-              {qa.label}
-            </button>
-          ))}
-          {expanded && extraActions.map((qa) => (
-            <button
-              key={qa.label}
-              className="pill-btn"
-              onClick={() => void handleQuickAction(qa.action, qa.value)}
-              style={pillStyle}
-            >
-              {qa.label}
-            </button>
-          ))}
-        </div>
-        <button
-          onClick={() => setExpanded((e) => !e)}
-          style={{
-            background: 'var(--bg-surface)',
-            border: '1px solid var(--border)',
-            borderRadius: 12,
-            color: 'var(--text-muted)',
-            fontSize: 16,
-            cursor: 'pointer',
-            padding: '6px 10px',
-            flexShrink: 0,
-          }}
-        >
-          {expanded ? '▴' : '▾'}
-        </button>
+      {/* Quick keys — one horizontally scrollable row */}
+      <div
+        data-testid="quick-keys"
+        style={{ display: 'flex', gap: 6, padding: '8px 8px 0', overflowX: 'auto' }}
+      >
+        {quickActions.map((qa) => (
+          <button
+            key={qa.label}
+            className="pill-btn"
+            title={qa.title}
+            aria-label={qa.title}
+            onClick={() => void handleQuickAction(qa.action, qa.value)}
+            style={pillStyle}
+          >
+            {qa.label}
+          </button>
+        ))}
       </div>
 
       {/* Text input row */}
@@ -291,7 +279,7 @@ export function MobileInputBar({ target, choices, inputText }: Props) {
             autoGrow(e.target)
           }}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
               e.preventDefault()
               void handleSend()
             }
@@ -356,8 +344,8 @@ export function MobileInputBar({ target, choices, inputText }: Props) {
             color: uploading ? '#fff' : 'var(--text-secondary)',
             cursor: uploading ? 'default' : 'pointer',
             fontSize: 16,
-            width: 36,
-            height: 36,
+            width: 44,
+            height: 44,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -371,6 +359,8 @@ export function MobileInputBar({ target, choices, inputText }: Props) {
 
         <button
           onClick={() => void handleSend()}
+          title="Send"
+          aria-label="Send"
           style={{
             background: text.trim() ? 'var(--accent-working)' : 'var(--bg-surface)',
             border: text.trim() ? 'none' : '1px solid var(--border)',
@@ -378,8 +368,8 @@ export function MobileInputBar({ target, choices, inputText }: Props) {
             color: text.trim() ? '#fff' : 'var(--text-secondary)',
             cursor: 'pointer',
             fontSize: 16,
-            width: 36,
-            height: 36,
+            width: 44,
+            height: 44,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',

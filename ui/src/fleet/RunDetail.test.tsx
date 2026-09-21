@@ -206,8 +206,7 @@ describe('RunDetail terminal lifecycle', () => {
     const r = liveRun()
     render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
 
-    // PaneHeader would render the pane target as text (see TerminalPane.test.tsx's
-    // readOnly-block assertions) — it must not appear here.
+    // PaneHeader would render the pane target as text — it must not appear here.
     expect(screen.queryByText(paneWsTarget(r.tmux!.pane_id))).toBeNull()
     // RunDetail's own header/tabs are still present.
     expect(screen.getByLabelText('Back to Fleet')).toBeTruthy()

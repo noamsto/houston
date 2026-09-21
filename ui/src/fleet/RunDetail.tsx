@@ -99,7 +99,7 @@ function RunDetailBody({ run, tab, streamConnected }: { run: Run; tab: Tab; stre
           </button>
         )}
       </nav>
-      <div className="run-detail-body">
+      <div className={`run-detail-body${effectiveTab === 'terminal' ? ' terminal' : ''}`}>
         {effectiveTab === 'activity' ? (
           <ActivityTab run={run} />
         ) : !run.tmux ? (
