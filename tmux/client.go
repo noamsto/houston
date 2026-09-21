@@ -43,6 +43,9 @@ type Pane struct {
 	Session string `json:"session"`
 	Window  int    `json:"window"`
 	Index   int    `json:"index"`
+	// ID is the tmux pane id, e.g. %307; when set, Target() addresses exactly
+	// this pane.
+	ID string `json:"-"`
 }
 
 type PaneInfo struct {
@@ -54,6 +57,9 @@ type PaneInfo struct {
 }
 
 func (p Pane) Target() string {
+	if p.ID != "" {
+		return p.ID
+	}
 	// If window/pane are default (0), just use session name
 	// This lets tmux pick the active window/pane
 	if p.Window == 0 && p.Index == 0 {
@@ -294,6 +300,31 @@ func (c *Client) GetPaneID(p Pane) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// ResolvePane looks up a pane id's current session, window and index. tmux
+// exits non-zero for a pane that no longer exists, which surfaces as the error.
+func (c *Client) ResolvePane(paneID string) (Pane, error) {
+	out, err := c.output("display-message", "-t", paneID, "-p", "#{window_index} #{pane_index} #{session_name}")
+	if err != nil {
+		return Pane{}, err
+	}
+	// Session last, and only the newline trimmed: session names may contain
+	// spaces.
+	line := strings.TrimSuffix(string(out), "\n")
+	parts := strings.SplitN(line, " ", 3)
+	if len(parts) != 3 {
+		return Pane{}, fmt.Errorf("unexpected display-message output for %s: %q", paneID, line)
+	}
+	window, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return Pane{}, fmt.Errorf("unexpected window index for %s: %q", paneID, parts[0])
+	}
+	index, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return Pane{}, fmt.Errorf("unexpected pane index for %s: %q", paneID, parts[1])
+	}
+	return Pane{ID: paneID, Session: parts[2], Window: window, Index: index}, nil
 }
 
 // SendRawKeys sends literal text to a pane using hex encoding (-H).

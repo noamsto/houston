@@ -25,7 +25,7 @@ function renderLayout(
     if (!pane) return null
     return (
       <TerminalPane
-        pane={pane}
+        address={{ kind: 'pane', target: pane.target }}
         isFocused={pane.id === focusedPaneId}
         onFocus={() => onFocus(pane.id)}
         onClose={() => onClose(pane.id)}

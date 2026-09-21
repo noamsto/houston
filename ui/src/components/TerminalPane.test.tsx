@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { TerminalPane } from './TerminalPane'
+import type { TerminalAddress } from '../api/terminal'
 import type { Terminal } from '@xterm/xterm'
 
 // Subclass the real Terminal so other describes in this file (which rely on
@@ -37,7 +38,7 @@ interface CapturedCallbacks {
 let capturedCallbacks: CapturedCallbacks | null = null
 
 vi.mock('../hooks/usePaneSocket', () => ({
-  usePaneSocket: (_target: string, callbacks: CapturedCallbacks) => {
+  usePaneSocket: (_path: string, callbacks: CapturedCallbacks) => {
     capturedCallbacks = callbacks
     return { connected: false, sendInput, sendResize }
   },
@@ -70,7 +71,8 @@ vi.mock('../hooks/useTouchGestures', async (importOriginal) => {
   return { ...actual, useTouchGestures: () => touchGesturesMock }
 })
 
-const pane = { id: 'pane-1', target: 'sess:0.0' }
+const target = 'sess:0.0'
+const address: TerminalAddress = { kind: 'pane', target }
 
 afterEach(async () => {
   cleanup()
@@ -87,19 +89,19 @@ afterEach(async () => {
 describe('TerminalPane input', () => {
   it('renders PaneHeader on desktop by default', () => {
     desktop = true
-    render(<TerminalPane pane={pane} isFocused onFocus={() => {}} onClose={() => {}} />)
-    expect(screen.getByText(pane.target)).toBeTruthy()
+    render(<TerminalPane address={address} isFocused onFocus={() => {}} onClose={() => {}} />)
+    expect(screen.getByText(target)).toBeTruthy()
   })
 
   it('renders the composer on mobile', () => {
     desktop = false
-    render(<TerminalPane pane={pane} isFocused onFocus={() => {}} onClose={() => {}} />)
+    render(<TerminalPane address={address} isFocused onFocus={() => {}} onClose={() => {}} />)
     expect(screen.getByPlaceholderText('Send a message...')).toBeTruthy()
   })
 
   it('forwards desktop keystrokes to the pane socket', async () => {
     desktop = true
-    render(<TerminalPane pane={pane} isFocused onFocus={() => {}} onClose={() => {}} />)
+    render(<TerminalPane address={address} isFocused onFocus={() => {}} onClose={() => {}} />)
     const term = await lastTerminalInstance()
     expect(term.options.disableStdin).toBe(false)
 
@@ -113,8 +115,8 @@ describe('TerminalPane input', () => {
 describe('TerminalPane hideHeader', () => {
   it('suppresses PaneHeader on desktop when hideHeader is set, without affecting input', async () => {
     desktop = true
-    render(<TerminalPane pane={pane} isFocused onFocus={() => {}} onClose={() => {}} hideHeader />)
-    expect(screen.queryByText(pane.target)).toBeNull()
+    render(<TerminalPane address={address} isFocused onFocus={() => {}} onClose={() => {}} hideHeader />)
+    expect(screen.queryByText(target)).toBeNull()
 
     const term = await lastTerminalInstance()
     expect(term.options.disableStdin).toBe(false)
@@ -127,27 +129,27 @@ describe('TerminalPane hideHeader', () => {
 
   it('does not affect composer visibility on mobile', () => {
     desktop = false
-    render(<TerminalPane pane={pane} isFocused onFocus={() => {}} onClose={() => {}} hideHeader />)
+    render(<TerminalPane address={address} isFocused onFocus={() => {}} onClose={() => {}} hideHeader />)
     expect(screen.getByPlaceholderText('Send a message...')).toBeTruthy()
   })
 
   it('defaults to false — PaneHeader still renders on desktop when omitted', () => {
     desktop = true
-    render(<TerminalPane pane={pane} isFocused onFocus={() => {}} onClose={() => {}} />)
-    expect(screen.getByText(pane.target)).toBeTruthy()
+    render(<TerminalPane address={address} isFocused onFocus={() => {}} onClose={() => {}} />)
+    expect(screen.getByText(target)).toBeTruthy()
   })
 })
 
 describe('TerminalPane column scrubber', () => {
   it('renders on mobile', () => {
     desktop = false
-    render(<TerminalPane pane={pane} isFocused onFocus={() => {}} onClose={() => {}} />)
+    render(<TerminalPane address={address} isFocused onFocus={() => {}} onClose={() => {}} />)
     expect(screen.getByTestId('column-scrubber-thumb')).toBeTruthy()
   })
 
   it('does not render on desktop', () => {
     desktop = true
-    render(<TerminalPane pane={pane} isFocused onFocus={() => {}} onClose={() => {}} />)
+    render(<TerminalPane address={address} isFocused onFocus={() => {}} onClose={() => {}} />)
     expect(screen.queryByTestId('column-scrubber-thumb')).toBeNull()
   })
 })
@@ -155,7 +157,7 @@ describe('TerminalPane column scrubber', () => {
 describe('TerminalPane mid-session reseed', () => {
   it('resets pan to column 0 on a reseed, but not on the first seed since connect', async () => {
     desktop = false
-    render(<TerminalPane pane={pane} isFocused onFocus={() => {}} onClose={() => {}} />)
+    render(<TerminalPane address={address} isFocused onFocus={() => {}} onClose={() => {}} />)
     const callbacks = capturedCallbacks!
 
     act(() => {
@@ -184,11 +186,11 @@ describe('TerminalPane mid-session reseed', () => {
   })
 })
 
-describe('TerminalPane pane prop change on a mounted instance', () => {
-  it('treats a fresh seed on a new target as first-seed, not a reseed', async () => {
+describe('TerminalPane address change on a mounted instance', () => {
+  it('treats a fresh seed on a new address as first-seed, not a reseed', async () => {
     desktop = false
     const { rerender } = render(
-      <TerminalPane pane={{ id: 'a', target: 't1' }} isFocused onFocus={() => {}} onClose={() => {}} />,
+      <TerminalPane address={{ kind: 'pane', target: 't1' }} isFocused onFocus={() => {}} onClose={() => {}} />,
     )
 
     act(() => {
@@ -201,10 +203,10 @@ describe('TerminalPane pane prop change on a mounted instance', () => {
     // Simulate a pan away from column 0 on the first run's terminal.
     touchGesturesMock.translateXRef.current = -120
 
-    // Same TerminalPane instance, new pane identity — the `[pane.target]`
+    // Same TerminalPane instance, new address identity — the `[key]`
     // effect should reset firstSeedDoneRef so the next seed isn't mistaken
     // for a mid-session reseed of run A's content.
-    rerender(<TerminalPane pane={{ id: 'a', target: 't2' }} isFocused onFocus={() => {}} onClose={() => {}} />)
+    rerender(<TerminalPane address={{ kind: 'pane', target: 't2' }} isFocused onFocus={() => {}} onClose={() => {}} />)
 
     act(() => {
       capturedCallbacks!.onDims({ cols: 80, rows: 24 })
@@ -226,7 +228,7 @@ describe('TerminalPane follow-cursor auto-pan', () => {
   it('follows the cursor after output, but not while a touch gesture is active', async () => {
     desktop = false
     touchGesturesMock.termDimsRef.current = { w: 800, h: 400 }
-    const { container } = render(<TerminalPane pane={pane} isFocused onFocus={() => {}} onClose={() => {}} />)
+    const { container } = render(<TerminalPane address={address} isFocused onFocus={() => {}} onClose={() => {}} />)
     const callbacks = capturedCallbacks!
     const outer = container.querySelector('.xterm')!.parentElement!.parentElement as HTMLElement
     Object.defineProperty(outer, 'clientWidth', { value: 400, configurable: true })

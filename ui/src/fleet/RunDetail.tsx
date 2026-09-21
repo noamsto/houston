@@ -1,5 +1,4 @@
 import type { Run } from '../api/runs'
-import { paneWsTarget } from '../api/runs'
 import { agoLabel, nameLabel, subtitle } from './format'
 import { TerminalPane } from '../components/TerminalPane'
 import { useTerminalLifecycle } from './useTerminalLifecycle'
@@ -114,7 +113,7 @@ function RunDetailBody({ run, tab, streamConnected }: { run: Run; tab: Tab; stre
             {lifecycle.reconnecting && <div className="run-detail-reconnecting" role="status">Reconnecting…</div>}
             <TerminalPane
               key={`${run.id}-${lifecycle.attempt}`}
-              pane={{ id: run.id, target: paneWsTarget(run.tmux.pane_id) }}
+              address={{ kind: 'run', id: run.id }}
               isFocused
               hideHeader
               onFocus={() => {}}

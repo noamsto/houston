@@ -14,7 +14,7 @@ interface PaneSocketCallbacks {
   onMeta: (meta: WSMeta) => void
 }
 
-export function usePaneSocket(target: string | null, callbacks: PaneSocketCallbacks) {
+export function usePaneSocket(path: string | null, callbacks: PaneSocketCallbacks) {
   const wsRef = useRef<WebSocket | null>(null)
   const callbacksRef = useRef(callbacks)
   const [connected, setConnected] = useState(false)
@@ -42,7 +42,7 @@ export function usePaneSocket(target: string | null, callbacks: PaneSocketCallba
   }, [])
 
   useEffect(() => {
-    if (!target) return
+    if (!path) return
 
     let cancelled = false
     let reconnectTimer: ReturnType<typeof setTimeout>
@@ -51,19 +51,19 @@ export function usePaneSocket(target: string | null, callbacks: PaneSocketCallba
       if (cancelled) return
 
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      const wsUrl = `${protocol}//${window.location.host}/api/pane/${target}/ws`
+      const wsUrl = `${protocol}//${window.location.host}${path}`
 
       const ws = new WebSocket(wsUrl)
       wsRef.current = ws
 
       ws.onopen = () => {
-        console.debug('[input] WS connected to', target)
+        console.debug('[input] WS connected to', path)
         setConnected(true)
         retriesRef.current = 0
       }
 
       ws.onclose = (e) => {
-        console.debug('[input] WS closed — target:', target, 'code:', e.code, 'reason:', e.reason, 'cancelled:', cancelled)
+        console.debug('[input] WS closed — path:', path, 'code:', e.code, 'reason:', e.reason, 'cancelled:', cancelled)
         // Only clear ref if it still points to THIS WebSocket instance.
         // When switching targets, the new effect sets wsRef.current to a new WS
         // before this old onclose fires — clearing it would null the new connection.
@@ -133,7 +133,7 @@ export function usePaneSocket(target: string | null, callbacks: PaneSocketCallba
       wsRef.current?.close()
       wsRef.current = null
     }
-  }, [target])
+  }, [path])
 
   return { connected, sendInput, sendResize }
 }

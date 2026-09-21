@@ -52,16 +52,22 @@ Houston scans ports 4096-4100 by default. Use `--no-opencode` to disable.
 │  React SPA (xterm.js + WebSocket + SSE)              │
 └──────────────────────────────────────────────────────┘
                           │
-           SSE (session list) + WebSocket (pane I/O)
+            SSE (run/session list) + WebSocket (terminal)
                           │
                           ▼
 ┌──────────────────────────────────────────────────────┐
 │                  Go HTTP Server                       │
 │                                                       │
 │  JSON API:                                            │
+│  GET  /api/runs*              - Run list + SSE stream │
+│  POST /api/runs/:id/reply     - Reply to a run        │
+│  WS   /api/runs/:id/terminal  - Run terminal I/O      │
+│  POST /api/runs/:id/input     - Send text/key/image   │
 │  GET  /api/sessions?stream=1  - SSE session stream    │
-│  WS   /api/pane/:target/ws   - Pane I/O (bidi)       │
+│  WS   /api/pane/:target/ws   - Pane I/O (bidi)        │
+│    (classic views only, pending removal)              │
 │  POST /api/pane/:target/send - Send text/special keys │
+│    (classic views only, pending removal)              │
 │  GET  /api/font/bigger       - Increase terminal font │
 │  GET  /api/font/smaller      - Decrease terminal font │
 │  GET  /api/dispatch/options  - Dispatch form choices  │
@@ -106,7 +112,8 @@ houston/
 ├── server/
 │   ├── server.go        # HTTP server, mux, SSE session stream
 │   ├── api.go           # JSON API handlers (sessions, panes, font)
-│   └── pane_ws.go       # WebSocket handler for pane I/O
+│   ├── pane_ws.go       # WebSocket handler for pane I/O
+│   └── runs_terminal.go # Run-addressed terminal WS + input routes
 ├── tmux/
 │   ├── client.go        # tmux CLI wrapper (list/capture/send)
 │   └── client_test.go
@@ -133,7 +140,8 @@ houston/
 │   │   ├── App.tsx              # Root layout, sidebar toggle, pane management
 │   │   ├── main.tsx             # React entry point
 │   │   ├── api/
-│   │   │   └── types.ts         # Shared TypeScript types (Session, WSMeta, etc.)
+│   │   │   ├── types.ts         # Shared TypeScript types (Session, WSMeta, etc.)
+│   │   │   └── terminal.ts      # TerminalAddress (run|pane) + send helpers
 │   │   ├── components/
 │   │   │   ├── Sidebar.tsx      # Slide-out session list with filter
 │   │   │   ├── SessionTree.tsx  # Collapsible session/window tree
@@ -142,6 +150,8 @@ houston/
 │   │   │   ├── SplitContainer.tsx # Desktop split pane layout (allotment)
 │   │   │   ├── PaneHeader.tsx   # Agent icon, status, mode badge, wide toggle
 │   │   │   └── MobileInputBar.tsx # Quick actions, text input, voice
+│   │   ├── fleet/
+│   │   │   └── RunDetail.tsx    # Run detail view; Terminal tab uses run address
 │   │   ├── hooks/
 │   │   │   ├── useSessionsStream.ts # SSE hook for live session list
 │   │   │   ├── usePaneSocket.ts     # WebSocket hook for pane I/O
@@ -210,7 +220,7 @@ The Vite dev server (`ui/vite.config.ts`) proxies `/api` to `http://localhost:90
 - **Pinch-to-zoom**: Two-finger pinch with focal-point tracking
 - **Pan**: Single-finger horizontal drag or two-finger drag when zoomed
 - **Composer** (`MobileInputBar.tsx`, docked under the terminal in the run-detail Terminal tab): multi-line field where Enter inserts a newline and Send (or Ctrl/Cmd+Enter) sends the text followed by Enter; an empty Send presses Enter. Also a voice button (Web Speech API) and file attach.
-- **Quick keys**: one horizontally scrollable row — Esc, ^C, Enter, Tab, Shift+Tab, ↑/↓, 1–5, Y/N, Alt+P, ^O, ^Z, `/copy`. All but `/copy` are keystrokes sent through `POST /api/pane/:target/send` with `special=true` (no implicit Enter, so a digit answers a numbered prompt without a stray Enter).
+- **Quick keys**: one horizontally scrollable row — Esc, ^C, Enter, Tab, Shift+Tab, ↑/↓, 1–5, Y/N, Alt+P, ^O, ^Z, `/copy`. All but `/copy` are keystrokes: for a run address, `POST /api/runs/:id/input` `{type:'key', key:...}` (400 if `key` isn't in the `terminalKeys` allowlist); classic pane views still use the legacy `POST /api/pane/:target/send` with `special=true`. Either way, no implicit Enter, so a digit answers a numbered prompt without a stray Enter.
 - **Choices**: when the pane `meta.choices` is present, each choice renders as a tappable `n. label` button above the row and answers with its ordinal key.
 - **Keyboard**: `useKeyboardInset` tracks the on-screen keyboard via `visualViewport`; `MobileShell` shortens itself to sit above it and hides the tab bar so the terminal and composer keep the space.
 
@@ -223,9 +233,19 @@ already verified in `TerminalPane.tsx` / `useTouchGestures.ts`.
 
 ## WebSocket Protocol
 
-The pane WebSocket (`/api/pane/:target/ws`) is bidirectional and carries a
-JSON envelope, `{"type":"...","data":{...}}` (`server/pane_ws.go`,
-`ui/src/hooks/usePaneSocket.ts`):
+The primary terminal route is `GET /api/runs/:id/terminal`
+(`server/runs_terminal.go`), which resolves the run to its live tmux pane and
+upgrades to the same bidirectional WebSocket envelope described below. Pane
+resolution happens before the upgrade, so a bad address never reaches
+`Upgrade()` — it comes back as a plain HTTP error: 503 if the run registry
+isn't started, 404 for an unknown run, 409 if the run has no terminal
+capability/pane, 409 again if the pane id no longer resolves in tmux (it
+exited or the session is gone). The legacy `/api/pane/:target/ws` is
+classic-views only, pending removal.
+
+Both routes carry a JSON envelope, `{"type":"...","data":{...}}`
+(`server/pane_ws.go`, `ui/src/hooks/usePaneSocket.ts`,
+`ui/src/api/terminal.ts` for address/URL selection):
 
 **Server → Client:**
 - `dims` — Pane dimensions (cols/rows) to resize xterm.js to match
@@ -238,11 +258,28 @@ JSON envelope, `{"type":"...","data":{...}}` (`server/pane_ws.go`,
 - `resize` — `{cols, rows}`, request terminal resize
 
 There is no `resize-done` acknowledgment, and no `special:<key>` message type
-on this WebSocket. `special` does exist, but as a form parameter on the
-legacy REST route `POST /api/pane/:target/send` (`server/server.go`): when
-`special=true`, `input` is sent as a key name (C-c, Up, Down, Escape, Tab,
-BTab, M-p, C-o, C-z) rather than literal text. `MobileInputBar.tsx` uses this
-route for quick actions instead of the WebSocket.
+on either WebSocket — the WS `input` message always carries raw keystrokes.
+
+Non-typing input (quick keys, images) instead goes through a POST route, and
+the allowlist that bounds it lives there, not on the socket:
+
+- `POST /api/runs/:id/input` (run address) — same resolution ladder as the WS
+  route (503/404/409/409) before the body is even read. Body is one of:
+  `{"type":"text","text":"..."}` (literal text, then Enter),
+  `{"type":"key","key":"<terminalKeys>"}` (one key, no Enter — 400 if `key`
+  isn't in the `terminalKeys` allowlist in `server/runs_terminal.go`: Escape,
+  C-c, Enter, Tab, BTab, Up, Down, M-p, C-o, C-z, y, n, 1–9), or
+  `{"type":"image","text":"...","images":[...]}` (temp-file paths + text,
+  then Enter). Max body 50 MiB (matches the legacy send-with-images limit); an
+  oversized body is 413. Success is 204 with no body. Because the allowlist
+  tops out at `9`, a choice past the 9th ordinal has no key to send.
+- `POST /api/pane/:target/send` (classic pane address, `server/server.go`) —
+  classic-views only, pending removal; unlike the run route it has no key
+  allowlist. `special=true` sends `input` as a key name (C-c, Up, Down,
+  Escape, Tab, BTab, M-p, C-o, C-z) rather than literal text.
+  `MobileInputBar.tsx` picks between the two POST routes (and the two WS
+  routes) based on the `TerminalAddress` it's given — see
+  `ui/src/api/terminal.ts`.
 
 ## Dispatch
 
