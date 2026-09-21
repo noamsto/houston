@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -8,8 +10,11 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/noamsto/houston/hook"
 	"github.com/noamsto/houston/server"
@@ -230,7 +235,22 @@ func runServer() {
 			filepath.Join(*statusDir, "token"))
 	}
 
-	if err := http.ListenAndServe(*addr, srv.Handler()); err != nil {
+	httpSrv := &http.Server{Addr: *addr, Handler: srv.Handler()}
+
+	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go func() {
+		<-sigCtx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = httpSrv.Shutdown(shutdownCtx)
+	}()
+
+	err = httpSrv.ListenAndServe()
+	if closeErr := srv.Close(); closeErr != nil {
+		slog.Warn("server close", "err", closeErr)
+	}
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
 }

@@ -44,10 +44,7 @@ func TestUnknownHostGetsNoCookieAndIsRefused(t *testing.T) {
 // discarded here, not the probing itself.)
 func TestHandlerRefusesUnknownHostEndToEnd(t *testing.T) {
 	dir := t.TempDir()
-	s, err := New(Config{StatusDir: dir, AuthEnabled: true, UIFS: fstest.MapFS{}})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	s := newFullServer(t, Config{StatusDir: dir, AuthEnabled: true, UIFS: fstest.MapFS{}})
 	s.hosts = newHostGate([]string{"houston-host"}, nil, nil)
 
 	req := httptest.NewRequest("GET", "http://evil.example/", nil)
