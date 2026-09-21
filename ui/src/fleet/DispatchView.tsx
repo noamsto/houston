@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { fetchDispatchOptions, submitDispatch, type DispatchOptions, type DispatchOutcome } from '../api/dispatch'
 import './fleet.css'
@@ -20,6 +20,12 @@ export function DispatchView() {
 
   const [submitting, setSubmitting] = useState(false)
   const [outcome, setOutcome] = useState<DispatchOutcome | null>(null)
+  const resultRef = useRef<HTMLDivElement>(null)
+
+  // The result lands below the submit button — off-screen on a phone.
+  useEffect(() => {
+    if (outcome) resultRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }, [outcome])
 
   // Pure fetch: every setState it makes happens inside a promise callback,
   // never synchronously in the caller's tick, so it's safe to invoke directly
@@ -198,27 +204,29 @@ export function DispatchView() {
         </form>
       )}
 
-      {outcome?.kind === 'started' && (
-        <div className="dispatch-result success">
-          <p>Worker <strong>{outcome.workerId}</strong> started on <code>{outcome.branch}</code>.</p>
-          {outcome.issueUrl && (
-            <p><a href={outcome.issueUrl} target="_blank" rel="noreferrer">View issue</a></p>
-          )}
-          <p className="dispatch-hint">It will appear in Fleet shortly.</p>
-        </div>
-      )}
+      <div ref={resultRef}>
+        {outcome?.kind === 'started' && (
+          <div className="dispatch-result success">
+            <p>Worker <strong>{outcome.workerId}</strong> started on <code>{outcome.branch}</code>.</p>
+            {outcome.issueUrl && (
+              <p><a href={outcome.issueUrl} target="_blank" rel="noreferrer">View issue</a></p>
+            )}
+            <p className="dispatch-hint">It will appear in Fleet shortly.</p>
+          </div>
+        )}
 
-      {outcome?.kind === 'failed' && (
-        <div className="dispatch-result failure">
-          <pre>{outcome.error}</pre>
-          {outcome.output && (
-            <details>
-              <summary>Output</summary>
-              <pre>{outcome.output}</pre>
-            </details>
-          )}
-        </div>
-      )}
+        {outcome?.kind === 'failed' && (
+          <div className="dispatch-result failure">
+            <pre>{outcome.error}</pre>
+            {outcome.output && (
+              <details>
+                <summary>Output</summary>
+                <pre>{outcome.output}</pre>
+              </details>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   )
 }
