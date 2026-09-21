@@ -72,6 +72,12 @@ type ControlClient struct {
 	cmdDesync bool
 
 	done chan struct{}
+
+	// stateChanged coalesces connect/disconnect transitions. Buffered to one
+	// and written with a non-blocking send, so a transition never blocks the
+	// connection lifecycle; a consumer that reads a signal re-reads
+	// Connected() rather than counting edges.
+	stateChanged chan struct{}
 }
 
 type commandResponse struct {
@@ -101,11 +107,12 @@ var (
 
 func NewControlClient(session string) *ControlClient {
 	cc := &ControlClient{
-		session: session,
-		subs:    make(map[string][]*PaneSub),
-		gaps:    make(map[string]*gap),
-		done:    make(chan struct{}),
-		backoff: 250 * time.Millisecond,
+		session:      session,
+		subs:         make(map[string][]*PaneSub),
+		gaps:         make(map[string]*gap),
+		done:         make(chan struct{}),
+		stateChanged: make(chan struct{}, 1),
+		backoff:      250 * time.Millisecond,
 		// Comfortably beyond a healthy seed handshake, short enough that a
 		// pane nothing resumes is not a minute of frozen screen.
 		gapDeadline: 10 * time.Second,
@@ -176,6 +183,7 @@ func (cc *ControlClient) attach(w io.Writer, closeFn func() error) {
 	cc.connOK = true
 	cc.gone = make(chan struct{})
 	cc.connMu.Unlock()
+	cc.notifyStateChange()
 
 	// Every send path reads cc.stdin under stdinMu, so the assignment must be
 	// guarded by the same lock, not connMu.
@@ -326,6 +334,7 @@ func (cc *ControlClient) supervise(r io.ReadCloser, closeConn func() error) {
 			cc.gone = nil // a dial-error lap must not close it twice
 		}
 		cc.connMu.Unlock()
+		cc.notifyStateChange()
 
 		if cc.isClosed() {
 			return
@@ -388,6 +397,21 @@ func (cc *ControlClient) Connected() bool {
 	cc.connMu.RLock()
 	defer cc.connMu.RUnlock()
 	return cc.connOK
+}
+
+// StateChanged receives on every connect/disconnect transition. It is a
+// coalescing notification, not an edge counter: a read means "re-read
+// Connected()". Connected() == false is the reconnecting (backoff) state —
+// supervise re-dials until Close.
+func (cc *ControlClient) StateChanged() <-chan struct{} { return cc.stateChanged }
+
+// notifyStateChange wakes StateChanged's reader, if any, without blocking the
+// connection lifecycle.
+func (cc *ControlClient) notifyStateChange() {
+	select {
+	case cc.stateChanged <- struct{}{}:
+	default:
+	}
 }
 
 func (cc *ControlClient) readLoop(r *bufio.Reader) {

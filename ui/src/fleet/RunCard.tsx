@@ -10,6 +10,9 @@ export function RunCard({ run, now, onOpen, selected }: { run: Run; now: number;
   const staleBlocked = run.state === 'blocked' && !isFresh(run, now)
   const history = isHistory(run, now)
   const stale = !isFresh(run, now)
+  // Transport-stale (the session's control connection is down) is distinct
+  // from time-stale (updated_at is old); a run can be both, either, or neither.
+  const connStale = run.stale === true
 
   const attentionClass = attention ? ' attention' : staleBlocked ? ' attention muted' : ''
 
@@ -41,6 +44,7 @@ export function RunCard({ run, now, onOpen, selected }: { run: Run; now: number;
         )}
         {run.crew?.codename && <span className="run-chip codename">{run.crew.codename}</span>}
         {run.crew?.tier && <span className="run-chip tier">{run.crew.tier}</span>}
+        {connStale && <span className="run-chip stale">stale</span>}
       </div>
     </button>
   )

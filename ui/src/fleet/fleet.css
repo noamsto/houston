@@ -103,6 +103,7 @@
 .run-chip.issue { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
 .run-chip.codename { background: var(--fill); color: var(--text-strong); font-weight: 600; }
 .run-chip.tier { background: var(--bg-sunken); color: var(--text-dim); border: 1px solid var(--line); }
+.run-chip.stale { background: var(--bg-sunken); color: var(--text-faint); font-style: italic; }
 
 .fleet-empty { padding: 40px 20px; text-align: center; color: var(--text-faint); font-size: 13px; }
 

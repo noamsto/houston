@@ -2023,3 +2023,49 @@ func TestReconnectBacksOffWhenConnectionsDieImmediately(t *testing.T) {
 		t.Fatalf("dialled %d times — never retried at all", n)
 	}
 }
+
+func TestStateChangedFiresOnDisconnectAndReconnect(t *testing.T) {
+	release := make(chan struct{})
+	d := &recordingDialer{onDial: func(i int, _ *recordedConn) {
+		if i > 0 {
+			<-release // park the re-dial so the disconnected window is observable
+		}
+	}}
+	cc := NewControlClient("test")
+	cc.dial = d.dial
+	cc.backoff = time.Millisecond
+
+	if err := cc.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = cc.Close() }()
+
+	// Start's attach left one buffered signal. Consume it so the next read is
+	// the disconnect edge, not a stale "connected" wake.
+	select {
+	case <-cc.StateChanged():
+	case <-time.After(2 * time.Second):
+		t.Fatal("no StateChanged signal after attach")
+	}
+
+	conn0 := d.connAt(t, 0)
+	_ = conn0.pw.Close() // readLoop EOFs; supervise clears connOK and parks the re-dial
+
+	select {
+	case <-cc.StateChanged():
+	case <-time.After(2 * time.Second):
+		t.Fatal("no StateChanged signal after the connection dropped")
+	}
+	if cc.Connected() {
+		t.Fatal("Connected() = true while the re-dial is still parked")
+	}
+
+	close(release)
+
+	select {
+	case <-cc.StateChanged():
+	case <-time.After(2 * time.Second):
+		t.Fatal("no StateChanged signal after the re-attach")
+	}
+	waitConnected(t, cc)
+}
