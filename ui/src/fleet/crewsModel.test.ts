@@ -41,9 +41,12 @@ describe('groupCrews', () => {
     expect(finished[0].needsYou).toBe(0)
   })
 
-  it('does not count a running member with a down control connection as live', () => {
-    const runs = [run({ id: 'a', crew: { name: 'c' }, state: 'running', stale: true, updated_at: old })]
-    expect(groupCrews(runs, now).live).toEqual([])
+  it('ranks a running member with a down control connection below a healthy one', () => {
+    const runs = [
+      run({ id: 'down', crew: { name: 'c' }, state: 'running', stale: true, updated_at: nowSec }),
+      run({ id: 'up', crew: { name: 'c' }, state: 'running', updated_at: nowSec - 30 }),
+    ]
+    expect(groupCrews(runs, now).live[0].members.map((m) => m.id)).toEqual(['up', 'down'])
   })
 
   it('does not let a ghost running member that stopped reporting keep its crew live', () => {

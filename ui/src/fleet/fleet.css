@@ -336,10 +336,8 @@
 .crews-when { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 6px; }
 .crews-title { color: var(--text-strong); font-size: 13px; line-height: 1.35; overflow-wrap: anywhere; }
 .crews-question { min-width: 0; margin-top: 5px; overflow-wrap: anywhere; }
-.crews-pr {
-  display: inline-flex; align-items: center; min-height: var(--tap); padding: 0 12px;
-  margin: 0 12px 10px; text-decoration: none;
-}
+.crews-pr { margin: 0 12px 10px; text-decoration: none; }
+a.crews-pr { display: inline-flex; align-items: center; min-height: var(--tap); padding: 0 12px; }
 .crews-member .crew-reply { margin: 0 10px 10px; }
 .crews-hint { margin: 0 12px 10px; font-size: 12px; color: var(--text-faint); }
 
