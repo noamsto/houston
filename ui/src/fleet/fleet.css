@@ -61,6 +61,27 @@
 .fleet-group .host-local { color: var(--host-local); }
 .fleet-group .host-remote { color: var(--host-remote); }
 
+.fleet-group-row { display: flex; justify-content: flex-end; padding: 4px 12px 0; }
+.fleet-group-toggle {
+  min-height: var(--tap); padding: 0 12px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--bg-raised); color: var(--text-faint);
+  font: inherit; font-size: 12px; cursor: pointer;
+}
+.fleet-group-toggle.on { background: var(--fill); color: var(--text); font-weight: 600; border-color: var(--line-strong); }
+.fleet-group-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.fleet-group-toggle:active { opacity: 0.7; }
+
+.fleet-project-group {
+  display: flex; justify-content: space-between; gap: 8px;
+  padding: 8px 14px 4px 22px; font-size: 11.5px; font-weight: 600; color: var(--text-faint);
+}
+.fleet-project-name {
+  min-width: 0; font-family: var(--font-mono); color: var(--accent);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.fleet-project-count { flex: none; display: flex; gap: 8px; }
+.fleet-project-attention { color: var(--state-blocked); }
+
 .run-card {
   display: block; width: calc(100% - 20px); margin: 0 10px 8px;
   padding: 11px 12px; border-radius: 10px; text-align: left;
@@ -78,7 +99,16 @@
 .run-head { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
 .run-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
 .run-name {
+  min-width: 0;
   color: var(--text); font-size: 14px; font-weight: 600; letter-spacing: -0.01em;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* flex:none so a long branch ellipsizes instead of squeezing the project out. */
+.run-project {
+  flex: none; max-width: 40%;
+  padding: 2px 8px; border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent);
+  font-family: var(--font-mono); font-size: 12px; font-weight: 600;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .run-age { margin-left: auto; flex: none; font-size: 12px; color: var(--text-faint); }
@@ -106,6 +136,16 @@
   font-size: 11px; padding: 2.5px 7px; border-radius: 5px;
   background: var(--fill); color: var(--text-strong);
 }
+.run-role {
+  font-size: 11px; font-weight: 600; padding: 2.5px 7px; border-radius: 5px;
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.run-role.dispatcher { background: var(--accent); color: var(--bg); }
+.run-role.worker {
+  background: color-mix(in srgb, var(--run-accent, var(--text-faint)) 20%, transparent);
+  color: var(--run-accent, var(--text-strong));
+}
+.run-crew { margin-top: 6px; font-size: 12px; font-weight: 600; color: var(--text-dim); }
 .run-chip.pr { background: color-mix(in srgb, var(--state-running) 18%, transparent); color: var(--state-running); }
 .run-chip.pr.failing { background: color-mix(in srgb, var(--state-blocked) 18%, transparent); color: var(--state-blocked); }
 .run-chip.issue { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }

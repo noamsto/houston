@@ -223,6 +223,10 @@ func runSignature(r Run) string {
 	b.WriteByte('|')
 	b.WriteString(r.Repo)
 	b.WriteByte('|')
+	b.WriteString(r.Project)
+	b.WriteByte('|')
+	b.WriteString(r.Role)
+	b.WriteByte('|')
 	b.WriteString(r.Branch)
 	b.WriteByte('|')
 	b.WriteString(r.Worktree)
@@ -274,6 +278,14 @@ func mergeInto(dst *Run, src Run) {
 	}
 	if src.Repo != "" {
 		dst.Repo = src.Repo
+	}
+	if src.Project != "" {
+		dst.Project = src.Project
+	}
+	// A dispatcher window also carries a crew record, so the crew source's
+	// "worker" must not demote it.
+	if src.Role != "" && (src.Role != RoleWorker || dst.Role != RoleDispatcher) {
+		dst.Role = src.Role
 	}
 	if src.Branch != "" {
 		dst.Branch = src.Branch

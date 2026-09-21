@@ -193,3 +193,30 @@ export function useTerminalFontSize() {
 
   return [fontSize, setFontSize] as const
 }
+
+const GROUP_BY_PROJECT_STORAGE_KEY = 'houston-fleet-group-by-project'
+
+function loadGroupByProject(): boolean {
+  try {
+    return localStorage.getItem(GROUP_BY_PROJECT_STORAGE_KEY) === 'true'
+  } catch {
+    return false
+  }
+}
+
+/** Persisted per-device Fleet grouping preference; standalone for the same
+ *  reason as useTerminalFontSize. */
+export function useGroupByProject(): [boolean, (v: boolean) => void] {
+  const [grouped, setGrouped] = useState<boolean>(loadGroupByProject)
+
+  const set = (v: boolean) => {
+    setGrouped(v)
+    try {
+      localStorage.setItem(GROUP_BY_PROJECT_STORAGE_KEY, String(v))
+    } catch {
+      // ignore
+    }
+  }
+
+  return [grouped, set]
+}

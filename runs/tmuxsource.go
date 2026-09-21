@@ -22,15 +22,16 @@ type lister interface {
 // user-options: branch, worktree, linked issue, PR state and crew membership.
 // Houston never recomputes any of it.
 type TmuxSource struct {
-	client lister
-	every  time.Duration
+	client   lister
+	every    time.Duration
+	projects *projectResolver
 }
 
 func NewTmuxSource(c lister, every time.Duration) *TmuxSource {
 	if every <= 0 {
 		every = 2 * time.Second
 	}
-	return &TmuxSource{client: c, every: every}
+	return &TmuxSource{client: c, every: every, projects: newProjectResolver()}
 }
 
 func (s *TmuxSource) Name() string { return "tmux" }
@@ -54,7 +55,7 @@ func (s *TmuxSource) Run(ctx context.Context, out chan<- Delta) error {
 		// skip the tick entirely rather than emitting Gone for everything seen.
 		if winErr == nil && paneErr == nil {
 			now := map[string]bool{}
-			for _, d := range deltasFromTmux(wins, panes) {
+			for _, d := range deltasFromTmux(wins, panes, s.projects.project) {
 				now[d.Key] = true
 				select {
 				case out <- d:
@@ -84,8 +85,9 @@ func (s *TmuxSource) Run(ctx context.Context, out chan<- Delta) error {
 
 // deltasFromTmux joins each pane to its window's enrichment. A pane whose
 // window was not listed is skipped rather than emitted bare — it means the two
-// queries raced a window closing.
-func deltasFromTmux(wins []tmux.WindowOptions, panes []tmux.PaneOptions) []Delta {
+// queries raced a window closing. project maps a git root to its main repo's
+// name.
+func deltasFromTmux(wins []tmux.WindowOptions, panes []tmux.PaneOptions, project func(root string) string) []Delta {
 	byTarget := windowsByTarget(wins)
 
 	out := make([]Delta, 0, len(panes))
@@ -112,6 +114,7 @@ func deltasFromTmux(wins []tmux.WindowOptions, panes []tmux.PaneOptions) []Delta
 		}
 		if w.GitRoot != "" {
 			r.Repo = filepath.Base(w.GitRoot)
+			r.Project = project(w.GitRoot)
 		}
 		if w.IssueID != "" && w.IssueID != noneSentinel {
 			r.Issue = &IssueRef{ID: w.IssueID}
@@ -124,6 +127,10 @@ func deltasFromTmux(wins []tmux.WindowOptions, panes []tmux.PaneOptions) []Delta
 		}
 		if w.CrewName != "" {
 			r.Crew = &CrewRef{Codename: w.CrewName, Color: tmuxColorToHex(w.CrewColor)}
+			r.Role = RoleWorker
+			if w.CrewName == dispatcherCrewName {
+				r.Role = RoleDispatcher
+			}
 		}
 		out = append(out, Delta{Source: "tmux", Key: p.PaneID, Run: r})
 	}
@@ -139,6 +146,10 @@ func windowsByTarget(wins []tmux.WindowOptions) map[string]tmux.WindowOptions {
 	}
 	return byTarget
 }
+
+// dispatcherCrewName is the @crew_name the dispatcher launcher sets on a
+// dispatcher window; workers carry their codename instead.
+const dispatcherCrewName = "dispatcher"
 
 // noneSentinel is what lazytmux writes to a window option that has no value.
 const noneSentinel = "none"

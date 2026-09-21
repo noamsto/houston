@@ -2,6 +2,12 @@
 // OpenCode or pi session — independent of where it happens to be running.
 package runs
 
+// Run roles. A run with no role is a solo session.
+const (
+	RoleDispatcher = "dispatcher"
+	RoleWorker     = "worker"
+)
+
 // Run is one agent run, anywhere. It is the only object the UI lists.
 type Run struct {
 	ID    string `json:"id"`
@@ -10,6 +16,8 @@ type Run struct {
 	State State  `json:"state"`
 
 	Repo     string `json:"repo,omitempty"`
+	Project  string `json:"project,omitempty"` // main repo name; a worktree resolves to its main repo
+	Role     string `json:"role,omitempty"`    // RoleDispatcher, RoleWorker, or "" for a solo run
 	Branch   string `json:"branch,omitempty"`
 	Worktree string `json:"worktree,omitempty"`
 

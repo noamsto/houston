@@ -468,6 +468,31 @@ func TestScanPublishesUnderTheJoinedPaneKey(t *testing.T) {
 	}
 }
 
+func TestScanStampsProjectAndWorkerRole(t *testing.T) {
+	bus := filepath.Join(t.TempDir(), "houston", ".git", "crew")
+	if err := os.MkdirAll(bus, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rec := `{"ts":1000,"crew_id":"c1","kind":"dispatch","branch":"fix/412","engine":"claude"}` + "\n"
+	if err := os.WriteFile(filepath.Join(bus, "events.jsonl"), []byte(rec), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := crewScanner(
+		map[string]string{"/wt/a": bus},
+		[]tmux.WindowOptions{{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"}},
+		[]tmux.PaneOptions{agentPane("%307", "h:1")},
+	)
+
+	got, _ := s.scan()
+	r := got["%307"]
+	if r.Project != "houston" {
+		t.Errorf("Project = %q, want houston — the repo owning the bus's .git", r.Project)
+	}
+	if r.Role != RoleWorker {
+		t.Errorf("Role = %q, want worker", r.Role)
+	}
+}
+
 func TestScanFallsBackWhenNoPaneJoins(t *testing.T) {
 	t.Run("the only pane is a shell", func(t *testing.T) {
 		bus := writeBus(t, "fix/412")

@@ -148,7 +148,10 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 
 	out := map[string]Run{}
 	for bus, branches := range s.scanRoots(rootList) {
+		project := ProjectFromCommonDir(filepath.Dir(bus))
 		for branch, r := range branches {
+			r.Project = project
+			r.Role = RoleWorker
 			r.Worktree = worktreeFor(bus, branch, wins, s.crewDir)
 			paneID, candidates := resolvePane(bus, branch, wins, panes, s.crewDir)
 			key := paneID
