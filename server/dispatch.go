@@ -19,14 +19,10 @@ import (
 )
 
 const (
-	// maxDispatchBody bounds the whole request envelope.
-	maxDispatchBody = 256 << 10
-	// maxDispatchSpec bounds the task body specifically, well inside maxDispatchBody.
-	maxDispatchSpec = 64 << 10
-	// dispatchTitleMaxRunes matches dispatch's own tmux-window-name / branch-slug limits.
+	maxDispatchBody       = 256 << 10
+	maxDispatchSpec       = 64 << 10
 	dispatchTitleMaxRunes = 200
-	// dispatchTimeout bounds a single dispatch run (SPEC.md §Execution).
-	dispatchTimeout = 120 * time.Second
+	dispatchTimeout       = 120 * time.Second
 )
 
 // dispatchTiers, dispatchEfforts and dispatchPlans are closed enums dispatch
@@ -41,9 +37,8 @@ var (
 	// object (dispatchModels) has none of its own.
 	dispatchEngineOrder = []string{"claude", "codex", "cursor", "pi"}
 
-	// dispatchModels is the union of dispatch's own tier-map rows per engine
-	// (SPEC.md §Validation). It moves with that map, which is also source —
-	// not config, so there is nothing else to keep in sync.
+	// dispatchModels is the union of dispatch's own tier-map rows per engine;
+	// update it when that map changes. Tier↔model fit is left to dispatch.
 	dispatchModels = map[string][]string{
 		"claude": {"opus", "sonnet", "haiku", "fable"},
 		"codex":  {"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"},
@@ -115,10 +110,9 @@ type dispatchResponse struct {
 	Output   string `json:"output,omitempty"`
 }
 
-// dispatchError is a validation or membership failure. msg already names the
-// field and the reason, since the UI shows it verbatim; field exists
-// separately so the request log can name what failed without repeating the
-// (possibly adversarial) value that triggered it.
+// dispatchError is a validation failure. msg names the field and the reason
+// because the UI shows it verbatim; field lets the log name what failed
+// without repeating the rejected value.
 type dispatchError struct {
 	field string
 	code  int
@@ -127,10 +121,9 @@ type dispatchError struct {
 
 func (e *dispatchError) Error() string { return e.msg }
 
-// validateDispatch is pure: it trims the title, defaults plan, and checks
-// every field against a closed enum or an anchored regex. It never touches
-// disk or the known-repo set — that membership check happens in
-// handleDispatch, once a repo is on hand to check crew dirs against.
+// validateDispatch trims the title, defaults plan, and checks every field
+// against a closed enum or an anchored regex. Repo and crew membership are
+// checked by the handler.
 func validateDispatch(req dispatchRequest) (dispatchRequest, *dispatchError) {
 	out := req
 	out.Title = strings.TrimSpace(req.Title)
@@ -478,10 +471,8 @@ func writeDispatchJSON(w http.ResponseWriter, code int, v any) {
 }
 
 // dispatchLog accumulates one request's outcome for a single slog.Info call.
-// Request fields are populated only once validateDispatch has confirmed they
-// are each a bounded enum or anchored-regex match (setValidated) — on a
-// validation failure the offending value never reaches the log, only the
-// field name that rejected it.
+// Request fields are set only after validation and the repo match, so a
+// rejected value never reaches the log.
 type dispatchLog struct {
 	validated bool
 	field     string

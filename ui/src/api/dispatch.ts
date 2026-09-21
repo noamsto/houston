@@ -27,8 +27,8 @@ export interface DispatchRequest {
   issue?: string
 }
 
-// Mirror of the POST /api/dispatch response contract (SPEC.md §API). `failed`
-// covers every non-200 status: `error` is dispatch's own stderr on 422, or
+// Mirror of the POST /api/dispatch response contract. `failed` covers every
+// non-200 status: `error` is dispatch's own stderr on 422, or
 // houston's own reason otherwise, always shown verbatim.
 export type DispatchOutcome =
   | { kind: 'started'; workerId: string; branch: string; issueUrl?: string }
