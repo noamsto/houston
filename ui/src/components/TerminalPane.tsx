@@ -85,9 +85,8 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
 
   // Detached: the user panned/scrolled away from the live follow position, so
   // output and reseeds must not yank the view back. The ref is what async
-  // callbacks read; the state drives the "Live" pill.
-  // The state holds the target it applies to and is dropped during render when
-  // the pane switches, so an A -> B -> A round trip can't resurrect the pill.
+  // callbacks read; the state (keyed by target, dropped during render when the
+  // pane switches) drives the "Live" pill.
   const detachedRef = useRef(false)
   const [detachedTarget, setDetachedTarget] = useState<string | null>(null)
   if (detachedTarget !== null && detachedTarget !== pane.target) setDetachedTarget(null)
