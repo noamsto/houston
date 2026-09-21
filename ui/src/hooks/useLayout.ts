@@ -204,8 +204,7 @@ function loadGroupByProject(): boolean {
   }
 }
 
-/** Persisted per-device Fleet grouping preference; standalone for the same
- *  reason as useTerminalFontSize. */
+/** Per-device Fleet grouping preference, remembered in localStorage. */
 export function useGroupByProject(): [boolean, (v: boolean) => void] {
   const [grouped, setGrouped] = useState<boolean>(loadGroupByProject)
 
