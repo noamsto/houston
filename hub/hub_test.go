@@ -207,3 +207,25 @@ func recv(t *testing.T, ch <-chan SessionView, timeout time.Duration) SessionVie
 		return SessionView{}
 	}
 }
+
+func TestMergeStateIntoViewSurfacesLastMessageOnlyWhileWaiting(t *testing.T) {
+	tests := []struct {
+		state hook.State
+		want  string
+	}{
+		{hook.StateWaiting, "msg"},
+		{hook.StatePermission, "msg"},
+		{hook.StateToolRunning, ""},
+		{hook.StateThinking, ""},
+		{hook.StateEnded, ""},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.state), func(t *testing.T) {
+			var v SessionView
+			mergeStateIntoView(&v, hook.SessionState{State: tt.state, LastMessage: "msg"})
+			if v.LastMessage != tt.want {
+				t.Errorf("LastMessage = %q, want %q", v.LastMessage, tt.want)
+			}
+		})
+	}
+}

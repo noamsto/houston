@@ -70,12 +70,28 @@ func (p *projectResolver) project(root string) string {
 	if root == "" {
 		return ""
 	}
+	return p.lookup(root).name
+}
 
+// resolved is project without the fallback: "" unless git actually named the
+// main repo. For layers that outrank tmux, where a guessed name would overwrite
+// a correct one.
+func (p *projectResolver) resolved(root string) string {
+	if root == "" {
+		return ""
+	}
+	if e := p.lookup(root); e.ok {
+		return e.name
+	}
+	return ""
+}
+
+func (p *projectResolver) lookup(root string) projectEntry {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	if e, ok := p.cache[root]; ok && (e.ok || p.now().Sub(e.at) < projectRetryAfter) {
-		return e.name
+		return e
 	}
 
 	e := projectEntry{at: p.now()}
@@ -85,5 +101,5 @@ func (p *projectResolver) project(root string) string {
 		e.name = filepath.Base(root)
 	}
 	p.cache[root] = e
-	return e.name
+	return e
 }

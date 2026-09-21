@@ -215,3 +215,29 @@ func TestTmuxCoordsEmptyOutsideTmux(t *testing.T) {
 		t.Errorf("got (%q, %q, %q), want all empty outside tmux", session, window, pane)
 	}
 }
+
+func TestDispatchNotificationMessageLivesOnlyUntilTheNextEvent(t *testing.T) {
+	for _, event := range []string{
+		EventSessionStart, EventUserPromptSubmit, EventPreToolUse, EventPostToolUse,
+		EventStop, EventSubagentStop, EventPreCompact, EventSessionEnd,
+	} {
+		t.Run(event, func(t *testing.T) {
+			dir := t.TempDir()
+			dispatch(t, dir, EventNotification, map[string]any{
+				"session_id": "s", "notification_type": "permission_prompt", "message": "Allow Bash?",
+			})
+			if got := dispatch(t, dir, event, map[string]any{"session_id": "s"}); got.LastMessage != "" {
+				t.Errorf("LastMessage after %s = %q, want cleared", event, got.LastMessage)
+			}
+		})
+	}
+}
+
+func TestDispatchNotificationReplacesThePreviousMessage(t *testing.T) {
+	dir := t.TempDir()
+	dispatch(t, dir, EventNotification, map[string]any{"session_id": "s", "message": "first"})
+	got := dispatch(t, dir, EventNotification, map[string]any{"session_id": "s", "message": "second"})
+	if got.LastMessage != "second" {
+		t.Errorf("LastMessage = %q, want second", got.LastMessage)
+	}
+}

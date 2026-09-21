@@ -413,7 +413,10 @@ func mergeStateIntoView(v *SessionView, s hook.SessionState) {
 	v.State = s.State
 	v.Tool = s.Tool
 	v.ToolInputHint = s.ToolInputHint
-	v.LastMessage = s.LastMessage
+	v.LastMessage = ""
+	if s.State == hook.StateWaiting || s.State == hook.StatePermission {
+		v.LastMessage = s.LastMessage
+	}
 	v.Turn = s.Turn
 	v.Since = s.Since
 	v.UpdatedAt = s.UpdatedAt

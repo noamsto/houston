@@ -2,33 +2,121 @@ package runs
 
 import (
 	"context"
+	"log/slog"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/noamsto/houston/hub"
+	"github.com/noamsto/houston/tmux"
 )
 
 // hookGoneCheckInterval is how often HookSource diffs against hub.Snapshot to
-// catch a session hub deleted without broadcasting (see Run).
+// catch a session hub deleted without broadcasting, and re-checks which panes
+// still exist (see Run).
 const hookGoneCheckInterval = 5 * time.Second
+
+type paneLister interface {
+	ListPaneOptions() ([]tmux.PaneOptions, error)
+}
 
 // HookSource publishes Claude Code hook state. It rides the existing hub rather
 // than re-watching the state dir and re-tailing transcripts.
-type HookSource struct{ hub *hub.Hub }
+type HookSource struct {
+	hub      *hub.Hub
+	panes    paneLister
+	projects *projectResolver
+	every    time.Duration
+}
 
-func NewHookSource(h *hub.Hub) *HookSource { return &HookSource{hub: h} }
+// NewHookSource returns a source over h. panes lets it end runs whose pane has
+// vanished; nil disables that check.
+func NewHookSource(h *hub.Hub, panes paneLister) *HookSource {
+	return &HookSource{hub: h, panes: panes, projects: newProjectResolver(), every: hookGoneCheckInterval}
+}
 
 func (s *HookSource) Name() string { return "hooks" }
 
 func (s *HookSource) Run(ctx context.Context, out chan<- Delta) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	sub := s.hub.Subscribe()
 	defer s.hub.Unsubscribe(sub)
 
-	seen := map[string]bool{}
+	// A session whose agent died without SessionEnd (killed pane, crashed
+	// tmux) leaves its state file at the last live state forever. Only a
+	// successful pane listing can declare a pane gone: on error the previous
+	// verdicts stand. The first listing is synchronous so no ghost is ever
+	// emitted live; later ones run off this loop so a hung tmux cannot stall
+	// hub delivery.
+	var (
+		panes  paneSet
+		paneCh chan paneSet // nil without a lister, so its case never fires
+	)
+	if s.panes != nil {
+		if ps, ok := listPanes(s.panes); ok {
+			panes = ps
+		}
+		paneCh = make(chan paneSet)
+		go s.pollPanes(ctx, paneCh)
+	}
+
+	// endedAt records the state-file time a session was ended at. Hook
+	// activity newer than that proves the agent is alive somewhere houston
+	// cannot see (another tmux server, a resumed session in a new pane), so it
+	// is never ended again rather than flapping on every tick. The catch is a
+	// dying agent's last hook write also counts as activity. Both maps are
+	// keyed by session, not pane: /clear and resume leave several sessions on
+	// one pane.
+	endedAt := map[string]int64{}
+	revived := map[string]bool{}
+	build := func(v hub.SessionView) (string, Run) {
+		key, r := runFromSessionView(v, s.projects.resolved(v.CWD))
+		switch {
+		case paneGone(v, panes.live, panes.at):
+			if at, ok := endedAt[v.SessionID]; ok && v.UpdatedAt > at {
+				revived[v.SessionID] = true
+			}
+			if !revived[v.SessionID] {
+				endedAt[v.SessionID] = v.UpdatedAt
+				return key, endRun(r)
+			}
+		case panes.live[v.TmuxPane]:
+			delete(endedAt, v.SessionID)
+			delete(revived, v.SessionID)
+		}
+		return key, r
+	}
+
+	// current is the session that speaks for each key: the most recently
+	// updated one, so a stale session left on a reused pane can neither
+	// shadow the live one nor make the run flap. It also prunes the ended
+	// bookkeeping of sessions hub has dropped.
+	current := func() map[string]hub.SessionView {
+		snap := s.hub.Snapshot()
+		sids := make(map[string]bool, len(snap))
+		byKey := make(map[string]hub.SessionView, len(snap))
+		for _, v := range snap {
+			sids[v.SessionID] = true
+			k := sessionKey(v)
+			if w, ok := byKey[k]; !ok || newerSession(v, w) {
+				byKey[k] = v
+			}
+		}
+		for sid := range endedAt {
+			if !sids[sid] {
+				delete(endedAt, sid)
+				delete(revived, sid)
+			}
+		}
+		return byKey
+	}
+
+	seen := map[string]string{} // key -> signature of the last emitted layer
 	emit := func(key string, r Run) error {
-		seen[key] = true
+		seen[key] = runSignature(r)
 		select {
 		case out <- Delta{Source: s.Name(), Key: key, Run: r}:
 			return nil
@@ -37,18 +125,46 @@ func (s *HookSource) Run(ctx context.Context, out chan<- Delta) error {
 		}
 	}
 
-	for _, v := range s.hub.Snapshot() {
-		key, r := runFromSessionView(v)
+	// resync re-derives every session, emitting those whose layer changed since
+	// last emitted (a pane verdict flipped, a project resolved late, a hub
+	// update dropped on a full channel), and Gone for any session hub deleted.
+	// hub deletes a session on file removal and broadcasts nothing about it,
+	// so a killed agent would otherwise stay listed forever at its last known
+	// state, capabilities and all.
+	resync := func() error {
+		now := map[string]bool{}
+		for _, v := range current() {
+			key, r := build(v)
+			now[key] = true
+			if sig, ok := seen[key]; ok && sig == runSignature(r) {
+				continue
+			}
+			if err := emit(key, r); err != nil {
+				return err
+			}
+		}
+		for key := range seen {
+			if now[key] {
+				continue
+			}
+			delete(seen, key)
+			select {
+			case out <- Delta{Source: s.Name(), Key: key, Gone: true}:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		return nil
+	}
+
+	for _, v := range current() {
+		key, r := build(v)
 		if err := emit(key, r); err != nil {
 			return err
 		}
 	}
 
-	// hub deletes a session on file removal and broadcasts nothing about it,
-	// so a killed agent would otherwise stay listed forever at its last known
-	// state, capabilities and all. Diff against hub.Snapshot on a ticker to
-	// catch that.
-	t := time.NewTicker(hookGoneCheckInterval)
+	t := time.NewTicker(s.every)
 	defer t.Stop()
 
 	for {
@@ -59,42 +175,109 @@ func (s *HookSource) Run(ctx context.Context, out chan<- Delta) error {
 			if !ok {
 				return nil
 			}
-			key, r := runFromSessionView(v)
+			w, ok := current()[sessionKey(v)]
+			if !ok {
+				continue
+			}
+			key, r := build(w)
 			if err := emit(key, r); err != nil {
 				return err
 			}
-		case <-t.C:
-			now := map[string]bool{}
-			for _, v := range s.hub.Snapshot() {
-				key, _ := runFromSessionView(v)
-				now[key] = true
+		case panes = <-paneCh:
+			if err := resync(); err != nil {
+				return err
 			}
-			for key := range seen {
-				if now[key] {
-					continue
-				}
-				delete(seen, key)
-				select {
-				case out <- Delta{Source: s.Name(), Key: key, Gone: true}:
-				case <-ctx.Done():
-					return ctx.Err()
-				}
+		case <-t.C:
+			if err := resync(); err != nil {
+				return err
 			}
 		}
 	}
+}
+
+type paneSet struct {
+	live map[string]bool
+	at   time.Time
+}
+
+func listPanes(l paneLister) (paneSet, bool) {
+	at := time.Now()
+	panes, err := l.ListPaneOptions()
+	if err != nil {
+		slog.Debug("hooks: tmux pane list", "error", err)
+		return paneSet{}, false
+	}
+	live := make(map[string]bool, len(panes))
+	for _, p := range panes {
+		live[p.PaneID] = true
+	}
+	return paneSet{live: live, at: at}, true
+}
+
+// pollPanes publishes each successful listing until ctx ends. A failed one is
+// simply not published, which is what leaves earlier verdicts standing.
+func (s *HookSource) pollPanes(ctx context.Context, out chan<- paneSet) {
+	t := time.NewTicker(s.every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		if ps, ok := listPanes(s.panes); ok {
+			select {
+			case out <- ps:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}
+}
+
+// sessionKey is the correlation key of v's run: its pane id, else its own id.
+func sessionKey(v hub.SessionView) string {
+	if v.TmuxPane != "" {
+		return v.TmuxPane
+	}
+	return "claude/" + v.SessionID
+}
+
+func newerSession(a, b hub.SessionView) bool {
+	if a.UpdatedAt != b.UpdatedAt {
+		return a.UpdatedAt > b.UpdatedAt
+	}
+	return a.SessionID > b.SessionID
+}
+
+// paneGone reports whether v's pane is provably absent. live is nil until a
+// listing succeeded. The listing must postdate the state file's last write so a
+// pane created after a cached listing is never mistaken for a dead one.
+func paneGone(v hub.SessionView, live map[string]bool, listedAt time.Time) bool {
+	return v.TmuxPane != "" && live != nil && listedAt.Unix() > v.UpdatedAt && !live[v.TmuxPane]
+}
+
+// endRun marks r finished while keeping what it last showed (repo, branch,
+// transcript preview), so it ages into history instead of vanishing.
+func endRun(r Run) Run {
+	r.State = StateDone
+	r.Question = nil
+	r.Activity.Tool, r.Activity.Hint, r.Activity.Message = "", "", ""
+	return r
 }
 
 // runFromSessionView converts one hub view into this source's layer. The key is
 // the tmux pane id when there is one, because that is what tmux and crew
 // deltas can also produce; a headless session falls back to its own id and
 // simply never correlates with them.
-func runFromSessionView(v hub.SessionView) (string, Run) {
+func runFromSessionView(v hub.SessionView, project string) (string, Run) {
 	repo, branch := repoAndBranch(v.CWD, v.GitBranch)
 	r := Run{
 		Agent:     "claude",
 		State:     FromHookState(v.State),
 		Repo:      repo,
 		Branch:    branch,
+		Project:   project,
 		Worktree:  v.CWD,
 		UpdatedAt: v.UpdatedAt,
 		Since:     v.Since,
@@ -113,9 +296,8 @@ func runFromSessionView(v hub.SessionView) (string, Run) {
 		})
 	}
 
-	key := "claude/" + v.SessionID
+	key := sessionKey(v)
 	if v.TmuxPane != "" {
-		key = v.TmuxPane
 		win, _ := strconv.Atoi(v.TmuxWindow)
 		r.Tmux = &TmuxRef{Session: v.TmuxSession, Window: win, PaneID: v.TmuxPane}
 	}
