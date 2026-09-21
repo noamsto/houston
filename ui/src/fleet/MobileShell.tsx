@@ -1,4 +1,3 @@
-import { useEffect, useState } from 'react'
 import type { Run } from '../api/runs'
 import { needsYou } from './staleness'
 import { FleetView } from './FleetView'
@@ -6,10 +5,8 @@ import { CrewsView } from './CrewsView'
 import { WorkspaceView } from './WorkspaceView'
 import { DispatchView } from './DispatchView'
 import { RunDetail } from './RunDetail'
-import { parseDispatchRoute, runHash, useDetailRoute } from './routes'
+import { runHash, tabHash, TAB_LABEL, useDetailRoute, useShellTab } from './routes'
 import { useKeyboardInset } from '../hooks/useKeyboardInset'
-
-type Tab = 'fleet' | 'crews' | 'workspace' | 'dispatch'
 
 export interface ShellData {
   runs: Run[]
@@ -19,17 +16,11 @@ export interface ShellData {
 }
 
 export function MobileShell({ runs, connected, hasSnapshot, now }: ShellData) {
-  const [tab, setTab] = useState<Tab>(() => (parseDispatchRoute(window.location.hash) ? 'dispatch' : 'fleet'))
+  const [tab, goTab] = useShellTab()
   const attention = runs.some((r) => needsYou(r, now))
 
   const detail = useDetailRoute()
   const keyboardInset = useKeyboardInset()
-
-  useEffect(() => {
-    const onHash = () => { if (parseDispatchRoute(window.location.hash)) setTab('dispatch') }
-    window.addEventListener('hashchange', onHash)
-    return () => window.removeEventListener('hashchange', onHash)
-  }, [])
 
   return (
     <div
@@ -71,23 +62,25 @@ export function MobileShell({ runs, connected, hasSnapshot, now }: ShellData) {
             now={now}
             id={detail.id}
             tab={detail.tab}
+            onBack={() => { window.location.hash = tabHash(tab) }}
+            backLabel={TAB_LABEL[tab]}
           />
         )}
       </div>
 
       <nav className="shell-tabs" aria-label="sections">
-        <button className={tab === 'fleet' ? 'on' : ''} aria-current={tab === 'fleet' ? 'true' : undefined} onClick={() => setTab('fleet')}>
+        <button className={tab === 'fleet' ? 'on' : ''} aria-current={tab === 'fleet' ? 'true' : undefined} onClick={() => goTab('fleet', true)}>
           <span className="glyph" aria-hidden>▤</span>
           Fleet
           {attention && tab !== 'fleet' && <span className="dot" role="status" aria-label="runs need you" />}
         </button>
-        <button className={tab === 'crews' ? 'on' : ''} aria-current={tab === 'crews' ? 'true' : undefined} onClick={() => setTab('crews')}>
+        <button className={tab === 'crews' ? 'on' : ''} aria-current={tab === 'crews' ? 'true' : undefined} onClick={() => goTab('crews', true)}>
           <span className="glyph" aria-hidden>◆</span>Crews
         </button>
-        <button className={tab === 'workspace' ? 'on' : ''} aria-current={tab === 'workspace' ? 'true' : undefined} onClick={() => setTab('workspace')}>
+        <button className={tab === 'workspace' ? 'on' : ''} aria-current={tab === 'workspace' ? 'true' : undefined} onClick={() => goTab('workspace', true)}>
           <span className="glyph" aria-hidden>▣</span>Workspace
         </button>
-        <button className={tab === 'dispatch' ? 'on' : ''} aria-current={tab === 'dispatch' ? 'true' : undefined} onClick={() => setTab('dispatch')}>
+        <button className={tab === 'dispatch' ? 'on' : ''} aria-current={tab === 'dispatch' ? 'true' : undefined} onClick={() => goTab('dispatch', true)}>
           <span className="glyph" aria-hidden>✦</span>Dispatch
         </button>
       </nav>
