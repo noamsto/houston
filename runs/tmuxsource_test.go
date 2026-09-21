@@ -191,3 +191,19 @@ func TestTmuxSourceRun(t *testing.T) {
 		t.Fatalf("Run returned %v, want context.Canceled", err)
 	}
 }
+
+func TestDeltasFromTmuxDropsNoneSentinel(t *testing.T) {
+	wins := []tmux.WindowOptions{{
+		Session: "s", Window: 1, IssueID: "none", PRNumber: "7",
+		PRState: "none", PRCheckState: "none", PRMergeable: "none",
+	}}
+	panes := []tmux.PaneOptions{{PaneID: "%1", Target: "s:1", ClaudeStatus: "idle 1 "}}
+
+	r := deltasFromTmux(wins, panes)[0].Run
+	if r.Issue != nil {
+		t.Errorf("Issue = %+v, want nil", r.Issue)
+	}
+	if r.PR == nil || r.PR.Number != "7" || r.PR.State != "" || r.PR.CheckState != "" || r.PR.Mergeable != "" {
+		t.Errorf("PR = %+v, want number only", r.PR)
+	}
+}

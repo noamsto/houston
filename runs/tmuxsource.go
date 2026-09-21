@@ -113,13 +113,13 @@ func deltasFromTmux(wins []tmux.WindowOptions, panes []tmux.PaneOptions) []Delta
 		if w.GitRoot != "" {
 			r.Repo = filepath.Base(w.GitRoot)
 		}
-		if w.IssueID != "" {
+		if w.IssueID != "" && w.IssueID != noneSentinel {
 			r.Issue = &IssueRef{ID: w.IssueID}
 		}
-		if w.PRNumber != "" && w.PRNumber != "none" {
+		if w.PRNumber != "" && w.PRNumber != noneSentinel {
 			r.PR = &PRRef{
-				Number: w.PRNumber, State: w.PRState,
-				CheckState: w.PRCheckState, Mergeable: w.PRMergeable,
+				Number: w.PRNumber, State: unsentinel(w.PRState),
+				CheckState: unsentinel(w.PRCheckState), Mergeable: unsentinel(w.PRMergeable),
 			}
 		}
 		if w.CrewName != "" {
@@ -138,6 +138,16 @@ func windowsByTarget(wins []tmux.WindowOptions) map[string]tmux.WindowOptions {
 		byTarget[fmt.Sprintf("%s:%d", w.Session, w.Window)] = w
 	}
 	return byTarget
+}
+
+// noneSentinel is what lazytmux writes to a window option that has no value.
+const noneSentinel = "none"
+
+func unsentinel(v string) string {
+	if v == noneSentinel {
+		return ""
+	}
+	return v
 }
 
 func firstNonEmpty(vals ...string) string {
