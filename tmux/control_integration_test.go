@@ -125,7 +125,7 @@ func TestGapDeadlineResumeActuallyResumesThePane(t *testing.T) {
 	for deadline := time.Now().Add(5 * time.Second); g == nil && time.Now().Before(deadline); {
 		g = cc.gapFor(paneID)
 		if g == nil {
-			time.Sleep(10 * time.Millisecond)
+			time.Sleep(2 * time.Millisecond)
 		}
 	}
 	if g == nil {
@@ -151,19 +151,37 @@ func TestGapDeadlineResumeActuallyResumesThePane(t *testing.T) {
 		t.Fatalf("SendSpecialKey Enter failed: %v", err)
 	}
 
+	// The shell prints the marker twice — the typed echo, then the command's
+	// output — so seeing it twice means the pane has processed everything a
+	// resumed pane would have streamed.
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		captured, err := cc.RunCommand(fmt.Sprintf("capture-pane -p -J -t %s", paneID))
+		if err != nil {
+			t.Fatalf("capture-pane failed: %v", err)
+		}
+		if strings.Count(captured, pausedMarker) >= 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("shell never echoed the marker in %s, captured: %q", paneID, captured)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// readLoop is sequential and tmux writes control output in order, so this
+	// reply lands after any %output tmux sent for the marker.
+	if _, err := cc.RunCommand("display-message -p sync"); err != nil {
+		t.Fatalf("sync command failed: %v", err)
+	}
 	var receivedWhilePaused string
-	idle := time.NewTimer(2 * time.Second)
-	defer idle.Stop()
-paused:
-	for {
+	for drained := false; !drained; {
 		select {
 		case ev := <-sub.C():
 			receivedWhilePaused += string(ev.Data)
 			if strings.Contains(receivedWhilePaused, pausedMarker) {
 				t.Fatalf("marker reached the subscriber while the pane was paused: %q", receivedWhilePaused)
 			}
-		case <-idle.C:
-			break paused
+		default:
+			drained = true
 		}
 	}
 

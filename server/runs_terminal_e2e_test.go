@@ -78,7 +78,7 @@ func waitForPaneText(t *testing.T, paneID, want string) {
 		if time.Now().After(deadline) {
 			t.Fatalf("pane %s never showed %q; last capture:\n%s", paneID, want, got)
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

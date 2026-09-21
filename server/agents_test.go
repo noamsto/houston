@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -17,16 +18,60 @@ import (
 	"github.com/noamsto/houston/hub"
 )
 
+// startHub runs h and returns once its watcher is live. Call it after
+// t.TempDir(): cleanup is LIFO, so Run has closed the watcher before the state
+// dir is removed.
+func startHub(t *testing.T, h *hub.Hub, dir string) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = h.Run(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("hub.Run did not return after cancel")
+		}
+	})
+
+	// Run installs the watch before its initial scan, so the probe appearing
+	// proves the watch exists; its removal is only observable through the watch.
+	const probe = "startHub-probe"
+	has := func() bool {
+		for _, v := range h.Snapshot() {
+			if v.SessionID == probe {
+				return true
+			}
+		}
+		return false
+	}
+	wait := func(what string, cond func() bool) {
+		for deadline := time.Now().Add(5 * time.Second); !cond(); time.Sleep(time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatalf("timed out waiting for %s", what)
+			}
+		}
+	}
+	if err := hook.Write(hook.Path(dir, probe), hook.SessionState{SessionID: probe, State: hook.StateIdle}); err != nil {
+		t.Fatal(err)
+	}
+	wait("hub to load the probe state", has)
+	if err := os.Remove(hook.Path(dir, probe)); err != nil {
+		t.Fatal(err)
+	}
+	wait("hub to drop the probe state", func() bool { return !has() })
+}
+
 // newTestServer constructs a minimal Server with only the hub wired — no tmux,
 // no opencode, no UI. Enough to exercise /api/agents and /api/agents/stream.
 func newTestServer(t *testing.T, stateDir string) *Server {
 	t.Helper()
 	s := &Server{hub: hub.NewWithOptions(stateDir, hub.Options{ClaudeProjectsDir: "-"}, slog.Default())}
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	go func() { _ = s.hub.Run(ctx) }()
-	// let Run set up fsnotify before tests write state files
-	time.Sleep(80 * time.Millisecond)
+	startHub(t, s.hub, stateDir)
 	return s
 }
 
@@ -149,12 +194,12 @@ func TestAgentsStreamEmitsSnapshotAndUpdate(t *testing.T) {
 			if strings.Contains(rec.body(), substr) {
 				return true
 			}
-			time.Sleep(25 * time.Millisecond)
+			time.Sleep(time.Millisecond)
 		}
 		return false
 	}
 
-	if !waitForBody("event: snapshot", time.Second) {
+	if !waitForBody("event: snapshot", 5*time.Second) {
 		t.Fatalf("snapshot event never sent\n%s", rec.body())
 	}
 
@@ -168,7 +213,7 @@ func TestAgentsStreamEmitsSnapshotAndUpdate(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	if !waitForBody("event: update", 2*time.Second) {
+	if !waitForBody("event: update", 5*time.Second) {
 		t.Errorf("update event never sent\n%s", rec.body())
 	}
 

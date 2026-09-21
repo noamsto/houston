@@ -194,7 +194,7 @@ func TestResolvePaneServerExitedIntegration(t *testing.T) {
 		if time.Now().After(deadline) {
 			break
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 	if resolveErr == nil {
 		t.Fatalf("ResolvePane(%s) = nil error after kill-server, want an error", id)

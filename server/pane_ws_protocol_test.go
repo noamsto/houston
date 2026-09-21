@@ -84,7 +84,7 @@ func TestPaneWSServerToClientProtocol(t *testing.T) {
 	stopPing := pingPane(fakeCC, fakeTmux.paneID, 10*time.Millisecond)
 	t.Cleanup(stopPing)
 
-	// meta may interleave (it's polled every second and can differ from its
+	// meta may interleave (the harness polls every 10ms and it can differ from its
 	// zero-value on the first tick), so skip past it to find the output
 	// message pingPane's ticks produce.
 	deadline := time.Now().Add(5 * time.Second)
@@ -137,11 +137,11 @@ func TestPaneWSClientToServerInput(t *testing.T) {
 }
 
 // waitForSendCall polls cc.sendCallsFor(paneID) until it contains want,
-// failing the test if it doesn't show up within 2s. Polling is the only
+// failing the test if it does not show up within 5s. Polling is the only
 // reliable way to observe the read loop's async effect on the fake.
 func waitForSendCall(t *testing.T, cc *fakeControlClient, paneID, want string) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	for {
 		if slices.Contains(cc.sendCallsFor(paneID), want) {
 			return
@@ -149,7 +149,7 @@ func waitForSendCall(t *testing.T, cc *fakeControlClient, paneID, want string) {
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out waiting for SendKeys(%q, %q); got %v", paneID, want, cc.sendCallsFor(paneID))
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(time.Millisecond)
 	}
 }
 
@@ -329,7 +329,7 @@ func TestPaneWSAckBeforeWrite(t *testing.T) {
 		started: make(chan struct{}),
 	}
 
-	go paneWSWriteLoop(gw, fakeTmux, fakeCC, agents.NewRegistry(generic.New()), harnessPane, sub, connDone)
+	go paneWSWriteLoop(gw, fakeTmux, fakeCC, agents.NewRegistry(generic.New()), harnessPane, sub, connDone, metaPollInterval)
 
 	<-gw.started
 

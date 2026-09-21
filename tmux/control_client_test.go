@@ -759,7 +759,7 @@ func TestRefusedResumeWithNoSubscribersStopsRetrying(t *testing.T) {
 	cc := NewControlClient("test")
 	cc.dial = d.dial
 	cc.backoff = time.Millisecond
-	cc.gapDeadline = 20 * time.Millisecond
+	cc.gapDeadline = 10 * time.Millisecond
 
 	if err := cc.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -1646,7 +1646,11 @@ func TestFailedWriteTearsDownTheConnectionItActuallyWroteTo(t *testing.T) {
 	conn0.parkWrite, conn0.parked, conn0.writeErr = park, parked, errors.New("stdin is gone")
 	conn0.mu.Unlock()
 
-	go func() { _ = cc.SendSpecialKey("%1", "C-c") }()
+	sent := make(chan struct{})
+	go func() {
+		defer close(sent)
+		_ = cc.SendSpecialKey("%1", "C-c")
+	}()
 
 	select {
 	case <-parked:
@@ -1669,7 +1673,15 @@ func TestFailedWriteTearsDownTheConnectionItActuallyWroteTo(t *testing.T) {
 
 	close(park)
 
-	deadline := time.After(200 * time.Millisecond)
+	// The failed write's teardown has run by the time the send returns, so the
+	// observation window starts after it rather than racing it.
+	select {
+	case <-sent:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the parked write never returned")
+	}
+
+	deadline := time.After(50 * time.Millisecond)
 	for {
 		d.mu.Lock()
 		n := len(d.conns)
@@ -1816,7 +1828,7 @@ func TestReconnectDisarmsAnOpenGapsDeadline(t *testing.T) {
 	cc := NewControlClient("test")
 	cc.dial = d.dial // the re-dial is the point here; no pin
 	cc.backoff = time.Millisecond
-	cc.gapDeadline = 150 * time.Millisecond
+	cc.gapDeadline = 100 * time.Millisecond
 
 	sentinel := cc.Subscribe("%9")
 	sub := cc.Subscribe("%1")
@@ -1925,14 +1937,17 @@ func TestDoneDoesNotFireOnDisconnect(t *testing.T) {
 	}
 	defer func() { _ = cc.Close() }()
 
+	for deadline := time.Now().Add(5 * time.Second); d.count() < 2; {
+		if time.Now().After(deadline) {
+			t.Fatalf("dials=%d, want at least 2 (the client never re-dialled)", d.count())
+		}
+		time.Sleep(time.Millisecond)
+	}
+
 	select {
 	case <-cc.Done():
 		t.Fatal("Done() fired on a transport drop; it must mean closed")
-	case <-time.After(200 * time.Millisecond):
-	}
-
-	if d.count() < 2 {
-		t.Fatalf("dials=%d, want at least 2 (the client never re-dialled)", d.count())
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 
@@ -1998,7 +2013,7 @@ func TestReconnectBacksOffWhenConnectionsDieImmediately(t *testing.T) {
 	var dials int32
 
 	cc := NewControlClient("test")
-	cc.backoff = 20 * time.Millisecond
+	cc.backoff = 5 * time.Millisecond
 	cc.dial = func() (io.ReadCloser, io.Writer, func() error, error) {
 		atomic.AddInt32(&dials, 1)
 		// dial succeeds, but the connection is dead on arrival
@@ -2011,16 +2026,21 @@ func TestReconnectBacksOffWhenConnectionsDieImmediately(t *testing.T) {
 	}
 	defer func() { _ = cc.Close() }()
 
-	time.Sleep(300 * time.Millisecond)
+	for deadline := time.Now().Add(5 * time.Second); atomic.LoadInt32(&dials) < 2; {
+		if time.Now().After(deadline) {
+			t.Fatalf("dialled %d times — never retried at all", atomic.LoadInt32(&dials))
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	time.Sleep(60 * time.Millisecond)
 
 	n := atomic.LoadInt32(&dials)
-	// 20ms doubling gives roughly 20+40+80+160 -> about 5 dials in 300ms.
-	// With no backoff on this path it would be thousands.
+	// 5ms doubling gives roughly 5+10+20+40 -> about 5 dials in 60ms, and
+	// oversleeping only lets the doubling push the count down. With no
+	// backoff on this path it would be thousands.
 	if n > 12 {
-		t.Fatalf("dialled %d times in 300ms — reconnect is hot-spinning", n)
-	}
-	if n < 2 {
-		t.Fatalf("dialled %d times — never retried at all", n)
+		t.Fatalf("dialled %d times in 60ms — reconnect is hot-spinning", n)
 	}
 }
 

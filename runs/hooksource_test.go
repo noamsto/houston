@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -192,6 +193,60 @@ func blockedState() hook.SessionState {
 	}
 }
 
+// startHub runs h and returns once its watcher is live; the returned context
+// is cancelled at cleanup. Call it after t.TempDir(): cleanup is LIFO, so Run
+// has closed the watcher before the state dir is removed.
+func startHub(t *testing.T, h *hub.Hub, dir string) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = h.Run(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("hub.Run did not return after cancel")
+		}
+	})
+
+	// Run installs the watch before its initial scan, so the probe appearing
+	// proves the watch exists; its removal is only observable through the watch.
+	const probe = "startHub-probe"
+	has := func() bool {
+		for _, v := range h.Snapshot() {
+			if v.SessionID == probe {
+				return true
+			}
+		}
+		return false
+	}
+	wait := func(what string, cond func() bool) {
+		for deadline := time.Now().Add(5 * time.Second); !cond(); time.Sleep(time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatalf("timed out waiting for %s", what)
+			}
+		}
+	}
+	if err := hook.Write(hook.Path(dir, probe), hook.SessionState{SessionID: probe, State: hook.StateIdle}); err != nil {
+		t.Fatal(err)
+	}
+	wait("hub to load the probe state", has)
+	if err := os.Remove(hook.Path(dir, probe)); err != nil {
+		t.Fatal(err)
+	}
+	wait("hub to drop the probe state", func() bool { return !has() })
+	return ctx
+}
+
+const (
+	hookTestEvery  = 2 * time.Millisecond
+	hookQuietTicks = 25
+)
+
 // startHookSource runs a HookSource over a real hub seeded with blockedState.
 func startHookSource(t *testing.T, panes paneLister) <-chan Delta {
 	t.Helper()
@@ -211,9 +266,7 @@ func startHookSourceWith(t *testing.T, panes paneLister, st hook.SessionState, t
 	}
 
 	h := hub.NewWithOptions(dir, hub.Options{ClaudeProjectsDir: "-"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	go func() { _ = h.Run(ctx) }()
+	ctx := startHub(t, h, dir)
 	for deadline := time.Now().Add(2 * time.Second); len(h.Snapshot()) < 1+len(extra); time.Sleep(5 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatal("hub never loaded the state file")
@@ -221,7 +274,7 @@ func startHookSourceWith(t *testing.T, panes paneLister, st hook.SessionState, t
 	}
 
 	src := NewHookSource(h, panes)
-	src.every = 10 * time.Millisecond
+	src.every = hookTestEvery
 	if tweak != nil {
 		tweak(src)
 	}
@@ -287,10 +340,11 @@ func TestHookSourceWithoutAPaneListerNeverEndsARun(t *testing.T) {
 	})
 }
 
-// expectNoDelta fails if any delta satisfying bad arrives within a short window.
+// expectNoDelta fails if any delta satisfying bad arrives within a short
+// window of hookQuietTicks pane-poll and resync ticks.
 func expectNoDelta(t *testing.T, out <-chan Delta, what string, bad func(Delta) bool) {
 	t.Helper()
-	quiet := time.After(200 * time.Millisecond)
+	quiet := time.After(hookQuietTicks * hookTestEvery)
 	for {
 		select {
 		case d := <-out:
