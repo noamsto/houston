@@ -466,9 +466,7 @@ func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 		dlog.status = http.StatusBadGateway
 		writeDispatchJSON(w, http.StatusBadGateway, dispatchResponse{Error: "could not run dispatch: " + res.Err.Error()})
 	case res.ExitCode != 0:
-		// A minted crew is removed here (unused), so its id doesn't go
-		// back to the client; a client-supplied crew still exists, so its
-		// id does.
+		// Only report a crew that still exists; a minted one was just removed.
 		crew := valid.Crew
 		if minted != "" {
 			_ = os.Remove(minted)

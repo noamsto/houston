@@ -1,6 +1,3 @@
-// Pure helpers backing the Dispatch tab. Kept free of React so the
-// precedence rules (resolveInitial) and the arithmetic (taskMaxHeight,
-// crewAgeLabel) can be unit-tested directly.
 import type { DispatchOptions, DispatchRepo } from '../api/dispatch'
 import { NEW_CREW } from '../api/dispatch'
 import type { Run } from '../api/runs'
@@ -59,7 +56,7 @@ interface ResolvedInitial {
 }
 
 /** Merges a `#/dispatch?repo=&crew=` link, remembered device prefs, and
- *  hard defaults into the form's initial state (spec R3/R4/R5). */
+ *  hard defaults into the form's initial state. */
 export function resolveInitial(
   o: DispatchOptions,
   prefs: DispatchPrefs,
@@ -97,30 +94,24 @@ export function resolveInitial(
   const model = prefs.model && (o.engines[engine] ?? []).includes(prefs.model) ? prefs.model : defaultModel(o, engine, tier)
 
   const chosenRepo = o.repos.find((r) => r.path === repo)
-  // Three cases (plan-critic, binding): (a) link.repo known — apply
-  // link.crew when valid against that repo; (b) no link.repo — apply
-  // link.crew when valid against the chosen (pref/default) repo; (c)
-  // link.repo unknown — ignore link.crew entirely.
-  const linkCrewValid =
-    link?.crew !== undefined && (link.crew === NEW_CREW || (chosenRepo?.crews.includes(link.crew) ?? false))
-  const crew = link?.repo && !repoKnown ? defaultCrew(chosenRepo) : linkCrewValid ? link.crew! : defaultCrew(chosenRepo)
+  // A crew from a link whose repo we don't know belongs to that repo, not ours.
+  const linkCrew = link?.repo && !repoKnown ? undefined : link?.crew
+  const crew =
+    linkCrew !== undefined && (linkCrew === NEW_CREW || (chosenRepo?.crews.includes(linkCrew) ?? false))
+      ? linkCrew
+      : defaultCrew(chosenRepo)
 
   return { repo, crew, engine, tier, model, effort, linkRepoUnknown: !!link?.repo && !repoKnown }
 }
 
-/** `<id> · <age> ago`, or bare `id` if the id doesn't start with a unix
- *  timestamp (crew ids are always `<unix>-<pid>`, but don't crash otherwise). */
+/** `<id> · <age> ago`, or bare `id` if it doesn't start with a unix timestamp. */
 export function crewAgeLabel(id: string, now: number): string {
   const m = id.match(/^(\d+)-/)
   if (!m) return id
-  const unixSeconds = Number(m[1])
-  if (!Number.isFinite(unixSeconds)) return id
-  return `${id} · ${agoLabel(unixSeconds, now)} ago`
+  return `${id} · ${agoLabel(Number(m[1]), now)} ago`
 }
 
-/** The same 40%-of-viewport rule #64 uses for the composer, duplicated as a
- *  pure helper here since composerMaxHeight.ts lives only on that unmerged
- *  branch. */
+/** Same 40%-of-viewport cap as the terminal composer. */
 export function taskMaxHeight(vh: number): number {
   return Math.max(120, Math.round(vh * 0.4))
 }
