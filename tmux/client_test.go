@@ -84,6 +84,7 @@ func TestResolvePaneExitOneClassification(t *testing.T) {
 	}{
 		{"can't find pane", "can't find pane: %9", true, false},
 		{"no server socket", "error connecting to /tmp/x (No such file or directory)", true, false},
+		{"server exited", "no server running on /tmp/x/default", true, false},
 		{"protocol version mismatch", "protocol version mismatch (client 8, server 7)", false, true},
 		{"permission denied", "error connecting to /tmp/x (Permission denied)", false, true},
 	}

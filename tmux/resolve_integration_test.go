@@ -4,9 +4,11 @@ import (
 	"errors"
 	"math/rand/v2"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // newResolveSession creates a detached session named after the test, the pid
@@ -124,6 +126,63 @@ func TestResolvePaneNoServerIntegration(t *testing.T) {
 	}
 	if !errors.Is(err, ErrPaneNotFound) {
 		t.Errorf("ResolvePane(%%999999) error = %v, want ErrPaneNotFound", err)
+	}
+}
+
+// TestResolvePaneServerExitedIntegration covers the "stale socket, server
+// exited" branch of ResolvePane: unlike TestResolvePaneNoServerIntegration
+// (socket path never existed), this starts a real server on a private
+// socket, kills it, and confirms the socket file survives the kill while
+// tmux itself reports "no server running" for it. Never touches the user's
+// default tmux server: TMUX_TMPDIR points at a fresh, private directory.
+func TestResolvePaneServerExitedIntegration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	dir, err := os.MkdirTemp("/tmp", "hx")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+
+	t.Setenv("TMUX", "")
+	t.Setenv("TMUX_TMPDIR", dir)
+
+	c := NewClient()
+	session := newResolveSession(t, c, "houston-test-resolve-exited")
+	id := paneIDOf(t, c, session)
+
+	socket := filepath.Join(dir, "tmux-"+strconv.Itoa(os.Getuid()), "default")
+	if _, err := os.Stat(socket); err != nil {
+		t.Fatalf("socket %s not present before kill-server: %v", socket, err)
+	}
+
+	_ = c.run("kill-server")
+
+	// Immediately after kill-server, a display-message racing the server's
+	// own teardown can observe the transient "server exited unexpectedly"
+	// rather than the settled "no server running" — poll past that instead
+	// of asserting on whichever one lands first.
+	deadline := time.Now().Add(2 * time.Second)
+	var resolveErr error
+	for {
+		if _, statErr := os.Stat(socket); statErr != nil {
+			t.Fatalf("socket %s disappeared after kill-server: %v", socket, statErr)
+		}
+		_, resolveErr = c.ResolvePane(id)
+		if resolveErr != nil && !strings.Contains(resolveErr.Error(), "server exited unexpectedly") {
+			break
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if resolveErr == nil {
+		t.Fatalf("ResolvePane(%s) = nil error after kill-server, want an error", id)
+	}
+	if !errors.Is(resolveErr, ErrPaneNotFound) {
+		t.Errorf("ResolvePane(%s) error = %v, want ErrPaneNotFound", id, resolveErr)
 	}
 }
 

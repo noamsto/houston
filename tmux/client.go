@@ -308,22 +308,37 @@ func (c *Client) GetPaneID(p Pane) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+// goneServerStderrMarkers are the stderr substrings tmux is known to print
+// on exit 1 when the pane/server it was asked about no longer exists:
+// "can't find" (session/window/pane resolution failed on a live server),
+// "No such file or directory" (the socket path itself is absent), and
+// "no server running" (the socket file survives but its server has exited,
+// e.g. last session ended, kill-server, or a crash).
+var goneServerStderrMarkers = [][]byte{
+	[]byte("can't find"),
+	[]byte("No such file or directory"),
+	[]byte("no server running"),
+}
+
 // ResolvePane looks up a pane id's current session, window and index. A gone
 // pane surfaces two ways depending on whether the tmux server has any other
-// session left: with none, display-message exits 1 ("no server running");
-// with one, -p's target resolution fails silently and it exits 0 with every
-// requested field blank instead of erroring. tmux also exits 1 for reasons
-// that have nothing to do with the pane — a stale socket left behind after a
-// NixOS switch upgrades the tmux version, or a permissions problem — so exit
-// 1 only counts as ErrPaneNotFound when stderr itself says the pane/server
-// is missing; any other exit-1 message is surfaced as-is.
+// session left: with none, display-message exits 1 with one of
+// goneServerStderrMarkers; with one, -p's target resolution fails silently
+// and it exits 0 with every requested field blank instead of erroring. tmux
+// also exits 1 for reasons that have nothing to do with the pane — a stale
+// socket left behind after a NixOS switch upgrades the tmux version, or a
+// permissions problem — so exit 1 only counts as ErrPaneNotFound when
+// stderr itself says the pane/server is missing; any other exit-1 message is
+// surfaced as-is.
 func (c *Client) ResolvePane(paneID string) (Pane, error) {
 	out, err := c.output("display-message", "-t", paneID, "-p", "#{window_index} #{pane_index} #{session_name}")
 	if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
-			if bytes.Contains(exitErr.Stderr, []byte("can't find")) || bytes.Contains(exitErr.Stderr, []byte("No such file or directory")) {
-				return Pane{}, fmt.Errorf("%w: %s", ErrPaneNotFound, paneID)
+			for _, marker := range goneServerStderrMarkers {
+				if bytes.Contains(exitErr.Stderr, marker) {
+					return Pane{}, fmt.Errorf("%w: %s", ErrPaneNotFound, paneID)
+				}
 			}
 			return Pane{}, fmt.Errorf("tmux display-message: %w: %s", err, bytes.TrimSpace(exitErr.Stderr))
 		}
