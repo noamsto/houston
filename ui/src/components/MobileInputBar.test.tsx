@@ -133,3 +133,69 @@ describe('MobileInputBar choices', () => {
     expect(params.get('special')).toBeNull()
   })
 })
+
+describe('MobileInputBar send failures', () => {
+  function typeAndSend(text: string) {
+    render(<MobileInputBar target={target} />)
+    const field = screen.getByPlaceholderText('Send a message...') as HTMLTextAreaElement
+    fireEvent.change(field, { target: { value: text } })
+    return field
+  }
+
+  it('keeps the text and shows the status on a non-ok response', async () => {
+    vi.mocked(fetch).mockResolvedValue({ ok: false, status: 503 } as Response)
+    const field = typeAndSend('echo hi')
+    await click(screen.getByRole('button', { name: 'Send' }))
+    expect(field.value).toBe('echo hi')
+    expect(screen.getByTestId('send-error').textContent).toContain('HTTP 503')
+  })
+
+  it('keeps the text and shows offline when fetch rejects; Send again delivers', async () => {
+    vi.mocked(fetch).mockRejectedValueOnce(new TypeError('Failed to fetch'))
+    const field = typeAndSend('echo hi')
+    await click(screen.getByRole('button', { name: 'Send' }))
+    expect(field.value).toBe('echo hi')
+    expect(screen.getByTestId('send-error').textContent).toContain('offline')
+
+    await click(screen.getByRole('button', { name: 'Send' }))
+    expect(field.value).toBe('')
+    expect(screen.queryByTestId('send-error')).toBeNull()
+  })
+
+  it('401 says the session expired', async () => {
+    vi.mocked(fetch).mockResolvedValue({ ok: false, status: 401 } as Response)
+    typeAndSend('x')
+    await click(screen.getByRole('button', { name: 'Send' }))
+    expect(screen.getByTestId('send-error').textContent).toContain('session expired — reload')
+  })
+
+  it('disables Send while in flight, keeps the textarea editable, and sends once', async () => {
+    let resolve!: (r: Response) => void
+    vi.mocked(fetch).mockReturnValue(new Promise<Response>((r) => { resolve = r }))
+    const field = typeAndSend('echo hi')
+    const send = screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement
+    await click(send)
+    expect(send.disabled).toBe(true)
+    expect(field.disabled).toBe(false)
+    fireEvent.keyDown(field, { key: 'Enter', ctrlKey: true })
+    expect(fetch).toHaveBeenCalledTimes(1)
+
+    await act(async () => resolve({ ok: true } as Response))
+    expect(send.disabled).toBe(false)
+    expect(field.value).toBe('')
+  })
+
+  it('quick-key failure surfaces a transient indicator', async () => {
+    vi.mocked(fetch).mockResolvedValue({ ok: false, status: 500 } as Response)
+    render(<MobileInputBar target={target} />)
+    await click(screen.getByRole('button', { name: 'Ctrl+C' }))
+    expect(screen.getByTestId('key-error').textContent).toContain('HTTP 500')
+  })
+
+  it('choice failure surfaces the indicator', async () => {
+    vi.mocked(fetch).mockRejectedValue(new TypeError('x'))
+    render(<MobileInputBar target={target} agent="claude-code" choices={['Yes']} />)
+    await click(screen.getByRole('button', { name: '1. Yes' }))
+    expect(screen.getByTestId('key-error').textContent).toContain('offline')
+  })
+})

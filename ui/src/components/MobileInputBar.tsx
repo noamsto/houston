@@ -41,23 +41,23 @@ const SpeechRecognitionCtor = (window as unknown as Record<string, unknown>).Spe
   | (new () => SpeechRecognitionLike)
   | undefined
 
-async function sendText(target: string, text: string) {
-  const body = new URLSearchParams({ input: text })
-  await fetch(`/api/pane/${target}/send`, {
-    method: 'POST',
-    body,
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-  })
+// Resolves to a short reason on failure, null on success.
+async function post(target: string, params: Record<string, string>): Promise<string | null> {
+  try {
+    const res = await fetch(`/api/pane/${target}/send`, {
+      method: 'POST',
+      body: new URLSearchParams(params),
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    })
+    if (res.ok) return null
+    return res.status === 401 ? 'session expired — reload' : `HTTP ${res.status}`
+  } catch {
+    return 'offline'
+  }
 }
 
-async function sendSpecial(target: string, key: string) {
-  const body = new URLSearchParams({ input: key, special: 'true' })
-  await fetch(`/api/pane/${target}/send`, {
-    method: 'POST',
-    body,
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-  })
-}
+const sendText = (target: string, text: string) => post(target, { input: text })
+const sendSpecial = (target: string, key: string) => post(target, { input: key, special: 'true' })
 
 type QuickAction = { label: string; action: 'text' | 'special'; value: string; title?: string }
 
@@ -99,41 +99,62 @@ const pillStyle: React.CSSProperties = {
   flexShrink: 0,
 }
 
+const errorStyle: React.CSSProperties = {
+  color: 'var(--accent-error)',
+  fontSize: 13,
+  padding: '6px 10px 0',
+}
+
 export function MobileInputBar({ target, choices, inputText, agent }: Props) {
   const [text, setText] = useState('')
   const [listening, setListening] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [sending, setSending] = useState(false)
+  const [sendError, setSendError] = useState<string | null>(null)
+  const [keyError, setKeyError] = useState<string | null>(null)
+  const sendingRef = useRef(false)
+  const keyErrorTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const handleSend = async () => {
+    if (sendingRef.current) return
     const line = text.trim()
-    if (!line) {
-      // Empty input: send Enter key to the terminal
-      await sendSpecial(target, 'Enter')
+    sendingRef.current = true
+    setSending(true)
+    setSendError(null)
+    const err = line ? await sendText(target, line) : await sendSpecial(target, 'Enter')
+    sendingRef.current = false
+    setSending(false)
+    if (err) {
+      setSendError(err)
       return
     }
-    setText('')
+    // Keep anything typed while the request was in flight.
+    setText((cur) => (cur === text ? '' : cur))
     if (textareaRef.current) textareaRef.current.style.height = 'auto'
-    await sendText(target, line)
   }
+
+  const reportKeyError = useCallback((err: string | null) => {
+    if (!err) return
+    setKeyError(err)
+    clearTimeout(keyErrorTimer.current)
+    keyErrorTimer.current = setTimeout(() => setKeyError(null), 3000)
+  }, [])
 
   // Claude's prompts are numbered menus answered by their ordinal key. Other
   // agents' choices aren't (Amp reorders the selected item first and selects by
   // cursor), so an ordinal would be wrong there — they keep label + Enter.
   const handleChoice = async (index: number, label: string) => {
-    if (agent === 'claude-code') await sendSpecial(target, String(index + 1))
-    else await sendText(target, label)
+    reportKeyError(
+      agent === 'claude-code' ? await sendSpecial(target, String(index + 1)) : await sendText(target, label),
+    )
   }
 
   const handleQuickAction = useCallback(async (action: 'text' | 'special', value: string) => {
-    if (action === 'special') {
-      await sendSpecial(target, value)
-    } else {
-      await sendText(target, value)
-    }
-  }, [target])
+    reportKeyError(action === 'special' ? await sendSpecial(target, value) : await sendText(target, value))
+  }, [target, reportKeyError])
 
   const handleVoice = () => {
     if (!SpeechRecognitionCtor) return
@@ -250,6 +271,12 @@ export function MobileInputBar({ target, choices, inputText, agent }: Props) {
         </div>
       )}
 
+      {keyError && (
+        <div role="alert" data-testid="key-error" style={errorStyle}>
+          Key not sent: {keyError}
+        </div>
+      )}
+
       <div
         data-testid="quick-keys"
         style={{ display: 'flex', gap: 6, padding: '8px 8px 0', overflowX: 'auto' }}
@@ -268,6 +295,12 @@ export function MobileInputBar({ target, choices, inputText, agent }: Props) {
         ))}
       </div>
 
+      {sendError && (
+        <div role="alert" data-testid="send-error" style={errorStyle}>
+          Not sent: {sendError} — tap Send to retry
+        </div>
+      )}
+
       {/* Text input row */}
       <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, padding: 8 }}>
         <textarea
@@ -275,6 +308,7 @@ export function MobileInputBar({ target, choices, inputText, agent }: Props) {
           value={text}
           onChange={(e) => {
             setText(e.target.value)
+            setSendError(null)
             autoGrow(e.target)
           }}
           onKeyDown={(e) => {
@@ -358,6 +392,7 @@ export function MobileInputBar({ target, choices, inputText, agent }: Props) {
 
         <button
           onClick={() => void handleSend()}
+          disabled={sending}
           title="Send"
           aria-label="Send"
           style={{
@@ -365,7 +400,8 @@ export function MobileInputBar({ target, choices, inputText, agent }: Props) {
             border: text.trim() ? 'none' : '1px solid var(--border)',
             borderRadius: 6,
             color: text.trim() ? '#fff' : 'var(--text-secondary)',
-            cursor: 'pointer',
+            cursor: sending ? 'default' : 'pointer',
+            opacity: sending ? 0.6 : 1,
             fontSize: 16,
             width: 44,
             height: 44,
