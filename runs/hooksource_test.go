@@ -21,6 +21,7 @@ func TestRunFromSessionViewKeysOnPane(t *testing.T) {
 		TmuxSession: "houston",
 		TmuxWindow:  "1",
 		TmuxPane:    "%307",
+		TmuxServer:  "1234",
 		State:       hook.StateToolRunning,
 		Tool:        "Bash",
 	}, "")
@@ -33,6 +34,9 @@ func TestRunFromSessionViewKeysOnPane(t *testing.T) {
 	}
 	if r.Tmux == nil || r.Tmux.PaneID != "%307" || r.Tmux.Session != "houston" || r.Tmux.Window != 1 {
 		t.Errorf("TmuxRef = %+v, want session houston window 1 pane %%307", r.Tmux)
+	}
+	if r.Tmux == nil || r.Tmux.Server != "1234" {
+		t.Errorf("TmuxRef.Server = %v, want 1234 to flow through from v.TmuxServer", r.Tmux)
 	}
 	if r.Agent != "claude" {
 		t.Errorf("Agent = %q, want claude", r.Agent)

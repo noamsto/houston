@@ -245,6 +245,7 @@ Every run can carry `project` and `role` (`runs/project.go`, `runs/tmuxsource.go
 - **Ghost hook runs:** a hook state file whose pane is missing from a *successful* `ListPaneOptions` is published as `done` (kept in history, `caps.terminal` false); a failed listing never ends anything. Hook activity newer than that verdict marks the session alive elsewhere (another tmux server) and it is never ended again.
 - `hub` prunes an ended hook state file `hub.DefaultPruneTTL` (24h) after its last update; a file whose last-written state is not `ended` — including a ghost session's — is never pruned by this pass.
 - **Foreign panes:** tmux pane ids are unique only within one server incarnation and restart at `%0` after a server restart, so a hook state file can name a pane that now belongs to someone else. Every hook event re-reads `$TMUX_PANE` and the server pid from `$TMUX` (no exec) and recomputes the coordinates when they disagree with the file or on `SessionStart`, recording the server pid as `tmux_server`. `runs/hooksource.go` then distrusts a pane whose recorded server differs from the one houston is listing, or whose state predates that server's start time (which covers files written before `tmux_server` existed): the coordinates are dropped before the run is keyed, so it keys off its session id, carries no `Tmux` ref or terminal/reply/kill caps, and is ended into history under the same revive rule as a vanished pane. The server identity rides the same `list-panes -a -F` listing that produces the pane ids (`#{pid}`/`#{start_time}` in `paneOptionsFormat`), so the two can never disagree about which server minted a pane; a failed listing publishes nothing and leaves earlier verdicts standing, and a tmux that cannot expand those fields logs once and falls back to trusting the recorded pane. The same normalize step disowns a session whose hook state is `ended` even when its pane is live and same-server: tmux hands that id to the next occupant the moment the pane is reused, and a session that announced its own end can never prove it is still there, so it too keys off its session id with no `Tmux` ref or terminal/reply/kill caps (#120). `last_message` is cleared by every hook event except `Notification`, and the hub only surfaces it while the state is waiting.
+- **Point-of-use server check:** the foreign-pane guard above is sound only for the listing it ran against — `HookSource` polls every 5s, so a tmux restart landing right after a successful listing leaves a window where a cached `Tmux` ref still matches the pre-restart server while the new server has already reused the same pane id. `runs.TmuxRef` and `tmux.Pane` both carry the tmux server pid (`Server`, internal only — `json:"-"`, never reaches the runs JSON/SSE API) alongside the pane id, and `server/runs_terminal.go`'s `runPane` re-resolves and compares it on every send/terminal-attach, refusing with 409 when both the run's recorded server and the freshly resolved pane's server are known and disagree. Either side being unknown never refuses on its own — same "unknown ⇒ false" posture as the foreign-pane guard. This closes the race for the run-addressed routes below; it does not extend to an already-open WebSocket's lifetime past its initial upgrade, nor to the legacy `/api/pane/:target/...` routes, which resolve panes by client-supplied coordinate rather than a cached `Tmux` ref.
 - A dispatcher card's `N workers · M blocked` line counts the workers with the same project and host; it is hidden when more than one live dispatcher shares that project and host, because the bus's crew id is not on the dispatcher's own run.
 - The Fleet list's **Group by project** toggle (`houston-fleet-group-by-project` in localStorage) is off by default: the flat list keeps needs-you-first across all repos, and the project chip is always visible.
 
@@ -257,7 +258,9 @@ resolution happens before the upgrade, so a bad address never reaches
 `Upgrade()` — it comes back as a plain HTTP error: 503 if the run registry
 isn't started, 404 for an unknown run, 409 if the run has no terminal
 capability/pane, 409 again if tmux confirms the pane id no longer exists (it
-exited or the session is gone), or 503 `tmux unavailable` if tmux itself
+exited or the session is gone), 409 again if the run's recorded tmux server
+and the freshly resolved pane's server are both known and disagree (see
+"Point-of-use server check" above), or 503 `tmux unavailable` if tmux itself
 couldn't be reached (missing binary, timeout, wrong socket permissions, or a
 client/server protocol mismatch after an upgrade left a stale tmux server
 running). The legacy `/api/pane/:target/ws` is classic-views only, pending
@@ -284,7 +287,7 @@ Non-typing input (quick keys, images) instead goes through a POST route, and
 the allowlist that bounds it lives there, not on the socket:
 
 - `POST /api/runs/:id/input` (run address) — same resolution ladder as the WS
-  route (503/404/409/409/503) before the body is even read. Body is one of:
+  route (503/404/409/409/409/503) before the body is even read. Body is one of:
   `{"type":"text","text":"..."}` (literal text, then Enter),
   `{"type":"key","key":"<terminalKeys>"}` (one key, no Enter — 400 if `key`
   isn't in the `terminalKeys` allowlist in `server/runs_terminal.go`: Escape,

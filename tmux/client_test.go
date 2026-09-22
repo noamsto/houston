@@ -105,6 +105,30 @@ func TestResolvePaneExitOneClassification(t *testing.T) {
 	}
 }
 
+// fakeTmuxOK writes a script that prints stdout to stdout and exits 0,
+// standing in for a live tmux server's successful display-message reply.
+func fakeTmuxOK(t *testing.T, stdout string) *Client {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "faketmux")
+	script := "#!/bin/sh\necho " + strconv.Quote(stdout) + "\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake tmux: %v", err)
+	}
+	return &Client{tmuxPath: path}
+}
+
+func TestResolvePaneParsesServerPID(t *testing.T) {
+	c := fakeTmuxOK(t, "1966 3 1 houston")
+	got, err := c.ResolvePane("%307")
+	if err != nil {
+		t.Fatalf("ResolvePane() error: %v", err)
+	}
+	want := Pane{ID: "%307", Session: "houston", Window: 3, Index: 1, Server: "1966"}
+	if got != want {
+		t.Errorf("ResolvePane() = %+v, want %+v", got, want)
+	}
+}
+
 // Pane is embedded in API responses; the id is an internal addressing detail.
 func TestPaneJSONOmitsID(t *testing.T) {
 	b, err := json.Marshal(Pane{ID: "%1", Session: "s", Window: 1, Index: 2})

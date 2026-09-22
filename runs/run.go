@@ -60,6 +60,10 @@ type TmuxRef struct {
 	Session string `json:"session"`
 	Window  int    `json:"window"`
 	PaneID  string `json:"pane_id"` // "%307"
+	// Server is the tmux server pid that minted PaneID, at the time this ref
+	// was recorded. Internal only — unlike the fields above, it is excluded
+	// from the runs JSON/SSE API.
+	Server string `json:"-"`
 }
 
 type IssueRef struct {

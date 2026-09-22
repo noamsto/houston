@@ -89,6 +89,10 @@ func TestResolvePaneIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ResolvePane(%s): %v", id, err)
 		}
+		if got.Server == "" {
+			t.Errorf("ResolvePane(%s).Server is empty, want the live server's pid", id)
+		}
+		got.Server = ""
 		want := Pane{ID: id, Session: session, Window: tc.window, Index: tc.index}
 		if got != want {
 			t.Errorf("ResolvePane(%s) = %+v, want %+v", id, got, want)

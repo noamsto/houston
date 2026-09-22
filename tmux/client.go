@@ -52,6 +52,9 @@ type Pane struct {
 	// ID is the tmux pane id, e.g. %307; when set, Target() addresses exactly
 	// this pane.
 	ID string `json:"-"`
+	// Server is the pid of the tmux server that currently answers for ID, as
+	// of this resolution. Internal only, like ID above.
+	Server string `json:"-"`
 }
 
 type PaneInfo struct {
@@ -320,14 +323,16 @@ var goneServerStderrMarkers = [][]byte{
 	[]byte("no server running"),
 }
 
-// ResolvePane looks up a pane id's current session, window and index. tmux
-// reports a gone pane either by exiting 0 with every field blank (a live
-// server that doesn't know the id) or by exiting 1 with one of
-// goneServerStderrMarkers. Any other exit-1 failure, such as a protocol
-// mismatch with an older running server or an unreadable socket, means tmux
-// is unreachable and is returned with tmux's own message.
+// ResolvePane looks up a pane id's current session, window, index and the
+// pid of the tmux server that resolved it. tmux reports a gone pane either by
+// exiting 0 with every pane-specific field blank (a live server that doesn't
+// know the id — #{pid} names the server itself, not the pane, so it stays
+// populated even then) or by exiting 1 with one of goneServerStderrMarkers.
+// Any other exit-1 failure, such as a protocol mismatch with an older
+// running server or an unreadable socket, means tmux is unreachable and is
+// returned with tmux's own message.
 func (c *Client) ResolvePane(paneID string) (Pane, error) {
-	out, err := c.output("display-message", "-t", paneID, "-p", "#{window_index} #{pane_index} #{session_name}")
+	out, err := c.output("display-message", "-t", paneID, "-p", "#{pid} #{window_index} #{pane_index} #{session_name}")
 	if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
@@ -343,22 +348,25 @@ func (c *Client) ResolvePane(paneID string) (Pane, error) {
 	// Session last, and only the newline trimmed: session names may contain
 	// spaces.
 	line := strings.TrimSuffix(string(out), "\n")
-	if strings.TrimSpace(line) == "" {
-		return Pane{}, fmt.Errorf("%w: %s", ErrPaneNotFound, paneID)
-	}
-	parts := strings.SplitN(line, " ", 3)
-	if len(parts) != 3 {
+	parts := strings.SplitN(line, " ", 4)
+	if len(parts) != 4 {
 		return Pane{}, fmt.Errorf("unexpected display-message output for %s: %q", paneID, line)
 	}
-	window, err := strconv.Atoi(parts[0])
-	if err != nil {
-		return Pane{}, fmt.Errorf("unexpected window index for %s: %q", paneID, parts[0])
+	if parts[1] == "" {
+		// #{pid} (parts[0]) is always populated on a live server, so it can no
+		// longer signal "gone" on its own; window_index blank is what a
+		// server that doesn't know paneID leaves behind instead.
+		return Pane{}, fmt.Errorf("%w: %s", ErrPaneNotFound, paneID)
 	}
-	index, err := strconv.Atoi(parts[1])
+	window, err := strconv.Atoi(parts[1])
 	if err != nil {
-		return Pane{}, fmt.Errorf("unexpected pane index for %s: %q", paneID, parts[1])
+		return Pane{}, fmt.Errorf("unexpected window index for %s: %q", paneID, parts[1])
 	}
-	return Pane{ID: paneID, Session: parts[2], Window: window, Index: index}, nil
+	index, err := strconv.Atoi(parts[2])
+	if err != nil {
+		return Pane{}, fmt.Errorf("unexpected pane index for %s: %q", paneID, parts[2])
+	}
+	return Pane{ID: paneID, Session: parts[3], Window: window, Index: index, Server: parts[0]}, nil
 }
 
 // SendRawKeys sends literal text to a pane using hex encoding (-H).

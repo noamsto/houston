@@ -365,7 +365,7 @@ func runFromSessionView(v hub.SessionView, project string) (string, Run) {
 	key := sessionKey(v)
 	if v.TmuxPane != "" {
 		win, _ := strconv.Atoi(v.TmuxWindow)
-		r.Tmux = &TmuxRef{Session: v.TmuxSession, Window: win, PaneID: v.TmuxPane}
+		r.Tmux = &TmuxRef{Session: v.TmuxSession, Window: win, PaneID: v.TmuxPane, Server: v.TmuxServer}
 	}
 
 	if r.State == StateBlocked && v.LastMessage != "" {

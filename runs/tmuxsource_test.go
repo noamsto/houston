@@ -21,7 +21,7 @@ func TestDeltasFromTmuxJoinsPanesToWindows(t *testing.T) {
 		CrewName: "mauve", CrewColor: "colour168", GitRoot: "/home/n/git/lazytmux",
 	}}
 	panes := []tmux.PaneOptions{{
-		PaneID: "%459", Target: "lazytmux:2", ClaudeStatus: "processing 1788 ",
+		PaneID: "%459", Target: "lazytmux:2", ClaudeStatus: "processing 1788 ", ServerPID: "1966",
 	}}
 
 	got := deltasFromTmux(wins, panes, fakeProject)
@@ -31,6 +31,9 @@ func TestDeltasFromTmuxJoinsPanesToWindows(t *testing.T) {
 	d := got[0]
 	if d.Key != "%459" {
 		t.Fatalf("Key = %q, want the pane id", d.Key)
+	}
+	if d.Run.Tmux == nil || d.Run.Tmux.Server != "1966" {
+		t.Errorf("Tmux.Server = %+v, want 1966 to flow through from p.ServerPID", d.Run.Tmux)
 	}
 	if d.Run.State != StateRunning {
 		t.Errorf("State = %q, want running (from @claude_status)", d.Run.State)
