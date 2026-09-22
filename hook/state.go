@@ -52,6 +52,10 @@ type SessionState struct {
 	TmuxSession string `json:"tmux_session,omitempty"`
 	TmuxWindow  string `json:"tmux_window,omitempty"`
 	TmuxPane    string `json:"tmux_pane,omitempty"`
+	// TmuxServer is the tmux server pid ($TMUX field 2). Pane ids are unique
+	// only within one server incarnation, so a pane id from another server —
+	// or from a previous one after a restart — names someone else's pane.
+	TmuxServer string `json:"tmux_server,omitempty"`
 
 	State         State  `json:"state"`
 	Tool          string `json:"tool,omitempty"` // set by PreToolUse, cleared by PostToolUse

@@ -31,7 +31,8 @@ type HookSource struct {
 }
 
 // NewHookSource returns a source over h. panes lets it end runs whose pane has
-// vanished; nil disables that check.
+// vanished and supplies the tmux server identity the distrust rule depends
+// on; nil disables both checks.
 func NewHookSource(h *hub.Hub, panes paneLister) *HookSource {
 	return &HookSource{hub: h, panes: panes, projects: newProjectResolver(), every: hookGoneCheckInterval}
 }
@@ -80,10 +81,24 @@ func (s *HookSource) Run(ctx context.Context, out chan<- Delta) error {
 	// one pane.
 	endedAt := map[string]int64{}
 	revived := map[string]bool{}
+
+	// normalize drops coordinates paneForeign rejects, so the key, the TmuxRef
+	// and the dedup all agree that this session owns no pane here.
+	normalize := func(v hub.SessionView) (hub.SessionView, bool) {
+		if !paneForeign(v, panes) {
+			return v, false
+		}
+		v.TmuxSession, v.TmuxWindow, v.TmuxPane = "", "", ""
+		return v, true
+	}
+
 	build := func(v hub.SessionView) (string, Run) {
+		gone := paneGone(v, panes.live, panes.at)
+		v, foreign := normalize(v)
+		gone = gone || foreign
 		key, r := runFromSessionView(v, s.projects.resolved(v.CWD))
 		switch {
-		case paneGone(v, panes.live, panes.at):
+		case gone:
 			if at, ok := endedAt[v.SessionID]; ok && v.UpdatedAt > at {
 				revived[v.SessionID] = true
 			}
@@ -108,7 +123,8 @@ func (s *HookSource) Run(ctx context.Context, out chan<- Delta) error {
 		byKey := make(map[string]hub.SessionView, len(snap))
 		for _, v := range snap {
 			sids[v.SessionID] = true
-			k := sessionKey(v)
+			nv, _ := normalize(v)
+			k := sessionKey(nv)
 			if w, ok := byKey[k]; !ok || newerSession(v, w) {
 				byKey[k] = v
 			}
@@ -183,7 +199,8 @@ func (s *HookSource) Run(ctx context.Context, out chan<- Delta) error {
 			if !ok {
 				return nil
 			}
-			w, ok := current()[sessionKey(v)]
+			nv, _ := normalize(v)
+			w, ok := current()[sessionKey(nv)]
 			if !ok {
 				continue
 			}
@@ -204,10 +221,16 @@ func (s *HookSource) Run(ctx context.Context, out chan<- Delta) error {
 }
 
 type paneSet struct {
-	live map[string]bool
-	at   time.Time
+	live        map[string]bool
+	at          time.Time
+	server      string
+	serverStart int64
 }
 
+// listPanes lists the live panes along with the identity of the server that
+// produced this listing. The identity comes off the same list-panes exec as
+// the pane ids themselves, so the two can never disagree about which server
+// incarnation minted them.
 func listPanes(l paneLister) (paneSet, bool) {
 	at := time.Now()
 	panes, err := l.ListPaneOptions()
@@ -219,7 +242,19 @@ func listPanes(l paneLister) (paneSet, bool) {
 	for _, p := range panes {
 		live[p.PaneID] = true
 	}
-	return paneSet{live: live, at: at}, true
+	var server string
+	var serverStart int64
+	if len(panes) > 0 {
+		// A property of the listing, not of a pane: one exec, one server.
+		server, serverStart = panes[0].ServerPID, panes[0].ServerStart
+		if server == "" {
+			// A tmux that cannot expand the identity leaves paneForeign with
+			// nothing to compare, which silently restores the stale-pane
+			// behaviour this guard exists to prevent.
+			slog.Warn("hooks: pane listing carries no server identity, foreign-pane guard disabled")
+		}
+	}
+	return paneSet{live: live, at: at, server: server, serverStart: serverStart}, true
 }
 
 // pollPanes publishes each successful listing until ctx ends. A failed one is
@@ -233,12 +268,14 @@ func (s *HookSource) pollPanes(ctx context.Context, out chan<- paneSet) {
 			return
 		case <-t.C:
 		}
-		if ps, ok := listPanes(s.panes); ok {
-			select {
-			case out <- ps:
-			case <-ctx.Done():
-				return
-			}
+		ps, ok := listPanes(s.panes)
+		if !ok {
+			continue
+		}
+		select {
+		case out <- ps:
+		case <-ctx.Done():
+			return
 		}
 	}
 }
@@ -263,6 +300,20 @@ func newerSession(a, b hub.SessionView) bool {
 // pane created after a cached listing is never mistaken for a dead one.
 func paneGone(v hub.SessionView, live map[string]bool, listedAt time.Time) bool {
 	return v.TmuxPane != "" && live != nil && listedAt.Unix() > v.UpdatedAt && !live[v.TmuxPane]
+}
+
+// paneForeign reports whether v's pane id was minted by a tmux server other
+// than the one being listed: either v names a different server, or v was
+// last written before this server started, so its pane id belongs to an
+// earlier incarnation (ids restart at %0). Unknown on either side ⇒ false.
+func paneForeign(v hub.SessionView, ps paneSet) bool {
+	if v.TmuxPane == "" {
+		return false
+	}
+	if ps.server != "" && v.TmuxServer != "" && v.TmuxServer != ps.server {
+		return true
+	}
+	return ps.serverStart > 0 && v.UpdatedAt < ps.serverStart
 }
 
 // endRun marks r finished while keeping what it last showed (repo, branch,
