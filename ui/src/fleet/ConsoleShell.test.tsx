@@ -289,7 +289,11 @@ describe('ConsoleShell tab routes', () => {
     render(<ConsoleShell runs={runs} connected hasSnapshot now={now} />)
     fireEvent.click(within(screen.getByLabelText('rail')).getByRole('button', { name: 'Crews' }))
 
-    fireEvent.click(within(screen.getByLabelText('detail')).getByRole('button', { name: 'Back to Crews' }))
+    fireEvent.click(
+      within(screen.getByLabelText('detail').querySelector<HTMLElement>('.run-detail-header')!).getByRole('button', {
+        name: 'Back to Crews',
+      }),
+    )
 
     expect(window.location.hash).toBe('#/crews')
   })
