@@ -158,6 +158,23 @@ func TestTickCrewDeltasKeepsFreshlyFinishedRuns(t *testing.T) {
 	}
 }
 
+func TestTickCrewDeltasKeepsAStaleReviewRun(t *testing.T) {
+	now := time.Now()
+	const key = "crew/" + testBus + "/fix/412"
+	current := map[string]Run{
+		key: {Branch: "fix/412", State: StateReview, UpdatedAt: now.Add(-7 * 24 * time.Hour).Unix()},
+	}
+
+	deltas, newSeen := tickCrewDeltas(current, map[string]bool{}, now)
+
+	if len(deltas) != 1 || deltas[0].Gone {
+		t.Fatalf("deltas = %+v, want one non-Gone delta — a stale review run is UI history, not evicted from the registry", deltas)
+	}
+	if !newSeen[key] {
+		t.Errorf("%s missing from the new seen set, want present so it stays visible under All", key)
+	}
+}
+
 func TestTickCrewDeltasNeverEvictsAQuietBlockedRun(t *testing.T) {
 	now := time.Now()
 	const key = "crew/" + testBus + "/fix/412"

@@ -47,10 +47,34 @@ describe('staleness', () => {
   })
 
   it('never treats a running or thinking run as history', () => {
-    for (const state of ['running', 'thinking', 'review', 'compacting'] as const) {
+    for (const state of ['running', 'thinking', 'compacting'] as const) {
       const old = run({ state, updated_at: agoSec(FRESH_MS * 5) })
       expect(isHistory(old, now)).toBe(false)
     }
+  })
+
+  it('treats a week-old review run with no live session as history', () => {
+    const old = run({ state: 'review', updated_at: agoSec(7 * 24 * 60 * 60_000) })
+    expect(old.caps.terminal).toBe(false)
+    expect(isHistory(old, now)).toBe(true)
+  })
+
+  it('keeps a review run with a live pane out of history however old', () => {
+    const old = run({
+      state: 'review',
+      updated_at: agoSec(7 * 24 * 60 * 60_000),
+      caps: { terminal: true, reply: true, kill: true },
+    })
+    expect(isHistory(old, now)).toBe(false)
+  })
+
+  it('keeps a just-ended review run out of history so it does not vanish mid-glance', () => {
+    const recent = run({ state: 'review', updated_at: agoSec(2 * 60 * 60_000) })
+    expect(isHistory(recent, now)).toBe(false)
+  })
+
+  it('does not treat a malformed review run with no timestamp as history', () => {
+    expect(isHistory(run({ state: 'review', updated_at: 0 }), now)).toBe(false)
   })
 
   it('reports freshness from updated_at', () => {

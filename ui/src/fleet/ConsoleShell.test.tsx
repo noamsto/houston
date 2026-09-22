@@ -107,6 +107,25 @@ describe('ConsoleShell layout', () => {
     expect(within(rail).getByRole('button', { name: /^All/ }).querySelector('.console-count')?.textContent).toBe('4')
   })
 
+  it('drops a crew from the rail once its only run has aged into history', () => {
+    const runs = [
+      run({
+        id: 'dead',
+        crew: { name: 'DEAD' },
+        state: 'review',
+        updated_at: nowSec - 7 * 24 * 3600,
+        caps: { terminal: false, reply: true, kill: false },
+      }),
+      run({ id: 'live', crew: { name: 'LIVE' } }),
+    ]
+    render(<ConsoleShell runs={runs} connected hasSnapshot now={now} />)
+
+    const rail = screen.getByLabelText('rail')
+    expect(within(rail).queryByTitle('DEAD')).toBeNull()
+    expect(within(rail).getByTitle('LIVE')).toBeTruthy()
+    expect(within(rail).getByRole('button', { name: /^Active/ }).querySelector('.console-count')?.textContent).toBe('1')
+  })
+
   it('narrows the fleet list to one crew and shows a clearable "N of M" chip', () => {
     const runs = [
       run({ id: 'x1', crew: { name: 'X' }, repo: 'r-x1', branch: 'b-x1' }),
