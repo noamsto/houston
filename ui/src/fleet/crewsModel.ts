@@ -47,9 +47,8 @@ function rank(run: Run, now: number): number {
 }
 
 // Only a project every member that reports one agrees on is safe to label
-// the crew with — a crew id can mirror into several repos' bus dirs, and
-// picking whichever member happens to report a project first was the #106
-// bug (an arbitrary, often wrong, repo label).
+// the crew with — a crew id can mirror into several repos' bus dirs, so a
+// crew's members don't all necessarily share one project.
 function soleProject(members: Run[]): string | undefined {
   let project: string | undefined
   for (const m of members) {

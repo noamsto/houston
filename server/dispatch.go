@@ -106,9 +106,7 @@ type dispatchRepo struct {
 	// file exists. The dispatcher launcher (adapters/core/dispatcher.sh)
 	// writes pane once, into the repo it runs from, never into a mirror
 	// another repo's dispatch creates when sending a worker there. pid
-	// exists in every mirror, so it's not a usable signal; pane is. This
-	// is what lets the Crews tab label a multi-repo crew by its actual
-	// home repo instead of guessing.
+	// exists in every mirror, so it's not a usable signal; pane is.
 	Home []string `json:"home"`
 
 	// commonDir is <repo>/.git (or a linked worktree's shared common dir),
