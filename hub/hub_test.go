@@ -322,11 +322,11 @@ func TestPruneEnded(t *testing.T) {
 		State:     hook.StateEnded,
 		UpdatedAt: oldTime.Unix(),
 	})
-	// The state's on-disk mtime must reflect when it was actually last
-	// written (as it does in production, where hook.Write's UpdatedAt and
-	// the file mtime are set moments apart) — otherwise pruneEnded's race
-	// guard, which compares mtime against UpdatedAt, sees a file that looks
-	// freshly rewritten and skips it.
+	// Backdate the on-disk mtime to match production, where hook.Write sets
+	// UpdatedAt and the file mtime moments apart. Not load-bearing for the
+	// race guard itself (which only compares two stats taken within
+	// pruneEnded's own read-to-remove window), but keeps this fixture
+	// realistic.
 	if err := os.Chtimes(hook.Path(dir, "old-ended"), oldTime, oldTime); err != nil {
 		t.Fatalf("Chtimes: %v", err)
 	}
@@ -346,6 +346,31 @@ func TestPruneEnded(t *testing.T) {
 		t.Fatalf("Chtimes: %v", err)
 	}
 
+	writeState(t, dir, hook.SessionState{
+		SessionID: "raced-with-resume",
+		State:     hook.StateEnded,
+		UpdatedAt: oldTime.Unix(),
+	})
+	if err := os.Chtimes(hook.Path(dir, "raced-with-resume"), oldTime, oldTime); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+
+	// Simulate a resumed session rewriting the file between pruneEnded's
+	// read and its remove: land a real mtime change in that window via the
+	// test-only preRemoveStat seam, right where the guard's second stat
+	// happens.
+	racedPath := hook.Path(dir, "raced-with-resume")
+	prevPreRemoveStat := preRemoveStat
+	preRemoveStat = func(path string) (os.FileInfo, error) {
+		if path == racedPath {
+			if err := os.Chtimes(path, time.Now(), time.Now()); err != nil {
+				t.Fatalf("Chtimes: %v", err)
+			}
+		}
+		return os.Stat(path)
+	}
+	defer func() { preRemoveStat = prevPreRemoveStat }()
+
 	h.pruneEnded(filepath.Join(dir, "claude"))
 
 	if _, err := os.Stat(hook.Path(dir, "old-ended")); !errors.Is(err, fs.ErrNotExist) {
@@ -356,5 +381,8 @@ func TestPruneEnded(t *testing.T) {
 	}
 	if _, err := os.Stat(hook.Path(dir, "old-live")); err != nil {
 		t.Errorf("old-live: want kept, stat err = %v", err)
+	}
+	if _, err := os.Stat(racedPath); err != nil {
+		t.Errorf("raced-with-resume: want kept, stat err = %v", err)
 	}
 }

@@ -290,7 +290,18 @@ func (h *Hub) scan(dir string) error {
 // trusts: hook/hook.go sets StateEnded solely on a genuine SessionEnd hook
 // event, so a live session's file, or a "ghost" session whose pane died
 // without ever firing SessionEnd, is never a candidate here regardless of
-// age.
+// age. A zero UpdatedAt (unwritten or corrupted) is never a prune candidate,
+// since it can't be distinguished from a file that's merely stale. The race
+// guard compares the file's mtime read right after hook.Read against its
+// mtime read right before os.Remove; any change in between (e.g. a resumed
+// session's SessionStart re-touching an old session id) means the file
+// isn't ours to remove this pass.
+// preRemoveStat performs the second, pre-remove stat in pruneEnded's race
+// guard. It's a var (not a direct os.Stat call) purely so tests can
+// deterministically land a rewrite in the read-to-remove window instead of
+// racing a real goroutine against it.
+var preRemoveStat = os.Stat
+
 func (h *Hub) pruneEnded(dir string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -303,28 +314,47 @@ func (h *Hub) pruneEnded(dir string) {
 		}
 		path := filepath.Join(dir, e.Name())
 		s, err := hook.Read(path)
-		if err != nil || s.SessionID == "" {
-			continue
-		}
-		if s.State != hook.StateEnded {
-			continue
-		}
-		if !time.Unix(s.UpdatedAt, 0).Before(cutoff) {
+		if err != nil {
+			if !errors.Is(err, fs.ErrNotExist) {
+				h.log.Warn("prune: read state file", "path", path, "err", err)
+			}
 			continue
 		}
 
-		// A resumed session could rewrite the file between our read and the
-		// remove below (e.g. SessionStart re-touching an old session id).
-		// If the file changed after we read it, it's not ours to remove
-		// this pass.
-		info, err := os.Stat(path)
+		// Captured right after the read, so the guard below brackets the
+		// full window during which a rewrite could race us.
+		before, err := os.Stat(path)
 		if err != nil {
 			if !errors.Is(err, fs.ErrNotExist) {
 				h.log.Warn("prune: stat state file", "path", path, "err", err)
 			}
 			continue
 		}
-		if info.ModTime().Unix() > s.UpdatedAt {
+
+		if s.SessionID == "" {
+			continue
+		}
+		if s.State != hook.StateEnded {
+			continue
+		}
+		if s.UpdatedAt == 0 {
+			continue
+		}
+		if !time.Unix(s.UpdatedAt, 0).Before(cutoff) {
+			continue
+		}
+
+		// A resumed session could rewrite the file between our read above
+		// and the remove below. If the file changed since, it's not ours to
+		// remove this pass.
+		after, err := preRemoveStat(path)
+		if err != nil {
+			if !errors.Is(err, fs.ErrNotExist) {
+				h.log.Warn("prune: stat state file", "path", path, "err", err)
+			}
+			continue
+		}
+		if !after.ModTime().Equal(before.ModTime()) {
 			continue
 		}
 
