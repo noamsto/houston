@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { TerminalPane } from './TerminalPane'
+import { mobileFitScale } from '../lib/mobileFitScale'
 import type { TerminalAddress } from '../api/terminal'
 import type { Terminal } from '@xterm/xterm'
 
@@ -592,5 +593,67 @@ describe('TerminalPane detached mode', () => {
     render(<TerminalPane address={address} isFocused onFocus={() => {}} onClose={() => {}} />)
     dragEnd({ movedX: true, startedAtBottom: true })
     expect(livePill()).toBeNull()
+  })
+})
+
+describe('mobileFitScale (#101 landscape fit)', () => {
+  let originalMatchMedia: typeof window.matchMedia
+
+  function stubOrientation(matches: boolean): void {
+    window.matchMedia = vi.fn(() => ({
+      matches,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    })) as unknown as typeof window.matchMedia
+  }
+
+  afterEach(() => {
+    window.matchMedia = originalMatchMedia
+  })
+
+  it('reproduces today\'s portrait behavior unchanged: 1x floor at the raw width ratio, scale never below 1x', () => {
+    originalMatchMedia = window.matchMedia
+    stubOrientation(false)
+    // Reported numbers: 23-row pane, screen content 468px tall; portrait
+    // phone viewport (390x844) leaves an outerW narrower than the pane.
+    const { floor, scale } = mobileFitScale(380, 700, 900, 468)
+    expect(floor).toBeCloseTo(380 / 900)
+    expect(scale).toBe(1) // Math.max(1.0, widthFloor) — never smaller than readable
+  })
+
+  it('is a no-op in portrait even when outerH is shorter than the content height', () => {
+    // Gating on heightFit < 1 alone would fire here too — 23 rows (468px)
+    // doesn't fit a chrome-heavy portrait viewport either — so the orientation
+    // check must be the actual gate, not a height-ratio heuristic.
+    originalMatchMedia = window.matchMedia
+    stubOrientation(false)
+    const { floor, scale } = mobileFitScale(380, 90, 900, 468)
+    expect(floor).toBeCloseTo(380 / 900)
+    expect(scale).toBe(1)
+  })
+
+  it('shrinks below 1x in landscape when chrome-collapsed height is still less than content height (the reported bug)', () => {
+    originalMatchMedia = window.matchMedia
+    stubOrientation(true)
+    // Landscape phone (844x390) after Step 1's chrome collapse: outerW wide
+    // (~830px), outerH still short (~260px) vs. 468px of fixed content.
+    const outerW = 830
+    const outerH = 260
+    const screenW = 900
+    const screenH = 468
+    const { floor, scale } = mobileFitScale(outerW, outerH, screenW, screenH)
+    const heightFit = outerH / screenH
+    expect(scale).toBeCloseTo(heightFit) // shrinks to fit height, not clamped to 1x
+    expect(scale).toBeLessThan(1)
+    // Nothing is pushed off-screen: content height at the new scale fits outerH.
+    expect(screenH * scale).toBeLessThanOrEqual(outerH + 0.001)
+    expect(floor).toBeLessThanOrEqual(scale)
+  })
+
+  it('does not zoom in past 1x when landscape height comfortably fits the content', () => {
+    originalMatchMedia = window.matchMedia
+    stubOrientation(true)
+    const { scale } = mobileFitScale(830, 900, 900, 468) // outerH taller than content
+    expect(scale).toBe(1)
   })
 })
