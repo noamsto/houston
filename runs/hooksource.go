@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/noamsto/houston/hook"
 	"github.com/noamsto/houston/hub"
 	"github.com/noamsto/houston/tmux"
 )
@@ -82,14 +83,20 @@ func (s *HookSource) Run(ctx context.Context, out chan<- Delta) error {
 	endedAt := map[string]int64{}
 	revived := map[string]bool{}
 
-	// normalize drops coordinates paneForeign rejects, so the key, the TmuxRef
-	// and the dedup all agree that this session owns no pane here.
+	// normalize drops coordinates this session cannot vouch for, so the key,
+	// the TmuxRef and the dedup all agree that it owns no pane here: a pane
+	// paneForeign rejects, and the pane an ended session recorded — tmux hands
+	// that id to the next occupant the moment the pane is reused, and a session
+	// that announced its own end can never prove it is still there (#120).
+	// Only the foreign bit feeds gone: an ended session is already StateDone,
+	// so routing it through the revive bookkeeping would change nothing.
 	normalize := func(v hub.SessionView) (hub.SessionView, bool) {
-		if !paneForeign(v, panes) {
+		foreign := paneForeign(v, panes)
+		if !foreign && v.State != hook.StateEnded {
 			return v, false
 		}
 		v.TmuxSession, v.TmuxWindow, v.TmuxPane = "", "", ""
-		return v, true
+		return v, foreign
 	}
 
 	build := func(v hub.SessionView) (string, Run) {

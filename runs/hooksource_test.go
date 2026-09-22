@@ -648,3 +648,173 @@ func TestHookSourceDistrustsAForeignSessionAmongTwoOnOnePane(t *testing.T) {
 		t.Errorf("revived Tmux = %+v, want nil", revived.Run.Tmux)
 	}
 }
+
+// endedState is a session that announced SessionEnd while still recorded on
+// pane %9, with a state file newer than the server start so neither paneGone
+// nor paneForeign can fire — the #120 shape.
+func endedState(sid string) hook.SessionState {
+	return hook.SessionState{
+		SessionID: sid,
+		State:     hook.StateEnded,
+		TmuxPane:  "%9",
+		CWD:       "/home/me/houston",
+		UpdatedAt: time.Now().Unix(),
+	}
+}
+
+// awaitDisowned reads every delta until the ended session's own key arrives,
+// failing the moment one speaks for pane %9. waitDelta discards what it does
+// not match, so a regression that emitted %9 first would slip past a trailing
+// expectNoDelta unnoticed.
+func awaitDisowned(t *testing.T, out <-chan Delta, sid string) Delta {
+	t.Helper()
+	timeout := time.After(2 * time.Second)
+	for {
+		select {
+		case d := <-out:
+			if d.Key == "%9" {
+				t.Fatalf("a run kept speaking for the reused pane: %+v", d)
+			}
+			if d.Key == "claude/"+sid {
+				return d
+			}
+		case <-timeout:
+			t.Fatal("no delta: ended session keyed on itself")
+		}
+	}
+}
+
+// TestHookSourceDisownsThePaneOfAnEndedSession is the #120 shape itself: the
+// pane is live and belongs to the same tmux server, so paneGone and
+// paneForeign both stay silent, yet the session announced its own end and can
+// no longer vouch for who is there now.
+func TestHookSourceDisownsThePaneOfAnEndedSession(t *testing.T) {
+	panes := &fakePanes{}
+	panes.set(nil, "%9")
+	panes.setIdentity("1966", time.Now().Add(-time.Hour).Unix())
+
+	out, _ := startHookSourceWith(t, panes, endedState("s1"), nil)
+	d := awaitDisowned(t, out, "s1")
+	if d.Run.Tmux != nil {
+		t.Errorf("Tmux = %+v, want nil — an ended session can no longer vouch for its pane", d.Run.Tmux)
+	}
+	if d.Run.State != StateDone {
+		t.Errorf("State = %q, want done", d.Run.State)
+	}
+
+	expectNoDelta(t, out, "a run kept speaking for the reused pane", func(d Delta) bool { return d.Key == "%9" })
+}
+
+// TestHookSourceDisownsAnEndedPaneWithoutAPaneLister proves the loss of proof
+// is the agent's own, not tmux's: no listing happens at all, yet StateEnded
+// alone is enough to disown the pane.
+func TestHookSourceDisownsAnEndedPaneWithoutAPaneLister(t *testing.T) {
+	out, _ := startHookSourceWith(t, nil, endedState("s1"), nil)
+	d := awaitDisowned(t, out, "s1")
+	if d.Run.Tmux != nil {
+		t.Errorf("Tmux = %+v, want nil — an ended session can no longer vouch for its pane", d.Run.Tmux)
+	}
+	if d.Run.State != StateDone {
+		t.Errorf("State = %q, want done", d.Run.State)
+	}
+
+	expectNoDelta(t, out, "a run kept speaking for the reused pane", func(d Delta) bool { return d.Key == "%9" })
+}
+
+// TestHookSourceReclaimsThePaneWhenAnEndedSessionResumes shows keying follows
+// the *current* state, never a sticky "was ended once" flag: the same session
+// id resuming on the same pane must key back on that pane.
+func TestHookSourceReclaimsThePaneWhenAnEndedSessionResumes(t *testing.T) {
+	panes := &fakePanes{}
+	panes.set(nil, "%9")
+	panes.setIdentity("1966", time.Now().Add(-time.Hour).Unix())
+
+	st := endedState("s1")
+	out, dir := startHookSourceWith(t, panes, st, nil)
+	waitDelta(t, out, "ended session keyed on itself", func(d Delta) bool { return d.Key == "claude/s1" })
+
+	st.State = hook.StateStarting
+	st.TmuxSession = "houston"
+	st.TmuxWindow = "3"
+	st.UpdatedAt = time.Now().Unix()
+	if err := hook.Write(hook.Path(dir, st.SessionID), st); err != nil {
+		t.Fatal(err)
+	}
+
+	d := waitDelta(t, out, "resumed session reclaims the pane", func(d Delta) bool { return d.Key == "%9" })
+	if d.Run.Tmux == nil || d.Run.Tmux.PaneID != "%9" {
+		t.Errorf("Tmux = %+v, want a TmuxRef for %%9", d.Run.Tmux)
+	}
+	if d.Run.State == StateDone {
+		t.Errorf("State = %q, want a live state", d.Run.State)
+	}
+}
+
+// TestHookSourceSpeaksForEveryEndedSessionOnAPane seeds two ended sessions
+// that were left behind on the same pane. Unlike two live sessions on one
+// pane (TestHookSourceSpeaksForOneSessionPerPane), they no longer share a
+// key once disowned, so current() cannot collapse one onto the other —
+// both must be reported.
+func TestHookSourceSpeaksForEveryEndedSessionOnAPane(t *testing.T) {
+	panes := &fakePanes{}
+	panes.set(nil, "%9")
+	panes.setIdentity("1966", time.Now().Add(-time.Hour).Unix())
+
+	s1 := endedState("s1")
+	s2 := endedState("s2")
+	s2.UpdatedAt = s1.UpdatedAt + 1
+
+	out, _ := startHookSourceWith(t, panes, s1, nil, s2)
+
+	seen := map[string]bool{}
+	timeout := time.After(2 * time.Second)
+	for !seen["claude/s1"] || !seen["claude/s2"] {
+		select {
+		case d := <-out:
+			// Tmux == nil && State == StateDone matches the disowned shape
+			// TestHookSourceWithdrawsThePaneWhenASessionEnds checks — a split
+			// that left the Tmux ref on one key must still fail here.
+			if (d.Key == "claude/s1" || d.Key == "claude/s2") && d.Run.Tmux == nil && d.Run.State == StateDone {
+				seen[d.Key] = true
+			}
+		case <-timeout:
+			t.Fatalf("saw %v, want deltas for both claude/s1 and claude/s2", seen)
+		}
+	}
+}
+
+// TestHookSourceWithdrawsThePaneWhenASessionEnds covers the transition rather
+// than an already-ended state: ending must also retract the pane-keyed layer,
+// or a stale hooks layer keeps granting caps at %9 while every other test here
+// still passes.
+func TestHookSourceWithdrawsThePaneWhenASessionEnds(t *testing.T) {
+	panes := &fakePanes{}
+	panes.set(nil, "%9")
+	panes.setIdentity("1966", time.Now().Add(-4*time.Hour).Unix())
+
+	st := blockedState()
+	out, dir := startHookSourceWith(t, panes, st, nil)
+	waitDelta(t, out, "initial live run on the pane", func(d Delta) bool { return d.Key == "%9" })
+
+	st.State = hook.StateEnded
+	st.UpdatedAt = time.Now().Unix()
+	if err := hook.Write(hook.Path(dir, st.SessionID), st); err != nil {
+		t.Fatal(err)
+	}
+
+	sawEnded, sawGone := false, false
+	timeout := time.After(2 * time.Second)
+	for !sawEnded || !sawGone {
+		select {
+		case d := <-out:
+			if d.Key == "claude/"+st.SessionID && d.Run.Tmux == nil && d.Run.State == StateDone {
+				sawEnded = true
+			}
+			if d.Key == "%9" && d.Gone {
+				sawGone = true
+			}
+		case <-timeout:
+			t.Fatalf("sawEnded=%v sawGone=%v, want both", sawEnded, sawGone)
+		}
+	}
+}
