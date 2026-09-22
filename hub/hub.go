@@ -285,6 +285,12 @@ func (h *Hub) scan(dir string) error {
 	return nil
 }
 
+// preRemoveStat performs the second, pre-remove stat in pruneEnded's race
+// guard. It's a var (not a direct os.Stat call) purely so tests can
+// deterministically land a rewrite in the read-to-remove window instead of
+// racing a real goroutine against it.
+var preRemoveStat = os.Stat
+
 // pruneEnded removes hook state files older than h.pruneTTL whose
 // last-written State is StateEnded. This is the only signal pruneEnded
 // trusts: hook/hook.go sets StateEnded solely on a genuine SessionEnd hook
@@ -296,12 +302,6 @@ func (h *Hub) scan(dir string) error {
 // mtime read right before os.Remove; any change in between (e.g. a resumed
 // session's SessionStart re-touching an old session id) means the file
 // isn't ours to remove this pass.
-// preRemoveStat performs the second, pre-remove stat in pruneEnded's race
-// guard. It's a var (not a direct os.Stat call) purely so tests can
-// deterministically land a rewrite in the read-to-remove window instead of
-// racing a real goroutine against it.
-var preRemoveStat = os.Stat
-
 func (h *Hub) pruneEnded(dir string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
