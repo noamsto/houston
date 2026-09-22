@@ -96,7 +96,7 @@ func (s *Server) handleRunTerminal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	servePane(conn, s.tmux, controlManagerAdapter{mgr: s.controlMgr}, s.registry, pane)
+	servePane(conn, s.tmux, controlManagerAdapter{mgr: s.controlMgr}, s.registry, pane, metaPollInterval)
 }
 
 // handleRunInput sends one piece of input to a run's pane.

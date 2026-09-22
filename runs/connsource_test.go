@@ -16,18 +16,25 @@ type fakeConnStates struct {
 	mu     sync.Mutex
 	states map[string]bool
 	ch     chan struct{}
+	// read is signalled after every SessionStates snapshot, so a test can
+	// know a tick has already taken its view of the connection state.
+	read chan struct{}
 }
 
 func newFakeConnStates() *fakeConnStates {
-	return &fakeConnStates{states: map[string]bool{}, ch: make(chan struct{}, 8)}
+	return &fakeConnStates{states: map[string]bool{}, ch: make(chan struct{}, 8), read: make(chan struct{}, 8)}
 }
 
 func (f *fakeConnStates) SessionStates() map[string]bool {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	out := make(map[string]bool, len(f.states))
 	for k, v := range f.states {
 		out[k] = v
+	}
+	f.mu.Unlock()
+	select {
+	case f.read <- struct{}{}:
+	default:
 	}
 	return out
 }
@@ -290,8 +297,13 @@ func TestConnectionSourceRunReactsToChangeSignal(t *testing.T) {
 	out := make(chan Delta, 8)
 	go func() { _ = src.Run(ctx, out) }()
 
-	// Let the initial tick run while connected, then flip and signal.
-	time.Sleep(20 * time.Millisecond)
+	// The initial tick has read the connected state, so the flip below can
+	// only surface through the Changes() arm.
+	select {
+	case <-conns.read:
+	case <-time.After(2 * time.Second):
+		t.Fatal("initial tick never read the connection state")
+	}
 	conns.set("s", false)
 
 	select {

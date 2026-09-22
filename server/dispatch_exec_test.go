@@ -209,7 +209,7 @@ sleep 300
 		if time.Now().After(deadline) {
 			t.Fatalf("grandchild %d still alive", pid)
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(2 * time.Millisecond)
 	}
 
 	if total := time.Since(start); total > 4*time.Second {

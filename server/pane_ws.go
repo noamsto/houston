@@ -67,6 +67,9 @@ type WSDims struct {
 	Rows int `json:"rows"`
 }
 
+// metaPollInterval is how often each pane connection re-runs agent detection.
+const metaPollInterval = time.Second
+
 func (s *Server) handlePaneWS(w http.ResponseWriter, r *http.Request, pane tmux.Pane) {
 	up := s.wsUpgrader()
 	conn, err := up.Upgrade(w, r, nil)
@@ -75,11 +78,11 @@ func (s *Server) handlePaneWS(w http.ResponseWriter, r *http.Request, pane tmux.
 		return
 	}
 
-	servePane(conn, s.tmux, controlManagerAdapter{mgr: s.controlMgr}, s.registry, pane)
+	servePane(conn, s.tmux, controlManagerAdapter{mgr: s.controlMgr}, s.registry, pane, metaPollInterval)
 }
 
 // servePane owns an upgraded pane connection: seeding, streaming and cleanup.
-func servePane(conn *websocket.Conn, tm tmuxOps, cm controlManagerOps, registry *agents.Registry, pane tmux.Pane) {
+func servePane(conn *websocket.Conn, tm tmuxOps, cm controlManagerOps, registry *agents.Registry, pane tmux.Pane, metaEvery time.Duration) {
 	// Look up tmux pane ID (%N format) for control mode routing
 	paneID, err := tm.GetPaneID(pane)
 	if err != nil {
@@ -183,7 +186,7 @@ func servePane(conn *websocket.Conn, tm tmuxOps, cm controlManagerOps, registry 
 	}
 
 	go paneWSReadLoop(conn, cc, paneID)
-	paneWSWriteLoop(conn, tm, cc, registry, pane, sub, connDone)
+	paneWSWriteLoop(conn, tm, cc, registry, pane, sub, connDone, metaEvery)
 }
 
 // sendSeed pushes a capture-pane snapshot as the authoritative screen state.
@@ -225,14 +228,14 @@ func writeSeed(conn wsWriter, seed string) error {
 	return conn.WriteMessage(websocket.TextMessage, msg)
 }
 
-func paneWSWriteLoop(conn wsWriter, tm tmuxOps, cc controlClientOps, registry *agents.Registry, pane tmux.Pane, sub paneSub, connDone <-chan struct{}) {
+func paneWSWriteLoop(conn wsWriter, tm tmuxOps, cc controlClientOps, registry *agents.Registry, pane tmux.Pane, sub paneSub, connDone <-chan struct{}, metaEvery time.Duration) {
 	pingTicker := time.NewTicker(30 * time.Second)
 	defer pingTicker.Stop()
 
 	// Meta polling runs in its own goroutine so capture-pane calls
 	// never block output delivery to the WebSocket client.
 	metaCh := make(chan WSMeta, 1)
-	go metaPollLoop(tm, registry, pane, connDone, metaCh)
+	go metaPollLoop(tm, registry, pane, connDone, metaCh, metaEvery)
 
 	var lastMeta WSMeta
 
@@ -308,8 +311,8 @@ func paneWSWriteLoop(conn wsWriter, tm tmuxOps, cc controlClientOps, registry *a
 
 // metaPollLoop runs agent detection in its own goroutine, sending
 // results to metaCh. Exits when done closes.
-func metaPollLoop(tm tmuxOps, registry *agents.Registry, pane tmux.Pane, done <-chan struct{}, metaCh chan<- WSMeta) {
-	ticker := time.NewTicker(1 * time.Second)
+func metaPollLoop(tm tmuxOps, registry *agents.Registry, pane tmux.Pane, done <-chan struct{}, metaCh chan<- WSMeta, every time.Duration) {
+	ticker := time.NewTicker(every)
 	defer ticker.Stop()
 
 	// Fetch initial pane info for agent detection

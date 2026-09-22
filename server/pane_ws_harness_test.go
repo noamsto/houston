@@ -376,7 +376,7 @@ func startPaneWS(t *testing.T, tm tmuxOps, cm controlManagerOps) (conn *websocke
 		if err != nil {
 			return
 		}
-		servePane(c, tm, cm, harnessRegistry, harnessPane)
+		servePane(c, tm, cm, harnessRegistry, harnessPane, 10*time.Millisecond)
 	}))
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")

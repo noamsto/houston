@@ -66,12 +66,12 @@ func TestRunsStreamDeliversARemoval(t *testing.T) {
 			if strings.Contains(rec.body(), substr) {
 				return true
 			}
-			time.Sleep(25 * time.Millisecond)
+			time.Sleep(time.Millisecond)
 		}
 		return false
 	}
 
-	if !waitForBody("event: snapshot", time.Second) {
+	if !waitForBody("event: snapshot", 5*time.Second) {
 		t.Fatalf("snapshot event never sent\n%s", rec.body())
 	}
 
@@ -79,7 +79,7 @@ func TestRunsStreamDeliversARemoval(t *testing.T) {
 	// as removed, not just fall silent.
 	reg.Apply(runs.Delta{Source: "hooks", Key: "%1", Gone: true})
 
-	if !waitForBody(`"removed":true`, 2*time.Second) {
+	if !waitForBody(`"removed":true`, 5*time.Second) {
 		t.Fatalf("removal never reached the client\n%s", rec.body())
 	}
 

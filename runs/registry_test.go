@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -379,33 +380,34 @@ func TestApplyDoesNotRaceSubscribeClose(t *testing.T) {
 	// reachable; a sequential test cannot reach it at all.
 	r := NewRegistry(DefaultOrder)
 
+	const applies = 600
+	const minChurn = 20
 	stop := make(chan struct{})
-	var wg sync.WaitGroup
+	var applyWG, churnWG sync.WaitGroup
+	var churned atomic.Int64
+	giveUp := time.Now().Add(5 * time.Second)
 
 	for i := 0; i < 50; i++ {
-		wg.Add(1)
+		applyWG.Add(1)
 		go func(n int) {
-			defer wg.Done()
-			for turn := 0; ; turn++ {
-				select {
-				case <-stop:
-					return
-				default:
-					// Vary the payload every call — otherwise dedupe collapses
-					// everything after the first send and this stops
-					// exercising the fan-out path this test is about.
-					r.Apply(Delta{Source: "hooks", Key: "%1", Run: Run{
-						Agent: "claude", State: StateRunning,
-						Activity: Activity{Message: fmt.Sprintf("%d-%d", n, turn)},
-					}})
-				}
+			defer applyWG.Done()
+			// Keep applying past the minimum until the churn has cycled, so the
+			// two are guaranteed to overlap however the scheduler orders them.
+			for turn := 0; turn < applies || (churned.Load() < minChurn && time.Now().Before(giveUp)); turn++ {
+				// Vary the payload every call — otherwise dedupe collapses
+				// everything after the first send and this stops
+				// exercising the fan-out path this test is about.
+				r.Apply(Delta{Source: "hooks", Key: "%1", Run: Run{
+					Agent: "claude", State: StateRunning,
+					Activity: Activity{Message: fmt.Sprintf("%d-%d", n, turn)},
+				}})
 			}
 		}(i)
 	}
 
-	wg.Add(1)
+	churnWG.Add(1)
 	go func() {
-		defer wg.Done()
+		defer churnWG.Done()
 		for {
 			select {
 			case <-stop:
@@ -413,13 +415,17 @@ func TestApplyDoesNotRaceSubscribeClose(t *testing.T) {
 			default:
 				ch := r.Subscribe()
 				r.Unsubscribe(ch)
+				churned.Add(1)
 			}
 		}
 	}()
 
-	time.Sleep(200 * time.Millisecond)
+	applyWG.Wait()
 	close(stop)
-	wg.Wait()
+	churnWG.Wait()
+	if n := churned.Load(); n < minChurn {
+		t.Fatalf("only %d subscribe/unsubscribe cycles completed, want at least %d", n, minChurn)
+	}
 }
 
 func TestPointerRefsReplaceWholesale(t *testing.T) {

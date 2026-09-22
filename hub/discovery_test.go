@@ -143,17 +143,8 @@ func TestHubSeedsDiscoveredSessionOnStart(t *testing.T) {
 
 	stateDir := t.TempDir()
 	h := NewWithOptions(stateDir, Options{ClaudeProjectsDir: projects}, slog.Default())
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = h.Run(ctx) }()
-
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if len(h.Snapshot()) > 0 {
-			break
-		}
-		time.Sleep(25 * time.Millisecond)
-	}
+	startHub(t, h)
+	waitForSnapshot(t, h, 1)
 	snap := h.Snapshot()
 	if len(snap) != 1 {
 		t.Fatalf("snapshot has %d sessions, want 1", len(snap))
@@ -185,17 +176,8 @@ func TestHubHookStateWinsOverDiscovery(t *testing.T) {
 	}
 
 	h := NewWithOptions(stateDir, Options{ClaudeProjectsDir: projects}, slog.Default())
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = h.Run(ctx) }()
-
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if len(h.Snapshot()) > 0 {
-			break
-		}
-		time.Sleep(25 * time.Millisecond)
-	}
+	startHub(t, h)
+	waitForSnapshot(t, h, 1)
 	snap := h.Snapshot()
 	if len(snap) != 1 || snap[0].State != hook.StateToolRunning {
 		t.Fatalf("hook state should win: %+v", snap)

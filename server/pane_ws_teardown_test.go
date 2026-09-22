@@ -45,7 +45,7 @@ func TestPaneWSTeardownOnClientDisconnect(t *testing.T) {
 	conn, cleanup := startPaneWS(t, fakeTmux, cm)
 	defer cleanup()
 
-	stopPing := pingPane(fakeCC, fakeTmux.paneID, 100*time.Millisecond)
+	stopPing := pingPane(fakeCC, fakeTmux.paneID, 10*time.Millisecond)
 	t.Cleanup(stopPing)
 
 	// See readUntilOutput's doc: this is the required happens-after, not an
@@ -59,7 +59,7 @@ func TestPaneWSTeardownOnClientDisconnect(t *testing.T) {
 	// Three goroutines should exit: paneWSReadLoop, paneWSWriteLoop itself
 	// (running synchronously inside the httptest handler goroutine), and
 	// metaPollLoop. The write loop only notices the dead connection on its
-	// next write attempt, which is pingPane's next 100ms tick — so the
+	// next write attempt, which is pingPane's next 10ms tick — so the
 	// window here is generous relative to that interval.
 	//
 	// NumGoroutine is process-wide, so an unrelated goroutine exiting could
@@ -71,7 +71,7 @@ func TestPaneWSTeardownOnClientDisconnect(t *testing.T) {
 			t.Fatalf("teardown did not settle: want <= %d goroutines, got %d; releases = %v",
 				want, runtime.NumGoroutine(), cm.releaseClientCalls())
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(2 * time.Millisecond)
 	}
 
 	releases := cm.releaseClientCalls()
@@ -87,57 +87,64 @@ func TestPaneWSTeardownOnClientDisconnect(t *testing.T) {
 // metaPollLoop running for as long as the other connection stayed open,
 // because the shared Done channel only closes when the last reference is
 // released.
+//
+// Each connection gets its own fakeTmux so captureModeCalls() attributes
+// polls to one connection's poller; the control manager stays shared because
+// its ref-counting is the point. A capture already in flight when A's done
+// closed lands in the first window below, so the second window must see none
+// from A. B's poller ticking is what proves time advanced.
 func TestPaneWSMetaPollerDoesNotOutliveItsConnection(t *testing.T) {
-	fakeTmux := newFakeTmux()
-	fakeTmux.paneID = "%1"
+	tmA := newFakeTmux()
+	tmA.paneID = "%1"
+	tmB := newFakeTmux()
+	tmB.paneID = "%1"
 	fakeCC := newFakeControlClient()
 	cm := newFakeControlManager(fakeCC) // shared by both connections: ref-counting matters here
 
-	connA, cleanupA := startPaneWS(t, fakeTmux, cm)
+	connA, cleanupA := startPaneWS(t, tmA, cm)
 	t.Cleanup(cleanupA)
-	connB, cleanupB := startPaneWS(t, fakeTmux, cm)
+	connB, cleanupB := startPaneWS(t, tmB, cm)
 	t.Cleanup(cleanupB)
 
-	stopPing := pingPane(fakeCC, fakeTmux.paneID, 100*time.Millisecond)
+	stopPing := pingPane(fakeCC, tmA.paneID, 10*time.Millisecond)
 	t.Cleanup(stopPing)
 
 	// Per-connection happens-after: prove both connections' goroutine sets
-	// exist before measuring poll rates.
+	// exist before measuring poll counts.
 	readUntilOutput(t, connA)
 	readUntilOutput(t, connB)
 
-	before := fakeTmux.captureModeCalls()
-	time.Sleep(1200 * time.Millisecond) // >1 tick of each 1s metaPollLoop ticker
-	duringBoth := fakeTmux.captureModeCalls() - before
-	if duringBoth < 2 {
-		t.Fatalf("duringBoth = %d, want >= 2 (expected roughly one tick from each of 2 live pollers before closing anything)", duringBoth)
+	waitFor := func(what string, cond func() bool) {
+		t.Helper()
+		for deadline := time.Now().Add(5 * time.Second); !cond(); time.Sleep(time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatalf("timed out waiting for %s", what)
+			}
+		}
 	}
+
+	waitFor("both pollers to tick", func() bool {
+		return tmA.captureModeCalls() >= 2 && tmB.captureModeCalls() >= 2
+	})
 
 	releasesBefore := len(cm.releaseClientCalls())
 	_ = connA.Close() // close the client side directly; cleanupA still runs at test end and tolerates a second Close
 
-	// Wait for A's teardown to land: the next pingPane tick after the close
-	// makes A's write loop notice the dead connection and return, which runs
-	// servePane's defer and calls ReleaseClient.
-	deadline := time.Now().Add(3 * time.Second)
-	for len(cm.releaseClientCalls()) != releasesBefore+1 {
-		if time.Now().After(deadline) {
-			t.Fatalf("releaseClientCalls did not grow by exactly one within deadline: got %v", cm.releaseClientCalls())
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+	// The next pingPane tick after the close makes A's write loop notice the
+	// dead connection and return, which runs servePane's defer and calls
+	// ReleaseClient.
+	waitFor("A's ReleaseClient", func() bool {
+		return len(cm.releaseClientCalls()) == releasesBefore+1
+	})
 
-	beforeSolo := fakeTmux.captureModeCalls()
-	time.Sleep(2200 * time.Millisecond) // comfortably more than 2 ticks of B's still-live 1s ticker
-	duringSolo := fakeTmux.captureModeCalls() - beforeSolo
+	b1 := tmB.captureModeCalls()
+	waitFor("B's poller to tick after A's release", func() bool { return tmB.captureModeCalls() >= b1+5 })
+	a1 := tmA.captureModeCalls()
+	b2 := tmB.captureModeCalls()
+	waitFor("B's poller to tick again", func() bool { return tmB.captureModeCalls() >= b2+5 })
 
-	// One live poller ticking every 1s over a ~2.2s window produces roughly
-	// 2 calls; two live pollers (A's zombie plus B's, the regression this
-	// test guards against) would produce roughly 4. The [1,3] band is wide
-	// enough to absorb ticker jitter while staying well clear of the
-	// two-poller regime.
-	if duringSolo < 1 || duringSolo > 3 {
-		t.Fatalf("duringSolo = %d, want in [1,3] (consistent with exactly one live metaPollLoop, not two)", duringSolo)
+	if got := tmA.captureModeCalls(); got != a1 {
+		t.Fatalf("A's metaPollLoop kept polling after its connection closed: %d -> %d captures while B's poller ticked", a1, got)
 	}
 }
 
@@ -181,7 +188,7 @@ func TestPaneWSAutoZoomsOnConnectAndUnzoomsOnTeardown(t *testing.T) {
 		t.Fatalf("getClientCalls() = %v, want exactly one entry %q", calls, harnessPane.Session)
 	}
 
-	stopPing := pingPane(fakeCC, fakeTmux.paneID, 100*time.Millisecond)
+	stopPing := pingPane(fakeCC, fakeTmux.paneID, 10*time.Millisecond)
 	t.Cleanup(stopPing)
 	readUntilOutput(t, conn) // same happens-after as the other teardown tests, before closing
 
@@ -192,6 +199,6 @@ func TestPaneWSAutoZoomsOnConnectAndUnzoomsOnTeardown(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatalf("zoomPaneCalls() did not reach 2 (un-zoom on teardown) within deadline, got %d", fakeTmux.zoomPaneCalls())
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(2 * time.Millisecond)
 	}
 }

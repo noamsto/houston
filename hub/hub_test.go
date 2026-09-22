@@ -3,6 +3,7 @@ package hub
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -20,8 +21,49 @@ func writeState(t *testing.T, dir string, s hook.SessionState) {
 	}
 }
 
+// waitUntil polls cond every millisecond, failing after 5s.
+func waitUntil(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); !cond(); time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+	}
+}
+
+// startHub runs h and returns once its watcher is live. Call it after
+// t.TempDir(): cleanup is LIFO, so Run has closed the watcher before the state
+// dir is removed.
+func startHub(t *testing.T, h *Hub) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = h.Run(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("hub.Run did not return after cancel")
+		}
+	})
+
+	// Run installs the watch before its initial scan, so the probe appearing
+	// proves the watch exists; its removal is only observable through the watch.
+	const probe = "startHub-probe"
+	writeState(t, h.stateDir, hook.SessionState{SessionID: probe, State: hook.StateIdle})
+	waitUntil(t, "hub to load the probe state", func() bool { return findSession(h, probe) != nil })
+	if err := os.Remove(hook.Path(h.stateDir, probe)); err != nil {
+		t.Fatalf("remove probe: %v", err)
+	}
+	waitUntil(t, "hub to drop the probe state", func() bool { return findSession(h, probe) == nil })
+}
+
 func silentLog() *slog.Logger {
-	return slog.New(slog.NewTextHandler(os.NewFile(0, os.DevNull), &slog.HandlerOptions{Level: slog.LevelError}))
+	return slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError}))
 }
 
 func TestHubLoadsExistingStateOnStart(t *testing.T) {
@@ -34,11 +76,9 @@ func TestHubLoadsExistingStateOnStart(t *testing.T) {
 	})
 
 	h := NewWithOptions(dir, Options{ClaudeProjectsDir: "-"}, silentLog())
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = h.Run(ctx) }()
+	startHub(t, h)
 
-	waitForSnapshot(t, h, 1, time.Second)
+	waitForSnapshot(t, h, 1)
 
 	snap := h.Snapshot()
 	if snap[0].SessionID != "s1" || snap[0].State != hook.StateThinking || snap[0].Turn != 3 {
@@ -49,12 +89,7 @@ func TestHubLoadsExistingStateOnStart(t *testing.T) {
 func TestHubPicksUpNewSessionAfterStart(t *testing.T) {
 	dir := t.TempDir()
 	h := NewWithOptions(dir, Options{ClaudeProjectsDir: "-"}, silentLog())
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = h.Run(ctx) }()
-
-	// give Run a moment to set up fsnotify
-	time.Sleep(50 * time.Millisecond)
+	startHub(t, h)
 
 	sub := h.Subscribe()
 	defer h.Unsubscribe(sub)
@@ -95,11 +130,9 @@ func TestHubIngestsTranscriptTrailAndPreview(t *testing.T) {
 	})
 
 	h := NewWithOptions(dir, Options{ClaudeProjectsDir: "-"}, silentLog())
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = h.Run(ctx) }()
+	startHub(t, h)
 
-	waitForTrail(t, h, "tr-1", 1, 2*time.Second)
+	waitForTrail(t, h, "tr-1", 1)
 
 	snap := findSession(h, "tr-1")
 	if snap == nil {
@@ -119,11 +152,8 @@ func TestHubIngestsTranscriptTrailAndPreview(t *testing.T) {
 func TestHubBroadcastsOnStateRewrite(t *testing.T) {
 	dir := t.TempDir()
 	h := NewWithOptions(dir, Options{ClaudeProjectsDir: "-"}, silentLog())
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = h.Run(ctx) }()
+	startHub(t, h)
 
-	time.Sleep(50 * time.Millisecond)
 	sub := h.Subscribe()
 	defer h.Unsubscribe(sub)
 
@@ -150,28 +180,17 @@ func TestSessionViewIsJSONMarshalable(t *testing.T) {
 
 // ---- helpers ----
 
-func waitForSnapshot(t *testing.T, h *Hub, want int, timeout time.Duration) {
+func waitForSnapshot(t *testing.T, h *Hub, want int) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if len(h.Snapshot()) >= want {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("snapshot never reached %d entries", want)
+	waitUntil(t, "snapshot entries", func() bool { return len(h.Snapshot()) >= want })
 }
 
-func waitForTrail(t *testing.T, h *Hub, sessionID string, wantLen int, timeout time.Duration) {
+func waitForTrail(t *testing.T, h *Hub, sessionID string, wantLen int) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if s := findSession(h, sessionID); s != nil && len(s.Trail) >= wantLen {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("trail never reached %d entries for %s", wantLen, sessionID)
+	waitUntil(t, "trail entries", func() bool {
+		s := findSession(h, sessionID)
+		return s != nil && len(s.Trail) >= wantLen
+	})
 }
 
 func findSession(h *Hub, id string) *SessionView {
