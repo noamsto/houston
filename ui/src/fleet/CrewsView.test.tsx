@@ -29,8 +29,11 @@ function run(p: Partial<Run> = {}): Run {
   } as Run
 }
 
-function options(repos: { path: string; name: string; crews: string[] }[]) {
-  return { repos, tiers: [], efforts: [], plans: [], engines: {}, engine_order: [], tier_models: {} }
+function options(repos: { path: string; name: string; crews: string[]; home?: string[] }[]) {
+  return {
+    repos: repos.map((r) => ({ ...r, home: r.home ?? r.crews })),
+    tiers: [], efforts: [], plans: [], engines: {}, engine_order: [], tier_models: {},
+  }
 }
 
 const fetchOptions = vi.mocked(fetchDispatchOptions)
@@ -172,6 +175,12 @@ describe('CrewsView', () => {
       expect(container.querySelector('.run-chip.stale')).toBeTruthy()
     })
 
+    it('shows the project chip from run.project', () => {
+      const runs = [run({ id: 'a', crew: { name: 'c' }, project: 'houston' })]
+      const { container } = render(<CrewsView runs={runs} now={now} />)
+      expect(container.querySelector('.run-project')?.textContent).toBe('houston')
+    })
+
     it('calls onOpen with the run when its main button is tapped', () => {
       const onOpen = vi.fn()
       const r = run({ id: 'a', crew: { name: 'c', codename: 'Apollo' } })
@@ -297,7 +306,7 @@ describe('CrewsView', () => {
       const runs = [run({ crew: { name: 'crew-9' }, project: 'qa-repo' })]
       const { container } = render(<CrewsView runs={runs} now={now} />)
 
-      expect(screen.getByText('qa-repo')).toBeTruthy()
+      expect(container.querySelector('.crews-repo')?.textContent).toBe('qa-repo')
       expect(container.querySelector('.crews-dispatch')).toBeNull()
       await waitFor(() => expect(container.querySelector('.crews-dispatch')).toBeTruthy())
       expect(container.querySelector('.crews-dispatch')?.getAttribute('href'))
@@ -327,7 +336,7 @@ describe('CrewsView', () => {
       const { container } = render(<CrewsView runs={[run({ crew: { name: 'c' }, project: 'app' })]} now={now} />)
 
       await waitFor(() => expect(fetchOptions).toHaveBeenCalled())
-      expect(screen.getByText('app')).toBeTruthy()
+      expect(container.querySelector('.crews-repo')?.textContent).toBe('app')
       expect(container.querySelector('.crews-dispatch')).toBeNull()
     })
 
@@ -339,6 +348,42 @@ describe('CrewsView', () => {
       expect(container.querySelector('.crews-dispatch')?.getAttribute('href'))
         .toBe('#/dispatch?repo=%2Fhome%2Fme%2Fhouston&crew=crew-1')
       expect(fetchOptions).toHaveBeenCalledTimes(1)
+    })
+
+    it('labels a crew spanning two repos "unknown repo" when neither repo claims it as home', async () => {
+      fetchOptions.mockResolvedValue(
+        options([
+          { path: '/a/houston', name: 'houston', crews: ['c-multi'], home: [] },
+          { path: '/b/nix-config', name: 'nix-config', crews: ['c-multi'], home: [] },
+        ]),
+      )
+      const runs = [
+        run({ id: 'a', crew: { name: 'c-multi' }, project: 'houston' }),
+        run({ id: 'b', crew: { name: 'c-multi' }, project: 'nix-config' }),
+      ]
+      const { container } = render(<CrewsView runs={runs} now={now} />)
+
+      await waitFor(() => expect(fetchOptions).toHaveBeenCalled())
+      expect(screen.getByText('unknown repo')).toBeTruthy()
+      expect(container.querySelector('.crews-dispatch')).toBeNull()
+    })
+
+    it('labels a crew spanning two repos by the one whose dispatcher actually lives there', async () => {
+      fetchOptions.mockResolvedValue(
+        options([
+          { path: '/a/houston', name: 'houston', crews: ['c-multi'], home: ['c-multi'] },
+          { path: '/b/nix-config', name: 'nix-config', crews: ['c-multi'], home: [] },
+        ]),
+      )
+      const runs = [
+        run({ id: 'a', crew: { name: 'c-multi' }, project: 'houston' }),
+        run({ id: 'b', crew: { name: 'c-multi' }, project: 'nix-config' }),
+      ]
+      const { container } = render(<CrewsView runs={runs} now={now} />)
+
+      await waitFor(() => expect(screen.getByText('houston')).toBeTruthy())
+      expect(container.querySelector('.crews-dispatch')?.getAttribute('href'))
+        .toBe('#/dispatch?repo=%2Fa%2Fhouston&crew=c-multi')
     })
 
     it('still renders when the options fetch rejects', async () => {

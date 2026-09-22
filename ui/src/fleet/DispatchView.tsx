@@ -170,7 +170,9 @@ export function DispatchView({ runs }: { runs: Run[] }) {
     const minted = result.crew
     if (req.crew === NEW_CREW && minted) {
       // Join the minted crew on the next attempt — success or a retryable
-      // failure alike — instead of minting another.
+      // failure alike — instead of minting another. `home` is deliberately
+      // left untouched: the server wouldn't list this crew as home either,
+      // since no dispatcher pane file exists yet for one the UI just minted.
       setOptions((o) => o && {
         ...o,
         repos: o.repos.map((r) =>

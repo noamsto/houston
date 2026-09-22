@@ -307,9 +307,10 @@ execution from an HTTP request, so the handler is closed by construction:
 
 - `GET /api/dispatch/options` — the repos houston knows (each distinct tmux
   `@git_root` resolved to its main repo, with that repo's crews from
-  `<git-common-dir>/crew/crews/`), tiers, efforts, plans, the per-engine model
-  allowlist (`engines`, displayed in `engine_order`), and `tier_models` (the
-  default model per engine+tier).
+  `<git-common-dir>/crew/crews/` and, per repo, `home` — the subset of `crews`
+  whose dispatcher pane lives in that repo), tiers, efforts, plans, the
+  per-engine model allowlist (`engines`, displayed in `engine_order`), and
+  `tier_models` (the default model per engine+tier).
 - `POST /api/dispatch` — `{repo, title, spec?, tier, engine, model, effort,
   plan?, crew, issue?}`. Every argv value is an enum, an allowlisted model, or
   an anchored-regex match; `repo` must be in the options set and `crew` must be
