@@ -19,7 +19,7 @@ const windowOptionsFormat = "#{session_name}" + optSep + "#{window_index}" + opt
 	"#{@window_task}" + optSep + "#{@git_root}" + optSep + "#{@crew_color}" + optSep + "#{window_name}" + optSep + "#{window_active}"
 
 const paneOptionsFormat = "#{pane_id}" + optSep + "#{session_name}:#{window_index}" + optSep + "#{@claude_status}" + optSep + "#{@claude_task}" + optSep +
-	"#{pane_current_command}" + optSep + "#{pane_index}" + optSep + "#{pane_active}"
+	"#{pane_current_command}" + optSep + "#{pane_index}" + optSep + "#{pane_active}" + optSep + "#{@crew_role}"
 
 // WindowOptions is lazytmux's per-window enrichment. Every field may be empty:
 // a window with no linked issue or PR simply has none.
@@ -55,6 +55,7 @@ type PaneOptions struct {
 	Command      string // #{pane_current_command}
 	Index        int    // #{pane_index}
 	Active       bool   // #{pane_active}
+	CrewRole     string // #{@crew_role}: non-empty on a role-grid pane, empty on the lead
 }
 
 func (c *Client) ListWindowOptions() ([]WindowOptions, error) {
@@ -98,7 +99,7 @@ func ParsePaneOptions(out string) []PaneOptions {
 	var res []PaneOptions
 	for _, line := range strings.Split(out, "\n") {
 		f := strings.Split(line, optSep)
-		if len(f) != 7 {
+		if len(f) != 8 {
 			continue
 		}
 		idx, err := strconv.Atoi(f[5])
@@ -107,7 +108,7 @@ func ParsePaneOptions(out string) []PaneOptions {
 		}
 		res = append(res, PaneOptions{
 			PaneID: f[0], Target: f[1], ClaudeStatus: f[2], ClaudeTask: f[3],
-			Command: f[4], Index: idx, Active: f[6] == "1",
+			Command: f[4], Index: idx, Active: f[6] == "1", CrewRole: f[7],
 		})
 	}
 	return res

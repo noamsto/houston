@@ -343,6 +343,10 @@ func agentPane(id, target string) tmux.PaneOptions {
 	return tmux.PaneOptions{PaneID: id, Target: target, ClaudeStatus: "processing 1 "}
 }
 
+func rolePane(id, target, role string) tmux.PaneOptions {
+	return tmux.PaneOptions{PaneID: id, Target: target, ClaudeStatus: "waiting", CrewRole: role}
+}
+
 func TestResolvePane(t *testing.T) {
 	win := func(window int, branch, root string) tmux.WindowOptions {
 		return tmux.WindowOptions{Session: "h", Window: window, Branch: branch, GitRoot: root}
@@ -387,6 +391,20 @@ func TestResolvePane(t *testing.T) {
 			wins:  []tmux.WindowOptions{win(1, "fix/412", "/other")},
 			panes: []tmux.PaneOptions{agentPane("%307", "h:1")},
 			wantN: 0,
+		},
+		{
+			// A role grid puts the lead and its critic panes in the same
+			// window; only the lead (no @crew_role) counts as a join
+			// candidate, so the bus run still joins unambiguously.
+			name: "role-grid panes don't make the join ambiguous",
+			wins: []tmux.WindowOptions{win(1, "fix/412", "/wt/a")},
+			panes: []tmux.PaneOptions{
+				agentPane("%40", "h:1"),
+				rolePane("%41", "h:1", "spec-critic"),
+				rolePane("%42", "h:1", "plan-critic"),
+			},
+			wantPane: "%40",
+			wantN:    1,
 		},
 		{
 			name:  "an unknown root disqualifies its window",

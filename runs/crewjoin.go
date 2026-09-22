@@ -17,6 +17,12 @@ func resolvePane(bus, branch string, wins []tmux.WindowOptions, panes []tmux.Pan
 		if p.ClaudeStatus == "" {
 			continue
 		}
+		// A role-grid pane (@crew_role set) reports to the bus under
+		// role:<branch>:<role>, not worker:<branch> — it must not count as a
+		// second agent pane and make the join ambiguous.
+		if p.CrewRole != "" {
+			continue
+		}
 		w, ok := byTarget[p.Target]
 		if !ok || w.Branch != branch || w.GitRoot == "" {
 			continue
