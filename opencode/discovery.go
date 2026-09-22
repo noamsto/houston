@@ -246,12 +246,15 @@ func (d *Discovery) GetServer(url string) *Server {
 	return d.servers[url]
 }
 
-// StartBackgroundScan starts periodic scanning for servers.
-// Returns a cancel function to stop scanning.
-func (d *Discovery) StartBackgroundScan(ctx context.Context, interval time.Duration) context.CancelFunc {
-	ctx, cancel := context.WithCancel(ctx)
+// StartBackgroundScan starts periodic scanning for servers. The returned
+// channel is closed once the background goroutine has exited (on ctx
+// cancellation), so a caller can join it.
+func (d *Discovery) StartBackgroundScan(ctx context.Context, interval time.Duration) <-chan struct{} {
+	done := make(chan struct{})
 
 	go func() {
+		defer close(done)
+
 		// Initial scan
 		d.Scan(ctx)
 
@@ -268,7 +271,7 @@ func (d *Discovery) StartBackgroundScan(ctx context.Context, interval time.Durat
 		}
 	}()
 
-	return cancel
+	return done
 }
 
 func (d *Discovery) addServer(url string, server *Server) {
