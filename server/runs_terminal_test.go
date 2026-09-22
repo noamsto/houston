@@ -207,11 +207,8 @@ func TestRunTerminalResolution(t *testing.T) {
 }
 
 // TestRunTerminalServerCheckAllowsResolution pins every non-refusal branch of
-// the server-identity check: a mismatch is the only thing runPane refuses on.
-// One side unknown (either direction) or both sides agreeing must all resolve
-// successfully — this is the "unknown ⇒ false" rule plus the plain matching
-// case, so a broken version that refused whenever run.Tmux.Server != ""
-// (regardless of agreement) would fail here.
+// the server-identity check: only an active mismatch (both sides known and
+// disagreeing) causes a 409.
 func TestRunTerminalServerCheckAllowsResolution(t *testing.T) {
 	cases := []struct {
 		name          string
