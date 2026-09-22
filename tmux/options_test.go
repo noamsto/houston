@@ -1,6 +1,9 @@
 package tmux
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseWindowOptions(t *testing.T) {
 	// Real output shape, including the common all-empty-options case.
@@ -64,9 +67,9 @@ func TestParseWindowOptionsSurvivesPipeInFreeText(t *testing.T) {
 }
 
 func TestParsePaneOptions(t *testing.T) {
-	out := "%307\x1fhouston:1\x1fprocessing 1788848628 \x1fand add a ci task\x1fnode\x1f0\x1f1\x1f\n" +
-		"%283\x1fdispatcher:1\x1f\x1f\x1fbash\x1f1\x1f0\x1f\n" +
-		"%284\x1fdispatcher:1\x1fwaiting\x1f\x1fnode\x1f2\x1f0\x1fspec-critic\n"
+	out := "%307\x1fhouston:1\x1fprocessing 1788848628 \x1fand add a ci task\x1fnode\x1f0\x1f1\x1f\x1f1966\x1f1790086864\n" +
+		"%283\x1fdispatcher:1\x1f\x1f\x1fbash\x1f1\x1f0\x1f\x1f1966\x1f1790086864\n" +
+		"%284\x1fdispatcher:1\x1fwaiting\x1f\x1fnode\x1f2\x1f0\x1fspec-critic\x1f1966\x1f1790086864\n"
 
 	got := ParsePaneOptions(out)
 	if len(got) != 3 {
@@ -84,6 +87,9 @@ func TestParsePaneOptions(t *testing.T) {
 	if got[0].CrewRole != "" {
 		t.Errorf("lead pane CrewRole = %q, want empty", got[0].CrewRole)
 	}
+	if got[0].ServerPID != "1966" || got[0].ServerStart != 1790086864 {
+		t.Errorf("ServerPID = %q ServerStart = %d, want 1966/1790086864", got[0].ServerPID, got[0].ServerStart)
+	}
 	if got[1].ClaudeStatus != "" {
 		t.Errorf("a pane with no claude status should be empty, got %q", got[1].ClaudeStatus)
 	}
@@ -92,5 +98,48 @@ func TestParsePaneOptions(t *testing.T) {
 	}
 	if got[2].CrewRole != "spec-critic" {
 		t.Errorf("role pane CrewRole = %q, want spec-critic", got[2].CrewRole)
+	}
+}
+
+func TestParsePaneOptionsSkipsShortLines(t *testing.T) {
+	// A line missing crew_role, pid, and start_time (pre-identity format) or
+	// missing just crew_role must be skipped rather than misparsed.
+	out := "%307\x1fhouston:1\x1f\x1f\x1fnode\x1f0\x1f1\n" +
+		"%283\x1fdispatcher:1\x1f\x1f\x1fbash\x1f1\x1f0\x1f1966\x1f1790086864\n" +
+		"%284\x1fdispatcher:1\x1f\x1f\x1fbash\x1f1\x1f0\x1f\x1f1966\x1f1790086864\n"
+
+	got := ParsePaneOptions(out)
+	if len(got) != 1 {
+		t.Fatalf("%d panes, want 1 — the short lines should be skipped", len(got))
+	}
+	if got[0].PaneID != "%284" {
+		t.Errorf("PaneID = %q, want %%284", got[0].PaneID)
+	}
+}
+
+func TestParsePaneOptionsToleratesNonNumericStartTime(t *testing.T) {
+	out := "%307\x1fhouston:1\x1f\x1f\x1fnode\x1f0\x1f1\x1f\x1f1966\x1fsometime\n"
+
+	got := ParsePaneOptions(out)
+	if len(got) != 1 {
+		t.Fatalf("%d panes, want 1 — an unexpandable start_time must not drop the pane", len(got))
+	}
+	if got[0].ServerPID != "1966" || got[0].ServerStart != 0 {
+		t.Errorf("ServerPID = %q ServerStart = %d, want 1966/0", got[0].ServerPID, got[0].ServerStart)
+	}
+}
+
+// The foreign-pane guard in runs/hooksource.go reads the server identity off
+// these listed lines, so dropping either field from the format would silently
+// disable it — the parser alone cannot notice, since it only ever sees
+// hand-built fixtures.
+func TestPaneOptionsFormatCarriesTheServerIdentity(t *testing.T) {
+	if n := strings.Count(paneOptionsFormat, optSep); n != 9 {
+		t.Errorf("%d separators, want 9 — ParsePaneOptions requires 10 fields", n)
+	}
+	for _, f := range []string{"#{pid}", "#{start_time}"} {
+		if !strings.Contains(paneOptionsFormat, f) {
+			t.Errorf("format lost %s: the pane listing no longer identifies its server", f)
+		}
 	}
 }

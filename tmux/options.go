@@ -19,7 +19,7 @@ const windowOptionsFormat = "#{session_name}" + optSep + "#{window_index}" + opt
 	"#{@window_task}" + optSep + "#{@git_root}" + optSep + "#{@crew_color}" + optSep + "#{window_name}" + optSep + "#{window_active}"
 
 const paneOptionsFormat = "#{pane_id}" + optSep + "#{session_name}:#{window_index}" + optSep + "#{@claude_status}" + optSep + "#{@claude_task}" + optSep +
-	"#{pane_current_command}" + optSep + "#{pane_index}" + optSep + "#{pane_active}" + optSep + "#{@crew_role}"
+	"#{pane_current_command}" + optSep + "#{pane_index}" + optSep + "#{pane_active}" + optSep + "#{@crew_role}" + optSep + "#{pid}" + optSep + "#{start_time}"
 
 // WindowOptions is lazytmux's per-window enrichment. Every field may be empty:
 // a window with no linked issue or PR simply has none.
@@ -56,6 +56,12 @@ type PaneOptions struct {
 	Index        int    // #{pane_index}
 	Active       bool   // #{pane_active}
 	CrewRole     string // #{@crew_role}: non-empty on a role-grid pane, empty on the lead
+	// ServerPID and ServerStart identify the tmux server that produced this
+	// listing. Pane ids (e.g. %307) are unique only within one server
+	// incarnation, so these are what a caller needs to tell a live pane from
+	// one minted by a since-restarted server reusing the same id.
+	ServerPID   string
+	ServerStart int64
 }
 
 func (c *Client) ListWindowOptions() ([]WindowOptions, error) {
@@ -99,16 +105,22 @@ func ParsePaneOptions(out string) []PaneOptions {
 	var res []PaneOptions
 	for _, line := range strings.Split(out, "\n") {
 		f := strings.Split(line, optSep)
-		if len(f) != 8 {
+		if len(f) != 10 {
 			continue
 		}
 		idx, err := strconv.Atoi(f[5])
 		if err != nil {
 			continue
 		}
+		// start_time is parsed leniently: this function is also TmuxSource's
+		// ground truth for every pane's capabilities, so a strict parse would
+		// turn one unexpandable #{start_time} into "every pane vanished" and
+		// drop every run's capabilities rather than just its identity.
+		start, _ := strconv.ParseInt(f[9], 10, 64)
 		res = append(res, PaneOptions{
 			PaneID: f[0], Target: f[1], ClaudeStatus: f[2], ClaudeTask: f[3],
 			Command: f[4], Index: idx, Active: f[6] == "1", CrewRole: f[7],
+			ServerPID: f[8], ServerStart: start,
 		})
 	}
 	return res

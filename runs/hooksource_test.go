@@ -161,43 +161,43 @@ func TestEndRunClearsWhatOnlyALiveRunHas(t *testing.T) {
 
 type fakePanes struct {
 	mu          sync.Mutex
-	panes       []tmux.PaneOptions
+	ids         []string
 	err         error
 	server      string
 	serverStart int64
-	identityErr error
 }
 
+// set replaces the listed pane ids. Each PaneOptions ListPaneOptions returns
+// is stamped with this fake's current identity, same as a real listing
+// stamps every line with the server that produced it.
 func (f *fakePanes) set(err error, ids ...string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.err = err
-	f.panes = nil
-	for _, id := range ids {
-		f.panes = append(f.panes, tmux.PaneOptions{PaneID: id})
-	}
+	f.ids = ids
 }
 
-// setIdentity configures ServerIdentity's return. Left uncalled, a fakePanes
-// reports server "" / serverStart 0 with no error, which paneForeign treats
-// as unknown — the zero value keeps every test that predates this field from
-// tripping the foreign check by accident.
-func (f *fakePanes) setIdentity(server string, startedAt int64, err error) {
+// setIdentity configures the identity stamped onto panes returned after this
+// call. Left uncalled, a fakePanes stamps server "" / serverStart 0, which
+// paneForeign treats as unknown — the zero value keeps every test that
+// predates this field from tripping the foreign check by accident.
+func (f *fakePanes) setIdentity(server string, startedAt int64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.server, f.serverStart, f.identityErr = server, startedAt, err
+	f.server, f.serverStart = server, startedAt
 }
 
 func (f *fakePanes) ListPaneOptions() ([]tmux.PaneOptions, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.panes, f.err
-}
-
-func (f *fakePanes) ServerIdentity() (string, int64, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.server, f.serverStart, f.identityErr
+	if f.err != nil {
+		return nil, f.err
+	}
+	panes := make([]tmux.PaneOptions, len(f.ids))
+	for i, id := range f.ids {
+		panes[i] = tmux.PaneOptions{PaneID: id, ServerPID: f.server, ServerStart: f.serverStart}
+	}
+	return panes, nil
 }
 
 // blockedState is a permission-blocked session on pane %9 whose state file is
@@ -478,38 +478,20 @@ func TestPaneForeign(t *testing.T) {
 	}
 }
 
-func TestListPanesPublishesTheListingEvenWhenIdentityFails(t *testing.T) {
+func TestListPanesTakesIdentityFromTheListing(t *testing.T) {
 	panes := &fakePanes{}
-	panes.set(nil, "%1")
-	panes.setIdentity("", 0, errors.New("no server"))
+	panes.setIdentity("2001", 1790086864)
+	panes.set(nil, "%1", "%2")
 
-	ps, ok := listPanes(panes, paneSet{})
-	if !ok {
-		t.Fatal("listPanes ok = false, want true — a failed identity query must not fail the whole listing")
-	}
-	if !ps.live["%1"] {
-		t.Errorf("live = %+v, want %%1 present", ps.live)
-	}
-	if ps.server != "" || ps.serverStart != 0 {
-		t.Errorf("server = %q serverStart = %d, want zero values with no previous identity to fall back on", ps.server, ps.serverStart)
-	}
-}
-
-func TestListPanesReusesThePreviousIdentityWhenTheQueryFails(t *testing.T) {
-	// One transient ServerIdentity failure must not zero the identity for
-	// every session's distrust check on the next tick — it should carry the
-	// last known-good identity forward instead.
-	panes := &fakePanes{}
-	panes.set(nil, "%1")
-	panes.setIdentity("", 0, errors.New("no server"))
-
-	prev := paneSet{server: "2001", serverStart: 100}
-	ps, ok := listPanes(panes, prev)
+	ps, ok := listPanes(panes)
 	if !ok {
 		t.Fatal("listPanes ok = false, want true")
 	}
-	if ps.server != "2001" || ps.serverStart != 100 {
-		t.Errorf("server = %q serverStart = %d, want the previous identity (2001, 100) reused", ps.server, ps.serverStart)
+	if !ps.live["%1"] || !ps.live["%2"] {
+		t.Errorf("live = %+v, want %%1 and %%2 present", ps.live)
+	}
+	if ps.server != "2001" || ps.serverStart != 1790086864 {
+		t.Errorf("server = %q serverStart = %d, want 2001/1790086864 straight off the listing", ps.server, ps.serverStart)
 	}
 }
 
@@ -517,7 +499,7 @@ func TestListPanesReusesThePreviousIdentityWhenTheQueryFails(t *testing.T) {
 func TestHookSourceDistrustsAForeignServer(t *testing.T) {
 	panes := &fakePanes{}
 	panes.set(nil, "%20")
-	panes.setIdentity("2001", time.Now().Unix(), nil)
+	panes.setIdentity("2001", time.Now().Unix())
 
 	st := blockedState()
 	st.TmuxPane = "%20"
@@ -536,7 +518,7 @@ func TestHookSourceDistrustsAPaneFromBeforeTheServerStarted(t *testing.T) {
 	panes := &fakePanes{}
 	panes.set(nil, "%20")
 	serverStart := time.Now().Unix()
-	panes.setIdentity("2001", serverStart, nil)
+	panes.setIdentity("2001", serverStart)
 
 	st := blockedState()
 	st.TmuxPane = "%20"
@@ -550,10 +532,32 @@ func TestHookSourceDistrustsAPaneFromBeforeTheServerStarted(t *testing.T) {
 	}
 }
 
+// TestHookSourceDistrustsAPaneIdReusedAfterAServerRestart is the race this
+// branch replaced ServerIdentity to close: a resumed session's state file
+// still names the tmux server it was written under, but the pane id %20 has
+// since been reused by a restarted server. Because the identity now comes
+// off the same list-panes exec as the pane ids, there is no window where the
+// two can disagree about which server minted %20.
+func TestHookSourceDistrustsAPaneIdReusedAfterAServerRestart(t *testing.T) {
+	st := blockedState()
+	st.TmuxPane = "%20"
+	st.TmuxServer = "1966"
+
+	panes := &fakePanes{}
+	panes.setIdentity("2001", st.UpdatedAt+1)
+	panes.set(nil, "%20")
+
+	out, _ := startHookSourceWith(t, panes, st, nil)
+	d := waitDelta(t, out, "foreign-keyed run", func(d Delta) bool { return d.Key == "claude/"+st.SessionID })
+	if d.Run.Tmux != nil {
+		t.Errorf("Tmux = %+v, want nil for a pane id reused by a restarted tmux server", d.Run.Tmux)
+	}
+}
+
 func TestHookSourceForeignSessionRevivesWithoutATmuxRef(t *testing.T) {
 	panes := &fakePanes{}
 	panes.set(nil, "%20")
-	panes.setIdentity("2001", time.Now().Unix(), nil)
+	panes.setIdentity("2001", time.Now().Unix())
 
 	st := blockedState()
 	st.TmuxPane = "%20"
@@ -588,7 +592,7 @@ func TestHookSourceDistrustsAForeignSessionAmongTwoOnOnePane(t *testing.T) {
 	panes := &fakePanes{}
 	panes.set(nil, "%20")
 	serverStart := time.Now().Add(-3 * time.Hour).Unix()
-	panes.setIdentity("2001", serverStart, nil)
+	panes.setIdentity("2001", serverStart)
 
 	live := blockedState()
 	live.SessionID = "live"
