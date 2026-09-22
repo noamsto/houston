@@ -164,6 +164,21 @@ describe('CrewsView', () => {
       expect(container.querySelector('.crews-phase')?.textContent).toBe('thinking')
     })
 
+    it('hides the phase line when it just repeats the question', () => {
+      const runs = [
+        run({ crew: { name: 'c' }, state: 'blocked', activity: { message: 'Keep it?' }, question: { text: 'Keep it?', via: 'crew' } }),
+      ]
+      const { container } = render(<CrewsView runs={runs} now={now} />)
+      expect(container.querySelector('.crews-phase')).toBeNull()
+      expect(container.querySelector('.crews-question')?.textContent).toBe('Keep it?')
+    })
+
+    it('shows the phase line when blocked with no question', () => {
+      const runs = [run({ crew: { name: 'c' }, state: 'blocked' })]
+      const { container } = render(<CrewsView runs={runs} now={now} />)
+      expect(container.querySelector('.crews-phase')?.textContent).toBe('waiting on you')
+    })
+
     it('exposes the run state as a text alternative on the state dot', () => {
       const { container } = render(<CrewsView runs={[run({ crew: { name: 'c' }, state: 'running' })]} now={now} />)
       expect(container.querySelector('.run-dot')?.getAttribute('aria-label')).toBe('running')

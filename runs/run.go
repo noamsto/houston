@@ -109,7 +109,9 @@ type TrailChip struct {
 // Question is the thing a human answers. Non-nil implies State == StateBlocked.
 type Question struct {
 	Text string `json:"text"`
-	// Via is how an answer is delivered: "pane" or "crew".
+	// Via is how an answer is delivered: "pane" or "crew". "watchdog" means
+	// the text is houston's own synthesized note, informational only, not
+	// addressed to anyone who can answer it.
 	Via string `json:"via"`
 }
 

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { Run } from '../api/runs'
 import { fetchDispatchOptions } from '../api/dispatch'
 import { isFresh } from './staleness'
-import { agoLabel } from './format'
+import { agoLabel, BLOCKED_FALLBACK } from './format'
 import { crewShortId, projectOf } from './fleetList'
 import { countsLabel, dispatchHref, groupCrews, type CrewGroup } from './crewsModel'
 import { ReplyComposer } from './ReplyComposer'
@@ -20,7 +20,7 @@ interface CrewRepo {
 }
 
 function phase(run: Run): string {
-  if (run.state === 'blocked') return run.activity.message || 'waiting on you'
+  if (run.state === 'blocked') return run.activity.message || BLOCKED_FALLBACK
   const { tool, hint } = run.activity
   if (tool) return hint ? `${tool} · ${hint}` : tool
   return run.state
@@ -54,7 +54,7 @@ function Member({ run, now, onOpen }: { run: Run; now: number; onOpen?: (r: Run)
           </span>
         </span>
         <span className="crews-title">{run.crew?.title || run.issue?.title || run.branch}</span>
-        <span className="run-sub crews-phase">{phase(run)}</span>
+        {!(run.question && phase(run) === run.question.text) && <span className="run-sub crews-phase">{phase(run)}</span>}
         {run.question && <span className="run-question crews-question">{run.question.text}</span>}
       </button>
       <span className="run-chips crews-chips">

@@ -5,6 +5,7 @@ import { agoLabel, nameLabel, subtitle } from './format'
 import { projectOf } from './fleetList'
 import { TerminalPane } from '../components/TerminalPane'
 import { useTerminalLifecycle } from './useTerminalLifecycle'
+import { ReplyComposer } from './ReplyComposer'
 import './fleet.css'
 
 type Tab = 'activity' | 'terminal'
@@ -190,7 +191,9 @@ function ActivityTab({ run, now }: { run: Run; now: number }) {
     <div className="activity">
       <div className="activity-glance">
         <span className="run-dot" style={{ background: `var(--state-${run.state}, var(--text-faint))` }} />
-        <span className="activity-status">{subtitle(run)}</span>
+        {!(run.question && subtitle(run) === run.question.text) && (
+          <span className="activity-status">{subtitle(run)}</span>
+        )}
         {typeof a.turn === 'number' && <span className="activity-meta">Turn {a.turn}</span>}
         <span className="activity-meta">{agoLabel(run.updated_at, now)}</span>
       </div>
@@ -214,7 +217,7 @@ function ActivityTab({ run, now }: { run: Run; now: number }) {
             </div>
           ))}
 
-          {a.message && (
+          {a.message && !(run.question && a.message === run.question.text) && (
             <button
               type="button"
               className={`activity-message${messageOpen ? ' open' : ''}`}
@@ -248,6 +251,12 @@ function ActivityTab({ run, now }: { run: Run; now: number }) {
       </div>
 
       {run.question && <div className="activity-question">{run.question.text}</div>}
+      {run.question && run.state === 'blocked' && run.question.via === 'crew' && <ReplyComposer runId={run.id} />}
+      {run.question && run.state === 'blocked' && run.question.via === 'pane' && run.caps.terminal && (
+        <button type="button" className="activity-question-reply" onClick={() => goToTab(run.id, 'terminal')}>
+          Reply in Terminal
+        </button>
+      )}
     </div>
   )
 }

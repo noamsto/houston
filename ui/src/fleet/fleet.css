@@ -319,6 +319,10 @@
   background: var(--bg-sunken); color: var(--text-strong);
   font-size: 14px; line-height: 1.45; max-height: 30dvh; overflow-y: auto; overflow-wrap: anywhere;
 }
+.activity-question-reply {
+  flex: none; min-height: var(--tap); margin-top: 8px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--bg-raised); color: var(--text-dim); font: inherit; font-size: 12px; cursor: pointer;
+}
 
 .run-detail-empty {
   padding: 40px 20px; text-align: center; color: var(--text-faint); font-size: 13px;
@@ -342,6 +346,7 @@
 .activity-earlier:focus-visible,
 .activity-preview-toggle:focus-visible,
 .activity-message:focus-visible,
+.activity-question-reply:focus-visible,
 .activity-latest:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;

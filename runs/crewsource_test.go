@@ -256,6 +256,52 @@ func TestDeltasFromCrewLogBlockedAlwaysCarriesAQuestion(t *testing.T) {
 			t.Fatalf("Question = %+v, want the synthesised text with Via crew", r.Question)
 		}
 	})
+
+	t.Run("watchdog source", func(t *testing.T) {
+		const fixture = `{"ts":1000,"crew_id":"c1","kind":"dispatch","branch":"fix/7","engine":"claude"}
+{"ts":1100,"crew_id":"c1","from":"worker:fix/7#s1","kind":"status","body":{"state":"blocked","detail":"quiet: cleared — awaited 300s, no reply (cycle 3 of 24)","source":"watchdog"}}
+`
+		got := deltasFromCrewLog(strings.NewReader(fixture))
+		r := got["fix/7"]
+		if r.Question == nil || r.Question.Via != "watchdog" || r.Question.Text != crewWatchdogNote {
+			t.Fatalf("Question = %+v, want the synthesised watchdog note, not the raw detail", r.Question)
+		}
+		if r.Crew.Detail != "" {
+			t.Errorf("Detail = %q, want cleared — a watchdog note is not a current phase", r.Crew.Detail)
+		}
+	})
+}
+
+func TestDeltasFromCrewLogWatchdogDetailDoesNotLeakOntoLaterStatus(t *testing.T) {
+	const blocked = `{"ts":1000,"crew_id":"c1","kind":"dispatch","branch":"fix/8","engine":"claude"}
+{"ts":1100,"crew_id":"c1","from":"worker:fix/8#s1","kind":"status","body":{"state":"blocked","detail":"quiet: cleared — awaited 300s, no reply (cycle 3 of 24)","source":"watchdog"}}
+`
+
+	t.Run("followed by another watchdog status", func(t *testing.T) {
+		fixture := blocked + `{"ts":1200,"crew_id":"c1","from":"worker:fix/8#s1","kind":"status","body":{"state":"working","detail":"quiet: cleared","source":"watchdog"}}
+`
+		got := deltasFromCrewLog(strings.NewReader(fixture))
+		r := got["fix/8"]
+		if r.Crew.Detail != "" {
+			t.Errorf("Detail = %q, want cleared — watchdog detail must not leak", r.Crew.Detail)
+		}
+		if r.Question != nil {
+			t.Errorf("Question = %+v, want nil — no longer blocked", r.Question)
+		}
+	})
+
+	t.Run("followed by the worker's own status", func(t *testing.T) {
+		fixture := blocked + `{"ts":1200,"crew_id":"c1","from":"worker:fix/8#s1","kind":"status","body":{"state":"working","detail":"running tests"}}
+`
+		got := deltasFromCrewLog(strings.NewReader(fixture))
+		r := got["fix/8"]
+		if r.Crew.Detail != "running tests" {
+			t.Errorf("Detail = %q, want the worker's own detail", r.Crew.Detail)
+		}
+		if r.Question != nil {
+			t.Errorf("Question = %+v, want nil — no longer blocked", r.Question)
+		}
+	})
 }
 
 func TestDeltasFromCrewLogRetiresAnAnsweredQuestion(t *testing.T) {

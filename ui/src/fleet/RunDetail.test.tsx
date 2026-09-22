@@ -328,6 +328,46 @@ describe('RunDetail activity timeline', () => {
     expect(timeline.compareDocumentPosition(question) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
+  it('clicking Reply in Terminal navigates to the terminal tab for a pane-sourced question', () => {
+    renderActivity({
+      state: 'blocked',
+      activity: { message: 'Deploy to prod?' },
+      question: { text: 'Deploy to prod?', via: 'pane' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Reply in Terminal' }))
+    expect(window.location.hash).toBe('#/fleet/pane-1/terminal')
+  })
+
+  it('shows the crew reply composer for a crew-sourced question', () => {
+    renderActivity({
+      state: 'blocked',
+      activity: { message: 'Deploy to prod?' },
+      question: { text: 'Deploy to prod?', via: 'crew' },
+    })
+    expect(screen.getByLabelText('Reply to the crew')).toBeTruthy()
+  })
+
+  it('shows no reply affordance for a watchdog-sourced question', () => {
+    renderActivity({
+      state: 'blocked',
+      activity: { message: 'Checking in — no reply needed.' },
+      question: { text: 'Checking in — no reply needed.', via: 'watchdog' },
+    })
+    expect(screen.getByText('Checking in — no reply needed.')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Reply in Terminal' })).toBeNull()
+    expect(screen.queryByLabelText('Reply to the crew')).toBeNull()
+  })
+
+  it('renders a duplicated blocked message exactly once in the Activity tab', () => {
+    const { container } = renderActivity({
+      state: 'blocked',
+      activity: { message: 'Deploy to prod?' },
+      question: { text: 'Deploy to prod?', via: 'pane' },
+    })
+    expect(container.querySelector('.activity-message')).toBeNull()
+    expect(screen.getAllByText('Deploy to prod?')).toHaveLength(1)
+  })
+
   it('keeps the terminal excerpt collapsed until toggled', () => {
     renderActivity({ activity: { preview: 'raw terminal text' } })
     expect(screen.queryByText('raw terminal text')).toBeNull()

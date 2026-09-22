@@ -257,6 +257,7 @@ type crewStatusBody struct {
 	State  string `json:"state"`
 	Detail string `json:"detail"`
 	PRURL  string `json:"pr_url"`
+	Source string `json:"source"`
 }
 
 // crewBlockedNoDetail is the question synthesised for a `crew status <from>
@@ -266,6 +267,12 @@ type crewStatusBody struct {
 // hooks layer overwrites State and the block goes unseen. Worded as houston's
 // own description: there is no worker text here to quote.
 const crewBlockedNoDetail = "Blocked, no detail given."
+
+// crewWatchdogNote is the question synthesised for a blocked status whose
+// source is "watchdog": the raw prefix-coded detail (e.g. "quiet: cleared —
+// awaited 300s, no reply (cycle 3 of 24)") is internal bookkeeping and must
+// never reach user-facing copy.
+const crewWatchdogNote = "Checking in — no reply needed."
 
 // deltasFromCrewLog folds one bus log into the latest state per branch. The bus
 // is append-only, so later records win.
@@ -335,16 +342,25 @@ func deltasFromCrewLog(rd io.Reader) map[string]Run {
 				r.UpdatedAt = rec.TS / 1000
 				lastStatusTS[branch] = rec.TS
 				// Latest status wins, including an empty detail: a stale phase
-				// must not outlive the status that replaced it.
-				r.Crew.Detail = body.Detail
+				// must not outlive the status that replaced it. A watchdog
+				// note is never a legitimate "current phase" for the card.
+				if body.Source == "watchdog" {
+					r.Crew.Detail = ""
+				} else {
+					r.Crew.Detail = body.Detail
+				}
 				if body.PRURL != "" {
 					r.PR = &PRRef{URL: body.PRURL, Number: prNumberFromURL(body.PRURL)}
 				}
 				r.Question = nil
 				if r.State == StateBlocked {
-					r.Question = &Question{Text: crewBlockedNoDetail, Via: "crew"}
-					if body.Detail != "" {
-						r.Question.Text = body.Detail
+					if body.Source == "watchdog" {
+						r.Question = &Question{Text: crewWatchdogNote, Via: "watchdog"}
+					} else {
+						r.Question = &Question{Text: crewBlockedNoDetail, Via: "crew"}
+						if body.Detail != "" {
+							r.Question.Text = body.Detail
+						}
 					}
 				}
 			}
