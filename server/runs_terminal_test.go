@@ -206,11 +206,22 @@ func TestRunTerminalResolution(t *testing.T) {
 	}
 }
 
-// TestRunTerminalServerUnknownAllowsResolution pins the "unknown ⇒ false"
-// half of the server-identity check: a run recorded with no Tmux.Server
-// (termDelta, unmodified) must not be refused just because the freshly
-// resolved pane's server happens to be known.
-func TestRunTerminalServerUnknownAllowsResolution(t *testing.T) {
+// TestRunTerminalServerCheckAllowsResolution pins every non-refusal branch of
+// the server-identity check: a mismatch is the only thing runPane refuses on.
+// One side unknown (either direction) or both sides agreeing must all resolve
+// successfully — this is the "unknown ⇒ false" rule plus the plain matching
+// case, so a broken version that refused whenever run.Tmux.Server != ""
+// (regardless of agreement) would fail here.
+func TestRunTerminalServerCheckAllowsResolution(t *testing.T) {
+	cases := []struct {
+		name          string
+		id            string
+		resolveServer string
+	}{
+		{"run server unknown, pane server known", termRunID, "some-pid"},
+		{"run server known, pane server unknown", serverRunID, ""},
+		{"run server known, pane server matches", serverRunID, "1111"},
+	}
 	routes := []struct {
 		name string
 		req  func(id string) *http.Request
@@ -222,22 +233,24 @@ func TestRunTerminalServerUnknownAllowsResolution(t *testing.T) {
 		}, http.StatusNoContent},
 	}
 	for _, route := range routes {
-		t.Run(route.name, func(t *testing.T) {
-			panes := &fakeRunPanes{resolveServer: "some-pid"}
-			s := newRunTerminalServer(t, panes, termDelta())
+		for _, tc := range cases {
+			t.Run(route.name+"/"+tc.name, func(t *testing.T) {
+				panes := &fakeRunPanes{resolveServer: tc.resolveServer}
+				s := newRunTerminalServer(t, panes, termDelta(), termDeltaWithServer("1111"))
 
-			rec := doReply(t, s, route.req(termRunID))
-			if rec.Code != route.want {
-				t.Fatalf("status %d, want %d (%q)", rec.Code, route.want, rec.Body.String())
-			}
-			if rec.Code == http.StatusConflict {
-				t.Fatalf("refused with a known server on the pane but no recorded server on the run")
-			}
-			resolved, _ := panes.calls()
-			if resolved != 1 {
-				t.Errorf("ResolvePane called %d times, want 1", resolved)
-			}
-		})
+				rec := doReply(t, s, route.req(tc.id))
+				if rec.Code != route.want {
+					t.Fatalf("status %d, want %d (%q)", rec.Code, route.want, rec.Body.String())
+				}
+				resolved, sent := panes.calls()
+				if resolved != 1 {
+					t.Errorf("ResolvePane called %d times, want 1", resolved)
+				}
+				if route.name == "input" && (len(sent) != 1 || !sent[0].special || sent[0].keys != "Enter") {
+					t.Errorf("sent %+v, want a single special Enter key", sent)
+				}
+			})
+		}
 	}
 }
 
