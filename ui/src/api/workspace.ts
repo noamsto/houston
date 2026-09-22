@@ -24,6 +24,7 @@ export interface WorkspaceWindow {
   index: number
   name: string
   active: boolean
+  session: string
   branch?: string
   task?: string
   crew_codename?: string
@@ -34,7 +35,7 @@ export interface WorkspaceWindow {
   panes: WorkspacePane[]
 }
 
-export interface WorkspaceSession {
+export interface WorkspaceProject {
   name: string
   window_count: number
   main_checkout?: WorkspaceWindow[]
@@ -44,7 +45,7 @@ export interface WorkspaceSession {
 
 export interface Workspace {
   host: string
-  sessions: WorkspaceSession[]
+  projects: WorkspaceProject[]
 }
 
 export async function fetchWorkspace(): Promise<Workspace> {

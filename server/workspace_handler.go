@@ -7,7 +7,7 @@ import (
 )
 
 // handleWorkspace returns the full tmux tree across every reachable session,
-// bucketed by repo (main checkout / worktree / no repo) and joined against
+// bucketed by project (main checkout / worktree / no repo) and joined against
 // the run registry so agent panes carry their run_id plus the run's agent type,
 // state and one-line detail.
 //
@@ -31,10 +31,11 @@ func (s *Server) handleWorkspace(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 
-	// isMainCheckout shells out to git, so ask it once per distinct root
-	// rather than once per window — repoClassifier already caches per root,
-	// but there's no reason to make redundant calls into that cache.
+	// isMainCheckout/project both shell out to git, so ask once per distinct
+	// root rather than once per window — repoClassifier already caches per
+	// root, but there's no reason to make redundant calls into that cache.
 	mainCheckouts := make(map[string]bool)
+	projectNames := make(map[string]string)
 	for _, win := range wins {
 		if win.GitRoot == "" {
 			continue
@@ -43,9 +44,10 @@ func (s *Server) handleWorkspace(w http.ResponseWriter, _ *http.Request) {
 			continue
 		}
 		mainCheckouts[win.GitRoot] = s.wsRepos.isMainCheckout(win.GitRoot)
+		projectNames[win.GitRoot] = s.wsRepos.project(win.GitRoot)
 	}
 
-	ws := buildWorkspace(wins, panes, s.runs.Snapshot(), mainCheckouts)
+	ws := buildWorkspace(wins, panes, s.runs.Snapshot(), mainCheckouts, projectNames)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(ws)

@@ -30,10 +30,12 @@ func (f *fakeWorkspaceLister) ListPaneOptions() ([]tmux.PaneOptions, error) {
 // fakeRepoClassifier satisfies mainCheckoutChecker with a canned answer per
 // root — no real git call, that belongs to workspace_repo_test.go.
 type fakeRepoClassifier struct {
-	main map[string]bool
+	main     map[string]bool
+	projects map[string]string
 }
 
 func (f *fakeRepoClassifier) isMainCheckout(root string) bool { return f.main[root] }
+func (f *fakeRepoClassifier) project(root string) string      { return f.projects[root] }
 
 func TestHandleWorkspaceWithoutRegistryIs503(t *testing.T) {
 	s := &Server{} // registry never started
@@ -89,7 +91,10 @@ func TestHandleWorkspaceJoinsRunAndBuckets(t *testing.T) {
 				{PaneID: "%1", Target: "houston:0", Command: "node", Index: 0, Active: true},
 			},
 		},
-		wsRepos: &fakeRepoClassifier{main: map[string]bool{"/repo/main": true}},
+		wsRepos: &fakeRepoClassifier{
+			main:     map[string]bool{"/repo/main": true},
+			projects: map[string]string{"/repo/main": "houston"},
+		},
 	}
 
 	rec := httptest.NewRecorder()
@@ -104,15 +109,18 @@ func TestHandleWorkspaceJoinsRunAndBuckets(t *testing.T) {
 		t.Fatalf("decode: %v — body %s", err, rec.Body.String())
 	}
 
-	if len(got.Sessions) != 1 {
-		t.Fatalf("got %d sessions, want 1: %+v", len(got.Sessions), got)
+	if len(got.Projects) != 1 {
+		t.Fatalf("got %d projects, want 1: %+v", len(got.Projects), got)
 	}
-	session := got.Sessions[0]
-	if len(session.MainCheckout) != 1 || len(session.Worktrees) != 0 || len(session.Other) != 0 {
-		t.Fatalf("got session %+v, want exactly one window in main_checkout", session)
+	project := got.Projects[0]
+	if project.Name != "houston" {
+		t.Fatalf("got project name %q, want houston", project.Name)
+	}
+	if len(project.MainCheckout) != 1 || len(project.Worktrees) != 0 || len(project.Other) != 0 {
+		t.Fatalf("got project %+v, want exactly one window in main_checkout", project)
 	}
 
-	panes := session.MainCheckout[0].Panes
+	panes := project.MainCheckout[0].Panes
 	if len(panes) != 1 {
 		t.Fatalf("got %d panes, want 1: %+v", len(panes), panes)
 	}

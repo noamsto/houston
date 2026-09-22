@@ -10,11 +10,11 @@ import (
 
 type Workspace struct {
 	Host     string             `json:"host"` // "" means local; unset by anything built here — M2's seam
-	Sessions []WorkspaceSession `json:"sessions"`
+	Projects []WorkspaceProject `json:"projects"`
 }
 
-type WorkspaceSession struct {
-	Name         string            `json:"name"`
+type WorkspaceProject struct {
+	Name         string            `json:"name"` // "" is the trailing no-repo group, sorted last
 	WindowCount  int               `json:"window_count"`
 	MainCheckout []WorkspaceWindow `json:"main_checkout,omitempty"`
 	Worktrees    []WorkspaceWindow `json:"worktrees,omitempty"`
@@ -24,6 +24,7 @@ type WorkspaceSession struct {
 type WorkspaceWindow struct {
 	Index        int             `json:"index"`
 	Name         string          `json:"name"`
+	Session      string          `json:"session"` // tmux session hosting this window — secondary label, a project can span several
 	Active       bool            `json:"active"`
 	Branch       string          `json:"branch,omitempty"`
 	Task         string          `json:"task,omitempty"`
@@ -67,10 +68,12 @@ type windowGroup struct {
 // mainCheckouts[root] == true means that @git_root is a repo's main
 // checkout; false or an absent key means a linked worktree (including a root
 // whose git lookup failed — see workspace_repo.go's repoClassifier for why
-// "uncertain" reads as "not main"). buildWorkspace stays pure and
-// fixture-testable: it never performs the git call itself, only buckets by
-// the answers it's handed.
-func buildWorkspace(wins []tmux.WindowOptions, panes []tmux.PaneOptions, snap []runs.Run, mainCheckouts map[string]bool) Workspace {
+// "uncertain" reads as "not main"). projectNames[root] names the project a
+// window's @git_root belongs to; a window with no @git_root has no entry and
+// is grouped into the trailing "" project instead. buildWorkspace stays pure
+// and fixture-testable: it never performs the git call itself, only buckets
+// by the answers it's handed.
+func buildWorkspace(wins []tmux.WindowOptions, panes []tmux.PaneOptions, snap []runs.Run, mainCheckouts map[string]bool, projectNames map[string]string) Workspace {
 	paneToRun := make(map[string]runs.Run, len(snap))
 	for _, r := range snap {
 		if r.Tmux != nil {
@@ -97,23 +100,48 @@ func buildWorkspace(wins []tmux.WindowOptions, panes []tmux.PaneOptions, snap []
 		g.panes = append(g.panes, p)
 	}
 
-	sessions := make(map[string][]*windowGroup)
+	projects := make(map[string][]*windowGroup)
 	for _, g := range groups {
-		sessions[g.win.Session] = append(sessions[g.win.Session], g)
+		// "" is reserved for windows with no @git_root at all; a @git_root
+		// missing from projectNames keys on the root itself instead, never ""
+		key := ""
+		if g.win.GitRoot != "" {
+			key = g.win.GitRoot
+			if name, ok := projectNames[g.win.GitRoot]; ok {
+				key = name
+			}
+		}
+		projects[key] = append(projects[key], g)
 	}
 
-	sessionNames := make([]string, 0, len(sessions))
-	for name := range sessions {
-		sessionNames = append(sessionNames, name)
+	names := make([]string, 0, len(projects))
+	for name := range projects {
+		names = append(names, name)
 	}
-	sort.Strings(sessionNames)
+	// Alphabetical, except the "" (no-repo) group always sorts last.
+	sort.Slice(names, func(i, j int) bool {
+		if names[i] == "" {
+			return false
+		}
+		if names[j] == "" {
+			return true
+		}
+		return names[i] < names[j]
+	})
 
-	ws := Workspace{Sessions: make([]WorkspaceSession, 0, len(sessionNames))}
-	for _, name := range sessionNames {
-		grps := sessions[name]
-		sort.Slice(grps, func(i, j int) bool { return grps[i].win.Window < grps[j].win.Window })
+	ws := Workspace{Projects: make([]WorkspaceProject, 0, len(names))}
+	for _, name := range names {
+		grps := projects[name]
+		// A project can span multiple tmux sessions, so window index alone
+		// no longer uniquely orders a group — sort by session first.
+		sort.Slice(grps, func(i, j int) bool {
+			if grps[i].win.Session != grps[j].win.Session {
+				return grps[i].win.Session < grps[j].win.Session
+			}
+			return grps[i].win.Window < grps[j].win.Window
+		})
 
-		session := WorkspaceSession{Name: name, WindowCount: len(grps)}
+		project := WorkspaceProject{Name: name, WindowCount: len(grps)}
 		for _, g := range grps {
 			sort.Slice(g.panes, func(i, j int) bool { return g.panes[i].Index < g.panes[j].Index })
 
@@ -140,6 +168,7 @@ func buildWorkspace(wins []tmux.WindowOptions, panes []tmux.PaneOptions, snap []
 			win := WorkspaceWindow{
 				Index:        g.win.Window,
 				Name:         g.win.Name,
+				Session:      g.win.Session,
 				Active:       g.win.Active,
 				Branch:       g.win.Branch,
 				Task:         g.win.Task,
@@ -153,15 +182,15 @@ func buildWorkspace(wins []tmux.WindowOptions, panes []tmux.PaneOptions, snap []
 
 			switch {
 			case g.win.GitRoot == "":
-				session.Other = append(session.Other, win)
+				project.Other = append(project.Other, win)
 			case mainCheckouts[g.win.GitRoot]:
-				session.MainCheckout = append(session.MainCheckout, win)
+				project.MainCheckout = append(project.MainCheckout, win)
 			default:
-				session.Worktrees = append(session.Worktrees, win)
+				project.Worktrees = append(project.Worktrees, win)
 			}
 		}
 
-		ws.Sessions = append(ws.Sessions, session)
+		ws.Projects = append(ws.Projects, project)
 	}
 
 	return ws
