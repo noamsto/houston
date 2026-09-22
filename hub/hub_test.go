@@ -3,7 +3,9 @@ package hub
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -306,5 +308,81 @@ func TestMergeStateIntoViewSurfacesLastMessageOnlyWhileWaiting(t *testing.T) {
 				t.Errorf("LastMessage = %q, want %q", v.LastMessage, tt.want)
 			}
 		})
+	}
+}
+
+func TestPruneEnded(t *testing.T) {
+	dir := t.TempDir()
+	h := NewWithOptions(dir, Options{ClaudeProjectsDir: "-", PruneTTL: time.Hour}, silentLog())
+
+	oldTime := time.Now().Add(-2 * time.Hour)
+
+	writeState(t, dir, hook.SessionState{
+		SessionID: "old-ended",
+		State:     hook.StateEnded,
+		UpdatedAt: oldTime.Unix(),
+	})
+	// Backdate the on-disk mtime to match production, where hook.Write sets
+	// UpdatedAt and the file mtime moments apart. Not load-bearing for the
+	// race guard itself (which only compares two stats taken within
+	// pruneEnded's own read-to-remove window), but keeps this fixture
+	// realistic.
+	if err := os.Chtimes(hook.Path(dir, "old-ended"), oldTime, oldTime); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+
+	writeState(t, dir, hook.SessionState{
+		SessionID: "recent-ended",
+		State:     hook.StateEnded,
+		UpdatedAt: time.Now().Unix(),
+	})
+
+	writeState(t, dir, hook.SessionState{
+		SessionID: "old-live",
+		State:     hook.StateWaiting,
+		UpdatedAt: oldTime.Unix(),
+	})
+	if err := os.Chtimes(hook.Path(dir, "old-live"), oldTime, oldTime); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+
+	writeState(t, dir, hook.SessionState{
+		SessionID: "raced-with-resume",
+		State:     hook.StateEnded,
+		UpdatedAt: oldTime.Unix(),
+	})
+	if err := os.Chtimes(hook.Path(dir, "raced-with-resume"), oldTime, oldTime); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+
+	// Simulate a resumed session rewriting the file between pruneEnded's
+	// read and its remove: land a real mtime change in that window via the
+	// test-only preRemoveStat seam, right where the guard's second stat
+	// happens.
+	racedPath := hook.Path(dir, "raced-with-resume")
+	prevPreRemoveStat := preRemoveStat
+	preRemoveStat = func(path string) (os.FileInfo, error) {
+		if path == racedPath {
+			if err := os.Chtimes(path, time.Now(), time.Now()); err != nil {
+				t.Fatalf("Chtimes: %v", err)
+			}
+		}
+		return os.Stat(path)
+	}
+	defer func() { preRemoveStat = prevPreRemoveStat }()
+
+	h.pruneEnded(filepath.Join(dir, "claude"))
+
+	if _, err := os.Stat(hook.Path(dir, "old-ended")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("old-ended: want removed, stat err = %v", err)
+	}
+	if _, err := os.Stat(hook.Path(dir, "recent-ended")); err != nil {
+		t.Errorf("recent-ended: want kept, stat err = %v", err)
+	}
+	if _, err := os.Stat(hook.Path(dir, "old-live")); err != nil {
+		t.Errorf("old-live: want kept, stat err = %v", err)
+	}
+	if _, err := os.Stat(racedPath); err != nil {
+		t.Errorf("raced-with-resume: want kept, stat err = %v", err)
 	}
 }
