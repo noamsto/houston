@@ -549,6 +549,7 @@ a.crews-pr::after { content: ''; position: absolute; inset: -10px -8px -13px; }
 .dispatch-field textarea:disabled { opacity: 0.6; }
 .dispatch-field textarea { min-height: 120px; resize: vertical; font-family: var(--font-mono); }
 .dispatch-hint { font-size: 12px; color: var(--text-faint); }
+.dispatch-hint.dispatch-error { color: var(--state-blocked); }
 .dispatch-field textarea.dispatch-task { resize: none; }
 .dispatch-notice { margin: 12px 0 0; padding: 0 14px; font-size: 12px; color: var(--state-blocked); }
 

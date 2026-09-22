@@ -111,6 +111,14 @@ export function crewAgeLabel(id: string, now: number): string {
   return `${id} · ${agoLabel(Number(m[1]), now)} ago`
 }
 
+/** Matches server/dispatch.go's dispatchIssueRe — a GitHub issue number or a
+ *  Linear id. Empty is valid (the field is optional). */
+const ISSUE_RE = /^([0-9]{1,9}|[A-Z]{2,10}-[0-9]{1,9})$/
+
+export function isValidIssue(issue: string): boolean {
+  return issue.trim() === '' || ISSUE_RE.test(issue.trim())
+}
+
 /** Same 40%-of-viewport cap as the terminal composer. */
 export function taskMaxHeight(vh: number): number {
   return Math.max(120, Math.round(vh * 0.4))

@@ -7,6 +7,7 @@ import {
   defaultCrew,
   defaultModel,
   findDispatchedRun,
+  isValidIssue,
   loadPrefs,
   resolveInitial,
   savePrefs,
@@ -149,7 +150,7 @@ export function DispatchView({ runs }: { runs: Run[] }) {
 
   async function handleSubmit(e: FormEvent): Promise<void> {
     e.preventDefault()
-    if (submitting || !title.trim()) return
+    if (submitting || !title.trim() || !isValidIssue(issue)) return
     setSubmitting(true)
     const req = {
       repo,
@@ -183,6 +184,9 @@ export function DispatchView({ runs }: { runs: Run[] }) {
     setTitle('')
     setSpec('')
   }
+
+  const issueValid = isValidIssue(issue)
+  const submitDisabledReason = !title.trim() ? 'Title is required.' : !issueValid ? 'Fix the issue id to dispatch.' : null
 
   const dispatchedRun =
     outcome?.kind === 'started' ? findDispatchedRun(runs, outcome.branch, outcome.crew || undefined) : undefined
@@ -290,13 +294,20 @@ export function DispatchView({ runs }: { runs: Run[] }) {
               type="text"
               value={issue}
               disabled={submitting}
+              aria-invalid={!issueValid}
               onChange={(e) => setIssue(e.target.value)}
             />
+            {!issueValid && (
+              <span className="dispatch-hint dispatch-error">Must be a GitHub issue number (123) or a Linear id (ENG-123).</span>
+            )}
           </div>
 
-          <button type="submit" className="dispatch-submit" disabled={submitting || !title.trim()}>
+          <button type="submit" className="dispatch-submit" disabled={submitting || !title.trim() || !issueValid}>
             {submitting ? 'Dispatching…' : 'Dispatch'}
           </button>
+          {!submitting && submitDisabledReason && (
+            <span className="dispatch-hint">{submitDisabledReason}</span>
+          )}
         </form>
       )}
 
