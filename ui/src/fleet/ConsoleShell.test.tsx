@@ -66,7 +66,7 @@ describe('ConsoleShell layout', () => {
     render(<ConsoleShell runs={runs} connected hasSnapshot now={now} />)
 
     const detail = screen.getByLabelText('detail')
-    expect(within(detail).getByText('repo-b/branch-b')).toBeTruthy()
+    expect(within(detail).getByText('branch-b')).toBeTruthy()
 
     const list = screen.getByLabelText('fleet list')
     expect(cardFor(list, 'branch-b').getAttribute('aria-current')).toBe('true')
@@ -86,7 +86,7 @@ describe('ConsoleShell layout', () => {
     act(() => { window.dispatchEvent(new HashChangeEvent('hashchange')) })
 
     const detail = screen.getByLabelText('detail')
-    expect(within(detail).getByText('repo-a/branch-a')).toBeTruthy()
+    expect(within(detail).getByText('branch-a')).toBeTruthy()
     expect(cardFor(list, 'branch-a').getAttribute('aria-current')).toBe('true')
     expect(cardFor(list, 'branch-b').getAttribute('aria-current')).toBeNull()
   })
@@ -251,7 +251,7 @@ describe('ConsoleShell tab routes', () => {
     fireEvent.click(within(screen.getByLabelText('rail')).getByRole('button', { name: /^All/ }))
 
     expect(window.location.hash).toBe('#/fleet/b')
-    expect(within(screen.getByLabelText('detail')).getByText('repo-b/branch-b')).toBeTruthy()
+    expect(within(screen.getByLabelText('detail')).getByText('branch-b')).toBeTruthy()
   })
 
   it('switches the list to Crews while the detail stays open', () => {
@@ -262,7 +262,7 @@ describe('ConsoleShell tab routes', () => {
     fireEvent.click(crewsButton)
 
     expect(crewsButton.getAttribute('aria-pressed')).toBe('true')
-    expect(within(screen.getByLabelText('detail')).getByText('repo-b/branch-b')).toBeTruthy()
+    expect(within(screen.getByLabelText('detail')).getByText('branch-b')).toBeTruthy()
   })
 
   it('the detail back button returns to the current section', () => {

@@ -226,7 +226,16 @@
   color: var(--text-faint); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
 }
 .run-detail-heading { display: flex; align-items: center; gap: 8px; min-width: 0; }
+/* flex:none so a long branch ellipsizes instead of squeezing the project out. */
+.run-detail-project {
+  flex: none; max-width: 40%;
+  padding: 2px 8px; border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent);
+  font-family: var(--font-mono); font-size: 12px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .run-detail-name {
+  min-width: 0;
   color: var(--text); font-size: 14px; font-weight: 600; letter-spacing: -0.01em;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }

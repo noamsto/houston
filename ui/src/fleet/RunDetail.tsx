@@ -2,6 +2,7 @@ import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { Run } from '../api/runs'
 import { collapseTrail } from './activityTimeline'
 import { agoLabel, nameLabel, subtitle } from './format'
+import { projectOf } from './fleetList'
 import { TerminalPane } from '../components/TerminalPane'
 import { useTerminalLifecycle } from './useTerminalLifecycle'
 import './fleet.css'
@@ -48,7 +49,8 @@ export function RunDetail({ runs, hasSnapshot, streamConnected, now, id, tab, on
         {run && (
           <div className="run-detail-heading">
             <span className="run-dot" style={{ background: `var(--state-${run.state}, var(--text-faint))` }} />
-            <span className="run-detail-name">{nameLabel(run)}</span>
+            <span className="run-detail-project">{projectOf(run)}</span>
+            <span className="run-detail-name">{run.branch || nameLabel(run)}</span>
             <span className="run-age">{agoLabel(run.updated_at, now)}</span>
           </div>
         )}
