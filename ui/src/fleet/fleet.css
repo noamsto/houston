@@ -186,16 +186,18 @@
 /* Landscape phone: header + tab switcher + bottom nav + composer together
    leave almost no room for the terminal in a ~390px-tall viewport. Collapse
    the header and bottom nav while the Terminal tab is open — same idea as
-   keyboard-open above — but keep .run-detail-tabs visible: it's the only
-   way to leave the terminal on mobile (TerminalPane's own header only
-   renders on desktop). :has() is new here but supported by Safari 15.4+ and
-   Chrome/Android WebView 105+ (2022+), fine for this internal tool. 1023px
-   matches the useIsDesktop breakpoint (min-width: 1024px) so desktop is
-   untouched; some landscape tablets ~1000px wide get swept in too — accepted
-   as a harmless minor over-application. */
+   keyboard-open above — but keep .run-detail-tabs visible, and reveal a
+   compact back button inline in it (.run-detail-tabs-back below), since the
+   header's own back button is what got hidden here (TerminalPane's own
+   header only renders on desktop). :has() is new here but supported by
+   Safari 15.4+ and Chrome/Android WebView 105+ (2022+), fine for this
+   internal tool. 1023px matches the useIsDesktop breakpoint (min-width:
+   1024px) so desktop is untouched; some landscape tablets ~1000px wide get
+   swept in too — accepted as a harmless minor over-application. */
 @media (orientation: landscape) and (max-width: 1023px) {
   .shell:has(.run-detail-body.terminal) .shell-tabs { display: none; }
   .run-detail:has(.run-detail-body.terminal) .run-detail-header { display: none; }
+  .run-detail:has(.run-detail-body.terminal) .run-detail-tabs-back { display: inline-flex; align-items: center; }
   /* .shell-tabs is hidden here without the keyboard necessarily being up, so
      it no longer clears the home indicator for the composer — give the inset
      back. */
@@ -268,6 +270,14 @@
 .run-detail-tabs button.on {
   background: var(--fill); color: var(--text); font-weight: 600;
   border-color: var(--line-strong);
+}
+/* Landscape-only escape hatch (revealed above): higher specificity than
+   `.run-detail-tabs button` so it overrides that rule's flex/border/background
+   sizing instead of just adding to it. */
+.run-detail-tabs button.run-detail-tabs-back {
+  flex: none; min-height: var(--tap); border: 0; background: none;
+  color: var(--text-faint); font-weight: 600; font-size: 14px; padding: 0 4px;
+  display: none;
 }
 
 .run-detail-body { padding: 4px 14px 24px; flex: 1; min-height: 0; display: flex; flex-direction: column; }

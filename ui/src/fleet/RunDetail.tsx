@@ -65,13 +65,13 @@ export function RunDetail({ runs, hasSnapshot, streamConnected, now, id, tab, on
           <button type="button" className="run-detail-back-cta" onClick={onBack}>Back to {backLabel}</button>
         </div>
       ) : (
-        <RunDetailBody run={run} tab={tab} streamConnected={streamConnected} now={now} onBack={onBack} />
+        <RunDetailBody run={run} tab={tab} streamConnected={streamConnected} now={now} onBack={onBack} backLabel={backLabel} />
       )}
     </div>
   )
 }
 
-function RunDetailBody({ run, tab, streamConnected, now, onBack }: { run: Run; tab: Tab; streamConnected: boolean; now: number; onBack: () => void }) {
+function RunDetailBody({ run, tab, streamConnected, now, onBack, backLabel }: { run: Run; tab: Tab; streamConnected: boolean; now: number; onBack: () => void; backLabel: string }) {
   const capable = run.caps.terminal && Boolean(run.tmux)
   const lifecycle = useTerminalLifecycle(run.id, capable, tab === 'terminal', streamConnected)
 
@@ -86,6 +86,9 @@ function RunDetailBody({ run, tab, streamConnected, now, onBack }: { run: Run; t
   return (
     <>
       <nav className="run-detail-tabs">
+        <button type="button" className="run-detail-tabs-back" onClick={onBack} aria-label={`Back to ${backLabel}`}>
+          <span aria-hidden>‹</span> {backLabel}
+        </button>
         <button
           type="button"
           className={effectiveTab === 'activity' ? 'on' : ''}

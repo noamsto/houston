@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { RunDetail } from './RunDetail'
 import type { Run } from '../api/runs'
 import type { Terminal } from '@xterm/xterm'
@@ -229,7 +229,7 @@ describe('RunDetail terminal lifecycle', () => {
     expect(screen.queryByText(r.tmux!.pane_id)).toBeNull()
     expect(container.textContent).not.toContain('/api/pane')
     // RunDetail's own header/tabs are still present.
-    expect(screen.getByLabelText('Back to Fleet')).toBeTruthy()
+    expect(within(container.querySelector<HTMLElement>('.run-detail-header')!).getByLabelText('Back to Fleet')).toBeTruthy()
     expect(screen.getByText('Terminal')).toBeTruthy()
   })
 
@@ -263,6 +263,20 @@ describe('RunDetail terminal lifecycle', () => {
     expect(url).toBe(`/api/runs/${r.id}/input`)
     expect(JSON.parse(String(init?.body))).toEqual({ type: 'key', key: 'y' })
     expect(sendInput).not.toHaveBeenCalled()
+  })
+
+  it('the tabs-row back button returns to Fleet (landscape one-step back)', () => {
+    const r = liveRun()
+    const onBack = vi.fn()
+    const { container } = render(
+      <RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" onBack={onBack} />,
+    )
+
+    fireEvent.click(
+      within(container.querySelector<HTMLElement>('.run-detail-tabs')!).getByRole('button', { name: /back to fleet/i }),
+    )
+
+    expect(onBack).toHaveBeenCalled()
   })
 })
 
