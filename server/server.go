@@ -87,6 +87,10 @@ type Server struct {
 	// OpenCode integration
 	ocDiscovery *opencode.Discovery
 	ocManager   *opencode.Manager
+	// ocScanDone/ocRefreshDone close once the OpenCode background scan/
+	// refresh goroutines have exited. Nil when OpenCode isn't enabled.
+	ocScanDone    <-chan struct{}
+	ocRefreshDone <-chan struct{}
 
 	// Agent-card hub (new) — aggregates hook state + transcript tails.
 	hub *hub.Hub
@@ -277,8 +281,8 @@ func New(cfg Config) (*Server, error) {
 		}
 
 		// Start background discovery
-		s.ocDiscovery.StartBackgroundScan(ctx, 30*time.Second)
-		s.ocManager.StartBackgroundRefresh(ctx, 10*time.Second)
+		s.ocScanDone = s.ocDiscovery.StartBackgroundScan(ctx, 30*time.Second)
+		s.ocRefreshDone = s.ocManager.StartBackgroundRefresh(ctx, 10*time.Second)
 	}
 
 	gate := &authGate{enabled: cfg.AuthEnabled, allowedOrigins: cfg.AllowedOrigins}
@@ -309,6 +313,20 @@ func (s *Server) Close() error {
 			// Every producer has returned, so nothing can send on deltas.
 			close(s.deltas)
 			<-s.pumpDone
+
+			if s.ocScanDone != nil {
+				<-s.ocScanDone
+			}
+			if s.ocRefreshDone != nil {
+				<-s.ocRefreshDone
+			}
+
+			// Goroutines have stopped; now close what they depended on.
+			s.controlMgr.Close()
+			if s.ocManager != nil {
+				s.ocManager.Close()
+			}
+
 			close(stopped)
 		}()
 

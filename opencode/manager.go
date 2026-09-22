@@ -355,9 +355,15 @@ func (m *Manager) GetCachedStates() []SessionState {
 	return all
 }
 
-// StartBackgroundRefresh starts periodic session refresh.
-func (m *Manager) StartBackgroundRefresh(ctx context.Context, interval time.Duration) {
+// StartBackgroundRefresh starts periodic session refresh. The returned
+// channel is closed once the background goroutine has exited (on ctx
+// cancellation), so a caller can join it.
+func (m *Manager) StartBackgroundRefresh(ctx context.Context, interval time.Duration) <-chan struct{} {
+	done := make(chan struct{})
+
 	go func() {
+		defer close(done)
+
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
@@ -370,6 +376,8 @@ func (m *Manager) StartBackgroundRefresh(ctx context.Context, interval time.Dura
 			}
 		}
 	}()
+
+	return done
 }
 
 // Close cleans up all subscriptions.
