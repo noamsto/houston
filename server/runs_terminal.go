@@ -70,6 +70,11 @@ func (s *Server) runPane(w http.ResponseWriter, r *http.Request) (tmux.Pane, boo
 		terminalRefusal(w, id, http.StatusServiceUnavailable, "tmux unavailable")
 		return tmux.Pane{}, false
 	}
+	if run.Tmux.Server != "" && pane.Server != "" && run.Tmux.Server != pane.Server {
+		slog.Info("resolve run pane refused: server mismatch", "id", id, "pane_id", run.Tmux.PaneID, "run_server", run.Tmux.Server, "pane_server", pane.Server)
+		terminalRefusal(w, id, http.StatusConflict, "terminal pane belongs to a different tmux server")
+		return tmux.Pane{}, false
+	}
 	return pane, true
 }
 

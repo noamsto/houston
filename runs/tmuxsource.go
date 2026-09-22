@@ -107,7 +107,7 @@ func deltasFromTmux(wins []tmux.WindowOptions, panes []tmux.PaneOptions, project
 			UpdatedAt: ClaudeStatusEpoch(p.ClaudeStatus),
 			Branch:    w.Branch,
 			Worktree:  w.GitRoot,
-			Tmux:      &TmuxRef{Session: w.Session, Window: w.Window, PaneID: p.PaneID},
+			Tmux:      &TmuxRef{Session: w.Session, Window: w.Window, PaneID: p.PaneID, Server: p.ServerPID},
 			Activity:  Activity{Task: firstNonEmpty(p.ClaudeTask, w.Task)},
 		}
 		// A pane is an agent run only once lazytmux reports a claude_status for

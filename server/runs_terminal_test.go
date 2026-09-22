@@ -31,11 +31,12 @@ type sentInput struct {
 // fakeRunPanes stands in for tmux. Its call log is the only way to prove a
 // refusal happened before anything reached a pane.
 type fakeRunPanes struct {
-	mu         sync.Mutex
-	resolveErr error
-	sendErr    error
-	resolved   []string
-	sent       []sentInput
+	mu            sync.Mutex
+	resolveErr    error
+	resolveServer string
+	sendErr       error
+	resolved      []string
+	sent          []sentInput
 }
 
 func (f *fakeRunPanes) ResolvePane(paneID string) (tmux.Pane, error) {
@@ -45,7 +46,7 @@ func (f *fakeRunPanes) ResolvePane(paneID string) (tmux.Pane, error) {
 	if f.resolveErr != nil {
 		return tmux.Pane{}, f.resolveErr
 	}
-	return tmux.Pane{ID: paneID, Session: "s"}, nil
+	return tmux.Pane{ID: paneID, Session: "s", Server: f.resolveServer}, nil
 }
 
 func (f *fakeRunPanes) SendKeys(p tmux.Pane, keys string, enter bool) error {
@@ -75,6 +76,20 @@ func termDelta() runs.Delta {
 		Tmux:  &runs.TmuxRef{Session: "s", Window: 0, PaneID: "%42"},
 	}}
 }
+
+// termDeltaWithServer is termDelta but with a recorded Tmux.Server, so tests
+// can exercise runPane's server-identity check. termDelta itself must stay
+// Server-less — other cases depend on that.
+func termDeltaWithServer(server string) runs.Delta {
+	return runs.Delta{Source: "tmux", Key: "%45", Run: runs.Run{
+		Agent: "claude",
+		Tmux:  &runs.TmuxRef{Session: "s", Window: 0, PaneID: "%45", Server: server},
+	}}
+}
+
+// serverRunID is the ID the registry derives for the "%45" key of
+// termDeltaWithServer.
+const serverRunID = "pane-45"
 
 func newRunTerminalServer(t *testing.T, panes runPaneOps, deltas ...runs.Delta) *Server {
 	t.Helper()
@@ -122,22 +137,26 @@ func TestRunTerminalResolution(t *testing.T) {
 	}}
 
 	cases := []struct {
-		name        string
-		id          func(*Server) string
-		resolveErr  error
-		want        int
-		wantBody    string
-		wantResolve int
+		name          string
+		id            func(*Server) string
+		resolveErr    error
+		resolveServer string
+		want          int
+		wantBody      string
+		wantResolve   int
 	}{
-		{"unknown run", func(*Server) string { return "pane-999" }, nil, http.StatusNotFound, "no such run", 0},
+		{"unknown run", func(*Server) string { return "pane-999" }, nil, "", http.StatusNotFound, "no such run", 0},
 		{"crew-only run", func(s *Server) string {
 			return runIDWhere(t, s, func(r runs.Run) bool { return r.Crew != nil })
-		}, nil, http.StatusConflict, "run has no terminal", 0},
+		}, nil, "", http.StatusConflict, "run has no terminal", 0},
 		// A hook's cached pane ref outlives the pane; only the tmux layer counts.
-		{"stale tmux ref", func(*Server) string { return "pane-43" }, nil, http.StatusConflict, "run has no terminal", 0},
-		{"no pane id", func(*Server) string { return "pane-44" }, nil, http.StatusConflict, "run has no terminal", 0},
-		{"pane vanished", func(*Server) string { return termRunID }, fmt.Errorf("%w: %%42", tmux.ErrPaneNotFound), http.StatusConflict, "terminal pane is gone", 1},
-		{"tmux unavailable", func(*Server) string { return termRunID }, errors.New(`exec: "tmux": executable file not found in $PATH`), http.StatusServiceUnavailable, "tmux unavailable", 1},
+		{"stale tmux ref", func(*Server) string { return "pane-43" }, nil, "", http.StatusConflict, "run has no terminal", 0},
+		{"no pane id", func(*Server) string { return "pane-44" }, nil, "", http.StatusConflict, "run has no terminal", 0},
+		{"pane vanished", func(*Server) string { return termRunID }, fmt.Errorf("%w: %%42", tmux.ErrPaneNotFound), "", http.StatusConflict, "terminal pane is gone", 1},
+		{"tmux unavailable", func(*Server) string { return termRunID }, errors.New(`exec: "tmux": executable file not found in $PATH`), "", http.StatusServiceUnavailable, "tmux unavailable", 1},
+		// The run's recorded server and the freshly resolved pane's server
+		// disagree: the pane belongs to a different tmux server incarnation.
+		{"server mismatch", func(*Server) string { return serverRunID }, nil, "2222", http.StatusConflict, "terminal pane belongs to a different tmux server", 1},
 	}
 
 	routes := []struct {
@@ -153,8 +172,8 @@ func TestRunTerminalResolution(t *testing.T) {
 	for _, route := range routes {
 		for _, tc := range cases {
 			t.Run(route.name+"/"+tc.name, func(t *testing.T) {
-				panes := &fakeRunPanes{resolveErr: tc.resolveErr}
-				s := newRunTerminalServer(t, panes, termDelta(), crewDelta(nil), hookOnly, noPaneID)
+				panes := &fakeRunPanes{resolveErr: tc.resolveErr, resolveServer: tc.resolveServer}
+				s := newRunTerminalServer(t, panes, termDelta(), crewDelta(nil), hookOnly, noPaneID, termDeltaWithServer("1111"))
 
 				rec := doReply(t, s, route.req(tc.id(s)))
 				// The plain code, not 101: resolution refuses before any upgrade.
@@ -182,6 +201,41 @@ func TestRunTerminalResolution(t *testing.T) {
 			rec := doReply(t, s, route.req(termRunID))
 			if rec.Code != http.StatusServiceUnavailable {
 				t.Fatalf("status %d, want 503", rec.Code)
+			}
+		})
+	}
+}
+
+// TestRunTerminalServerUnknownAllowsResolution pins the "unknown ⇒ false"
+// half of the server-identity check: a run recorded with no Tmux.Server
+// (termDelta, unmodified) must not be refused just because the freshly
+// resolved pane's server happens to be known.
+func TestRunTerminalServerUnknownAllowsResolution(t *testing.T) {
+	routes := []struct {
+		name string
+		req  func(id string) *http.Request
+		want int
+	}{
+		{"terminal", func(id string) *http.Request { return wsRequest("/api/runs/" + id + "/terminal") }, http.StatusInternalServerError},
+		{"input", func(id string) *http.Request {
+			return replyRequest("POST", "/api/runs/"+id+"/input", `{"type":"key","key":"Enter"}`)
+		}, http.StatusNoContent},
+	}
+	for _, route := range routes {
+		t.Run(route.name, func(t *testing.T) {
+			panes := &fakeRunPanes{resolveServer: "some-pid"}
+			s := newRunTerminalServer(t, panes, termDelta())
+
+			rec := doReply(t, s, route.req(termRunID))
+			if rec.Code != route.want {
+				t.Fatalf("status %d, want %d (%q)", rec.Code, route.want, rec.Body.String())
+			}
+			if rec.Code == http.StatusConflict {
+				t.Fatalf("refused with a known server on the pane but no recorded server on the run")
+			}
+			resolved, _ := panes.calls()
+			if resolved != 1 {
+				t.Errorf("ResolvePane called %d times, want 1", resolved)
 			}
 		})
 	}
