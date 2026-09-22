@@ -6,6 +6,7 @@ import {
   defaultCrew,
   defaultModel,
   findDispatchedRun,
+  isValidIssue,
   loadPrefs,
   resolveInitial,
   savePrefs,
@@ -244,5 +245,32 @@ describe('findDispatchedRun', () => {
     const older = run({ id: 'older', branch: 'feat/x', since: 100, updated_at: 500 })
     const newer = run({ id: 'newer', branch: 'feat/x', since: 200, updated_at: 300 })
     expect(findDispatchedRun([older, newer], 'feat/x')).toBe(newer)
+  })
+})
+
+describe('isValidIssue', () => {
+  it('accepts empty', () => {
+    expect(isValidIssue('')).toBe(true)
+    expect(isValidIssue('   ')).toBe(true)
+  })
+
+  it('accepts a GitHub issue number', () => {
+    expect(isValidIssue('123')).toBe(true)
+  })
+
+  it('accepts a Linear id', () => {
+    expect(isValidIssue('ENG-123')).toBe(true)
+  })
+
+  it('rejects a bogus id', () => {
+    expect(isValidIssue('not-an-issue')).toBe(false)
+  })
+
+  it('rejects a leading #', () => {
+    expect(isValidIssue('#123')).toBe(false)
+  })
+
+  it('trims surrounding whitespace before matching', () => {
+    expect(isValidIssue('  123  ')).toBe(true)
   })
 })
