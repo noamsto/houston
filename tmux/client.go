@@ -583,3 +583,21 @@ func (c *Client) ResizeWindow(session string, window int, cols, rows int) error 
 	target := fmt.Sprintf("%s:%d", session, window)
 	return c.run("resize-window", "-t", target, "-x", strconv.Itoa(cols), "-y", strconv.Itoa(rows))
 }
+
+// ServerIdentity reports the pid of the tmux server this client talks to and
+// the unix time it started. Pane ids are only unique within one incarnation.
+func (c *Client) ServerIdentity() (pid string, startedAt int64, err error) {
+	out, err := c.output("display-message", "-p", "#{pid}\t#{start_time}")
+	if err != nil {
+		return "", 0, err
+	}
+	parts := strings.Split(strings.TrimSpace(string(out)), "\t")
+	if len(parts) != 2 {
+		return "", 0, fmt.Errorf("unexpected output format: %s", string(out))
+	}
+	startedAt, err = strconv.ParseInt(parts[1], 10, 64)
+	if err != nil {
+		return "", 0, fmt.Errorf("unexpected output format: %s", string(out))
+	}
+	return parts[0], startedAt, nil
+}

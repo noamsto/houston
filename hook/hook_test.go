@@ -2,6 +2,7 @@ package hook
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -239,5 +240,133 @@ func TestDispatchNotificationReplacesThePreviousMessage(t *testing.T) {
 	got := dispatch(t, dir, EventNotification, map[string]any{"session_id": "s", "message": "second"})
 	if got.LastMessage != "second" {
 		t.Errorf("LastMessage = %q, want second", got.LastMessage)
+	}
+}
+
+// stubTmuxDisplay replaces tmuxDisplay for the duration of a test and counts
+// invocations.
+func stubTmuxDisplay(t *testing.T, f func(pane string) ([]byte, error)) *int {
+	t.Helper()
+	calls := 0
+	orig := tmuxDisplay
+	tmuxDisplay = func(pane string) ([]byte, error) {
+		calls++
+		return f(pane)
+	}
+	t.Cleanup(func() { tmuxDisplay = orig })
+	return &calls
+}
+
+func TestDispatchResumedSessionFollowsTheNewPane(t *testing.T) {
+	// A1 (regression): a session started in pane A and later resumed in pane
+	// B must have its coordinates and server identity follow B, not keep A.
+	dir := t.TempDir()
+	stubTmuxDisplay(t, func(string) ([]byte, error) {
+		return []byte("origsess\t0"), nil
+	})
+	t.Setenv("TMUX_PANE", "%20")
+	t.Setenv("TMUX", "/s,1966,0")
+	dispatch(t, dir, EventSessionStart, map[string]any{"session_id": "s"})
+	dispatch(t, dir, EventPreToolUse, map[string]any{"session_id": "s", "tool_name": "Bash"})
+
+	stubTmuxDisplay(t, func(string) ([]byte, error) {
+		return []byte("toddl\t1"), nil
+	})
+	t.Setenv("TMUX_PANE", "%24")
+	t.Setenv("TMUX", "/s,2001,0")
+	got := dispatch(t, dir, EventPreToolUse, map[string]any{"session_id": "s", "tool_name": "Bash"})
+
+	if got.TmuxPane != "%24" {
+		t.Errorf("TmuxPane = %q, want %%24 (the resumed pane)", got.TmuxPane)
+	}
+	if got.TmuxSession != "toddl" || got.TmuxWindow != "1" {
+		t.Errorf("TmuxSession/Window = %q/%q, want toddl/1", got.TmuxSession, got.TmuxWindow)
+	}
+	if got.TmuxServer != "2001" {
+		t.Errorf("TmuxServer = %q, want 2001", got.TmuxServer)
+	}
+}
+
+func TestDispatchUnchangedEnvDoesNotReexec(t *testing.T) {
+	// A3: once the environment is recorded, further events with the same
+	// environment must not spawn tmux again.
+	dir := t.TempDir()
+	calls := stubTmuxDisplay(t, func(string) ([]byte, error) {
+		return []byte("sess\t0"), nil
+	})
+	t.Setenv("TMUX_PANE", "%20")
+	t.Setenv("TMUX", "/s,1966,0")
+	dispatch(t, dir, EventSessionStart, map[string]any{"session_id": "s"})
+	dispatch(t, dir, EventPreToolUse, map[string]any{"session_id": "s", "tool_name": "Bash"})
+	dispatch(t, dir, EventPostToolUse, map[string]any{"session_id": "s", "tool_name": "Bash"})
+
+	if *calls != 1 {
+		t.Errorf("tmuxDisplay called %d times, want 1", *calls)
+	}
+}
+
+func TestDispatchRetriesAfterAFailedDisplayMessage(t *testing.T) {
+	// A failed display-message leaves TmuxSession empty while TmuxPane is
+	// still set; the next event must retry rather than treating that as
+	// "already recorded".
+	dir := t.TempDir()
+	fail := true
+	calls := stubTmuxDisplay(t, func(string) ([]byte, error) {
+		if fail {
+			return nil, errors.New("tmux: no such pane")
+		}
+		return []byte("sess\t0"), nil
+	})
+	t.Setenv("TMUX_PANE", "%20")
+	t.Setenv("TMUX", "/s,1966,0")
+	got := dispatch(t, dir, EventSessionStart, map[string]any{"session_id": "s"})
+	if got.TmuxSession != "" || got.TmuxPane != "%20" {
+		t.Fatalf("setup: got session=%q pane=%q, want empty session, pane %%20", got.TmuxSession, got.TmuxPane)
+	}
+
+	fail = false
+	got = dispatch(t, dir, EventPreToolUse, map[string]any{"session_id": "s", "tool_name": "Bash"})
+
+	if got.TmuxSession != "sess" {
+		t.Errorf("TmuxSession = %q after retry, want sess", got.TmuxSession)
+	}
+	if *calls != 2 {
+		t.Errorf("tmuxDisplay called %d times, want 2 (initial failure + retry)", *calls)
+	}
+}
+
+func TestDispatchSessionStartAlwaysRefreshes(t *testing.T) {
+	// Even with an unchanged environment, SessionStart must recompute — it
+	// marks a fresh (or resumed) process, and a stale entry from a killed
+	// process must not linger uncorrected.
+	dir := t.TempDir()
+	calls := stubTmuxDisplay(t, func(string) ([]byte, error) {
+		return []byte("sess\t0"), nil
+	})
+	t.Setenv("TMUX_PANE", "%20")
+	t.Setenv("TMUX", "/s,1966,0")
+	dispatch(t, dir, EventSessionStart, map[string]any{"session_id": "s"})
+	dispatch(t, dir, EventSessionStart, map[string]any{"session_id": "s"})
+
+	if *calls != 2 {
+		t.Errorf("tmuxDisplay called %d times across two SessionStarts, want 2", *calls)
+	}
+}
+
+func TestDispatchClearsPaneWhenNoLongerUnderTmux(t *testing.T) {
+	dir := t.TempDir()
+	stubTmuxDisplay(t, func(string) ([]byte, error) {
+		return []byte("sess\t0"), nil
+	})
+	t.Setenv("TMUX_PANE", "%20")
+	t.Setenv("TMUX", "/s,1966,0")
+	dispatch(t, dir, EventSessionStart, map[string]any{"session_id": "s"})
+
+	t.Setenv("TMUX_PANE", "")
+	t.Setenv("TMUX", "")
+	got := dispatch(t, dir, EventPreToolUse, map[string]any{"session_id": "s", "tool_name": "Bash"})
+
+	if got.TmuxSession != "" || got.TmuxWindow != "" || got.TmuxPane != "" || got.TmuxServer != "" {
+		t.Errorf("coordinates not cleared outside tmux: %+v", got)
 	}
 }

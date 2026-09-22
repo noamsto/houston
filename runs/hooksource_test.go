@@ -160,9 +160,12 @@ func TestEndRunClearsWhatOnlyALiveRunHas(t *testing.T) {
 }
 
 type fakePanes struct {
-	mu    sync.Mutex
-	panes []tmux.PaneOptions
-	err   error
+	mu          sync.Mutex
+	panes       []tmux.PaneOptions
+	err         error
+	server      string
+	serverStart int64
+	identityErr error
 }
 
 func (f *fakePanes) set(err error, ids ...string) {
@@ -175,10 +178,26 @@ func (f *fakePanes) set(err error, ids ...string) {
 	}
 }
 
+// setIdentity configures ServerIdentity's return. Left uncalled, a fakePanes
+// reports server "" / serverStart 0 with no error, which paneForeign treats
+// as unknown — the zero value keeps every test that predates this field from
+// tripping the foreign check by accident.
+func (f *fakePanes) setIdentity(server string, startedAt int64, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.server, f.serverStart, f.identityErr = server, startedAt, err
+}
+
 func (f *fakePanes) ListPaneOptions() ([]tmux.PaneOptions, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.panes, f.err
+}
+
+func (f *fakePanes) ServerIdentity() (string, int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.server, f.serverStart, f.identityErr
 }
 
 // blockedState is a permission-blocked session on pane %9 whose state file is
@@ -432,5 +451,112 @@ func TestHookSourceSpeaksForOneSessionPerPane(t *testing.T) {
 	waitDelta(t, out, "current session", func(d Delta) bool { return d.Key == "%9" && d.Run.State == StateThinking })
 	expectNoDelta(t, out, "the stale session spoke for the pane", func(d Delta) bool {
 		return d.Key == "%9" && d.Run.State != StateThinking
+	})
+}
+
+func TestPaneForeign(t *testing.T) {
+	tests := []struct {
+		name string
+		v    hub.SessionView
+		ps   paneSet
+		want bool
+	}{
+		{"no pane", hub.SessionView{}, paneSet{server: "2001", serverStart: 100}, false},
+		{"different server", hub.SessionView{TmuxPane: "%1", TmuxServer: "1966"}, paneSet{server: "2001", serverStart: 100}, true},
+		{"same server", hub.SessionView{TmuxPane: "%1", TmuxServer: "2001", UpdatedAt: 150}, paneSet{server: "2001", serverStart: 100}, false},
+		{"legacy state predates server start", hub.SessionView{TmuxPane: "%1", UpdatedAt: 99}, paneSet{server: "2001", serverStart: 100}, true},
+		{"legacy state at server start", hub.SessionView{TmuxPane: "%1", UpdatedAt: 100}, paneSet{server: "2001", serverStart: 100}, false},
+		{"legacy state after server start", hub.SessionView{TmuxPane: "%1", UpdatedAt: 101}, paneSet{server: "2001", serverStart: 100}, false},
+		{"identity unknown", hub.SessionView{TmuxPane: "%1", TmuxServer: "1966"}, paneSet{}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := paneForeign(tt.v, tt.ps); got != tt.want {
+				t.Errorf("paneForeign = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestListPanesPublishesTheListingEvenWhenIdentityFails(t *testing.T) {
+	panes := &fakePanes{}
+	panes.set(nil, "%1")
+	panes.setIdentity("", 0, errors.New("no server"))
+
+	ps, ok := listPanes(panes)
+	if !ok {
+		t.Fatal("listPanes ok = false, want true — a failed identity query must not fail the whole listing")
+	}
+	if !ps.live["%1"] {
+		t.Errorf("live = %+v, want %%1 present", ps.live)
+	}
+	if ps.server != "" || ps.serverStart != 0 {
+		t.Errorf("server = %q serverStart = %d, want zero values on a failed identity query", ps.server, ps.serverStart)
+	}
+}
+
+// A2a: a state file naming a tmux server other than the one being listed.
+func TestHookSourceDistrustsAForeignServer(t *testing.T) {
+	panes := &fakePanes{}
+	panes.set(nil, "%20")
+	panes.setIdentity("2001", time.Now().Unix(), nil)
+
+	st := blockedState()
+	st.TmuxPane = "%20"
+	st.TmuxServer = "1966"
+
+	out, _ := startHookSourceWith(t, panes, st, nil)
+	d := waitDelta(t, out, "foreign-keyed run", func(d Delta) bool { return d.Key == "claude/"+st.SessionID })
+	if d.Run.Tmux != nil {
+		t.Errorf("Tmux = %+v, want nil for a pane owned by a different tmux server", d.Run.Tmux)
+	}
+}
+
+// A2b: a legacy state file (no tmux_server) whose updated_at predates this
+// server's start time, so its pane id belongs to an earlier incarnation.
+func TestHookSourceDistrustsAPaneFromBeforeTheServerStarted(t *testing.T) {
+	panes := &fakePanes{}
+	panes.set(nil, "%20")
+	serverStart := time.Now().Unix()
+	panes.setIdentity("2001", serverStart, nil)
+
+	st := blockedState()
+	st.TmuxPane = "%20"
+	st.TmuxServer = ""
+	st.UpdatedAt = serverStart - 10
+
+	out, _ := startHookSourceWith(t, panes, st, nil)
+	d := waitDelta(t, out, "foreign-keyed run", func(d Delta) bool { return d.Key == "claude/"+st.SessionID })
+	if d.Run.Tmux != nil {
+		t.Errorf("Tmux = %+v, want nil for a pane predating this tmux server", d.Run.Tmux)
+	}
+}
+
+func TestHookSourceForeignSessionRevivesWithoutATmuxRef(t *testing.T) {
+	panes := &fakePanes{}
+	panes.set(nil, "%20")
+	panes.setIdentity("2001", time.Now().Unix(), nil)
+
+	st := blockedState()
+	st.TmuxPane = "%20"
+	st.TmuxServer = "1966"
+
+	out, dir := startHookSourceWith(t, panes, st, nil)
+	waitDelta(t, out, "foreign run ended", func(d Delta) bool {
+		return d.Key == "claude/"+st.SessionID && d.Run.State == StateDone
+	})
+
+	st.UpdatedAt = time.Now().Add(-30 * time.Second).Unix()
+	if err := hook.Write(hook.Path(dir, st.SessionID), st); err != nil {
+		t.Fatal(err)
+	}
+	d := waitDelta(t, out, "revived run", func(d Delta) bool {
+		return d.Key == "claude/"+st.SessionID && d.Run.State == StateBlocked
+	})
+	if d.Run.Tmux != nil {
+		t.Errorf("Tmux = %+v, want nil — the run stays live but owns no pane here", d.Run.Tmux)
+	}
+	expectNoDelta(t, out, "run ended again despite later activity", func(d Delta) bool {
+		return d.Key == "claude/"+st.SessionID && d.Run.State == StateDone
 	})
 }

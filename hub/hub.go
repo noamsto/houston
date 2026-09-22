@@ -32,6 +32,7 @@ type SessionView struct {
 	TmuxSession    string      `json:"tmux_session,omitempty"`
 	TmuxWindow     string      `json:"tmux_window,omitempty"`
 	TmuxPane       string      `json:"tmux_pane,omitempty"`
+	TmuxServer     string      `json:"tmux_server,omitempty"`
 	State          hook.State  `json:"state"`
 	Tool           string      `json:"tool,omitempty"`
 	ToolInputHint  string      `json:"tool_input_hint,omitempty"`
@@ -415,6 +416,7 @@ func mergeStateIntoView(v *SessionView, s hook.SessionState) {
 	v.TmuxSession = s.TmuxSession
 	v.TmuxWindow = s.TmuxWindow
 	v.TmuxPane = s.TmuxPane
+	v.TmuxServer = s.TmuxServer
 	v.State = s.State
 	v.Tool = s.Tool
 	v.ToolInputHint = s.ToolInputHint

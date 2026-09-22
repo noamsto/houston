@@ -750,3 +750,31 @@ func TestProjectKeepsTheLowestLayersOpinion(t *testing.T) {
 		t.Errorf("Project = %q, want the hook's when no lower layer has one", hookOnly.Project)
 	}
 }
+
+// A2c: hooksource.go normalizes a foreign-server pane away from its key
+// before this ever reaches the registry, so a hook run that once matched %20
+// and the tmux-source run that currently owns %20 must compose as two
+// distinct runs, not merge into one.
+func TestForeignHookRunAndItsFormerPaneComposeAsTwoRuns(t *testing.T) {
+	r := NewRegistry(DefaultOrder)
+	r.Apply(Delta{Source: "hooks", Key: "claude/foreign-sess", Run: Run{Agent: "claude", State: StateBlocked}})
+	r.Apply(Delta{Source: "tmux", Key: "%20", Run: Run{Agent: "claude", State: StateIdle}})
+
+	got := r.Snapshot()
+	if len(got) != 2 {
+		t.Fatalf("%d runs, want 2 — a foreign hook session and the live tmux pane it once matched must not merge", len(got))
+	}
+
+	var hookRun *Run
+	for _, run := range got {
+		if run.ID == idFor("claude/foreign-sess") {
+			hookRun = &run
+		}
+	}
+	if hookRun == nil {
+		t.Fatal("the foreign hook run is missing from the snapshot")
+	}
+	if hookRun.Caps.Terminal || hookRun.Caps.Reply || hookRun.Caps.Kill {
+		t.Errorf("Caps = %+v, want all false — a reply must not be able to reach another identity's pane", hookRun.Caps)
+	}
+}

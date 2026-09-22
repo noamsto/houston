@@ -79,10 +79,17 @@ func Dispatch(event string, stateDir string, stdin io.Reader) error {
 		next.CWD = ev.CWD
 	}
 	next.UpdatedAt = now
-	if next.TmuxSession == "" {
+	// A --resume of the same session id in another pane (or after a tmux
+	// restart) must not keep the first pane recorded: the stale id is
+	// another agent's pane, and the run's reply/terminal target follows it.
+	// Outside tmux both env values are empty, so a recorded pane is cleared
+	// rather than kept.
+	pane, server := tmuxEnv()
+	stale := next.TmuxPane != pane || next.TmuxServer != server ||
+		(next.TmuxPane != "" && next.TmuxSession == "") // last display-message failed
+	if event == EventSessionStart || stale {
 		next.TmuxSession, next.TmuxWindow, next.TmuxPane = tmuxCoords()
-	}
-	if next.PID == 0 {
+		next.TmuxServer = server
 		next.PID = os.Getppid()
 	}
 
@@ -162,6 +169,25 @@ func truncate(s string, n int) string {
 	return s[:n-1] + "…"
 }
 
+// tmuxEnv reports the pane id and server pid the hook is currently running
+// under, read from the environment alone — no exec, so the hot path
+// (PreToolUse/PostToolUse) can check for staleness on every event without
+// spawning tmux.
+func tmuxEnv() (pane, server string) {
+	pane = os.Getenv("TMUX_PANE")
+	// $TMUX is "<socket>,<server-pid>,<session-id>".
+	fields := strings.Split(os.Getenv("TMUX"), ",")
+	if len(fields) >= 2 {
+		server = fields[1]
+	}
+	return pane, server
+}
+
+// tmuxDisplay is overridden in tests to stub tmux's output and count calls.
+var tmuxDisplay = func(pane string) ([]byte, error) {
+	return exec.Command("tmux", "display-message", "-p", "-t", pane, "#S\t#I").Output()
+}
+
 // tmuxCoords returns (session, window, pane). Empty on any failure — hooks
 // can fire outside tmux.
 func tmuxCoords() (string, string, string) {
@@ -172,7 +198,7 @@ func tmuxCoords() (string, string, string) {
 	if pane == "" {
 		return "", "", ""
 	}
-	out, err := exec.Command("tmux", "display-message", "-p", "-t", pane, "#S\t#I").Output()
+	out, err := tmuxDisplay(pane)
 	if err != nil {
 		return "", "", pane
 	}

@@ -105,6 +105,51 @@ func TestResolvePaneExitOneClassification(t *testing.T) {
 	}
 }
 
+// fakeTmuxStdout writes a script that prints stdout to stdout and exits 0,
+// standing in for tmux's happy path without a real tmux server.
+func fakeTmuxStdout(t *testing.T, stdout string) *Client {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "faketmux")
+	script := "#!/bin/sh\nprintf " + strconv.Quote(stdout) + "\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake tmux: %v", err)
+	}
+	return &Client{tmuxPath: path}
+}
+
+func TestServerIdentity(t *testing.T) {
+	c := fakeTmuxStdout(t, "1966\t1790086864\n")
+	pid, startedAt, err := c.ServerIdentity()
+	if err != nil {
+		t.Fatalf("ServerIdentity() error = %v", err)
+	}
+	if pid != "1966" {
+		t.Errorf("pid = %q, want %q", pid, "1966")
+	}
+	if startedAt != 1790086864 {
+		t.Errorf("startedAt = %d, want %d", startedAt, 1790086864)
+	}
+}
+
+func TestServerIdentityMalformed(t *testing.T) {
+	cases := []struct {
+		name   string
+		stdout string
+	}{
+		{"missing field", "1966\n"},
+		{"non-numeric start_time", "1966\tsometime\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := fakeTmuxStdout(t, tc.stdout)
+			_, _, err := c.ServerIdentity()
+			if err == nil {
+				t.Fatalf("ServerIdentity() = nil error, want one")
+			}
+		})
+	}
+}
+
 // Pane is embedded in API responses; the id is an internal addressing detail.
 func TestPaneJSONOmitsID(t *testing.T) {
 	b, err := json.Marshal(Pane{ID: "%1", Session: "s", Window: 1, Index: 2})
