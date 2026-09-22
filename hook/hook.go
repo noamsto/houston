@@ -80,10 +80,9 @@ func Dispatch(event string, stateDir string, stdin io.Reader) error {
 	}
 	next.UpdatedAt = now
 	// A --resume of the same session id in another pane (or after a tmux
-	// restart) must not keep the first pane recorded: the stale id is
-	// another agent's pane, and the run's reply/terminal target follows it.
-	// Outside tmux both env values are empty, so a recorded pane is cleared
-	// rather than kept.
+	// restart) must not keep the first pane recorded: the stale id is another
+	// agent's pane, and the run's reply/terminal target follows it. Outside
+	// tmux both env values are empty, so a recorded pane is cleared, not kept.
 	pane, server := tmuxEnv()
 	stale := next.TmuxPane != pane || next.TmuxServer != server ||
 		(next.TmuxPane != "" && next.TmuxSession == "") // last display-message failed

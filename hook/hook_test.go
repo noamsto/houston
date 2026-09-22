@@ -285,7 +285,7 @@ func stubTmuxDisplay(t *testing.T, f func(pane string) ([]byte, error)) *int {
 }
 
 func TestDispatchResumedSessionFollowsTheNewPane(t *testing.T) {
-	// A1 (regression): a session started on pane %20/server 1966 must refresh
+	// A session started on pane %20/server 1966 must refresh
 	// its recorded coordinates and server identity whenever either one
 	// changes underneath it, and must not re-exec tmux when neither does.
 	tests := []struct {

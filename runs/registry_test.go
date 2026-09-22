@@ -751,7 +751,7 @@ func TestProjectKeepsTheLowestLayersOpinion(t *testing.T) {
 	}
 }
 
-// A2c: hooksource.go normalizes a foreign-server pane away from its key
+// hooksource.go normalizes a foreign-server pane away from its key
 // before this ever reaches the registry, so a hook run that once matched %20
 // and the tmux-source run that currently owns %20 must compose as two
 // distinct runs, not merge into one.

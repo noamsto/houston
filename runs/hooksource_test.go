@@ -179,8 +179,7 @@ func (f *fakePanes) set(err error, ids ...string) {
 
 // setIdentity configures the identity stamped onto panes returned after this
 // call. Left uncalled, a fakePanes stamps server "" / serverStart 0, which
-// paneForeign treats as unknown — the zero value keeps every test that
-// predates this field from tripping the foreign check by accident.
+// paneForeign treats as unknown.
 func (f *fakePanes) setIdentity(server string, startedAt int64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -495,7 +494,7 @@ func TestListPanesTakesIdentityFromTheListing(t *testing.T) {
 	}
 }
 
-// A2a: a state file naming a tmux server other than the one being listed.
+// A state file naming a tmux server other than the one being listed.
 func TestHookSourceDistrustsAForeignServer(t *testing.T) {
 	panes := &fakePanes{}
 	panes.set(nil, "%20")
@@ -512,7 +511,7 @@ func TestHookSourceDistrustsAForeignServer(t *testing.T) {
 	}
 }
 
-// A2b: a legacy state file (no tmux_server) whose updated_at predates this
+// A legacy state file (no tmux_server) whose updated_at predates this
 // server's start time, so its pane id belongs to an earlier incarnation.
 func TestHookSourceDistrustsAPaneFromBeforeTheServerStarted(t *testing.T) {
 	panes := &fakePanes{}
