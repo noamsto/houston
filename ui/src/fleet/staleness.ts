@@ -28,12 +28,27 @@ export function needsYou(run: Freshness, now: number): boolean {
 }
 
 /**
- * isHistory marks a run as foldable behind the "All" filter. Only terminal
- * states qualify, and only once stale: a run that is blocked, running or
- * thinking is never history however old it looks, because hiding something
- * that is waiting on you is the worse failure.
+ * How long a review-state run with no live pane stays out of history. A
+ * crew-bus worker parked at pr_open has no session once it exits, so nothing
+ * ever advances that state; the bus carries no merged/closed bit, so age is
+ * the only signal houston has that the run is over. A day is long enough that
+ * a session which just ended mid-shepherd stays visible, short enough that a
+ * merged PR does not sit in Active forever.
+ */
+export const REVIEW_HISTORY_MS = 24 * 60 * 60 * 1000
+
+/**
+ * isHistory marks a run as foldable behind the "All" filter. Terminal states
+ * qualify once stale, and a review run qualifies once it is a day old with no
+ * live pane — the one non-terminal state houston publishes that nothing will
+ * ever move on its own. A run that is blocked, running or thinking is never
+ * history however old it looks, because hiding something that is waiting on
+ * you is the worse failure.
  */
 export function isHistory(run: Run, now: number): boolean {
-  if (run.state !== 'done' && run.state !== 'failed') return false
-  return !isFresh(run, now)
+  if (run.state === 'done' || run.state === 'failed') return !isFresh(run, now)
+  if (run.state === 'review' && run.caps?.terminal !== true) {
+    return run.updated_at > 0 && now - run.updated_at * 1000 > REVIEW_HISTORY_MS
+  }
+  return false
 }

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { Run } from '../api/runs'
-import { needsYou } from './staleness'
+import { isHistory, needsYou } from './staleness'
 import { filterRuns, groupByHost, crewShortId, type Filter } from './fleetList'
 import { RunList } from './RunList'
 import { CrewsView } from './CrewsView'
@@ -50,6 +50,10 @@ export function ConsoleShell({ runs, connected, hasSnapshot, now }: ShellData) {
     for (const r of runs) {
       const name = r.crew?.name
       if (!name) continue
+      // The rail is a navigation of work in flight; a crew whose only runs are
+      // history (a merged PR with no session left) belongs in the Crews
+      // Finished list, not here.
+      if (isHistory(r, now)) continue
       const list = byCrew.get(name)
       if (list) list.push(r)
       else byCrew.set(name, [r])

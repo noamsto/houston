@@ -46,6 +46,26 @@ describe('filterRuns', () => {
     expect(result.map((r) => r.id).sort()).toEqual(['running', 'stale-done'])
   })
 
+  it('active drops a week-old no-pane review run but All keeps it in history', () => {
+    const runs = [
+      run({
+        id: 'stale-review',
+        state: 'review',
+        updated_at: nowSec - 7 * 24 * HOUR,
+        caps: { terminal: false, reply: true, kill: false },
+      }),
+      run({ id: 'running', state: 'running' }),
+    ]
+    expect(filterRuns(runs, 'active', now).map((r) => r.id)).toEqual(['running'])
+    expect(filterRuns(runs, 'all', now).map((r) => r.id).sort()).toEqual(['running', 'stale-review'])
+  })
+
+  it('active keeps a review run with a live pane however old', () => {
+    const live = run({ id: 'live-review', state: 'review', updated_at: nowSec - 7 * 24 * HOUR })
+    expect(live.caps.terminal).toBe(true)
+    expect(filterRuns([live], 'active', now).map((r) => r.id)).toEqual(['live-review'])
+  })
+
   it('active sort puts fresh blocked first then updated_at desc', () => {
     const runs = [
       run({ id: 'old-running', state: 'running', updated_at: nowSec - 100 }),
