@@ -64,12 +64,13 @@ func TestParseWindowOptionsSurvivesPipeInFreeText(t *testing.T) {
 }
 
 func TestParsePaneOptions(t *testing.T) {
-	out := "%307\x1fhouston:1\x1fprocessing 1788848628 \x1fand add a ci task\x1fnode\x1f0\x1f1\n" +
-		"%283\x1fdispatcher:1\x1f\x1f\x1fbash\x1f1\x1f0\n"
+	out := "%307\x1fhouston:1\x1fprocessing 1788848628 \x1fand add a ci task\x1fnode\x1f0\x1f1\x1f\n" +
+		"%283\x1fdispatcher:1\x1f\x1f\x1fbash\x1f1\x1f0\x1f\n" +
+		"%284\x1fdispatcher:1\x1fwaiting\x1f\x1fnode\x1f2\x1f0\x1fspec-critic\n"
 
 	got := ParsePaneOptions(out)
-	if len(got) != 2 {
-		t.Fatalf("%d panes, want 2", len(got))
+	if len(got) != 3 {
+		t.Fatalf("%d panes, want 3", len(got))
 	}
 	if got[0].PaneID != "%307" || got[0].ClaudeStatus != "processing 1788848628 " {
 		t.Errorf("got %+v", got[0])
@@ -80,10 +81,16 @@ func TestParsePaneOptions(t *testing.T) {
 	if got[0].Command != "node" || got[0].Index != 0 || !got[0].Active {
 		t.Errorf("got command=%q index=%d active=%v, want node/0/true", got[0].Command, got[0].Index, got[0].Active)
 	}
+	if got[0].CrewRole != "" {
+		t.Errorf("lead pane CrewRole = %q, want empty", got[0].CrewRole)
+	}
 	if got[1].ClaudeStatus != "" {
 		t.Errorf("a pane with no claude status should be empty, got %q", got[1].ClaudeStatus)
 	}
 	if got[1].Command != "bash" || got[1].Index != 1 || got[1].Active {
 		t.Errorf("got command=%q index=%d active=%v, want bash/1/false", got[1].Command, got[1].Index, got[1].Active)
+	}
+	if got[2].CrewRole != "spec-critic" {
+		t.Errorf("role pane CrewRole = %q, want spec-critic", got[2].CrewRole)
 	}
 }

@@ -73,6 +73,27 @@ func TestDeltasFromTmuxOmitsAbsentEnrichment(t *testing.T) {
 	}
 }
 
+func TestDeltasFromTmuxSkipsRolePanes(t *testing.T) {
+	// A role-grid pane (spec-critic, plan-critic, …) parks on the crew bus
+	// under role:<branch>:<role>, not worker:<branch> — it must never surface
+	// as its own "needs you" card, only the lead's pane should.
+	got := deltasFromTmux(
+		[]tmux.WindowOptions{{Session: "houston", Window: 1, Branch: "fix/412", CrewName: "ash"}},
+		[]tmux.PaneOptions{
+			{PaneID: "%40", Target: "houston:1", ClaudeStatus: "processing 1"},
+			{PaneID: "%41", Target: "houston:1", ClaudeStatus: "waiting", CrewRole: "spec-critic"},
+			{PaneID: "%42", Target: "houston:1", ClaudeStatus: "waiting", CrewRole: "plan-critic"},
+		},
+		fakeProject,
+	)
+	if len(got) != 1 {
+		t.Fatalf("%d deltas, want 1 (role panes must not become listed runs)", len(got))
+	}
+	if got[0].Key != "%40" {
+		t.Errorf("Key = %q, want the lead pane %%40", got[0].Key)
+	}
+}
+
 func TestDeltasFromTmuxSkipsPanesWithNoWindow(t *testing.T) {
 	got := deltasFromTmux(nil, []tmux.PaneOptions{{PaneID: "%9", Target: "ghost:1"}}, fakeProject)
 	if len(got) != 0 {
