@@ -32,7 +32,8 @@ type HookSource struct {
 }
 
 // NewHookSource returns a source over h. panes lets it end runs whose pane has
-// vanished; nil disables that check.
+// vanished and supplies the tmux server identity the distrust rule depends
+// on; nil disables both checks.
 func NewHookSource(h *hub.Hub, panes paneLister) *HookSource {
 	return &HookSource{hub: h, panes: panes, projects: newProjectResolver(), every: hookGoneCheckInterval}
 }
@@ -57,14 +58,14 @@ func (s *HookSource) Run(ctx context.Context, out chan<- Delta) error {
 		paneCh chan paneSet // nil without a lister, so its case never fires
 	)
 	if s.panes != nil {
-		if ps, ok := listPanes(s.panes); ok {
+		if ps, ok := listPanes(s.panes, panes); ok {
 			panes = ps
 		}
 		paneCh = make(chan paneSet)
 		pollDone := make(chan struct{})
 		go func() {
 			defer close(pollDone)
-			s.pollPanes(ctx, paneCh)
+			s.pollPanes(ctx, panes, paneCh)
 		}()
 		defer func() {
 			cancel()
@@ -227,7 +228,15 @@ type paneSet struct {
 	serverStart int64
 }
 
-func listPanes(l paneLister) (paneSet, bool) {
+// listPanes lists the live panes and the identity of the server that holds
+// them. prev is the last paneSet this HookSource published; on an identity
+// error it stands in for the current one rather than being zeroed, since one
+// transient failure would otherwise disable the distrust guard (paneForeign)
+// for every session on the next tick. A server's identity is immutable for
+// its lifetime, so carrying it forward is safe — and if the server actually
+// did restart, the old pane ids are absent from this listing, so paneGone
+// still ends those runs.
+func listPanes(l paneLister, prev paneSet) (paneSet, bool) {
 	at := time.Now()
 	panes, err := l.ListPaneOptions()
 	if err != nil {
@@ -241,20 +250,20 @@ func listPanes(l paneLister) (paneSet, bool) {
 	// The identity query runs after the pane listing on purpose: a tmux
 	// restart landing between the two would otherwise pair the old pane ids
 	// with the new server's start time and over-detect foreign — the
-	// fail-safe direction. On error server/serverStart stay zero, which
-	// paneForeign treats as unknown, so a stalled identity query never strips
-	// caps from every hook card; the listing is still published.
+	// fail-safe direction.
 	server, serverStart, err := l.ServerIdentity()
 	if err != nil {
-		slog.Debug("hooks: tmux server identity", "error", err)
-		server, serverStart = "", 0
+		slog.Warn("hooks: tmux server identity failed, reusing previous identity", "error", err)
+		server, serverStart = prev.server, prev.serverStart
 	}
 	return paneSet{live: live, at: at, server: server, serverStart: serverStart}, true
 }
 
 // pollPanes publishes each successful listing until ctx ends. A failed one is
-// simply not published, which is what leaves earlier verdicts standing.
-func (s *HookSource) pollPanes(ctx context.Context, out chan<- paneSet) {
+// simply not published, which is what leaves earlier verdicts standing. prev
+// seeds the identity fallback for the first poll and is then updated from
+// each published listing.
+func (s *HookSource) pollPanes(ctx context.Context, prev paneSet, out chan<- paneSet) {
 	t := time.NewTicker(s.every)
 	defer t.Stop()
 	for {
@@ -263,12 +272,15 @@ func (s *HookSource) pollPanes(ctx context.Context, out chan<- paneSet) {
 			return
 		case <-t.C:
 		}
-		if ps, ok := listPanes(s.panes); ok {
-			select {
-			case out <- ps:
-			case <-ctx.Done():
-				return
-			}
+		ps, ok := listPanes(s.panes, prev)
+		if !ok {
+			continue
+		}
+		prev = ps
+		select {
+		case out <- ps:
+		case <-ctx.Done():
+			return
 		}
 	}
 }

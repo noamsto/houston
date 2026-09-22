@@ -91,6 +91,8 @@ func Dispatch(event string, stateDir string, stdin io.Reader) error {
 		next.TmuxSession, next.TmuxWindow, next.TmuxPane = tmuxCoords()
 		next.TmuxServer = server
 		next.PID = os.Getppid()
+	} else if next.PID == 0 {
+		next.PID = os.Getppid()
 	}
 
 	apply(&next, event, ev, now)
@@ -175,10 +177,11 @@ func truncate(s string, n int) string {
 // spawning tmux.
 func tmuxEnv() (pane, server string) {
 	pane = os.Getenv("TMUX_PANE")
-	// $TMUX is "<socket>,<server-pid>,<session-id>".
+	// $TMUX is "<socket>,<server-pid>,<session-id>", but the socket path can
+	// itself contain a comma, so the pid is indexed from the right.
 	fields := strings.Split(os.Getenv("TMUX"), ",")
 	if len(fields) >= 2 {
-		server = fields[1]
+		server = fields[len(fields)-2]
 	}
 	return pane, server
 }

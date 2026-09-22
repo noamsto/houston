@@ -483,7 +483,7 @@ func TestListPanesPublishesTheListingEvenWhenIdentityFails(t *testing.T) {
 	panes.set(nil, "%1")
 	panes.setIdentity("", 0, errors.New("no server"))
 
-	ps, ok := listPanes(panes)
+	ps, ok := listPanes(panes, paneSet{})
 	if !ok {
 		t.Fatal("listPanes ok = false, want true — a failed identity query must not fail the whole listing")
 	}
@@ -491,7 +491,25 @@ func TestListPanesPublishesTheListingEvenWhenIdentityFails(t *testing.T) {
 		t.Errorf("live = %+v, want %%1 present", ps.live)
 	}
 	if ps.server != "" || ps.serverStart != 0 {
-		t.Errorf("server = %q serverStart = %d, want zero values on a failed identity query", ps.server, ps.serverStart)
+		t.Errorf("server = %q serverStart = %d, want zero values with no previous identity to fall back on", ps.server, ps.serverStart)
+	}
+}
+
+func TestListPanesReusesThePreviousIdentityWhenTheQueryFails(t *testing.T) {
+	// One transient ServerIdentity failure must not zero the identity for
+	// every session's distrust check on the next tick — it should carry the
+	// last known-good identity forward instead.
+	panes := &fakePanes{}
+	panes.set(nil, "%1")
+	panes.setIdentity("", 0, errors.New("no server"))
+
+	prev := paneSet{server: "2001", serverStart: 100}
+	ps, ok := listPanes(panes, prev)
+	if !ok {
+		t.Fatal("listPanes ok = false, want true")
+	}
+	if ps.server != "2001" || ps.serverStart != 100 {
+		t.Errorf("server = %q serverStart = %d, want the previous identity (2001, 100) reused", ps.server, ps.serverStart)
 	}
 }
 
@@ -559,4 +577,75 @@ func TestHookSourceForeignSessionRevivesWithoutATmuxRef(t *testing.T) {
 	expectNoDelta(t, out, "run ended again despite later activity", func(d Delta) bool {
 		return d.Key == "claude/"+st.SessionID && d.Run.State == StateDone
 	})
+}
+
+// TestHookSourceDistrustsAForeignSessionAmongTwoOnOnePane seeds a live and a
+// foreign session on the same pane id, with the foreign one newer. Without
+// normalize()'d keys, both current() and the <-sub branch would dedupe them
+// onto the raw pane id and newerSession would let the foreign session win,
+// silently dropping the live one.
+func TestHookSourceDistrustsAForeignSessionAmongTwoOnOnePane(t *testing.T) {
+	panes := &fakePanes{}
+	panes.set(nil, "%20")
+	serverStart := time.Now().Add(-3 * time.Hour).Unix()
+	panes.setIdentity("2001", serverStart, nil)
+
+	live := blockedState()
+	live.SessionID = "live"
+	live.TmuxPane = "%20"
+	live.TmuxServer = "2001"
+	live.UpdatedAt = time.Now().Add(-2 * time.Hour).Unix()
+
+	foreign := blockedState()
+	foreign.SessionID = "foreign"
+	foreign.TmuxPane = "%20"
+	foreign.TmuxServer = "1966" // a different tmux server minted this pane id
+	foreign.UpdatedAt = time.Now().Add(-1 * time.Hour).Unix() // newer than live
+
+	// A large every keeps the periodic pane-poll/resync ticks from firing
+	// during this test, so the revival delta below can only come from the
+	// <-sub branch's own normalize handling, not resync's independent one.
+	out, dir := startHookSourceWith(t, panes, live, func(s *HookSource) { s.every = time.Hour }, foreign)
+
+	foreignKey := "claude/" + foreign.SessionID
+	deltas := map[string]Delta{}
+	timeout := time.After(2 * time.Second)
+	for len(deltas) < 2 {
+		select {
+		case d := <-out:
+			deltas[d.Key] = d
+		case <-timeout:
+			t.Fatalf("got %d of 2 expected initial deltas: %+v", len(deltas), deltas)
+		}
+	}
+
+	liveDelta, ok := deltas["%20"]
+	if !ok {
+		t.Fatalf("no delta keyed on the pane; deltas = %+v", deltas)
+	}
+	if liveDelta.Run.Tmux == nil || liveDelta.Run.Tmux.PaneID != "%20" {
+		t.Errorf("live Tmux = %+v, want a TmuxRef for %%20", liveDelta.Run.Tmux)
+	}
+
+	foreignDelta, ok := deltas[foreignKey]
+	if !ok {
+		t.Fatalf("no delta keyed on the foreign session id; deltas = %+v", deltas)
+	}
+	if foreignDelta.Run.Tmux != nil {
+		t.Errorf("foreign Tmux = %+v, want nil for a pane owned by a different tmux server", foreignDelta.Run.Tmux)
+	}
+
+	// Exercise the <-sub branch's own normalize call: an update to the
+	// foreign session must resolve to its own key, not the live session's.
+	foreign.UpdatedAt = time.Now().Add(-30 * time.Second).Unix()
+	foreign.LastMessage = "Allow Write?"
+	if err := hook.Write(hook.Path(dir, foreign.SessionID), foreign); err != nil {
+		t.Fatal(err)
+	}
+	revived := waitDelta(t, out, "foreign session revives on its own key", func(d Delta) bool {
+		return d.Key == foreignKey && d.Run.State == StateBlocked
+	})
+	if revived.Run.Tmux != nil {
+		t.Errorf("revived Tmux = %+v, want nil", revived.Run.Tmux)
+	}
 }
