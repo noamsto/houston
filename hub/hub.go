@@ -81,7 +81,7 @@ type Session struct {
 	trail   []TrailChip
 	preview []string
 
-	lastTurnStart    int64  // unix-sec when turn began (UserPromptSubmit)
+	lastTurn         int    // last turn whose trail was cleared (UserPromptSubmit bumps Turn)
 	lastBroadcastSig string // last broadcast view signature; skip duplicates
 }
 
@@ -291,9 +291,11 @@ func (h *Hub) loadStateFile(path string) {
 	}
 	mergeStateIntoView(&sess.view, s)
 
-	// Reset trail on new turn so chips reflect only the current turn.
-	if s.State == hook.StateThinking && s.Since > sess.lastTurnStart {
-		sess.lastTurnStart = s.Since
+	// Clear the trail only when a new turn starts (Turn increments on
+	// UserPromptSubmit). Since is bumped by every event, including PostToolUse,
+	// so keying on it wiped the trail on every tool completion (#100).
+	if s.Turn > sess.lastTurn {
+		sess.lastTurn = s.Turn
 		sess.trail = sess.trail[:0]
 	}
 	sess.transcriptPath = s.TranscriptPath

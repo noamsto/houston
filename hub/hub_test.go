@@ -149,6 +149,66 @@ func TestHubIngestsTranscriptTrailAndPreview(t *testing.T) {
 	}
 }
 
+// TestHubTrailNotResetOnSameTurnEvent pins the #100 invariant: the Activity
+// trail is cleared only when a new turn starts (UserPromptSubmit increments
+// Turn), not on every hook event. PostToolUse bumps Since and returns the state
+// to thinking, which used to look like a new turn and wipe the trail.
+func TestHubTrailNotResetOnSameTurnEvent(t *testing.T) {
+	dir := t.TempDir()
+
+	transcript := filepath.Join(t.TempDir(), "t.jsonl")
+	toolUse := func(id, name, file string) string {
+		return `{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"` + id + `","name":"` + name + `","input":{"file_path":"` + file + `"}}]}}` + "\n"
+	}
+	body := toolUse("tu_1", "Read", "a.go") + toolUse("tu_2", "Edit", "b.go")
+	if err := os.WriteFile(transcript, []byte(body), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	state := hook.SessionState{
+		SessionID:      "tr-2",
+		TranscriptPath: transcript,
+		State:          hook.StateThinking,
+		Turn:           1,
+		Since:          100,
+		UpdatedAt:      time.Now().Unix(),
+	}
+	writeState(t, dir, state)
+
+	h := NewWithOptions(dir, Options{ClaudeProjectsDir: "-"}, silentLog())
+	startHub(t, h)
+
+	waitForTrail(t, h, "tr-2", 2)
+
+	// A later event in the same turn (e.g. PostToolUse) bumps Since but not
+	// Turn. It must not clear the trail.
+	state.Since = 200
+	writeState(t, dir, state)
+
+	// Append a third tool_use and force a transcript refresh with another
+	// same-turn event; the trail must still hold all three chips.
+	f, err := os.OpenFile(transcript, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("open transcript: %v", err)
+	}
+	if _, err := f.WriteString(toolUse("tu_3", "Grep", "c.go")); err != nil {
+		t.Fatalf("append transcript: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close transcript: %v", err)
+	}
+	state.Since = 300
+	writeState(t, dir, state)
+
+	waitUntil(t, "third chip ingested", func() bool {
+		s := findSession(h, "tr-2")
+		return s != nil && len(s.Trail) > 0 && s.Trail[len(s.Trail)-1].Tool == "Grep"
+	})
+	if got := findSession(h, "tr-2"); len(got.Trail) < 3 {
+		t.Fatalf("trail reset on same-turn event: len = %d, want >= 3", len(got.Trail))
+	}
+}
+
 func TestHubBroadcastsOnStateRewrite(t *testing.T) {
 	dir := t.TempDir()
 	h := NewWithOptions(dir, Options{ClaudeProjectsDir: "-"}, silentLog())
