@@ -102,6 +102,15 @@ type dispatchRepo struct {
 	Name  string   `json:"name"`
 	Crews []string `json:"crews"` // newest first, never nil
 
+	// Home is the subset of Crews whose <commonDir>/crew/crews/<id>/pane
+	// file exists. The dispatcher launcher (adapters/core/dispatcher.sh)
+	// writes pane once, into the repo it runs from, never into a mirror
+	// another repo's dispatch creates when sending a worker there. pid
+	// exists in every mirror, so it's not a usable signal; pane is. This
+	// is what lets the Crews tab label a multi-repo crew by its actual
+	// home repo instead of guessing.
+	Home []string `json:"home"`
+
 	// commonDir is <repo>/.git (or a linked worktree's shared common dir),
 	// used to check crew membership. Not exposed to the client.
 	commonDir string
@@ -253,10 +262,12 @@ func listDispatchRepos(lister workspaceLister, commonDir func(root string) (stri
 
 	repos := make([]dispatchRepo, 0, len(byPath))
 	for repo, dir := range byPath {
+		crews := listDispatchCrews(dir)
 		repos = append(repos, dispatchRepo{
 			Path:      repo,
 			Name:      filepath.Base(repo),
-			Crews:     listDispatchCrews(dir),
+			Crews:     crews,
+			Home:      dispatchHomeCrews(dir, crews),
 			commonDir: dir,
 		})
 	}
@@ -292,6 +303,18 @@ func listDispatchCrews(commonDir string) []string {
 		return crews[i] > crews[j]
 	})
 	return crews
+}
+
+// dispatchHomeCrews returns the subset of crews whose
+// <commonDir>/crew/crews/<id>/pane file exists — see dispatchRepo.Home.
+func dispatchHomeCrews(commonDir string, crews []string) []string {
+	home := make([]string, 0, len(crews))
+	for _, id := range crews {
+		if info, err := os.Stat(filepath.Join(commonDir, "crew", "crews", id, "pane")); err == nil && !info.IsDir() {
+			home = append(home, id)
+		}
+	}
+	return home
 }
 
 func dispatchCrewUnixPrefix(id string) int64 {

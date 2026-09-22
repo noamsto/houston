@@ -46,6 +46,20 @@ function rank(run: Run, now: number): number {
   return isLiveMember(run, now) ? 1 : 0
 }
 
+// Only a project every member that reports one agrees on is safe to label
+// the crew with — a crew id can mirror into several repos' bus dirs, and
+// picking whichever member happens to report a project first was the #106
+// bug (an arbitrary, often wrong, repo label).
+function soleProject(members: Run[]): string | undefined {
+  let project: string | undefined
+  for (const m of members) {
+    if (!m.project) continue
+    if (project === undefined) project = m.project
+    else if (project !== m.project) return undefined
+  }
+  return project
+}
+
 function buildGroup(name: string, runs: Run[], now: number): CrewGroup {
   const members = [...runs].sort((a, b) => {
     const dr = rank(b, now) - rank(a, now)
@@ -55,7 +69,7 @@ function buildGroup(name: string, runs: Run[], now: number): CrewGroup {
   for (const m of members) counts[bucket(m)]++
   return {
     name,
-    project: members.find((m) => m.project)?.project,
+    project: soleProject(members),
     members,
     counts,
     needsYou: members.filter((m) => needsYou(m, now)).length,

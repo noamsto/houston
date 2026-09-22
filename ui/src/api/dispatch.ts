@@ -3,6 +3,7 @@ export interface DispatchRepo {
   path: string
   name: string
   crews: string[] // newest first, never empty-vs-missing ambiguity: always an array
+  home?: string[] // subset of crews whose dispatcher pane lives in this repo — see server/dispatch.go's dispatchHomeCrews
 }
 
 export interface DispatchOptions {

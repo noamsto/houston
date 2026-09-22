@@ -638,6 +638,9 @@ func TestListDispatchRepos(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if err := os.WriteFile(filepath.Join(crewsDir, "1700000001-1", "pane"), []byte("%1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	bareRoot := filepath.Join(tmp, "bare")
 
 	lister := &fakeWorkspaceLister{wins: []tmux.WindowOptions{
@@ -670,6 +673,10 @@ func TestListDispatchRepos(t *testing.T) {
 	if !slices.Equal(repos[0].Crews, wantCrews) {
 		t.Errorf("crews = %q, want %q", repos[0].Crews, wantCrews)
 	}
+	wantHome := []string{"1700000001-1"}
+	if !slices.Equal(repos[0].Home, wantHome) {
+		t.Errorf("home = %q, want %q", repos[0].Home, wantHome)
+	}
 }
 
 func TestListDispatchReposMissingCrewsDirIsEmptyNotNil(t *testing.T) {
@@ -692,6 +699,32 @@ func TestListDispatchReposMissingCrewsDirIsEmptyNotNil(t *testing.T) {
 	}
 	if len(repos[0].Crews) != 0 {
 		t.Errorf("crews = %q, want empty", repos[0].Crews)
+	}
+}
+
+func TestListDispatchReposHomeEmptyNotNil(t *testing.T) {
+	tmp := t.TempDir()
+	root := filepath.Join(tmp, "repo")
+	commonDir := filepath.Join(root, ".git")
+	crewsDir := filepath.Join(commonDir, "crew", "crews")
+	for _, name := range []string{"1700000002-1", "1700000001-1"} {
+		if err := os.MkdirAll(filepath.Join(crewsDir, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	lister := &fakeWorkspaceLister{wins: []tmux.WindowOptions{{GitRoot: root}}}
+	lookup := func(string) (string, error) { return commonDir, nil }
+
+	repos, err := listDispatchRepos(lister, lookup)
+	if err != nil {
+		t.Fatalf("listDispatchRepos: %v", err)
+	}
+	if repos[0].Home == nil {
+		t.Fatal("home is nil, want an empty non-nil slice")
+	}
+	if len(repos[0].Home) != 0 {
+		t.Errorf("home = %q, want empty", repos[0].Home)
 	}
 }
 

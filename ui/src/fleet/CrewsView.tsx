@@ -3,7 +3,7 @@ import type { Run } from '../api/runs'
 import { fetchDispatchOptions } from '../api/dispatch'
 import { isFresh } from './staleness'
 import { agoLabel } from './format'
-import { crewShortId } from './fleetList'
+import { crewShortId, projectOf } from './fleetList'
 import { countsLabel, dispatchHref, groupCrews, type CrewGroup } from './crewsModel'
 import { ReplyComposer } from './ReplyComposer'
 import './fleet.css'
@@ -58,6 +58,7 @@ function Member({ run, now, onOpen }: { run: Run; now: number; onOpen?: (r: Run)
         {run.question && <span className="run-question crews-question">{run.question.text}</span>}
       </button>
       <span className="run-chips crews-chips">
+        <span className="run-project">{projectOf(run)}</span>
         {run.crew?.tier && <span className="run-chip tier">{run.crew.tier}</span>}
         <span className="run-chip">{run.agent}</span>
         {run.crew?.model && <span className="run-chip model">{run.crew.model}</span>}
@@ -132,7 +133,7 @@ export function CrewsView({ runs, now, onOpen }: CrewsViewProps) {
         const byCrew = new Map<string, CrewRepo>()
         const names = new Map<string, CrewRepo | null>()
         for (const r of opts.repos) {
-          for (const crew of r.crews) byCrew.set(crew, { name: r.name, path: r.path })
+          for (const crew of r.home ?? []) byCrew.set(crew, { name: r.name, path: r.path })
           // Two repos sharing a name are ambiguous: better no link than the wrong one.
           names.set(r.name, names.has(r.name) ? null : { name: r.name, path: r.path })
         }
