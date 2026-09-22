@@ -305,24 +305,28 @@ func (m *Manager) AbortSession(ctx context.Context, serverURL, sessionID string)
 func (m *Manager) SubscribeToServer(ctx context.Context, serverURL string, handler func(Event)) error {
 	client := NewClient(serverURL)
 
-	events, err := client.SubscribeEvents(ctx)
+	// Derive the cancellable ctx before subscribing so Close/Unsubscribe can
+	// abort the in-flight SSE request, not merely gate the forwarding loop.
+	subCtx, cancel := context.WithCancel(ctx)
+
+	events, err := client.SubscribeEvents(subCtx)
 	if err != nil {
+		cancel()
 		return err
 	}
 
 	// Cancel any existing subscription
 	m.eventsMu.Lock()
-	if cancel, ok := m.eventCtxs[serverURL]; ok {
-		cancel()
+	if existing, ok := m.eventCtxs[serverURL]; ok {
+		existing()
 	}
-	ctx, cancel := context.WithCancel(ctx)
 	m.eventCtxs[serverURL] = cancel
 	m.eventsMu.Unlock()
 
 	go func() {
 		for event := range events {
 			select {
-			case <-ctx.Done():
+			case <-subCtx.Done():
 				return
 			default:
 				handler(event)
