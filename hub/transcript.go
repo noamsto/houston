@@ -139,7 +139,7 @@ func parseLine(line string, offset int64) []TranscriptEvent {
 		base.ToolName = rec.ToolName
 		base.ToolUseID = rec.ToolUseID
 		base.IsError = rec.IsError
-		base.Text = firstStringField(rec.ToolInput, hook.ToolHintKeys...)
+		base.Text = hook.ToolHint(rec.ToolName, rec.ToolInput)
 		return []TranscriptEvent{base}
 	}
 
@@ -173,7 +173,7 @@ func parseLine(line string, offset int64) []TranscriptEvent {
 			ev.Type = EventTypeToolUse
 			ev.ToolName = blk.Name
 			ev.ToolUseID = blk.ID
-			ev.Text = firstStringField(blk.Input, hook.ToolHintKeys...)
+			ev.Text = hook.ToolHint(blk.Name, blk.Input)
 		case EventTypeToolResult:
 			ev.Type = EventTypeToolResult
 			ev.ToolUseID = blk.ToolUseID
@@ -193,22 +193,6 @@ func parseLine(line string, offset int64) []TranscriptEvent {
 		last.CacheWriteTokens = rec.Message.Usage.CacheCreationInputTokens
 	}
 	return out
-}
-
-func firstStringField(raw json.RawMessage, keys ...string) string {
-	if len(raw) == 0 {
-		return ""
-	}
-	var m map[string]any
-	if err := json.Unmarshal(raw, &m); err != nil {
-		return ""
-	}
-	for _, k := range keys {
-		if v, ok := m[k].(string); ok && v != "" {
-			return truncate(strings.TrimSpace(v), 160)
-		}
-	}
-	return ""
 }
 
 // extractToolResultText handles the three shapes Claude writes: bare string,

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -119,7 +120,7 @@ func apply(s *SessionState, event string, ev Event, now int64) {
 	case EventPreToolUse:
 		s.State = StateToolRunning
 		s.Tool = ev.ToolName
-		s.ToolInputHint = toolInputHint(ev.ToolInput)
+		s.ToolInputHint = ToolHint(ev.ToolName, ev.ToolInput)
 	case EventPostToolUse:
 		s.State = StateThinking
 		clearTool()
@@ -147,7 +148,10 @@ func apply(s *SessionState, event string, ev Event, now int64) {
 // priority order. Shared with transcript parsing.
 var ToolHintKeys = []string{"file_path", "path", "command", "pattern", "url", "description", "prompt"}
 
-func toolInputHint(raw json.RawMessage) string {
+// ToolHint extracts a short display hint from a tool_input payload, tailored
+// to the tool that produced it. Bash prefers its own description over the
+// raw command; Read/Edit show a file basename instead of a full path.
+func ToolHint(toolName string, raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
 	}
@@ -155,6 +159,25 @@ func toolInputHint(raw json.RawMessage) string {
 	if err := json.Unmarshal(raw, &m); err != nil {
 		return ""
 	}
+
+	switch toolName {
+	case "Bash":
+		if v, ok := m["description"].(string); ok && v != "" {
+			return truncate(strings.TrimSpace(v), 120)
+		}
+		if v, ok := m["command"].(string); ok && v != "" {
+			return truncate(strings.TrimSpace(v), 120)
+		}
+		return ""
+	case "Read", "Edit":
+		for _, k := range []string{"file_path", "path"} {
+			if v, ok := m[k].(string); ok && v != "" {
+				return truncate(filepath.Base(strings.TrimSpace(v)), 120)
+			}
+		}
+		return ""
+	}
+
 	for _, k := range ToolHintKeys {
 		if v, ok := m[k].(string); ok && v != "" {
 			return truncate(strings.TrimSpace(v), 120)
