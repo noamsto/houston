@@ -462,12 +462,12 @@ func TestPaneForeign(t *testing.T) {
 		want bool
 	}{
 		{"no pane", hub.SessionView{}, paneSet{server: "2001", serverStart: 100}, false},
-		{"different server", hub.SessionView{TmuxPane: "%1", TmuxServer: "1966"}, paneSet{server: "2001", serverStart: 100}, true},
+		{"different server", hub.SessionView{TmuxPane: "%1", TmuxServer: "1966", UpdatedAt: 150}, paneSet{server: "2001", serverStart: 100}, true},
 		{"same server", hub.SessionView{TmuxPane: "%1", TmuxServer: "2001", UpdatedAt: 150}, paneSet{server: "2001", serverStart: 100}, false},
 		{"legacy state predates server start", hub.SessionView{TmuxPane: "%1", UpdatedAt: 99}, paneSet{server: "2001", serverStart: 100}, true},
 		{"legacy state at server start", hub.SessionView{TmuxPane: "%1", UpdatedAt: 100}, paneSet{server: "2001", serverStart: 100}, false},
 		{"legacy state after server start", hub.SessionView{TmuxPane: "%1", UpdatedAt: 101}, paneSet{server: "2001", serverStart: 100}, false},
-		{"identity unknown", hub.SessionView{TmuxPane: "%1", TmuxServer: "1966"}, paneSet{}, false},
+		{"identity unknown", hub.SessionView{TmuxPane: "%1", TmuxServer: "1966", UpdatedAt: 150}, paneSet{}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -532,16 +532,12 @@ func TestHookSourceDistrustsAPaneFromBeforeTheServerStarted(t *testing.T) {
 	}
 }
 
-// TestHookSourceDistrustsAPaneIdReusedAfterAServerRestart is the race this
-// branch replaced ServerIdentity to close: a resumed session's state file
-// still names the tmux server it was written under, but the pane id %20 has
-// since been reused by a restarted server. Because the identity now comes
-// off the same list-panes exec as the pane ids, there is no window where the
-// two can disagree about which server minted %20.
+// TestHookSourceDistrustsAPaneIdReusedAfterAServerRestart covers the state
+// files written before tmux_server existed: nothing names the old server, so
+// only the start-time clause can tell that %20 was re-minted by a restart.
 func TestHookSourceDistrustsAPaneIdReusedAfterAServerRestart(t *testing.T) {
 	st := blockedState()
 	st.TmuxPane = "%20"
-	st.TmuxServer = "1966"
 
 	panes := &fakePanes{}
 	panes.setIdentity("2001", st.UpdatedAt+1)
@@ -603,7 +599,7 @@ func TestHookSourceDistrustsAForeignSessionAmongTwoOnOnePane(t *testing.T) {
 	foreign := blockedState()
 	foreign.SessionID = "foreign"
 	foreign.TmuxPane = "%20"
-	foreign.TmuxServer = "1966" // a different tmux server minted this pane id
+	foreign.TmuxServer = "1966"                               // a different tmux server minted this pane id
 	foreign.UpdatedAt = time.Now().Add(-1 * time.Hour).Unix() // newer than live
 
 	// A large every keeps the periodic pane-poll/resync ticks from firing

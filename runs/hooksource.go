@@ -239,11 +239,20 @@ func listPanes(l paneLister) (paneSet, bool) {
 		return paneSet{}, false
 	}
 	live := make(map[string]bool, len(panes))
-	var server string
-	var serverStart int64
 	for _, p := range panes {
 		live[p.PaneID] = true
-		server, serverStart = p.ServerPID, p.ServerStart
+	}
+	var server string
+	var serverStart int64
+	if len(panes) > 0 {
+		// A property of the listing, not of a pane: one exec, one server.
+		server, serverStart = panes[0].ServerPID, panes[0].ServerStart
+		if server == "" {
+			// A tmux that cannot expand the identity leaves paneForeign with
+			// nothing to compare, which silently restores the stale-pane
+			// behaviour this guard exists to prevent.
+			slog.Warn("hooks: pane listing carries no server identity, foreign-pane guard disabled")
+		}
 	}
 	return paneSet{live: live, at: at, server: server, serverStart: serverStart}, true
 }

@@ -74,3 +74,30 @@ replacement is smaller than the code it removes.
 
 **Status: blocked on the dispatcher.** The two review→fix rounds are spent, so
 per the evidence contract this proposal is handed off, not implemented.
+
+## Round 3 (authorised by the dispatcher) — replacement implemented
+
+Commit `136900a` implements the escalated proposal: `#{pid}`/`#{start_time}`
+ride `paneOptionsFormat`, and `ServerIdentity`, the carry-forward and the
+`prev` threading are deleted. That closes by deletion every round-2 row above —
+the carried-forward identity, the untested threading, the 5 s `slog.Warn`
+volume, and the poller closure capturing `panes` (the goroutine now captures
+only `ctx`/`paneCh`).
+
+Targeted re-review of `136900a` (opus): the mechanism is confirmed correct —
+the round-2 failure class is unrepresentable (a `paneSet`'s identity and its
+pane ids come from one exec, and the one-method `paneLister` makes a second
+query a compile-visible change), all six mutants die, and no other consumer of
+`ParsePaneOptions` is affected. It blocked only on follow-on items, all fixed
+mechanically in the next commit:
+
+| invariant/family | finding | observed head | fix commit | proof | disposition | rounds |
+| --- | --- | --- | --- | --- | --- | --- |
+| docs match behaviour | HIGH: CLAUDE.md still documented the deleted carry-forward as live behaviour | 136900a | see below | rewritten to state where the identity now comes from | fixed | 3 |
+| tests isolate the clause they name | MEDIUM: two fixtures tripped both `paneForeign` clauses, so neither isolated the one it named | 136900a | see below | `UpdatedAt` set past `serverStart`; the restart test now carries no `TmuxServer`, so only the start-time clause can fire | fixed | 3 |
+| degraded guard is visible | MEDIUM: a tmux that cannot expand the identity disabled the guard silently (the ff5eafc warn went with the carry-forward) | 136900a | see below | one `slog.Warn` when a non-empty listing carries no identity | fixed | 3 |
+| ledger reports shipped fixes | MEDIUM: rows still read `pending` / "blocked on the dispatcher" after the work landed | 136900a | this section | — | fixed | 3 |
+| identity reads as per-pane | LOW: taking it from the last loop iteration implied per-pane variance | 136900a | see below | read from `panes[0]` outside the loop, with the comment | fixed | 3 |
+
+`recurrence_escalation: used` (round 2 → round 3; the replacement landed, so the
+escalation is closed).
