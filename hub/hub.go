@@ -47,11 +47,24 @@ type SessionView struct {
 	TranscriptPath string      `json:"transcript_path,omitempty"`
 }
 
+// DefaultPruneTTL is how long an ended hook state file is kept after its
+// last update before pruneEnded removes it. Deliberately >= DefaultDiscoveryWindow
+// (both 24h) so a freshly-pruned session's transcript can't still be inside
+// the discovery window and get re-seeded — keep them equal, or keep this the
+// larger of the two if you ever change one.
+const DefaultPruneTTL = 24 * time.Hour
+
+// pruneInterval is how often Run re-runs pruneEnded, independent of
+// DefaultPruneTTL — a long-lived server should periodically reclaim
+// regardless of the configured TTL.
+const pruneInterval = time.Hour
+
 // Hub aggregates hook state files + transcript tails and exposes updates.
 type Hub struct {
 	stateDir          string
 	claudeProjectsDir string
 	discoveryWindow   time.Duration
+	pruneTTL          time.Duration
 	log               *slog.Logger
 
 	mu       sync.RWMutex
@@ -69,6 +82,11 @@ type Options struct {
 	// DiscoveryWindow caps how far back we consider a transcript "live".
 	// Defaults to DefaultDiscoveryWindow (24h).
 	DiscoveryWindow time.Duration
+	// PruneTTL is how long an ended hook state file is kept after its last
+	// update before it is removed. Defaults to DefaultPruneTTL (24h) when
+	// <=0. A state file whose last-written State is not StateEnded is never
+	// pruned, regardless of age.
+	PruneTTL time.Duration
 }
 
 // Session is the hub's per-session bookkeeping. One goroutine owns it via the
@@ -107,10 +125,15 @@ func NewWithOptions(stateDir string, opts Options, log *slog.Logger) *Hub {
 	if window <= 0 {
 		window = DefaultDiscoveryWindow
 	}
+	ttl := opts.PruneTTL
+	if ttl <= 0 {
+		ttl = DefaultPruneTTL
+	}
 	return &Hub{
 		stateDir:          stateDir,
 		claudeProjectsDir: projects,
 		discoveryWindow:   window,
+		pruneTTL:          ttl,
 		log:               log,
 		sessions:          map[string]*Session{},
 		subs:              map[chan SessionView]struct{}{},
@@ -124,6 +147,7 @@ func (h *Hub) Run(ctx context.Context) error {
 	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
 		return err
 	}
+	h.pruneEnded(claudeDir)
 
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -147,6 +171,8 @@ func (h *Hub) Run(ctx context.Context) error {
 	defer tick.Stop()
 	discover := time.NewTicker(30 * time.Second)
 	defer discover.Stop()
+	pruneTick := time.NewTicker(pruneInterval)
+	defer pruneTick.Stop()
 
 	for {
 		select {
@@ -166,6 +192,8 @@ func (h *Hub) Run(ctx context.Context) error {
 			h.refreshAllTranscripts()
 		case <-discover.C:
 			h.runDiscovery(ctx)
+		case <-pruneTick.C:
+			h.pruneEnded(claudeDir)
 		}
 	}
 }
@@ -255,6 +283,55 @@ func (h *Hub) scan(dir string) error {
 		h.loadStateFile(filepath.Join(dir, e.Name()))
 	}
 	return nil
+}
+
+// pruneEnded removes hook state files older than h.pruneTTL whose
+// last-written State is StateEnded. This is the only signal pruneEnded
+// trusts: hook/hook.go sets StateEnded solely on a genuine SessionEnd hook
+// event, so a live session's file, or a "ghost" session whose pane died
+// without ever firing SessionEnd, is never a candidate here regardless of
+// age.
+func (h *Hub) pruneEnded(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-h.pruneTTL)
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		s, err := hook.Read(path)
+		if err != nil || s.SessionID == "" {
+			continue
+		}
+		if s.State != hook.StateEnded {
+			continue
+		}
+		if !time.Unix(s.UpdatedAt, 0).Before(cutoff) {
+			continue
+		}
+
+		// A resumed session could rewrite the file between our read and the
+		// remove below (e.g. SessionStart re-touching an old session id).
+		// If the file changed after we read it, it's not ours to remove
+		// this pass.
+		info, err := os.Stat(path)
+		if err != nil {
+			if !errors.Is(err, fs.ErrNotExist) {
+				h.log.Warn("prune: stat state file", "path", path, "err", err)
+			}
+			continue
+		}
+		if info.ModTime().Unix() > s.UpdatedAt {
+			continue
+		}
+
+		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			h.log.Warn("prune: remove state file", "path", path, "err", err)
+		}
+	}
 }
 
 func (h *Hub) handleFSEvent(evt fsnotify.Event) {

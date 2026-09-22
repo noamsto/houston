@@ -3,7 +3,9 @@ package hub
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -306,5 +308,53 @@ func TestMergeStateIntoViewSurfacesLastMessageOnlyWhileWaiting(t *testing.T) {
 				t.Errorf("LastMessage = %q, want %q", v.LastMessage, tt.want)
 			}
 		})
+	}
+}
+
+func TestPruneEnded(t *testing.T) {
+	dir := t.TempDir()
+	h := NewWithOptions(dir, Options{ClaudeProjectsDir: "-", PruneTTL: time.Hour}, silentLog())
+
+	oldTime := time.Now().Add(-2 * time.Hour)
+
+	writeState(t, dir, hook.SessionState{
+		SessionID: "old-ended",
+		State:     hook.StateEnded,
+		UpdatedAt: oldTime.Unix(),
+	})
+	// The state's on-disk mtime must reflect when it was actually last
+	// written (as it does in production, where hook.Write's UpdatedAt and
+	// the file mtime are set moments apart) — otherwise pruneEnded's race
+	// guard, which compares mtime against UpdatedAt, sees a file that looks
+	// freshly rewritten and skips it.
+	if err := os.Chtimes(hook.Path(dir, "old-ended"), oldTime, oldTime); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+
+	writeState(t, dir, hook.SessionState{
+		SessionID: "recent-ended",
+		State:     hook.StateEnded,
+		UpdatedAt: time.Now().Unix(),
+	})
+
+	writeState(t, dir, hook.SessionState{
+		SessionID: "old-live",
+		State:     hook.StateWaiting,
+		UpdatedAt: oldTime.Unix(),
+	})
+	if err := os.Chtimes(hook.Path(dir, "old-live"), oldTime, oldTime); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+
+	h.pruneEnded(filepath.Join(dir, "claude"))
+
+	if _, err := os.Stat(hook.Path(dir, "old-ended")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("old-ended: want removed, stat err = %v", err)
+	}
+	if _, err := os.Stat(hook.Path(dir, "recent-ended")); err != nil {
+		t.Errorf("recent-ended: want kept, stat err = %v", err)
+	}
+	if _, err := os.Stat(hook.Path(dir, "old-live")); err != nil {
+		t.Errorf("old-live: want kept, stat err = %v", err)
 	}
 }
