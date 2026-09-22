@@ -11,10 +11,12 @@ export function agoLabel(updatedAt: number, now: number): string {
   return `${Math.floor(h / 24)}d`
 }
 
+export const BLOCKED_FALLBACK = 'waiting on you'
+
 /** The one line describing what this run is doing right now. */
 export function subtitle(run: Run): string {
   const a = run.activity
-  if (run.state === 'blocked') return a.message || 'waiting on you'
+  if (run.state === 'blocked') return a.message || BLOCKED_FALLBACK
   if (a.tool) return a.hint ? `${a.tool} · ${a.hint}` : a.tool
   if (a.task) return a.task
   if (run.pr) return `PR #${run.pr.number}${run.pr.check_state ? ` · ${run.pr.check_state}` : ''}`

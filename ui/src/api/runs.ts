@@ -62,7 +62,7 @@ export interface Activity {
 
 export interface Question {
   text: string
-  via: string // "pane" | "crew"
+  via: string // "pane" | "crew" | "watchdog"
 }
 
 export interface Tokens {

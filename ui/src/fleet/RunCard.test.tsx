@@ -122,6 +122,27 @@ describe('RunCard crew-bus fields', () => {
     expect(container.querySelector('.run-card-detail')).toBeNull()
   })
 
+  it('hides the sub line when it just repeats the question', () => {
+    const r = run({ state: 'blocked', activity: { message: 'Keep it?' }, question: { text: 'Keep it?', via: 'crew' } })
+    const { container } = render(<RunCard run={r} now={now} />)
+    expect(container.querySelector('.run-sub')).toBeNull()
+    expect(container.querySelectorAll('.run-question')).toHaveLength(1)
+    expect(container.querySelector('.run-question')?.textContent).toBe('Keep it?')
+  })
+
+  it('keeps the sub line when it genuinely differs from the question', () => {
+    const r = run({ state: 'blocked', activity: { message: 'Running tests' }, question: { text: 'Keep it?', via: 'crew' } })
+    const { container } = render(<RunCard run={r} now={now} />)
+    expect(container.querySelector('.run-sub')?.textContent).toBe('Running tests')
+    expect(container.querySelector('.run-question')?.textContent).toBe('Keep it?')
+  })
+
+  it('shows the fallback sub line when blocked with no question', () => {
+    const r = run({ state: 'blocked' })
+    const { container } = render(<RunCard run={r} now={now} />)
+    expect(container.querySelector('.run-sub')?.textContent).toBe('waiting on you')
+  })
+
   it('does not render a link for a non-http PR url', () => {
     render(<RunCard run={run({ pr: { number: '9', url: 'javascript:alert(1)' } })} now={now} />)
     expect(screen.queryByRole('link')).toBeNull()
