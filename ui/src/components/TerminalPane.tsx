@@ -16,6 +16,7 @@ import {
   useTouchGestures,
 } from '../hooks/useTouchGestures'
 import { darkTheme, lightTheme } from '../lib/xterm'
+import { mobileFitScale } from '../lib/mobileFitScale'
 import { PaneHeader } from './PaneHeader'
 import { MobileInputBar } from './MobileInputBar'
 import { ColumnScrubber } from './ColumnScrubber'
@@ -72,6 +73,12 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
   // Track browser zoom via devicePixelRatio — skip refit on zoom to preserve columns
   const dprRef = useRef(window.devicePixelRatio)
   const fittedWidthRef = useRef(0)
+
+  // The scale mobileFitScale last auto-applied on mobile. If the live scale
+  // still matches this, no pinch happened since — safe to re-fit on the next
+  // resize. If it diverged (user pinched), leave their zoom alone; only
+  // reposition (ty), don't fight their gesture.
+  const autoFitScaleRef = useRef<number | null>(null)
 
   const [fontSize, setFontSize] = useTerminalFontSize()
 
@@ -281,11 +288,11 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
           // User can pinch-zoom out to see the full terminal.
           const outerW = outer.clientWidth - PAD * 2
           const outerH = outer.clientHeight - PAD * 2
-          const minS = outerW / screenW
-          const initScale = Math.max(1.0, minS)
+          const { floor: minS, scale: initScale } = mobileFitScale(outerW, outerH, screenW, screenH)
           const visH = screenH * initScale
           // A reconnect re-sends unchanged dims: a detached user keeps their pan.
           const keepPan = holdingView() && prevDims?.cols === cols && prevDims.rows === rows
+          if (!keepPan) autoFitScaleRef.current = initScale
           const scale = keepPan ? scaleRef.current : initScale
           const tx = keepPan ? translateXRef.current : 0
           const ty = keepPan ? translateYRef.current : Math.min(0, outerH - visH)
@@ -551,11 +558,21 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
           const s = minScaleRef.current
 
           if (paneDimsRef.current) {
-            // Server controls terminal size — keep dims, auto-scroll to show bottom
-            const visH = termDimsRef.current.h * sc
+            // mobileFitScale accounts for available height too, so a short
+            // (landscape) viewport shrinks below width-fit instead of cropping
+            // the top off-screen. Only apply its default while the user hasn't
+            // pinched away from it (autoFitScaleRef) — otherwise keep their zoom.
+            const outerW = container.clientWidth - PAD * 2
+            const { floor, scale: fitScale } = mobileFitScale(outerW, outerH, termDimsRef.current.w, termDimsRef.current.h)
+            const atAutoFit = autoFitScaleRef.current === null || Math.abs(sc - autoFitScaleRef.current) < 0.001
+            const newSc = atAutoFit ? fitScale : sc
+            if (atAutoFit) autoFitScaleRef.current = fitScale
+            const visH = termDimsRef.current.h * newSc
             const ty = Math.min(0, outerH - visH)
-            innerRef.current.style.transform = `translate(${tx}px, ${ty}px) scale(${sc})`
-            resetTransform(s, termDimsRef.current, { scale: sc, tx, ty })
+            innerRef.current.style.transform = `translate(${tx}px, ${ty}px) scale(${newSc})`
+            resetTransform(atAutoFit ? floor : s, termDimsRef.current, { scale: newSc, tx, ty })
+            clampPan()
+            applyTransform()
           } else {
             // FitAddon controls — resize inner div to match container
             innerRef.current.style.height = `${outerH}px`
@@ -588,7 +605,7 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
       clearTimeout(debounceTimer)
       ro.disconnect()
     }
-  }, [sendResize, isDesktop, minScaleRef, resetTransform, termDimsRef, translateXRef])
+  }, [sendResize, isDesktop, minScaleRef, resetTransform, termDimsRef, translateXRef, applyTransform, clampPan])
 
   return (
     <div

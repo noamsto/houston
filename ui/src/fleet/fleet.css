@@ -183,6 +183,25 @@
    would double it (and is moot while the keyboard covers it). */
 .shell .mobile-input-bar { padding-bottom: 0 !important; }
 
+/* Landscape phone: header + tab switcher + bottom nav + composer together
+   leave almost no room for the terminal in a ~390px-tall viewport. Collapse
+   the header and bottom nav while the Terminal tab is open — same idea as
+   keyboard-open above — but keep .run-detail-tabs visible: it's the only
+   way to leave the terminal on mobile (TerminalPane's own header only
+   renders on desktop). :has() is new here but supported by Safari 15.4+ and
+   Chrome/Android WebView 105+ (2022+), fine for this internal tool. 1023px
+   matches the useIsDesktop breakpoint (min-width: 1024px) so desktop is
+   untouched; some landscape tablets ~1000px wide get swept in too — accepted
+   as a harmless minor over-application. */
+@media (orientation: landscape) and (max-width: 1023px) {
+  .shell:has(.run-detail-body.terminal) .shell-tabs { display: none; }
+  .run-detail:has(.run-detail-body.terminal) .run-detail-header { display: none; }
+  /* .shell-tabs is hidden here without the keyboard necessarily being up, so
+     it no longer clears the home indicator for the composer — give the inset
+     back. */
+  .shell:has(.run-detail-body.terminal) .mobile-input-bar { padding-bottom: env(safe-area-inset-bottom) !important; }
+}
+
 .shell-tabs {
   display: flex; flex: none;
   background: var(--bg-sunken); border-top: 1px solid var(--line);
