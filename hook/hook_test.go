@@ -45,8 +45,8 @@ func TestDispatchPreToolUseSetsToolRunning(t *testing.T) {
 	if got.Tool != "Edit" {
 		t.Errorf("Tool = %q, want Edit", got.Tool)
 	}
-	if got.ToolInputHint != "ui/src/App.tsx" {
-		t.Errorf("ToolInputHint = %q, want file_path", got.ToolInputHint)
+	if got.ToolInputHint != "App.tsx" {
+		t.Errorf("ToolInputHint = %q, want basename", got.ToolInputHint)
 	}
 	if got.Since == 0 {
 		t.Errorf("Since not set on state transition")
@@ -172,23 +172,28 @@ func TestDispatchMissingSessionIDIsError(t *testing.T) {
 func TestToolInputHint(t *testing.T) {
 	cases := []struct {
 		name string
+		tool string
 		in   string
 		want string
 	}{
-		{"file_path", `{"file_path":"a/b.go"}`, "a/b.go"},
-		{"command", `{"command":"go test"}`, "go test"},
-		{"pattern", `{"pattern":"func Foo"}`, "func Foo"},
-		{"url", `{"url":"https://example.com"}`, "https://example.com"},
-		{"empty", `{}`, ""},
-		{"truncate", `{"command":"` + strings.Repeat("x", 200) + `"}`, strings.Repeat("x", 119) + "…"},
-		{"invalid_json", `not json`, ""},
-		{"preferred_order", `{"command":"bash","file_path":"x.go"}`, "x.go"},
+		{"file_path", "Grep", `{"file_path":"a/b.go"}`, "a/b.go"},
+		{"command", "Grep", `{"command":"go test"}`, "go test"},
+		{"pattern", "Grep", `{"pattern":"func Foo"}`, "func Foo"},
+		{"url", "Grep", `{"url":"https://example.com"}`, "https://example.com"},
+		{"empty", "Grep", `{}`, ""},
+		{"truncate", "Grep", `{"command":"` + strings.Repeat("x", 200) + `"}`, strings.Repeat("x", 119) + "…"},
+		{"invalid_json", "Grep", `not json`, ""},
+		{"preferred_order", "Grep", `{"command":"bash","file_path":"x.go"}`, "x.go"},
+		{"bash_description", "Bash", `{"description":"Build the UI","command":"npm run build"}`, "Build the UI"},
+		{"bash_no_description", "Bash", `{"command":"npm run build"}`, "npm run build"},
+		{"read_basename", "Read", `{"file_path":"/home/user/project/src/App.tsx"}`, "App.tsx"},
+		{"edit_basename", "Edit", `{"file_path":"/home/user/project/src/App.tsx"}`, "App.tsx"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := toolInputHint(json.RawMessage(tc.in))
+			got := ToolHint(tc.tool, json.RawMessage(tc.in))
 			if got != tc.want {
-				t.Errorf("toolInputHint(%s) = %q, want %q", tc.in, got, tc.want)
+				t.Errorf("ToolHint(%q, %s) = %q, want %q", tc.tool, tc.in, got, tc.want)
 			}
 		})
 	}
