@@ -755,14 +755,13 @@ func TestProjectKeepsTheLowestLayersOpinion(t *testing.T) {
 // the registry — for a foreign server, and for a session whose own hook state
 // says it ended (#120) — so a hook run that once matched %20 and the
 // tmux-source run that currently owns %20 must compose as two distinct runs,
-// not merge into one. The registry cannot tell the two reasons apart, so this
-// is the composition rule for both. It is what server/runs_terminal.go gates
-// the terminal WS on (run.Caps.Terminal && run.Tmux != nil), so it fails if a
-// future change re-merges the keys or derives caps from a Tmux ref instead of
-// layer presence.
+// not merge into one. The hooks delta below still names %20 on purpose: caps
+// come from layer presence, never from a Tmux ref, and that ref is half of
+// what server/runs_terminal.go gates the terminal WS on. The normalization
+// itself is assumed here, not exercised — the hooksource tests own that.
 func TestForeignHookRunAndItsFormerPaneComposeAsTwoRuns(t *testing.T) {
 	r := NewRegistry(DefaultOrder)
-	r.Apply(Delta{Source: "hooks", Key: "claude/foreign-sess", Run: Run{Agent: "claude", State: StateBlocked}})
+	r.Apply(Delta{Source: "hooks", Key: "claude/foreign-sess", Run: Run{Agent: "claude", State: StateBlocked, Tmux: &TmuxRef{Session: "s", PaneID: "%20"}}})
 	r.Apply(Delta{Source: "tmux", Key: "%20", Run: Run{Agent: "claude", State: StateIdle}})
 
 	got := r.Snapshot()
@@ -783,10 +782,7 @@ func TestForeignHookRunAndItsFormerPaneComposeAsTwoRuns(t *testing.T) {
 		t.Fatalf("snapshot missing a run: %+v", got)
 	}
 	if hookRun.Caps.Terminal || hookRun.Caps.Reply || hookRun.Caps.Kill {
-		t.Errorf("Caps = %+v, want all false — a reply must not be able to reach another identity's pane", hookRun.Caps)
-	}
-	if hookRun.Tmux != nil {
-		t.Errorf("Tmux = %+v, want nil — the disowned run must not name the pane either", hookRun.Tmux)
+		t.Errorf("Caps = %+v, want all false even though the hooks layer still names %%20 — caps derive from layer presence, not the Tmux ref", hookRun.Caps)
 	}
 	if !paneRun.Caps.Terminal {
 		t.Errorf("pane Caps.Terminal = false, want true — the pane's own run still owns it")
