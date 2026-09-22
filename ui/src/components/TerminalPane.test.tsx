@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { TerminalPane } from './TerminalPane'
 import { mobileFitScale } from '../lib/mobileFitScale'
@@ -50,6 +50,19 @@ vi.mock('../hooks/useMediaQuery', () => ({
   useIsDesktop: () => desktop,
 }))
 
+let resizeObserverCallback: (() => void) | null = null
+class FakeResizeObserver {
+  constructor(cb: () => void) {
+    resizeObserverCallback = cb
+  }
+  observe() {}
+  disconnect() {}
+}
+
+beforeEach(() => {
+  vi.stubGlobal('ResizeObserver', FakeResizeObserver)
+})
+
 // Real pinch/pan/font math (computeFitFontSize, computeFollowCursorTranslateX)
 // stays real; only the hook's stateful refs are swapped for plain objects a
 // test can poke directly — happy-dom has no layout engine, so driving these
@@ -95,6 +108,8 @@ afterEach(async () => {
   touchGesturesMock.translateYRef.current = 0
   touchGesturesMock.termDimsRef.current = { w: 0, h: 0 }
   touchGesturesMock.gestureActiveRef.current = false
+  resizeObserverCallback = null
+  vi.unstubAllGlobals()
   const { __instances } = (await import('@xterm/xterm')) as unknown as { __instances: Terminal[] }
   __instances.length = 0
 })
@@ -655,5 +670,130 @@ describe('mobileFitScale (#101 landscape fit)', () => {
     stubOrientation(true)
     const { scale } = mobileFitScale(830, 900, 900, 468) // outerH taller than content
     expect(scale).toBe(1)
+  })
+})
+
+describe('TerminalPane desktop fill scale (#107)', () => {
+  const nextFrame = () =>
+    act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve))
+    })
+
+  function mountDesktopWithDims(outerW: number, outerH: number, screenW: number, screenH: number) {
+    desktop = true
+    const { container, rerender } = render(
+      <TerminalPane address={address} isFocused onFocus={() => {}} onClose={() => {}} />,
+    )
+    const outer = container.querySelector('.xterm')!.parentElement!.parentElement as HTMLElement
+    Object.defineProperty(outer, 'clientWidth', { value: outerW, configurable: true })
+    Object.defineProperty(outer, 'clientHeight', { value: outerH, configurable: true })
+    const xtermScreen = container.querySelector('.xterm-screen') as HTMLElement
+    Object.defineProperty(xtermScreen, 'offsetWidth', { value: screenW, configurable: true })
+    Object.defineProperty(xtermScreen, 'offsetHeight', { value: screenH, configurable: true })
+    return { container, rerender, outer, callbacks: capturedCallbacks! }
+  }
+
+  it('establishes the fill scale via the shared refs when dims arrive', async () => {
+    // Padded outer 800x600, screen 400x300 — clean 2x on both axes.
+    const { callbacks } = mountDesktopWithDims(812, 612, 400, 300)
+
+    act(() => {
+      callbacks.onDims({ cols: 80, rows: 24 })
+    })
+    await nextFrame()
+
+    expect(touchGesturesMock.resetTransform).toHaveBeenCalledWith(2, { w: 400, h: 300 }, { scale: 2, tx: 0, ty: 0 })
+    expect(touchGesturesMock.applyTransform).toHaveBeenCalled()
+  })
+
+  it('picks the tighter axis so a mismatched-aspect container never distorts glyphs', async () => {
+    // Padded outer 800x200, screen 400x400 — min(800/400, 200/400) = min(2, 0.5) = 0.5.
+    const { callbacks } = mountDesktopWithDims(812, 212, 400, 400)
+
+    act(() => {
+      callbacks.onDims({ cols: 80, rows: 24 })
+    })
+    await nextFrame()
+
+    expect(touchGesturesMock.resetTransform).toHaveBeenCalledWith(0.5, { w: 400, h: 400 }, { scale: 0.5, tx: 0, ty: 0 })
+  })
+
+  it('recomputes the fill scale on a container resize via the ResizeObserver callback', async () => {
+    const { callbacks, outer } = mountDesktopWithDims(812, 612, 400, 300)
+
+    act(() => {
+      callbacks.onDims({ cols: 80, rows: 24 })
+    })
+    await nextFrame()
+
+    // The mocked resetTransform doesn't write back to termDimsRef — mirror
+    // what the real hook would have stored so the resize path has real dims.
+    touchGesturesMock.termDimsRef.current = { w: 400, h: 300 }
+    touchGesturesMock.resetTransform.mockClear()
+    touchGesturesMock.applyTransform.mockClear()
+
+    // Shrink the container: padded 400x300 / screen 400x300 = 1.
+    Object.defineProperty(outer, 'clientWidth', { value: 412, configurable: true })
+    Object.defineProperty(outer, 'clientHeight', { value: 312, configurable: true })
+
+    act(() => {
+      resizeObserverCallback!()
+    })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 200))
+    })
+
+    expect(touchGesturesMock.resetTransform).toHaveBeenCalledWith(1, { w: 400, h: 300 }, { scale: 1, tx: 0, ty: 0 })
+  })
+
+  it('does not clobber the established fill on a reseed', async () => {
+    const { callbacks } = mountDesktopWithDims(812, 612, 400, 300)
+
+    act(() => {
+      callbacks.onDims({ cols: 80, rows: 24 })
+    })
+    await nextFrame()
+
+    // Mirror what the real resetTransform would have stored for the fill (the
+    // mock doesn't apply its args back to the ref).
+    touchGesturesMock.scaleRef.current = 2
+    touchGesturesMock.resetTransform.mockClear()
+    touchGesturesMock.applyTransform.mockClear()
+
+    const settle = () =>
+      act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
+
+    // First seed since connect — not a reseed.
+    act(() => {
+      callbacks.onSeed('first seed\n')
+    })
+    await settle()
+
+    // Second seed on the same connection — this is the reseed.
+    act(() => {
+      callbacks.onSeed('second seed\n')
+    })
+    await settle()
+
+    expect(touchGesturesMock.applyTransform).toHaveBeenCalled()
+    expect(touchGesturesMock.resetTransform).not.toHaveBeenCalled()
+    expect(touchGesturesMock.scaleRef.current).toBe(2)
+  })
+
+  it('clears the stale transform when switching pane address', () => {
+    desktop = true
+    const { container, rerender } = render(
+      <TerminalPane address={address} isFocused onFocus={() => {}} onClose={() => {}} />,
+    )
+    const inner = container.querySelector('.xterm')!.parentElement as HTMLElement
+    inner.style.transform = 'translate(10px, 20px) scale(2)'
+
+    rerender(
+      <TerminalPane address={{ kind: 'pane', target: 'sess:1.0' }} isFocused onFocus={() => {}} onClose={() => {}} />,
+    )
+
+    expect(inner.style.transform).toBe('')
   })
 })
