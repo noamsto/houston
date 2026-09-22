@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 )
 
@@ -83,6 +84,38 @@ func TestRepoClassifier_CachesAfterFirstCall(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Errorf("calls after second isMainCheckout = %d, want 1 (cached, no re-shell-out)", calls)
+	}
+}
+
+func TestRepoClassifier_ProjectName(t *testing.T) {
+	mainDir := t.TempDir()
+	runGit(t, mainDir, "init", "-q", "-b", "main")
+	runGit(t, mainDir, "commit", "-q", "--allow-empty", "-m", "init")
+
+	wtDir := t.TempDir()
+	runGit(t, mainDir, "worktree", "add", "-q", "-b", "feature", wtDir)
+
+	c := newRepoClassifier()
+
+	want := filepath.Base(mainDir)
+	if got := c.project(mainDir); got != want {
+		t.Errorf("project(%q) = %q, want %q", mainDir, got, want)
+	}
+	if got := c.project(wtDir); got != want {
+		t.Errorf("project(%q) = %q, want %q (same project as its main checkout)", wtDir, got, want)
+	}
+}
+
+func TestRepoClassifier_ProjectFallsBackToBasenameOnError(t *testing.T) {
+	c := newRepoClassifier()
+	c.commonDir = func(root string) (string, error) {
+		return "", errors.New("git not found")
+	}
+
+	root := "/some/root"
+	want := filepath.Base(root)
+	if got := c.project(root); got != want {
+		t.Errorf("project(%q) = %q, want %q", root, got, want)
 	}
 }
 

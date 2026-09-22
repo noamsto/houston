@@ -20,15 +20,16 @@ const nowSec = () => Math.floor(Date.now() / 1000)
 function fixture(): Workspace {
   return {
     host: '',
-    sessions: [
+    projects: [
       {
-        name: 'sess-a',
+        name: 'houston',
         window_count: 2,
         main_checkout: [
           {
             index: 0,
             name: 'main',
             active: true,
+            session: 'sess-a',
             branch: 'feat/38-workspace-tab',
             crew_codename: 'firefly',
             issue_id: '#38',
@@ -44,6 +45,7 @@ function fixture(): Workspace {
             index: 1,
             name: 'shell',
             active: false,
+            session: 'sess-a',
             panes: [
               { id: 'pane-2', index: 0, active: false, command: 'zsh', agent: false },
               { id: 'pane-3', index: 1, active: true, command: 'vim', agent: false },
@@ -52,13 +54,14 @@ function fixture(): Workspace {
         ],
       },
       {
-        name: 'sess-b',
+        name: '',
         window_count: 1,
         other: [
           {
             index: 0,
             name: 'scratch',
             active: false,
+            session: 'sess-b',
             panes: [
               { id: 'pane-4', index: 0, active: false, command: 'htop', agent: false },
             ],
@@ -106,7 +109,7 @@ describe('WorkspaceView states', () => {
   })
 
   it('shows an empty state when there are no sessions', () => {
-    mockReturn = { workspace: { host: '', sessions: [] }, error: null, loading: false, refreshing: false, refresh }
+    mockReturn = { workspace: { host: '', projects: [] }, error: null, loading: false, refreshing: false, refresh }
     const { container } = render(<WorkspaceView />)
     expect(container.textContent).toMatch(/no tmux sessions/i)
   })
@@ -118,7 +121,7 @@ describe('WorkspaceView buckets', () => {
     const { container } = render(<WorkspaceView />)
 
     const headers = Array.from(container.querySelectorAll('.fleet-group')).map((h) => h.textContent)
-    expect(headers).toEqual(['sess-a1 agent', 'sess-b0 agents'])
+    expect(headers).toEqual(['houston1 agent', 'Other sessions0 agents'])
 
     const sections = container.querySelectorAll('section')
     const sessA = sections[0]
@@ -137,6 +140,32 @@ describe('WorkspaceView buckets', () => {
     const sessB = sections[1]
     const buckets = Array.from(sessB.querySelectorAll('.ws-bucket')).map((b) => b.textContent)
     expect(buckets).toEqual(['Other'])
+  })
+
+  it('renders the no-repo project group header as "Other sessions"', () => {
+    mockReturn = { workspace: fixture(), error: null, loading: false, refreshing: false, refresh }
+    const { container } = render(<WorkspaceView />)
+
+    const sections = container.querySelectorAll('section')
+    const header = sections[1].querySelector('.fleet-group span')
+    expect(header?.textContent).toBe('Other sessions')
+  })
+
+  it('renders windows from different tmux sessions under one project group', () => {
+    const ws = fixture()
+    ws.projects[0].worktrees!.push({
+      index: 1,
+      name: 'other-shell',
+      active: false,
+      session: 'sess-c',
+      panes: [{ id: 'pane-6', index: 0, active: false, command: 'bash', agent: false }],
+    })
+    mockReturn = { workspace: ws, error: null, loading: false, refreshing: false, refresh }
+    const { container } = render(<WorkspaceView />)
+
+    const sections = container.querySelectorAll('section')
+    const sessionLabels = Array.from(sections[0].querySelectorAll('.ws-window-session')).map((n) => n.textContent)
+    expect(sessionLabels).toEqual(['sess-a', 'sess-a', 'sess-c'])
   })
 
   it('calls onOpen with exactly the agent pane\'s run id when clicked; plain panes are not interactive', () => {
@@ -181,7 +210,7 @@ describe('WorkspaceView rows', () => {
 
   it('does not repeat the state as the detail line', () => {
     const ws = fixture()
-    const pane = ws.sessions[0].main_checkout![0].panes[0]
+    const pane = ws.projects[0].main_checkout![0].panes[0]
     if (!pane.agent) throw new Error('fixture pane must be an agent')
     pane.detail = 'running'
     mockReturn = { workspace: ws, error: null, loading: false, refreshing: false, refresh }
@@ -197,7 +226,7 @@ describe('WorkspaceView rows', () => {
 
   it('marks a merged or closed PR on its chip, and leaves an open one bare', () => {
     const ws = fixture()
-    ws.sessions[0].main_checkout![0].pr_state = 'merged'
+    ws.projects[0].main_checkout![0].pr_state = 'merged'
     mockReturn = { workspace: ws, error: null, loading: false, refreshing: false, refresh }
     const { container } = render(<WorkspaceView />)
     expect(container.querySelector('.run-chip.pr')?.textContent).toBe('#71 merged')
@@ -212,7 +241,7 @@ describe('WorkspaceView rows', () => {
 
   it('collapses panes with no run into one deduped, neutral summary line', () => {
     const ws = fixture()
-    ws.sessions[0].worktrees![0].panes.push(
+    ws.projects[0].worktrees![0].panes.push(
       { id: 'pane-5', index: 2, active: false, command: 'zsh', agent: false },
     )
     mockReturn = { workspace: ws, error: null, loading: false, refreshing: false, refresh }
@@ -225,7 +254,7 @@ describe('WorkspaceView rows', () => {
 describe('WorkspaceView needs-you', () => {
   function withBlocked(ageSec: number): Workspace {
     const ws = fixture()
-    const pane = ws.sessions[0].main_checkout![0].panes[0]
+    const pane = ws.projects[0].main_checkout![0].panes[0]
     if (!pane.agent) throw new Error('fixture pane must be an agent')
     pane.state = 'blocked'
     pane.updated_at = nowSec() - ageSec

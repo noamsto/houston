@@ -15,12 +15,12 @@ func TestBuildWorkspace_PlainPaneNoRun(t *testing.T) {
 		{PaneID: "%1", Target: "main:0", ClaudeStatus: "", Index: 0},
 	}
 
-	ws := buildWorkspace(wins, panes, nil, nil)
+	ws := buildWorkspace(wins, panes, nil, nil, nil)
 
-	if len(ws.Sessions) != 1 || len(ws.Sessions[0].Other) != 1 || len(ws.Sessions[0].Other[0].Panes) != 1 {
+	if len(ws.Projects) != 1 || len(ws.Projects[0].Other) != 1 || len(ws.Projects[0].Other[0].Panes) != 1 {
 		t.Fatalf("unexpected shape: %+v", ws)
 	}
-	p := ws.Sessions[0].Other[0].Panes[0]
+	p := ws.Projects[0].Other[0].Panes[0]
 	if p.Agent {
 		t.Errorf("Agent = true, want false for plain pane with no matching run")
 	}
@@ -40,9 +40,9 @@ func TestBuildWorkspace_OrdinaryEnrichedAgentPane(t *testing.T) {
 		{ID: "run-1", Tmux: &runs.TmuxRef{Session: "main", Window: 0, PaneID: "%2"}},
 	}
 
-	ws := buildWorkspace(wins, panes, snap, nil)
+	ws := buildWorkspace(wins, panes, snap, nil, nil)
 
-	w := ws.Sessions[0].Other[0]
+	w := ws.Projects[0].Other[0]
 	if w.Branch != "feat/x" || w.CrewCodename != "falcon" {
 		t.Errorf("window fields not carried through: %+v", w)
 	}
@@ -69,9 +69,9 @@ func TestBuildWorkspace_HookOnlyAgentPane(t *testing.T) {
 		{ID: "run-2", Tmux: &runs.TmuxRef{Session: "main", Window: 0, PaneID: "%3"}},
 	}
 
-	ws := buildWorkspace(wins, panes, snap, nil)
+	ws := buildWorkspace(wins, panes, snap, nil, nil)
 
-	p := ws.Sessions[0].Other[0].Panes[0]
+	p := ws.Projects[0].Other[0].Panes[0]
 	if !p.Agent {
 		t.Errorf("Agent = false, want true for hook-only composed run (ClaudeStatus empty)")
 	}
@@ -90,9 +90,9 @@ func TestBuildWorkspace_ClaudeStatusWithNoJoinedRun(t *testing.T) {
 		{PaneID: "%4", Target: "main:0", ClaudeStatus: "working", Index: 0},
 	}
 
-	ws := buildWorkspace(wins, panes, nil, nil)
+	ws := buildWorkspace(wins, panes, nil, nil, nil)
 
-	p := ws.Sessions[0].Other[0].Panes[0]
+	p := ws.Projects[0].Other[0].Panes[0]
 	if p.Agent {
 		t.Errorf("Agent = true, want false when no run joined this pane id")
 	}
@@ -110,12 +110,12 @@ func TestBuildWorkspace_PaneWithMissingWindowSkipped(t *testing.T) {
 		{PaneID: "%6", Target: "main:1", Index: 0}, // window 1 never listed
 	}
 
-	ws := buildWorkspace(wins, panes, nil, nil)
+	ws := buildWorkspace(wins, panes, nil, nil, nil)
 
-	if len(ws.Sessions) != 1 || len(ws.Sessions[0].Other) != 1 {
+	if len(ws.Projects) != 1 || len(ws.Projects[0].Other) != 1 {
 		t.Fatalf("unexpected session/window shape: %+v", ws)
 	}
-	panesOut := ws.Sessions[0].Other[0].Panes
+	panesOut := ws.Projects[0].Other[0].Panes
 	if len(panesOut) != 1 || panesOut[0].ID != "%5" {
 		t.Errorf("panes = %+v, want only %%5", panesOut)
 	}
@@ -123,9 +123,9 @@ func TestBuildWorkspace_PaneWithMissingWindowSkipped(t *testing.T) {
 
 func TestBuildWorkspace_Ordering(t *testing.T) {
 	wins := []tmux.WindowOptions{
-		{Session: "zeta", Window: 0, Name: "z0"},
-		{Session: "alpha", Window: 1, Name: "a1"},
-		{Session: "alpha", Window: 0, Name: "a0"},
+		{Session: "zeta", Window: 0, Name: "z0", GitRoot: "/repo/zeta"},
+		{Session: "alpha", Window: 1, Name: "a1", GitRoot: "/repo/alpha"},
+		{Session: "alpha", Window: 0, Name: "a0", GitRoot: "/repo/alpha"},
 	}
 	panes := []tmux.PaneOptions{
 		{PaneID: "%20", Target: "zeta:0", Index: 0},
@@ -134,13 +134,14 @@ func TestBuildWorkspace_Ordering(t *testing.T) {
 		{PaneID: "%10", Target: "alpha:0", Index: 0},
 		{PaneID: "%11", Target: "alpha:0", Index: 1},
 	}
+	projectNames := map[string]string{"/repo/zeta": "zeta", "/repo/alpha": "alpha"}
 
-	ws := buildWorkspace(wins, panes, nil, nil)
+	ws := buildWorkspace(wins, panes, nil, nil, projectNames)
 
-	if len(ws.Sessions) != 2 || ws.Sessions[0].Name != "alpha" || ws.Sessions[1].Name != "zeta" {
-		t.Fatalf("sessions not sorted by name: %+v", ws.Sessions)
+	if len(ws.Projects) != 2 || ws.Projects[0].Name != "alpha" || ws.Projects[1].Name != "zeta" {
+		t.Fatalf("projects not sorted by name: %+v", ws.Projects)
 	}
-	alphaWindows := ws.Sessions[0].Other
+	alphaWindows := ws.Projects[0].Worktrees
 	if len(alphaWindows) != 2 || alphaWindows[0].Index != 0 || alphaWindows[1].Index != 1 {
 		t.Fatalf("windows not sorted by index: %+v", alphaWindows)
 	}
@@ -173,16 +174,24 @@ func TestBuildWorkspace_Bucketing(t *testing.T) {
 		"/repo/wt1":  false,
 		// "/repo/wt2" intentionally absent — must still bucket as Worktrees.
 	}
-
-	ws := buildWorkspace(wins, panes, nil, mainCheckouts)
-
-	if len(ws.Sessions) != 1 {
-		t.Fatalf("unexpected session count: %+v", ws.Sessions)
+	projectNames := map[string]string{
+		"/repo/main": "repo",
+		"/repo/wt1":  "repo",
+		"/repo/wt2":  "repo",
 	}
-	s := ws.Sessions[0]
 
-	if s.WindowCount != 4 {
-		t.Errorf("WindowCount = %d, want 4 regardless of bucket", s.WindowCount)
+	ws := buildWorkspace(wins, panes, nil, mainCheckouts, projectNames)
+
+	// The three GitRoot'd windows land in one "repo" project; the no-repo
+	// window can never join a named project (its key is always ""), so it
+	// lands in its own trailing project instead.
+	if len(ws.Projects) != 2 || ws.Projects[0].Name != "repo" || ws.Projects[1].Name != "" {
+		t.Fatalf("unexpected project shape: %+v", ws.Projects)
+	}
+	s := ws.Projects[0]
+
+	if s.WindowCount != 3 {
+		t.Errorf("WindowCount = %d, want 3 regardless of bucket", s.WindowCount)
 	}
 	if len(s.MainCheckout) != 1 || s.MainCheckout[0].Name != "main-checkout" {
 		t.Errorf("MainCheckout = %+v, want just main-checkout", s.MainCheckout)
@@ -193,8 +202,66 @@ func TestBuildWorkspace_Bucketing(t *testing.T) {
 	if s.Worktrees[0].Name != "worktree-explicit-false" || s.Worktrees[1].Name != "worktree-absent-key" {
 		t.Errorf("Worktrees = %+v, want [worktree-explicit-false, worktree-absent-key] in window-index order", s.Worktrees)
 	}
-	if len(s.Other) != 1 || s.Other[0].Name != "no-repo" {
-		t.Errorf("Other = %+v, want just no-repo", s.Other)
+
+	noRepo := ws.Projects[1]
+	if len(noRepo.Other) != 1 || noRepo.Other[0].Name != "no-repo" {
+		t.Errorf("Other = %+v, want just no-repo", noRepo.Other)
+	}
+}
+
+// TestBuildWorkspace_ProjectSpansSessions is the regression test for "a
+// worktree window physically hosted in tmux session X gets counted under
+// X's name instead of its own repo": two windows sharing one @git_root but
+// living in different tmux sessions must land in the same project, each
+// keeping its own Session field and its own main-checkout/worktree bucket.
+func TestBuildWorkspace_ProjectSpansSessions(t *testing.T) {
+	wins := []tmux.WindowOptions{
+		{Session: "houston", Window: 0, Name: "main", GitRoot: "/repo/main"},
+		{Session: "ash", Window: 0, Name: "wt", GitRoot: "/repo/wt"},
+	}
+	panes := []tmux.PaneOptions{
+		{PaneID: "%40", Target: "houston:0", Index: 0},
+		{PaneID: "%41", Target: "ash:0", Index: 0},
+	}
+	mainCheckouts := map[string]bool{"/repo/main": true, "/repo/wt": false}
+	projectNames := map[string]string{"/repo/main": "houston", "/repo/wt": "houston"}
+
+	ws := buildWorkspace(wins, panes, nil, mainCheckouts, projectNames)
+
+	if len(ws.Projects) != 1 || ws.Projects[0].Name != "houston" {
+		t.Fatalf("expected one project named houston, got: %+v", ws.Projects)
+	}
+	p := ws.Projects[0]
+	if len(p.MainCheckout) != 1 || p.MainCheckout[0].Session != "houston" {
+		t.Fatalf("MainCheckout = %+v, want the houston-session window", p.MainCheckout)
+	}
+	if len(p.Worktrees) != 1 || p.Worktrees[0].Session != "ash" {
+		t.Fatalf("Worktrees = %+v, want the ash-session window", p.Worktrees)
+	}
+}
+
+// TestBuildWorkspace_NoRepoWindowGetsOwnTrailingProject is the regression
+// test for "a plain non-repo tmux session becomes a fake project": a window
+// with no @git_root must not be grouped with a repo'd window merely because
+// they share a tmux session, and the no-repo project must sort last.
+func TestBuildWorkspace_NoRepoWindowGetsOwnTrailingProject(t *testing.T) {
+	wins := []tmux.WindowOptions{
+		{Session: "main", Window: 0, Name: "repo-win", GitRoot: "/repo/main"},
+		{Session: "main", Window: 1, Name: "plain-win", GitRoot: ""},
+	}
+	panes := []tmux.PaneOptions{
+		{PaneID: "%50", Target: "main:0", Index: 0},
+		{PaneID: "%51", Target: "main:1", Index: 0},
+	}
+	projectNames := map[string]string{"/repo/main": "houston"}
+
+	ws := buildWorkspace(wins, panes, nil, nil, projectNames)
+
+	if len(ws.Projects) != 2 {
+		t.Fatalf("expected 2 projects, got: %+v", ws.Projects)
+	}
+	if ws.Projects[0].Name != "houston" || ws.Projects[1].Name != "" {
+		t.Fatalf("expected houston then trailing \"\" project, got: %+v", ws.Projects)
 	}
 }
 
@@ -212,9 +279,9 @@ func TestBuildWorkspace_JoinsRunStateAndDetail(t *testing.T) {
 		Activity: runs.Activity{Tool: "Edit", Hint: "a.go"},
 	}}
 
-	ws := buildWorkspace(wins, panes, snap, nil)
+	ws := buildWorkspace(wins, panes, snap, nil, nil)
 
-	w := ws.Sessions[0].Other[0]
+	w := ws.Projects[0].Other[0]
 	if w.IssueID != "#69" || w.PRNumber != "71" || w.PRState != "OPEN" || w.PRCheckState != "failure" {
 		t.Errorf("issue/PR fields not carried through: %+v", w)
 	}
@@ -259,7 +326,7 @@ func TestBuildWorkspace_DropsNoneSentinelOptions(t *testing.T) {
 	}
 	panes := []tmux.PaneOptions{{PaneID: "%1", Target: "main:0", Index: 0}}
 
-	w := buildWorkspace(wins, panes, nil, nil).Sessions[0].Other[0]
+	w := buildWorkspace(wins, panes, nil, nil, nil).Projects[0].Other[0]
 
 	if w.IssueID != "#69" {
 		t.Errorf("IssueID = %q, want #69", w.IssueID)

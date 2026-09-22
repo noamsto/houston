@@ -9,7 +9,7 @@ vi.mock('../api/workspace', () => ({
 }))
 
 function workspace(host = 'local'): Workspace {
-  return { host, sessions: [] }
+  return { host, projects: [] }
 }
 
 // Named (not anonymous) so eslint-plugin-react-hooks recognises this as a
