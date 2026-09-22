@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { UnicodeGraphemesAddon } from '@xterm/addon-unicode-graphemes'
@@ -17,6 +17,7 @@ import {
 } from '../hooks/useTouchGestures'
 import { darkTheme, lightTheme } from '../lib/xterm'
 import { mobileFitScale } from '../lib/mobileFitScale'
+import { desktopFillScale } from '../lib/desktopFillScale'
 import { PaneHeader } from './PaneHeader'
 import { MobileInputBar } from './MobileInputBar'
 import { ColumnScrubber } from './ColumnScrubber'
@@ -123,6 +124,25 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
     innerRef, outerRef, termRef, !isDesktop && termMounted, setFontSize,
     () => handleDoubleTapRef.current(),
     (info) => handleDragEndRef.current(info),
+  )
+
+  // Desktop only: fills the container via the same transform refs the mobile
+  // path uses. Writing inner.style.transform directly here would get
+  // overwritten by afterSeedWritten's unconditional applyTransform() on the
+  // next reseed.
+  const applyDesktopFill = useCallback(
+    (screenW: number, screenH: number) => {
+      const outer = outerRef.current
+      const inner = innerRef.current
+      if (!outer || !inner) return
+      const outerW = outer.clientWidth - PAD * 2
+      const outerH = outer.clientHeight - PAD * 2
+      const scale = desktopFillScale(outerW, outerH, screenW, screenH)
+      inner.style.transformOrigin = '0 0'
+      resetTransform(scale, { w: screenW, h: screenH }, { scale, tx: 0, ty: 0 })
+      applyTransform()
+    },
+    [resetTransform, applyTransform],
   )
 
   // Coarse horizontal position for the mobile column scrubber — polled at
@@ -302,9 +322,11 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
           if (keepPan) clampPan()
           applyTransform()
         } else {
-          // Desktop: just size inner to match terminal
+          // Desktop: size inner to match terminal, then scale it to fill the
+          // container via the shared transform refs.
           inner.style.width = `${screenW}px`
           inner.style.height = `${screenH}px`
+          applyDesktopFill(screenW, screenH)
         }
       })
     }
@@ -443,6 +465,12 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
       innerRef.current.style.height = `${outerH}px`
       innerRef.current.style.transform = `translate(0px, ${ty}px) scale(${initScale})`
       resetTransform(minS, { w: MOBILE_TERM_WIDTH, h: outerH }, { scale: initScale, tx: 0, ty })
+    } else {
+      // Desktop: clear any transform/scale state carried over from mobile mode
+      // (e.g. a breakpoint flip) until the next onDims/seed establishes a real
+      // fill scale.
+      if (innerRef.current) innerRef.current.style.transform = ''
+      resetTransform(1, { w: 0, h: 0 }, { scale: 1, tx: 0, ty: 0 })
     }
 
     term.open(innerRef.current)
@@ -516,7 +544,11 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
     if (term) {
       term.clear()
     }
-  }, [key])
+    if (isDesktop && innerRef.current) {
+      innerRef.current.style.transform = ''
+      resetTransform(1, { w: 0, h: 0 }, { scale: 1, tx: 0, ty: 0 })
+    }
+  }, [key, isDesktop]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Resize observer — refit when outer container dimensions change
   useEffect(() => {
@@ -544,6 +576,9 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
               return
             }
             // Zoomed out — clear locks and fall through to refit
+          }
+          if (paneDimsRef.current && termDimsRef.current.w > 0) {
+            applyDesktopFill(termDimsRef.current.w, termDimsRef.current.h)
           }
         }
 
@@ -605,7 +640,7 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
       clearTimeout(debounceTimer)
       ro.disconnect()
     }
-  }, [sendResize, isDesktop, minScaleRef, resetTransform, termDimsRef, translateXRef, applyTransform, clampPan])
+  }, [sendResize, isDesktop, minScaleRef, resetTransform, termDimsRef, translateXRef, applyTransform, clampPan, applyDesktopFill])
 
   return (
     <div
