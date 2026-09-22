@@ -101,6 +101,14 @@ describe('RunDetail', () => {
     expect(screen.getByText('Terminal')).toBeTruthy()
     expect(screen.getByText(/coming soon/i)).toBeTruthy()
   })
+
+  it('shows project and branch separately in the header, not the worktree-dir repo slug twice', () => {
+    const r = run({ project: 'houston', repo: 'feat-97-dogfood-houston-as-a-phone-user-and-file', branch: 'feat/97-dogfood-houston-as-a-phone-user-and-file' })
+    render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="activity" />)
+    expect(screen.getByText('houston')).toBeTruthy()
+    expect(screen.getByText('feat/97-dogfood-houston-as-a-phone-user-and-file')).toBeTruthy()
+    expect(screen.queryByText(/feat-97-dogfood-houston-as-a-phone-user-and-file\/feat/)).toBeNull()
+  })
 })
 
 describe('RunDetail terminal lifecycle', () => {
