@@ -13,18 +13,21 @@ import "github.com/noamsto/houston/tmux"
 // let the crew layer's Agent promote that shell into a listed run.
 //
 // busState is the crew-bus Run.State for this branch, from the latest status
-// record. When busState is terminal (StateDone or StateFailed), the worker
-// session that wrote those bus records has ended — the record must not join to
-// any live pane, since the pane's current occupant is a different session.
-// A zero busState (dispatch-only branch with no status yet) is not terminal
-// and does not gate.
-func resolvePane(bus, branch string, busState State, wins []tmux.WindowOptions, panes []tmux.PaneOptions, busOf func(gitRoot string) string) (paneID string, candidates int) {
-	// A terminal bus state means the session that wrote those records ended.
-	// Do not join the stale record to a pane whose current occupant is a
-	// different (or any) session.
-	if busState == StateDone || busState == StateFailed {
-		return "", 0
-	}
+// record, and busUpdatedAt is that record's timestamp (unix seconds — see
+// Run.UpdatedAt). When busState is terminal (StateDone or StateFailed), the
+// worker session that wrote those bus records has ended, but its own pane
+// commonly still sits idle in its window until `crew reap` reclaims it — the
+// normal case, not a stale join. So a terminal record still joins iff the
+// candidate pane's own activity epoch (ClaudeStatusEpoch(p.ClaudeStatus)) is
+// <= busUpdatedAt: nothing has touched the pane since the worker finished, so
+// it is the same session. A pane epoch newer than busUpdatedAt means a new
+// occupant took the pane over — don't join. A non-positive pane epoch (0 for
+// unknown/missing, or a malformed negative value) on a terminal record fails
+// closed — don't join, since identity can't be confirmed. A zero busState
+// (dispatch-only branch with no status yet) is not terminal and does not
+// gate.
+func resolvePane(bus, branch string, busState State, busUpdatedAt int64, wins []tmux.WindowOptions, panes []tmux.PaneOptions, busOf func(gitRoot string) string) (paneID string, candidates int) {
+	terminal := busState == StateDone || busState == StateFailed
 	byTarget := windowsByTarget(wins)
 	for _, p := range panes {
 		if p.ClaudeStatus == "" {
@@ -42,6 +45,12 @@ func resolvePane(bus, branch string, busState State, wins []tmux.WindowOptions, 
 		}
 		if b := busOf(w.GitRoot); b == "" || b != bus {
 			continue
+		}
+		if terminal {
+			epoch := ClaudeStatusEpoch(p.ClaudeStatus)
+			if epoch <= 0 || epoch > busUpdatedAt {
+				continue
+			}
 		}
 		candidates++
 		paneID = p.PaneID
