@@ -70,6 +70,17 @@ func TestForegroundStartIn(t *testing.T) {
 			t.Errorf("foregroundStartIn = %d, want 0", got)
 		}
 	})
+
+	t.Run("missing root stat (no btime)", func(t *testing.T) {
+		root := t.TempDir()
+		// No root/stat file written.
+		writeStat(t, root, shellPID, enginePID, 0)
+		writeStat(t, root, enginePID, 0, 250)
+
+		if got := foregroundStartIn(root, shellPID); got != 0 {
+			t.Errorf("foregroundStartIn = %d, want 0", got)
+		}
+	})
 }
 
 // TestProcStartInRealKernel sanity-checks procStartIn against the real

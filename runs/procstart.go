@@ -1,10 +1,26 @@
 package runs
 
 import (
+	"log/slog"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
+
+// probeBroken ensures the foreground-process probe's broken-probe warning
+// (as opposed to the legitimate "process/leader has exited") fires once per
+// process, not once per join attempt.
+var probeBroken sync.Once
+
+// warnProbeBroken logs, once, that the foreground-process probe itself is
+// failing rather than reporting a legitimately gone process — meaning
+// terminal crew records will stop joining their panes.
+func warnProbeBroken(err error) {
+	probeBroken.Do(func() {
+		slog.Warn("crew source: foreground-process probe failed, terminal crew records will not join their panes", "error", err)
+	})
+}
 
 // procStartFunc returns the unix start time of the foreground process group
 // leader on the tty of the pane whose first process is panePID, or 0 when

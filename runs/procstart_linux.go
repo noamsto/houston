@@ -3,6 +3,8 @@
 package runs
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"strconv"
 )
@@ -17,19 +19,28 @@ const userHZ = 100
 func procStartIn(root string, pid int) int64 {
 	stat, err := os.ReadFile(root + "/" + strconv.Itoa(pid) + "/stat")
 	if err != nil {
+		// ENOENT means the process has exited, a legitimate outcome; any
+		// other error (e.g. EACCES under hidepid) means the probe itself is
+		// broken.
+		if !errors.Is(err, fs.ErrNotExist) {
+			warnProbeBroken(err)
+		}
 		return 0
 	}
 	_, ticks, ok := parseProcStat(string(stat))
 	if !ok {
+		warnProbeBroken(errors.New("unparseable /proc/<pid>/stat"))
 		return 0
 	}
 
 	sysStat, err := os.ReadFile(root + "/stat")
 	if err != nil {
+		warnProbeBroken(err)
 		return 0
 	}
 	btime, ok := parseBtime(string(sysStat))
 	if !ok {
+		warnProbeBroken(errors.New("no btime in /proc/stat"))
 		return 0
 	}
 
@@ -47,10 +58,18 @@ func foregroundStartIn(root string, panePID int) int64 {
 	}
 	stat, err := os.ReadFile(root + "/" + strconv.Itoa(panePID) + "/stat")
 	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			warnProbeBroken(err)
+		}
 		return 0
 	}
 	tpgid, _, ok := parseProcStat(string(stat))
-	if !ok || tpgid <= 0 {
+	if !ok {
+		warnProbeBroken(errors.New("unparseable /proc/<pid>/stat"))
+		return 0
+	}
+	if tpgid <= 0 {
+		// No controlling tty / no foreground group — not a probe failure.
 		return 0
 	}
 	return procStartIn(root, tpgid)
