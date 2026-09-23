@@ -88,6 +88,11 @@ func fromEnvelope(in input) (event string, ev Event, agent string, err error) {
 	}
 
 	switch {
+	case in.Engine == "pi" && in.NativeEvent == "session_shutdown" && extra.Reason == "reload":
+		// pi's /reload emits this then re-emits session_start for the same
+		// session id, both as separate detached processes; if the start
+		// lands first, treating this as SessionEnd would end a live session.
+		event = ""
 	case in.CanonicalEvent == "" && in.Engine == "pi" && in.NativeEvent == "session_shutdown":
 		event = EventSessionEnd
 	default:

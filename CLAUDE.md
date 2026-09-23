@@ -244,11 +244,14 @@ Claude Code's native hook payload, or hookyard's normalized envelope
 (`{engine, canonical_event, native_event, session_id, cwd, tool_name,
 tool_input, native}`, `native` carrying the engine's own payload). In envelope
 mode the envelope's own event is authoritative and a CLI `<event>` arg is
-ignored (that arg exists for `houston hooks install`'s native Claude
-registrations, which never send an envelope).
+ignored (that arg exists so wrapper scripts can name the event for a native
+Claude payload; `houston hooks install` registers a bare `<binary> hook` and
+relies on `hook_event_name`).
 
-`engine: claude-code` decodes `native` as today's `Event` and runs the native
-Claude path unchanged. Other engines map canonical events onto houston's
+`engine: claude-code` decodes `native` as a Claude `Event`; the event is
+`native.hook_event_name`, else the envelope's `native_event` (neither →
+no-op), and the file records `agent: claude`. From there it runs the same
+`apply` as the native path. Other engines map canonical events onto houston's
 internal (Claude) event vocabulary:
 
 | envelope | houston event | notes |
@@ -259,7 +262,7 @@ internal (Claude) event vocabulary:
 | `post_tool` | PostToolUse | |
 | `pre_compact` | PreCompact | |
 | `turn_end` | Stop | see pi exception below |
-| `""` + pi `session_shutdown` | SessionEnd | |
+| `""` + pi `session_shutdown` | SessionEnd | `reason: reload` is a no-op instead — pi re-emits `session_start` for the same session |
 | anything else | — | no-op: no state-file write |
 
 `TranscriptPath` comes from the native payload's `transcript_path`, else pi's
@@ -285,6 +288,18 @@ hook package.
 `turn_end`, `prompt_submit`, `session_start`) as detached fire-and-forget
 processes that would otherwise race a Read→apply→Write and silently drop an
 update. The tmux `display-message` exec stays outside the lock.
+
+The lock serializes writes but doesn't order them — a detached event can
+still land after a later one. A late `post_tool` landing after `turn_end`
+leaves a card `thinking`; a pi turn's detached `turn_end` landing after the
+next turn's synchronous `pre_tool` clears `turn_tool`, so that next turn's
+`turn_end` shows `waiting` early — until the next event corrects it.
+
+houston only sees events hookyard's manifest subscribes it to. The
+engine-scoped `pi:session_shutdown` and the canonical `pre_compact` must both
+be named in the manifest's `events` (the nix-config houston manifest) —
+otherwise a pi run that exits while its pane stays open (e.g. back to a
+shell) is never ended, and `compacting` never shows.
 
 lazytmux does not set `@claude_status` on pi (or codex/cursor) panes, so the
 tmux layer never lists them on its own — they reach Fleet through the hooks

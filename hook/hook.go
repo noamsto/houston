@@ -108,6 +108,8 @@ func Dispatch(event string, stateDir string, stdin io.Reader) error {
 		fetchedCoords = true
 	}
 
+	beforeLock()
+
 	unlock, err := lockStateDir(filepath.Dir(path))
 	if err != nil {
 		return fmt.Errorf("lock state dir: %w", err)
@@ -301,6 +303,12 @@ func tmuxEnv() (pane, server string) {
 var tmuxDisplay = func(pane string) ([]byte, error) {
 	return exec.Command("tmux", "display-message", "-p", "-t", pane, "#S\t#I").Output()
 }
+
+// beforeLock is overridden in tests to inject a write between the unlocked
+// pre-read/exec and the locked re-read, exercising the race where the
+// pre-read found the pane fresh (skipping the exec) but another process's
+// write makes the locked re-read stale.
+var beforeLock = func() {}
 
 // tmuxCoords returns (session, window, pane). Empty on any failure — hooks
 // can fire outside tmux.

@@ -3,6 +3,7 @@ package hook
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"testing"
 )
 
@@ -190,6 +191,51 @@ func TestEnvelopePiSessionShutdown(t *testing.T) {
 	}
 	if got.Reason != "quit" {
 		t.Errorf("Reason = %q, want quit", got.Reason)
+	}
+}
+
+func TestEnvelopePiSessionShutdownReloadIsNotAnEnd(t *testing.T) {
+	// pi's /reload emits session_shutdown (reason: reload) then re-emits
+	// session_start for the same session id, both as separate detached
+	// processes; if the start lands first, ending the session here would
+	// leave a live session marked ended.
+	dir := t.TempDir()
+	start := envelope(t, "pi", "session_start", "session_start", "s7b", "", nil,
+		map[string]any{"cwd": "/w", "session_id": "s7b"})
+	dispatchEnvelope(t, dir, "", "s7b", start)
+	prompt := envelope(t, "pi", "prompt_submit", "input", "s7b", "", nil,
+		map[string]any{"cwd": "/w", "session_id": "s7b"})
+	got := dispatchEnvelope(t, dir, "", "s7b", prompt)
+	if got.State != StateThinking {
+		t.Fatalf("setup: State = %q, want thinking", got.State)
+	}
+
+	path := Path(dir, "s7b")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read state file: %v", err)
+	}
+
+	reload := envelope(t, "pi", "", "session_shutdown", "s7b", "", nil,
+		map[string]any{"cwd": "/w", "session_id": "s7b", "reason": "reload"})
+	if err := Dispatch("", dir, bytes.NewReader(reload)); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read state file: %v", err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Errorf("state file rewritten on reload shutdown, want unchanged")
+	}
+
+	got, err = Read(path)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if got.State != StateThinking {
+		t.Errorf("State = %q after reload shutdown, want thinking", got.State)
 	}
 }
 

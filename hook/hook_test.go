@@ -416,6 +416,53 @@ func TestDispatchRetriesAfterAFailedDisplayMessage(t *testing.T) {
 	}
 }
 
+func TestDispatchStaleUnderLockRetries(t *testing.T) {
+	// The unlocked pre-read can find the pane fresh (skipping the tmux exec)
+	// while another process's write lands before the lock is taken, so the
+	// locked re-read is stale. Dispatch must still emit the "display-message
+	// failed" shape (fetchedCoords was never set) so the next event retries.
+	dir := t.TempDir()
+	calls := stubTmuxDisplay(t, func(string) ([]byte, error) {
+		return []byte("sess\t0"), nil
+	})
+	t.Setenv("TMUX_PANE", "%20")
+	t.Setenv("TMUX", "/s,1966,0")
+	dispatch(t, dir, EventSessionStart, map[string]any{"session_id": "s"})
+	if *calls != 1 {
+		t.Fatalf("setup: tmuxDisplay called %d times, want 1", *calls)
+	}
+
+	orig := beforeLock
+	t.Cleanup(func() { beforeLock = orig })
+	beforeLock = func() {
+		if err := Write(Path(dir, "s"), SessionState{TmuxPane: "%99", TmuxServer: "1966"}); err != nil {
+			t.Fatalf("beforeLock write: %v", err)
+		}
+	}
+
+	before := *calls
+	got := dispatch(t, dir, EventPostToolUse, map[string]any{"session_id": "s", "tool_name": "Bash"})
+	if *calls != before {
+		t.Errorf("tmuxDisplay called %d new times during the racing dispatch, want 0", *calls-before)
+	}
+	if got.TmuxPane != "%20" {
+		t.Errorf("TmuxPane = %q, want %%20 (current $TMUX_PANE)", got.TmuxPane)
+	}
+	if got.TmuxSession != "" {
+		t.Errorf("TmuxSession = %q, want empty (failed-display-message shape)", got.TmuxSession)
+	}
+
+	beforeLock = orig
+	before = *calls
+	got = dispatch(t, dir, EventPostToolUse, map[string]any{"session_id": "s", "tool_name": "Bash"})
+	if *calls != before+1 {
+		t.Errorf("tmuxDisplay called %d times on retry, want 1", *calls-before)
+	}
+	if got.TmuxSession != "sess" {
+		t.Errorf("TmuxSession = %q after retry, want sess", got.TmuxSession)
+	}
+}
+
 func TestDispatchSessionStartAlwaysRefreshes(t *testing.T) {
 	// Even with an unchanged environment, SessionStart must recompute — it
 	// marks a fresh (or resumed) process, and a stale entry from a killed
