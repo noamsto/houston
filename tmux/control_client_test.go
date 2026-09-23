@@ -1732,9 +1732,6 @@ func TestReconnectMarksSubscribersDirty(t *testing.T) {
 	}
 }
 
-// TestReconnectBumpsGeneration uses recordingDialer, not scriptedDialer's
-// immediate EOF, so the test controls exactly when the connection drops
-// rather than racing Start() against a transcript that ends right away.
 func TestReconnectBumpsGeneration(t *testing.T) {
 	d := &recordingDialer{}
 	cc := NewControlClient("test")

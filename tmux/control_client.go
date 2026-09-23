@@ -29,9 +29,7 @@ type ControlClient struct {
 	dial    func() (io.ReadCloser, io.Writer, func() error, error)
 	backoff time.Duration // initial reconnect delay; doubles to backoffMax
 
-	// gen counts attaches: a consumer that baselines against it can tell
-	// whether a reconnect happened since, without racing connMu.
-	gen atomic.Uint64
+	gen atomic.Uint64 // see Generation
 
 	closeMu  sync.Mutex
 	closed   bool
@@ -112,8 +110,7 @@ var (
 
 // ErrStaleGeneration is returned by SendKeys when the connection identified
 // by its gen argument is no longer the one cc.stdin writes to. It is not a
-// connection failure — the current connection may be perfectly healthy — so
-// callers must not treat it like one.
+// connection failure: the current connection may be healthy.
 var ErrStaleGeneration = errors.New("tmux control client: stale generation")
 
 func NewControlClient(session string) *ControlClient {
@@ -278,9 +275,7 @@ func (cc *ControlClient) writeCommand(command string, reply chan commandResponse
 // writeCommandGated is writeCommand plus a generation check made under the
 // same stdinMu section as the write. attach bumps gen before it takes
 // stdinMu to swap cc.stdin, so a caller that holds stdinMu and finds
-// cc.gen unchanged from gen is still writing to that connection's stdin —
-// checking and writing separately would leave a window where attach swaps
-// the connection out from under an already-approved write.
+// cc.gen unchanged from gen is still writing to that connection's stdin.
 func (cc *ControlClient) writeCommandGated(gen uint64, command string, reply chan commandResponse) error {
 	cc.stdinMu.Lock()
 	if cc.gen.Load() != gen {
@@ -913,8 +908,7 @@ func (cc *ControlClient) SendSpecialKey(paneID, key string) error {
 	return cc.writeCommand(fmt.Sprintf("send-keys -t %s %s", paneID, key), nil)
 }
 
-// sendSpecialKeyGated is SendSpecialKey with SendKeys's generation gate, used
-// internally so its callers stay atomic under gen's check-and-write.
+// sendSpecialKeyGated is SendSpecialKey behind SendKeys's generation gate.
 func (cc *ControlClient) sendSpecialKeyGated(gen uint64, paneID, key string) error {
 	return cc.writeCommandGated(gen, fmt.Sprintf("send-keys -t %s %s", paneID, key), nil)
 }

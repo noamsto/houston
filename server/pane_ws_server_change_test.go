@@ -95,7 +95,7 @@ func mustMarshal(t *testing.T, v any) json.RawMessage {
 	return b
 }
 
-// TestPaneWSClosesWhenServerChanges is AC1: once the generation is bumped it
+// TestPaneWSClosesWhenServerChanges: once the generation is bumped it
 // never becomes verified again (the resolve now disagrees), so input read
 // after the bump is dropped regardless of exactly when it arrives relative
 // to the Dirty event that triggers the check.
@@ -148,7 +148,7 @@ func waitForRefusedCall(t *testing.T, cc *fakeControlClient, paneID, want string
 	}
 }
 
-// TestPaneWSSurvivesReconnectToSameServer is AC2: a reconnect to the same
+// TestPaneWSSurvivesReconnectToSameServer: a reconnect to the same
 // server re-verifies and keeps streaming.
 func TestPaneWSSurvivesReconnectToSameServer(t *testing.T) {
 	fakeTmux := newFakeTmux()
@@ -183,7 +183,7 @@ func TestPaneWSSurvivesReconnectToSameServer(t *testing.T) {
 	}
 }
 
-// TestPaneWSOrdinaryReseedDoesNotResolve is AC3: a Dirty event with no
+// TestPaneWSOrdinaryReseedDoesNotResolve: a Dirty event with no
 // generation change re-seeds without touching tmux again.
 func TestPaneWSOrdinaryReseedDoesNotResolve(t *testing.T) {
 	fakeTmux := newFakeTmux()
@@ -295,7 +295,7 @@ func TestPaneWSUnknownServerNeverResolves(t *testing.T) {
 	waitForSendCall(t, fakeCC, fakeTmux.paneID, "z")
 }
 
-// TestPaneWSOpenTimeMismatchNeverZooms covers F2: the open-time server check
+// TestPaneWSOpenTimeMismatchNeverZooms: the open-time server check
 // must run before auto-zoom, so a pane already on a different server at open
 // never has its window zoomed on our behalf.
 func TestPaneWSOpenTimeMismatchNeverZooms(t *testing.T) {
@@ -318,7 +318,7 @@ func TestPaneWSOpenTimeMismatchNeverZooms(t *testing.T) {
 	}
 }
 
-// TestPaneWSServerChangeSkipsZoomRestore covers F2: a socket that closes
+// TestPaneWSServerChangeSkipsZoomRestore: a socket that closes
 // because the pane's server changed must not un-zoom on the way out — that
 // zoom toggle would hit an unrelated window on the new server.
 func TestPaneWSServerChangeSkipsZoomRestore(t *testing.T) {

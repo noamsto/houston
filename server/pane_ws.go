@@ -105,11 +105,9 @@ func servePane(conn *websocket.Conn, tm tmuxOps, cm controlManagerOps, registry 
 		return
 	}
 
-	// verified is the generation, as of the last time the write loop confirmed
-	// pane's server is still the one it's streaming from. Baselined and
-	// checked here, right after acquiring the client and before any side
-	// effect (auto-zoom, pause, subscribe) that could land on a foreign
-	// server if a reconnect already happened.
+	// verified is the last control-client generation confirmed to still be on
+	// pane.Server. Checked before auto-zoom and pause, so neither can land on
+	// a foreign server.
 	verified := new(atomic.Uint64)
 	verified.Store(cc.Generation())
 	if !serverStillMatches(conn, tm, pane, paneID) {
@@ -219,9 +217,8 @@ func servePane(conn *websocket.Conn, tm tmuxOps, cm controlManagerOps, registry 
 }
 
 // serverStillMatches checks pane's tmux server is still the one paneID
-// resolves to, closing conn and returning false if not. pane.Server == ""
-// means the caller (the legacy pane-address route) never knew the server to
-// begin with, so there is nothing to verify.
+// resolves to, closing conn and returning false if not. An unknown
+// pane.Server is never refused.
 func serverStillMatches(conn wsWriter, tm tmuxOps, pane tmux.Pane, paneID string) bool {
 	if pane.Server == "" {
 		return true
@@ -285,9 +282,7 @@ func writeSeed(conn wsWriter, seed string) error {
 }
 
 // paneWSWriteLoop streams pane output to conn until it exits. serverChanged
-// reports whether it exited specifically because serverStillMatches found
-// the pane's server had changed — the one exit reason servePane's deferred
-// cleanup must treat differently (skipping the zoom restore).
+// reports whether it exited because the pane's server changed.
 func paneWSWriteLoop(conn wsWriter, tm tmuxOps, cc controlClientOps, registry *agents.Registry, pane tmux.Pane, paneID string, sub paneSub, verified *atomic.Uint64, connDone <-chan struct{}, metaEvery time.Duration) (serverChanged bool) {
 	pingTicker := time.NewTicker(30 * time.Second)
 	defer pingTicker.Stop()
