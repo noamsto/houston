@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -55,6 +56,37 @@ func expectClose(t *testing.T, conn *websocket.Conn, code int) {
 				return
 			}
 			t.Fatalf("read error is not a close error: %v", err)
+		}
+	}
+}
+
+// expectCloseWithoutSeed is expectClose, but also fails the moment a "seed"
+// frame is seen before the close arrives.
+func expectCloseWithoutSeed(t *testing.T, conn *websocket.Conn, code int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for close code %d", code)
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			var closeErr *websocket.CloseError
+			if errors.As(err, &closeErr) {
+				if closeErr.Code != code {
+					t.Fatalf("close code = %d, want %d", closeErr.Code, code)
+				}
+				return
+			}
+			t.Fatalf("read error is not a close error: %v", err)
+		}
+		var env wsEnvelope
+		if err := json.Unmarshal(raw, &env); err != nil {
+			t.Fatalf("unmarshal envelope: %v", err)
+		}
+		if env.Type == "seed" {
+			t.Fatal("a seed frame reached the client before the close: a foreign seed was sent")
 		}
 	}
 }
@@ -401,4 +433,57 @@ func TestPaneWSReconnectDuringReseedIsNotLost(t *testing.T) {
 			t.Fatal("a second seed frame reached the client before the close: the foreign capture was sent")
 		}
 	}
+}
+
+// TestPaneWSReconnectBeforeSubscribeToNewServerClosesWithoutSeed: a reconnect
+// landing between the open-time check and Subscribe must be verified before
+// the seed goes out, so a seed captured on the new server never reaches the
+// client.
+func TestPaneWSReconnectBeforeSubscribeToNewServerClosesWithoutSeed(t *testing.T) {
+	fakeTmux := newFakeTmux()
+	fakeTmux.paneID = "%1"
+	fakeTmux.setResolve(tmux.Pane{Server: "100"}, nil)
+
+	fakeCC := newFakeControlClient()
+	cm := newFakeControlManager(fakeCC)
+
+	fakeCC.setOnRun(func(cmd string) {
+		if strings.HasSuffix(cmd, ":pause") {
+			fakeTmux.setResolve(tmux.Pane{Server: "200"}, nil)
+			fakeCC.bumpGeneration()
+		}
+	})
+
+	conn, cleanup := startPaneWSWithPane(t, fakeTmux, cm, serverPane)
+	defer cleanup()
+
+	expectCloseWithoutSeed(t, conn, wsCloseServerChanged)
+
+	waitForRelease(t, cm)
+}
+
+// TestPaneWSReconnectBeforeSubscribeToSameServerKeepsInput: the same
+// generation bump with no server change behind it must not disrupt the
+// connection — the seed still ships and input still reaches SendKeys.
+func TestPaneWSReconnectBeforeSubscribeToSameServerKeepsInput(t *testing.T) {
+	fakeTmux := newFakeTmux()
+	fakeTmux.paneID = "%1"
+	fakeTmux.setResolve(tmux.Pane{Server: "100"}, nil)
+
+	fakeCC := newFakeControlClient()
+	cm := newFakeControlManager(fakeCC)
+
+	fakeCC.setOnRun(func(cmd string) {
+		if strings.HasSuffix(cmd, ":pause") {
+			fakeCC.bumpGeneration()
+		}
+	})
+
+	conn, cleanup := startPaneWSWithPane(t, fakeTmux, cm, serverPane)
+	defer cleanup()
+
+	readUntilType(t, conn, "seed", 5*time.Second)
+
+	writeInput(t, conn, "z")
+	waitForSendCall(t, fakeCC, fakeTmux.paneID, "z")
 }

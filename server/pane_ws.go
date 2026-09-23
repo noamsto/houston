@@ -146,13 +146,6 @@ func servePane(conn *websocket.Conn, tm tmuxOps, cm controlManagerOps, registry 
 
 	sub := cc.Subscribe(paneID)
 
-	// A reconnect landing between the baseline above and this Subscribe would
-	// bump the generation without ever marking sub dirty, leaving input gated
-	// with nothing to trigger the write loop's verification. Force one now.
-	if cc.Generation() != verified.Load() {
-		cc.MarkPendingReseed(sub)
-	}
-
 	var serverChanged bool
 	defer func() {
 		// Ensure pane is resumed if we exit before the explicit continue
@@ -171,6 +164,18 @@ func servePane(conn *websocket.Conn, tm tmuxOps, cm controlManagerOps, registry 
 		cc.Unsubscribe(paneID, sub)
 		cm.ReleaseClient(pane.Session)
 	}()
+
+	// A reconnect landing between the baseline above and this Subscribe
+	// bumps the generation without marking sub dirty. Verify now, before
+	// dims and the seed go out, so neither a foreign seed reaches the
+	// client nor input stays gated on a quiet pane.
+	if g := cc.Generation(); g != verified.Load() {
+		if !serverStillMatches(conn, tm, pane, paneID) {
+			serverChanged = true
+			return
+		}
+		verified.Store(g)
+	}
 
 	// Keepalive
 	conn.SetPongHandler(func(string) error {
