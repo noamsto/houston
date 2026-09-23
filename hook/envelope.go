@@ -92,6 +92,16 @@ func fromEnvelope(in input) (event string, ev Event, agent string, err error) {
 		event = ""
 	case in.CanonicalEvent == "" && in.Engine == "pi" && in.NativeEvent == "session_shutdown":
 		event = EventSessionEnd
+	case in.Engine == "pi" && in.CanonicalEvent == "turn_end":
+		// pi fires turn_end after every LLM response; only agent_settled
+		// (below) is the run's final signal, so this turn is intermediate.
+		event = EventTurnEnd
+	case in.Engine == "pi" && in.NativeEvent == "agent_settled":
+		event = EventStop
+	case in.Engine == "codex" && in.NativeEvent == "SessionEnd":
+		event = EventSessionEnd
+	case in.Engine == "cursor" && in.NativeEvent == "sessionEnd":
+		event = EventSessionEnd
 	default:
 		event = canonicalEventMap[in.CanonicalEvent]
 	}

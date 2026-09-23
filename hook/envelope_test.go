@@ -116,9 +116,6 @@ func TestEnvelopePiPreTool(t *testing.T) {
 	if got.ToolInputHint != "echo hookyard-probe" {
 		t.Errorf("ToolInputHint = %q, want the command", got.ToolInputHint)
 	}
-	if !got.TurnTool {
-		t.Errorf("TurnTool not set by pre_tool")
-	}
 }
 
 func TestEnvelopePiPostTool(t *testing.T) {
@@ -140,34 +137,107 @@ func TestEnvelopePiPostTool(t *testing.T) {
 	}
 }
 
-func TestEnvelopePiTurnEnd(t *testing.T) {
-	// A turn_end after a tool turn stays thinking (another LLM call
-	// follows); the next, tool-free turn_end is the final one → waiting.
+func TestEnvelopePiSequenceEndsWaitingOnAgentSettled(t *testing.T) {
+	// pi fires turn_end after every LLM response; agent_settled is the run's
+	// final signal. The full sequence must end waiting, thinking after each
+	// turn_end.
 	dir := t.TempDir()
-	pre := envelope(t, "pi", "pre_tool", "tool_call", "s5", "Bash",
+	start := envelope(t, "pi", "session_start", "session_start", "s5", "", nil,
+		map[string]any{"cwd": "/w", "session_id": "s5", "session_file": "/s/pi.jsonl", "reason": "startup"})
+	dispatchEnvelope(t, dir, "", "s5", start)
+
+	input := envelope(t, "pi", "prompt_submit", "input", "s5", "", nil,
+		map[string]any{"cwd": "/w", "session_id": "s5", "prompt": "do the thing"})
+	if got := dispatchEnvelope(t, dir, "", "s5", input); got.State != StateThinking {
+		t.Fatalf("after input = %q, want thinking", got.State)
+	}
+
+	toolCall := envelope(t, "pi", "pre_tool", "tool_call", "s5", "Bash",
 		map[string]any{"command": "echo x"},
 		map[string]any{"cwd": "/w", "session_id": "s5", "tool_name": "bash", "tool_input": map[string]any{"command": "echo x"}})
-	dispatchEnvelope(t, dir, "", "s5", pre)
+	if got := dispatchEnvelope(t, dir, "", "s5", toolCall); got.State != StateToolRunning {
+		t.Fatalf("after tool_call = %q, want tool-running", got.State)
+	}
 
-	post := envelope(t, "pi", "post_tool", "tool_result", "s5", "Bash", nil,
+	toolResult := envelope(t, "pi", "post_tool", "tool_result", "s5", "Bash", nil,
 		map[string]any{"cwd": "/w", "session_id": "s5", "tool_name": "bash"})
-	dispatchEnvelope(t, dir, "", "s5", post)
-
-	turnEnd1 := envelope(t, "pi", "turn_end", "turn_end", "s5", "", nil,
-		map[string]any{"cwd": "/w", "session_id": "s5", "turn_index": 0})
-	got := dispatchEnvelope(t, dir, "", "s5", turnEnd1)
-	if got.State != StateThinking {
-		t.Errorf("first turn_end (ran a tool) = %q, want thinking", got.State)
-	}
-	if got.TurnTool {
-		t.Errorf("TurnTool not cleared after turn_end")
+	if got := dispatchEnvelope(t, dir, "", "s5", toolResult); got.State != StateThinking {
+		t.Fatalf("after tool_result = %q, want thinking", got.State)
 	}
 
-	turnEnd2 := envelope(t, "pi", "turn_end", "turn_end", "s5", "", nil,
-		map[string]any{"cwd": "/w", "session_id": "s5", "turn_index": 1})
-	got = dispatchEnvelope(t, dir, "", "s5", turnEnd2)
+	for i := 0; i < 2; i++ {
+		turnEnd := envelope(t, "pi", "turn_end", "turn_end", "s5", "", nil,
+			map[string]any{"cwd": "/w", "session_id": "s5", "turn_index": i})
+		if got := dispatchEnvelope(t, dir, "", "s5", turnEnd); got.State != StateThinking {
+			t.Errorf("after turn_end %d = %q, want thinking", i, got.State)
+		}
+	}
+
+	// The captured hookyard fixture shape for agent_settled.
+	settled := envelope(t, "pi", "", "agent_settled", "s5", "", nil, map[string]any{
+		"cwd":             "/w",
+		"hook_event_name": "agent_settled",
+		"pi_version":      "0.87.0",
+		"session_file":    "/s/pi.jsonl",
+		"session_id":      "s5",
+	})
+	got := dispatchEnvelope(t, dir, "", "s5", settled)
 	if got.State != StateWaiting {
-		t.Errorf("second turn_end (no tool) = %q, want waiting", got.State)
+		t.Errorf("after agent_settled = %q, want waiting", got.State)
+	}
+}
+
+func TestEnvelopePiAbortedRunSettlesWaiting(t *testing.T) {
+	// Esc while a pi tool runs: tool_call then turn_end then agent_settled.
+	dir := t.TempDir()
+	toolCall := envelope(t, "pi", "pre_tool", "tool_call", "s5a", "Bash",
+		map[string]any{"command": "echo x"},
+		map[string]any{"cwd": "/w", "session_id": "s5a", "tool_name": "bash", "tool_input": map[string]any{"command": "echo x"}})
+	dispatchEnvelope(t, dir, "", "s5a", toolCall)
+
+	turnEnd := envelope(t, "pi", "turn_end", "turn_end", "s5a", "", nil,
+		map[string]any{"cwd": "/w", "session_id": "s5a"})
+	dispatchEnvelope(t, dir, "", "s5a", turnEnd)
+
+	settled := envelope(t, "pi", "", "agent_settled", "s5a", "", nil,
+		map[string]any{"cwd": "/w", "session_id": "s5a", "hook_event_name": "agent_settled"})
+	got := dispatchEnvelope(t, dir, "", "s5a", settled)
+	if got.State != StateWaiting {
+		t.Errorf("aborted run after agent_settled = %q, want waiting", got.State)
+	}
+}
+
+func TestEnvelopeCodexSessionEnd(t *testing.T) {
+	dir := t.TempDir()
+	start := envelope(t, "codex", "session_start", "session_start", "s14", "", nil,
+		map[string]any{"cwd": "/w", "session_id": "s14"})
+	dispatchEnvelope(t, dir, "", "s14", start)
+
+	payload := envelope(t, "codex", "", "SessionEnd", "s14", "", nil,
+		map[string]any{"cwd": "/w", "session_id": "s14", "reason": "quit"})
+	got := dispatchEnvelope(t, dir, "", "s14", payload)
+	if got.State != StateEnded {
+		t.Errorf("State = %q, want ended", got.State)
+	}
+	if got.Reason != "quit" {
+		t.Errorf("Reason = %q, want quit", got.Reason)
+	}
+}
+
+func TestEnvelopeCursorSessionEnd(t *testing.T) {
+	dir := t.TempDir()
+	start := envelope(t, "cursor", "session_start", "session_start", "s15", "", nil,
+		map[string]any{"cwd": "/w", "session_id": "s15"})
+	dispatchEnvelope(t, dir, "", "s15", start)
+
+	payload := envelope(t, "cursor", "", "sessionEnd", "s15", "", nil,
+		map[string]any{"cwd": "/w", "session_id": "s15", "reason": "quit"})
+	got := dispatchEnvelope(t, dir, "", "s15", payload)
+	if got.State != StateEnded {
+		t.Errorf("State = %q, want ended", got.State)
+	}
+	if got.Reason != "quit" {
+		t.Errorf("Reason = %q, want quit", got.Reason)
 	}
 }
 

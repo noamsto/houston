@@ -252,7 +252,8 @@ relies on `hook_event_name`).
 `native.hook_event_name`, else the envelope's `native_event` (neither →
 no-op), and the file records `agent: claude`. From there it runs the same
 `apply` as the native path. Other engines map canonical events onto houston's
-internal (Claude) event vocabulary:
+internal (Claude) event vocabulary; engine-scoped events (empty
+`canonical_event`, `engine` set) are matched by engine and native name first:
 
 | envelope | houston event | notes |
 |---|---|---|
@@ -261,22 +262,23 @@ internal (Claude) event vocabulary:
 | `pre_tool` | PreToolUse | tool + hint from the envelope's normalized `tool_name`/`tool_input` |
 | `post_tool` | PostToolUse | |
 | `pre_compact` | PreCompact | |
-| `turn_end` | Stop | see pi exception below |
+| `turn_end` | Stop (pi: `TurnEnd`) | pi's `turn_end` is intermediate — see below |
+| `""` + pi `agent_settled` | Stop | pi's run settled — the final signal, `waiting` |
 | `""` + pi `session_shutdown` | SessionEnd | `reason: reload` is a no-op instead — pi re-emits `session_start` for the same session |
+| `""` + codex `SessionEnd` | SessionEnd | |
+| `""` + cursor `sessionEnd` | SessionEnd | |
 | anything else | — | no-op: no state-file write |
 
 `TranscriptPath` comes from the native payload's `transcript_path`, else pi's
 `session_file`.
 
-**pi exception:** pi fires `turn_end` after every LLM response, not just the
-final one, so a naive `turn_end` → waiting would flap a pi card to "waiting"
-between every tool batch. A state-file field `turn_tool` (set only by
-`pre_tool`, which hookyard runs synchronously in its verdict lane, so it lands
-before that turn's `turn_end`) tracks whether the turn that just ended ran a
-tool: a pi `turn_end` with `turn_tool` set stays `thinking`; only a no-tool
-turn goes `waiting`. Known limit: an aborted pi run whose last turn ran a tool
-stays `thinking` until its next event. pi has no Notification, so a pi run
-never shows a permission prompt.
+**pi turns:** pi fires `turn_end` after every LLM response, not just the
+final one, so it maps to houston's internal `TurnEnd` event and always leaves
+the card `thinking`. pi's final signal is the engine-scoped `agent_settled`
+(mapped to `Stop` → `waiting`), which fires once per run after retries,
+compaction and queued follow-ups, and also on an aborted (Esc) run — so an
+aborted run settles `waiting` instead of hanging `thinking`. pi has no
+Notification, so a pi run never shows a permission prompt.
 
 The state file records `agent` (`claude`/`codex`/`cursor`/`pi`); an empty
 value (legacy files, native Claude hooks, transcript-discovered sessions)
@@ -290,16 +292,20 @@ processes that would otherwise race a Read→apply→Write and silently drop an
 update. The tmux `display-message` exec stays outside the lock.
 
 The lock serializes writes but doesn't order them — a detached event can
-still land after a later one. A late `post_tool` landing after `turn_end`
-leaves a card `thinking`; a pi turn's detached `turn_end` landing after the
-next turn's synchronous `pre_tool` clears `turn_tool`, so that next turn's
-`turn_end` shows `waiting` early — until the next event corrects it.
+still land after a later one, so a late `post_tool` landing after a `turn_end`
+leaves a card `thinking` until the next event corrects it. The same race
+applies to pi's final `turn_end` and `agent_settled`: `apply`'s `EventTurnEnd`
+case guards against this by skipping the `thinking` transition when the state
+is already `waiting` — a `turn_end` after the run settled can only be a late
+one.
 
 houston only sees events hookyard's manifest subscribes it to. The
-engine-scoped `pi:session_shutdown` and the canonical `pre_compact` must both
-be named in the manifest's `events` (the nix-config houston manifest) —
-otherwise a pi run that exits while its pane stays open (e.g. back to a
-shell) is never ended, and `compacting` never shows.
+engine-scoped `pi:agent_settled`, `pi:session_shutdown`, `codex:SessionEnd`
+and `cursor:sessionEnd`, and the canonical `pre_compact`, must all be named
+in the manifest's `events` (the nix-config houston manifest) — otherwise a pi
+run never leaves `thinking` when it settles, a pi run that exits while its
+pane stays open (e.g. back to a shell) is never ended, a codex/cursor session
+that ends stays `waiting`, and `compacting` never shows.
 
 lazytmux does not set `@claude_status` on pi (or codex/cursor) panes, so the
 tmux layer never lists them on its own — they reach Fleet through the hooks

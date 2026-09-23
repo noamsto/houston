@@ -24,6 +24,10 @@ const (
 	EventStop             = "Stop"
 	EventSubagentStop     = "SubagentStop"
 	EventPreCompact       = "PreCompact"
+	// EventTurnEnd is houston's internal event for pi's native turn_end: an
+	// intermediate turn boundary, not a run end. pi's final signal is
+	// agent_settled, mapped to EventStop.
+	EventTurnEnd = "TurnEnd"
 )
 
 // AgentClaude is the SessionState.Agent value for the native Claude Code
@@ -187,7 +191,6 @@ func apply(s *SessionState, event string, ev Event, now int64) {
 	case EventSessionStart:
 		s.State = StateStarting
 		s.Source = ev.Source
-		s.TurnTool = false
 	case EventSessionEnd:
 		s.State = StateEnded
 		s.Reason = ev.Reason
@@ -195,13 +198,11 @@ func apply(s *SessionState, event string, ev Event, now int64) {
 	case EventUserPromptSubmit:
 		s.State = StateThinking
 		s.Turn++
-		s.TurnTool = false
 		clearTool()
 	case EventPreToolUse:
 		s.State = StateToolRunning
 		s.Tool = ev.ToolName
 		s.ToolInputHint = ToolHint(ev.ToolName, ev.ToolInput)
-		s.TurnTool = true
 	case EventPostToolUse:
 		s.State = StateThinking
 		clearTool()
@@ -219,15 +220,19 @@ func apply(s *SessionState, event string, ev Event, now int64) {
 		s.LastMessage = ev.Message
 	case EventStop, EventSubagentStop:
 		clearTool()
-		// pi fires turn_end (mapped to Stop) after every LLM response, not just
-		// the final one: a turn that ran a tool is followed by another LLM
-		// call, so it's still "thinking", not "waiting".
-		if s.Agent == "pi" && s.TurnTool {
-			s.State = StateThinking
-		} else {
-			s.State = StateWaiting
+		s.State = StateWaiting
+	case EventTurnEnd:
+		// pi's turn_end after any LLM response is always intermediate: pi's
+		// final signal is agent_settled, mapped to Stop above. But when
+		// agent_settled and the final turn_end arrive as detached
+		// fire-and-forget processes, the lock serialises them without
+		// ordering — if turn_end lands after agent_settled it must not
+		// flip the run from waiting back to thinking.
+		if s.State == StateWaiting {
+			break
 		}
-		s.TurnTool = false
+		clearTool()
+		s.State = StateThinking
 	case EventPreCompact:
 		s.State = StateCompacting
 	}
