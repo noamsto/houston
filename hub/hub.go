@@ -288,9 +288,6 @@ func (h *Hub) scan(dir string) error {
 	return nil
 }
 
-// preRemoveStat performs the second, pre-remove stat in pruneEnded's race
-// guard. It lives on the Hub so tests can set their own without a global.
-
 // pruneEnded removes hook state files older than h.pruneTTL whose
 // last-written State is StateEnded. This is the only signal pruneEnded
 // trusts: hook/hook.go sets StateEnded solely on a genuine SessionEnd hook
