@@ -19,7 +19,11 @@ interface TerminalLifecycleResult {
   reconnecting: boolean
   /** Bumped on every manual reconnect; part of TerminalPane's key so a reconnect forces a fresh mount. */
   attempt: number
+  /** Set by `end`; shown under "Terminal session ended." until the next reconnect or run-id change. */
+  endedReason: string | null
   onConnectionChange: (connected: boolean) => void
+  /** Ends the session immediately with a reason, bypassing the disconnect grace period. */
+  end: (reason: string) => void
   reconnect: () => void
 }
 
@@ -53,6 +57,7 @@ export function useTerminalLifecycle(
   const [everLive, setEverLive] = useState(liveNow)
   const [prevRunId, setPrevRunId] = useState(runId)
   const [prevCapable, setPrevCapable] = useState(capable)
+  const [endedReason, setEndedReason] = useState<string | null>(null)
   const disconnectTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   if (runId !== prevRunId) {
@@ -61,6 +66,7 @@ export function useTerminalLifecycle(
     setEverLive(liveNow)
     setState('live')
     setAttempt(0)
+    setEndedReason(null)
   } else {
     if (liveNow && !everLive) setEverLive(true)
 
@@ -85,9 +91,16 @@ export function useTerminalLifecycle(
     }, DISCONNECT_GRACE_MS)
   }, [])
 
+  const end = useCallback((reason: string) => {
+    clearTimeout(disconnectTimerRef.current)
+    setState('ended')
+    setEndedReason(reason)
+  }, [])
+
   const reconnect = useCallback(() => {
     clearTimeout(disconnectTimerRef.current)
     setState('live')
+    setEndedReason(null)
     setAttempt((a) => a + 1)
   }, [])
 
@@ -96,7 +109,9 @@ export function useTerminalLifecycle(
     state,
     reconnecting: state === 'live' && !streamConnected,
     attempt,
+    endedReason,
     onConnectionChange,
+    end,
     reconnect,
   }
 }

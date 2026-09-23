@@ -1732,6 +1732,103 @@ func TestReconnectMarksSubscribersDirty(t *testing.T) {
 	}
 }
 
+func TestReconnectBumpsGeneration(t *testing.T) {
+	d := &recordingDialer{}
+	cc := NewControlClient("test")
+	cc.dial = d.dial
+	cc.backoff = time.Millisecond
+
+	sub := cc.Subscribe("%1")
+
+	if err := cc.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = cc.Close() }()
+
+	if got := cc.Generation(); got != 1 {
+		t.Fatalf("Generation() after Start = %d, want 1", got)
+	}
+
+	first := d.connAt(t, 0)
+	_ = first.pw.Close() // drop the connection; supervise re-dials
+
+	expectDirty(t, sub, "subscriber after re-attach")
+
+	if got := cc.Generation(); got != 2 {
+		t.Fatalf("Generation() after reconnect = %d, want 2", got)
+	}
+}
+
+// TestSendKeysRefusesStaleGeneration covers the check-and-write race attach
+// opens: a generation captured before a reconnect must never reach the new
+// connection's stdin, and the current generation must still write normally.
+func TestSendKeysRefusesStaleGeneration(t *testing.T) {
+	d := &recordingDialer{}
+	cc := NewControlClient("test")
+	cc.dial = d.dial
+	cc.backoff = time.Millisecond
+
+	sub := cc.Subscribe("%1")
+
+	if err := cc.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = cc.Close() }()
+
+	staleGen := cc.Generation()
+
+	first := d.connAt(t, 0)
+	_ = first.pw.Close() // drop the connection; supervise re-dials
+
+	expectDirty(t, sub, "subscriber after re-attach")
+	second := d.connAt(t, 1)
+
+	if err := cc.SendKeys(staleGen, "%0", "x"); !errors.Is(err, ErrStaleGeneration) {
+		t.Fatalf("SendKeys with stale gen = %v, want ErrStaleGeneration", err)
+	}
+	if got := second.written(); strings.Contains(got, "send-keys -t %0 -l") {
+		t.Fatalf("stale-generation SendKeys reached the new connection's stdin: %q", got)
+	}
+
+	if err := cc.SendKeys(cc.Generation(), "%0", "x"); err != nil {
+		t.Fatalf("SendKeys with current gen: %v", err)
+	}
+	waitForWrite(t, second, "send-keys -t %0 -l 'x'")
+}
+
+// TestSendKeysRefusesStaleGenerationForMixedContent covers the same refusal
+// for mixed content (SendKeys's non-printable-text path), which writes one
+// segment per writeCommand call: a stale generation must refuse the whole
+// text, not just the first segment that happens to hit the gate.
+func TestSendKeysRefusesStaleGenerationForMixedContent(t *testing.T) {
+	d := &recordingDialer{}
+	cc := NewControlClient("test")
+	cc.dial = d.dial
+	cc.backoff = time.Millisecond
+
+	sub := cc.Subscribe("%1")
+
+	if err := cc.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = cc.Close() }()
+
+	staleGen := cc.Generation()
+
+	first := d.connAt(t, 0)
+	_ = first.pw.Close() // drop the connection; supervise re-dials
+
+	expectDirty(t, sub, "subscriber after re-attach")
+	second := d.connAt(t, 1)
+
+	if err := cc.SendKeys(staleGen, "%0", "a\nb"); !errors.Is(err, ErrStaleGeneration) {
+		t.Fatalf("SendKeys(mixed content) with stale gen = %v, want ErrStaleGeneration", err)
+	}
+	if got := second.written(); strings.Contains(got, "send-keys -t %0") {
+		t.Fatalf("mixed-content SendKeys reached the new connection's stdin despite a stale generation: %q", got)
+	}
+}
+
 // TestReattachClearsGapState covers R12: a gap outstanding on a connection
 // that has since died must not let an unrelated %continue on the new
 // connection re-seed anybody.

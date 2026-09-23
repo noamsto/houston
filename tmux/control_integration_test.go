@@ -41,7 +41,7 @@ func TestControlClientIntegration(t *testing.T) {
 	defer cc.Unsubscribe(paneID, sub)
 
 	// Send keys via control client
-	if err := cc.SendKeys(paneID, "echo hello-control-mode"); err != nil {
+	if err := cc.SendKeys(cc.Generation(), paneID, "echo hello-control-mode"); err != nil {
 		t.Fatalf("SendKeys failed: %v", err)
 	}
 	if err := cc.SendSpecialKey(paneID, "Enter"); err != nil {
@@ -144,7 +144,7 @@ func TestGapDeadlineResumeActuallyResumesThePane(t *testing.T) {
 
 	pid := strconv.Itoa(os.Getpid())
 	pausedMarker := "houston-paused-marker-" + pid
-	if err := cc.SendKeys(paneID, "echo "+pausedMarker); err != nil {
+	if err := cc.SendKeys(cc.Generation(), paneID, "echo "+pausedMarker); err != nil {
 		t.Fatalf("SendKeys failed: %v", err)
 	}
 	if err := cc.SendSpecialKey(paneID, "Enter"); err != nil {
@@ -202,7 +202,7 @@ func TestGapDeadlineResumeActuallyResumesThePane(t *testing.T) {
 	cc.AckReseed(sub)
 
 	resumedMarker := "houston-resumed-marker-" + pid
-	if err := cc.SendKeys(paneID, "echo "+resumedMarker); err != nil {
+	if err := cc.SendKeys(cc.Generation(), paneID, "echo "+resumedMarker); err != nil {
 		t.Fatalf("SendKeys failed: %v", err)
 	}
 	if err := cc.SendSpecialKey(paneID, "Enter"); err != nil {

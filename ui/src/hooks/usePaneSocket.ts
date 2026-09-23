@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { WSMeta, WSOutput } from '../api/types'
+import { WS_CLOSE_SERVER_CHANGED } from '../api/terminal'
 
 interface WSDims {
   cols: number
@@ -19,6 +20,11 @@ export function usePaneSocket(path: string | null, callbacks: PaneSocketCallback
   const callbacksRef = useRef(callbacks)
   const [connected, setConnected] = useState(false)
   const retriesRef = useRef(0)
+  // Keyed by path rather than cleared in an effect, so a path change resets
+  // `ended` to null on its own — react-hooks flags setState-in-effect.
+  const [endedState, setEndedState] = useState<{ path: string; reason: string } | null>(null)
+  const ended = path && endedState?.path === path ? endedState.reason : null
+  const endedRef = useRef(false)
 
   // Keep callbacks ref up-to-date without triggering reconnect
   useEffect(() => {
@@ -43,33 +49,41 @@ export function usePaneSocket(path: string | null, callbacks: PaneSocketCallback
 
   useEffect(() => {
     if (!path) return
+    const socketPath = path // narrow to string for the closures below
 
     let cancelled = false
     let reconnectTimer: ReturnType<typeof setTimeout>
+    endedRef.current = false
 
     function connect() {
       if (cancelled) return
 
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      const wsUrl = `${protocol}//${window.location.host}${path}`
+      const wsUrl = `${protocol}//${window.location.host}${socketPath}`
 
       const ws = new WebSocket(wsUrl)
       wsRef.current = ws
 
       ws.onopen = () => {
-        console.debug('[input] WS connected to', path)
+        console.debug('[input] WS connected to', socketPath)
         setConnected(true)
         retriesRef.current = 0
       }
 
       ws.onclose = (e) => {
-        console.debug('[input] WS closed — path:', path, 'code:', e.code, 'reason:', e.reason, 'cancelled:', cancelled)
+        console.debug('[input] WS closed — path:', socketPath, 'code:', e.code, 'reason:', e.reason, 'cancelled:', cancelled)
         // Only clear ref if it still points to THIS WebSocket instance.
         // When switching targets, the new effect sets wsRef.current to a new WS
         // before this old onclose fires — clearing it would null the new connection.
-        if (wsRef.current === ws) {
+        const isCurrent = wsRef.current === ws
+        if (isCurrent) {
           setConnected(false)
           wsRef.current = null
+        }
+        if (isCurrent && !cancelled && e.code === WS_CLOSE_SERVER_CHANGED) {
+          setEndedState({ path: socketPath, reason: e.reason || 'tmux server changed' })
+          endedRef.current = true
+          return
         }
         if (cancelled) return
         // Exponential backoff: 500ms, 1s, 2s, 4s, capped at 5s
@@ -118,6 +132,7 @@ export function usePaneSocket(path: string | null, callbacks: PaneSocketCallback
 
     // Reconnect immediately when tab becomes visible again
     const onVisibility = () => {
+      if (endedRef.current) return
       if (document.visibilityState === 'visible' && wsRef.current?.readyState !== WebSocket.OPEN) {
         clearTimeout(reconnectTimer)
         retriesRef.current = 0
@@ -135,5 +150,5 @@ export function usePaneSocket(path: string | null, callbacks: PaneSocketCallback
     }
   }, [path])
 
-  return { connected, sendInput, sendResize }
+  return { connected, ended, sendInput, sendResize }
 }

@@ -29,6 +29,7 @@ interface Props {
   onClose: () => void
   hideHeader?: boolean
   onConnectionChange?: (connected: boolean) => void
+  onEnded?: (reason: string) => void
 }
 
 /** Write a capture-pane snapshot into xterm.js.
@@ -58,7 +59,7 @@ function writeSnapshot(term: Terminal, data: string, onDone?: () => void) {
 const MOBILE_TERM_WIDTH = 960
 const PAD = 6
 
-export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader = false, onConnectionChange }: Props) {
+export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader = false, onConnectionChange, onEnded }: Props) {
   const key = terminalKey(address)
   // outerRef: observed by ResizeObserver; has padding that creates visual breathing room
   const outerRef = useRef<HTMLDivElement>(null)
@@ -339,7 +340,7 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
     }
   }
 
-  const { connected, sendInput, sendResize } = usePaneSocket(terminalSocketPath(address), {
+  const { connected, ended, sendInput, sendResize } = usePaneSocket(terminalSocketPath(address), {
     onDims: ({ cols, rows }) => {
       const term = termRef.current
       if (!term) return
@@ -391,6 +392,10 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
   useEffect(() => {
     onConnectionChange?.(connected)
   }, [connected, onConnectionChange])
+
+  useEffect(() => {
+    if (ended) onEnded?.(ended)
+  }, [ended, onEnded])
 
   // Focus the xterm textarea when this pane becomes the active one (desktop only).
   useEffect(() => {

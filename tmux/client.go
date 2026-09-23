@@ -17,6 +17,10 @@ import (
 // opposed to tmux being unreachable or timing out.
 var ErrPaneNotFound = errors.New("pane not found")
 
+// ServerMismatch reports whether a and b are both known and disagree. An
+// unknown side (empty) is never a mismatch.
+func ServerMismatch(a, b string) bool { return a != "" && b != "" && a != b }
+
 var tmuxEscapeRe = regexp.MustCompile(`#\[[^\]]*\]`)
 
 // StripTmuxEscapes removes tmux style directives like #[fg=color] from text.
