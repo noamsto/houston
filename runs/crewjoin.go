@@ -26,10 +26,17 @@ import "github.com/noamsto/houston/tmux"
 //     of the record. The worker posts its terminal status and then ends its
 //     final turn, so the Stop hook stamps the pane a few seconds later, not
 //     earlier;
-//   - and its state word says the session has finished: done/idle/failed for
-//     @claude_status, idle for @agent_screen. An actively working pane
-//     (processing, or waiting on a prompt) is a new occupant — issue #132 —
-//     even inside the grace window.
+//   - and its state word says the session has finished: done/idle/error (the
+//     @claude_status vocabulary — error maps to StateFailed) for a Claude pane,
+//     idle for @agent_screen. An actively working pane (processing, or waiting
+//     on a prompt) is a new occupant — issue #132 — even inside the grace
+//     window.
+//
+// The grace window cannot separate the finished worker's preserved idle stamp
+// from a genuinely new idle session that starts within it (SessionStart writes
+// idle with a fresh epoch), so that residual false join is accepted and pinned
+// explicitly by TestResolvePaneTerminalStateIdleNewOccupantWithinGraceJoins
+// rather than hidden behind a boundary the tests do not pin.
 //
 // A non-positive pane epoch (0 for unknown/missing, or a malformed negative
 // value) on a terminal record fails closed — don't join, since identity can't

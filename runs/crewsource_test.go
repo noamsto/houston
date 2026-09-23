@@ -561,9 +561,10 @@ func TestResolvePaneTerminalStateWithinGraceJoins(t *testing.T) {
 func TestResolvePaneTerminalStateNewOccupantDoesNotJoin(t *testing.T) {
 	// Issue #132's scenario: a new session took the pane after the old one
 	// finished, and its first activity stamp lands beyond the grace window —
-	// don't join the stale record onto it.
+	// don't join the stale record onto it. The epoch is fixed, not derived from
+	// terminalJoinGrace, so a too-large grace window fails this test.
 	win := tmux.WindowOptions{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"}
-	panes := []tmux.PaneOptions{agentPaneAt("%307", "h:1", 100+terminalJoinGrace+1)}
+	panes := []tmux.PaneOptions{agentPaneAt("%307", "h:1", 3700)}
 
 	for _, state := range []State{StateDone, StateFailed} {
 		pane, n := resolvePane(testBus, "fix/412", state, 100, []tmux.WindowOptions{win}, panes, testBusOf)
@@ -586,6 +587,23 @@ func TestResolvePaneTerminalStateNewOccupantWithinGraceDoesNotJoin(t *testing.T)
 		if n != 0 || pane != "" {
 			t.Errorf("state=%s: got (%q, %d), want (\"\", 0) — an actively working pane is a new occupant even inside grace", state, pane, n)
 		}
+	}
+}
+
+func TestResolvePaneTerminalStateIdleNewOccupantWithinGraceJoins(t *testing.T) {
+	// Known limitation of the task-prescribed grace rule, pinned so it is
+	// explicit rather than hidden: SessionStart writes an idle @claude_status
+	// with a fresh epoch, so a brand-new session that sits idle at its prompt
+	// within terminalJoinGrace is indistinguishable from the finished worker's
+	// own preserved idle stamp, and joins. A new session that did any work
+	// (processing) is rejected (see the test above). The code comment and
+	// CLAUDE.md state this; the PR carries a follow-up for a stronger signal.
+	win := tmux.WindowOptions{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"}
+	panes := []tmux.PaneOptions{agentPaneAt("%307", "h:1", 200)}
+
+	pane, n := resolvePane(testBus, "fix/412", StateDone, 100, []tmux.WindowOptions{win}, panes, testBusOf)
+	if n != 1 || pane != "%307" {
+		t.Errorf("got (%q, %d), want (%%307, 1) — the accepted residual: an idle new session within grace joins", pane, n)
 	}
 }
 

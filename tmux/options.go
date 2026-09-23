@@ -57,10 +57,10 @@ type PaneOptions struct {
 	// Empty on a Claude pane, or one whose agent has left the screen.
 	AgentScreen string
 	ClaudeTask  string
-	Command      string // #{pane_current_command}
-	Index        int    // #{pane_index}
-	Active       bool   // #{pane_active}
-	CrewRole     string // #{@crew_role}: non-empty on a role-grid pane, empty on the lead
+	Command     string // #{pane_current_command}
+	Index       int    // #{pane_index}
+	Active      bool   // #{pane_active}
+	CrewRole    string // #{@crew_role}: non-empty on a role-grid pane, empty on the lead
 	// ServerPID and ServerStart identify the tmux server that produced this
 	// listing. Pane ids (e.g. %307) are unique only within one server
 	// incarnation, so these are what a caller needs to tell a live pane from
