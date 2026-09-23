@@ -125,6 +125,11 @@ func (s *HookSource) Run(ctx context.Context, out chan<- Delta) error {
 		if v.State == hook.StateWaiting && (tmuxState == StateIdle || tmuxState == StateDone) {
 			r.State = tmuxState
 			r.Question = nil
+			// LastMessage is a waiting-only field (hub only populates it while
+			// StateWaiting), so a demoted idle/done run must drop it too, or the
+			// stale "Claude is waiting for your input" text survives the merge
+			// and reaches the detail view.
+			r.Activity.Message = ""
 		}
 		switch {
 		case gone:

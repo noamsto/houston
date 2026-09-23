@@ -853,6 +853,9 @@ func TestHookSourceSkipsRoleGridPanes(t *testing.T) {
 	expectNoDelta(t, out, "a role-grid pane surfaced as its own run", func(d Delta) bool { return true })
 }
 
+// waitingMsg is hub's LastMessage for a turn-end waiting state.
+const waitingMsg = "Claude is waiting for your input"
+
 // TestHookSourceDemotesTurnEndWaitingAgainstTmux is #143 root cause 2: the
 // hooks layer's turn-end waiting (idle_prompt, Stop) must not outrank the tmux
 // layer's idle/done verdict for the same pane. A permission prompt is a
@@ -864,13 +867,14 @@ func TestHookSourceDemotesTurnEndWaitingAgainstTmux(t *testing.T) {
 		hookState hook.State
 		wantState State
 		wantQuest bool
+		wantMsg   string
 	}{
-		{"idle demotes a turn-end waiting", "idle 100 0", hook.StateWaiting, StateIdle, false},
-		{"done demotes a turn-end waiting", "done 100 0", hook.StateWaiting, StateDone, false},
-		{"waiting keeps a turn-end waiting blocked", "waiting 100 0", hook.StateWaiting, StateBlocked, true},
-		{"processing keeps a turn-end waiting blocked", "processing 100 0", hook.StateWaiting, StateBlocked, true},
-		{"no status keeps a turn-end waiting blocked", "", hook.StateWaiting, StateBlocked, true},
-		{"idle never demotes a permission prompt", "idle 100 0", hook.StatePermission, StateBlocked, true},
+		{"idle demotes a turn-end waiting", "idle 100 0", hook.StateWaiting, StateIdle, false, ""},
+		{"done demotes a turn-end waiting", "done 100 0", hook.StateWaiting, StateDone, false, ""},
+		{"waiting keeps a turn-end waiting blocked", "waiting 100 0", hook.StateWaiting, StateBlocked, true, waitingMsg},
+		{"processing keeps a turn-end waiting blocked", "processing 100 0", hook.StateWaiting, StateBlocked, true, waitingMsg},
+		{"no status keeps a turn-end waiting blocked", "", hook.StateWaiting, StateBlocked, true, waitingMsg},
+		{"idle never demotes a permission prompt", "idle 100 0", hook.StatePermission, StateBlocked, true, waitingMsg},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -879,7 +883,7 @@ func TestHookSourceDemotesTurnEndWaitingAgainstTmux(t *testing.T) {
 
 			st := blockedState()
 			st.State = tt.hookState
-			st.LastMessage = "Claude is waiting for your input"
+			st.LastMessage = waitingMsg
 			out, _ := startHookSourceWith(t, panes, st, nil)
 
 			d := waitDelta(t, out, "waiting run", func(d Delta) bool { return d.Key == "%9" })
@@ -888,6 +892,9 @@ func TestHookSourceDemotesTurnEndWaitingAgainstTmux(t *testing.T) {
 			}
 			if got := d.Run.Question != nil; got != tt.wantQuest {
 				t.Errorf("Question present = %v, want %v (%+v)", got, tt.wantQuest, d.Run.Question)
+			}
+			if d.Run.Activity.Message != tt.wantMsg {
+				t.Errorf("Activity.Message = %q, want %q — a demoted run must not keep waiting-only text", d.Run.Activity.Message, tt.wantMsg)
 			}
 		})
 	}
