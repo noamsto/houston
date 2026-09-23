@@ -118,15 +118,15 @@ func (s *HookSource) Run(ctx context.Context, out chan<- Delta) error {
 		key, r := runFromSessionView(v, s.projects.resolved(v.CWD))
 		// A hook turn-end `waiting` (idle_prompt, Stop, a default notification)
 		// must not outrank the tmux layer's own verdict for the same pane: idle
-		// means not working and done means the turn ended, and neither needs a
+		// means not working and neither needs a
 		// human. permission_prompt is a distinct hook state and is never
 		// demoted. A hook-only run has no tmux verdict to consult and keeps the
 		// hook's blocked verdict.
-		if v.State == hook.StateWaiting && (tmuxState == StateIdle || tmuxState == StateDone) {
+		if v.State == hook.StateWaiting && tmuxState == StateIdle {
 			r.State = tmuxState
 			r.Question = nil
 			// LastMessage is a waiting-only field (hub only populates it while
-			// StateWaiting), so a demoted idle/done run must drop it too, or the
+			// StateWaiting), so a demoted idle run must drop it too, or the
 			// stale "Claude is waiting for your input" text survives the merge
 			// and reaches the detail view.
 			r.Activity.Message = ""

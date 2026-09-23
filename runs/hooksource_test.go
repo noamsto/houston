@@ -870,7 +870,7 @@ func TestHookSourceDemotesTurnEndWaitingAgainstTmux(t *testing.T) {
 		wantMsg   string
 	}{
 		{"idle demotes a turn-end waiting", "idle 100 0", hook.StateWaiting, StateIdle, false, ""},
-		{"done demotes a turn-end waiting", "done 100 0", hook.StateWaiting, StateDone, false, ""},
+		{"done keeps a turn-end waiting blocked", "done 100 0", hook.StateWaiting, StateBlocked, true, waitingMsg},
 		{"waiting keeps a turn-end waiting blocked", "waiting 100 0", hook.StateWaiting, StateBlocked, true, waitingMsg},
 		{"processing keeps a turn-end waiting blocked", "processing 100 0", hook.StateWaiting, StateBlocked, true, waitingMsg},
 		{"no status keeps a turn-end waiting blocked", "", hook.StateWaiting, StateBlocked, true, waitingMsg},

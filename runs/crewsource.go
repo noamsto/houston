@@ -274,8 +274,8 @@ const crewBlockedNoDetail = "Blocked, no detail given."
 // interactive prompt in pane %326 — ...") is dispatcher-facing and
 // prefix-coded, so it never reaches user-facing copy.
 const (
-	crewWatchdogPromptNote = "Parked on an interactive prompt in its pane — open the terminal and press Esc to dismiss it."
-	crewWatchdogQuotaNote  = "Parked on a rate-limit prompt in its pane — open the terminal and press Esc; it resumes from intact context."
+	crewWatchdogPromptNote = "Parked on a prompt in its pane — open the terminal to answer it."
+	crewWatchdogQuotaNote  = "Paused on a usage limit — it resumes when the limit resets; see its terminal."
 )
 
 // watchdogNeedsHuman reports whether a watchdog status's reserved detail prefix
