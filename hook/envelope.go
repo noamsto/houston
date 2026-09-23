@@ -5,11 +5,10 @@ import (
 	"fmt"
 )
 
-// input is the union of shapes Dispatch can receive on stdin: Claude Code's
-// native hook payload, or hookyard's normalized envelope wrapping it (or
-// another engine's native payload) in Native. Claude's session_id/cwd/
-// tool_name/tool_input keys coincide with the envelope's top-level keys, so
-// one decode serves both shapes; Engine is empty for the native path.
+// input decodes both stdin shapes: Claude Code's native payload and
+// hookyard's envelope. Claude's session_id/cwd/tool_name/tool_input keys
+// coincide with the envelope's, so one decode serves both; Engine is empty
+// for the native payload.
 type input struct {
 	Event
 	Engine         string          `json:"engine,omitempty"`
@@ -29,9 +28,7 @@ var canonicalEventMap = map[string]string{
 	"turn_end":      EventStop,
 }
 
-// nativeExtra pulls the fields fromEnvelope needs out of a non-Claude
-// engine's native payload; other fields in there are engine-specific and
-// unused by houston today.
+// nativeExtra is what fromEnvelope reads from a non-Claude native payload.
 type nativeExtra struct {
 	TranscriptPath string `json:"transcript_path"`
 	SessionFile    string `json:"session_file"`

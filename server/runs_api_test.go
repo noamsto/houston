@@ -41,7 +41,7 @@ func TestRunsSnapshotReturnsComposedRuns(t *testing.T) {
 // TestRunsSnapshotShowsAPiAgentFromAHookEnvelope wires the real hook →
 // hub → HookSource → Registry pipeline (server.go's New does the same) over a
 // pi session_start envelope, and checks the resulting /api/runs body carries
-// the engine hookyard reported rather than the hardcoded "claude".
+// the engine hookyard reported.
 func TestRunsSnapshotShowsAPiAgentFromAHookEnvelope(t *testing.T) {
 	// No tmux to talk to: the pane key path is not under test here.
 	t.Setenv("TMUX_PANE", "")

@@ -92,9 +92,9 @@ func Dispatch(event string, stateDir string, stdin io.Reader) error {
 
 	path := Path(stateDir, ev.SessionID)
 
-	// The tmux exec must stay outside the lock below (it's the slow part of
-	// Dispatch), so decide up front — from an unlocked read — whether this
-	// event needs a fresh display-message. A --resume of the same session id
+	// The tmux exec must stay outside the lock below, so decide up front —
+	// from an unlocked read — whether this event needs a fresh
+	// display-message. A --resume of the same session id
 	// in another pane (or after a tmux restart) must not keep the first pane
 	// recorded: the stale id is another agent's pane, and the run's
 	// reply/terminal target follows it. Outside tmux both env values are
@@ -158,12 +158,10 @@ func paneStale(s SessionState, pane, server string) bool {
 		(s.TmuxPane != "" && s.TmuxSession == "") // last display-message failed
 }
 
-// lockStateDir takes an exclusive flock on dir's lock file, serializing
-// concurrent Dispatch calls (post_tool, turn_end, prompt_submit and
-// session_start all arrive as detached fire-and-forget processes from
-// hookyard, so two can otherwise race a Read-apply-Write and silently drop
-// one's update). One lock file for the whole dir, not one per session, so
-// nothing accumulates for hub/prune to skip over.
+// lockStateDir takes an exclusive flock on dir's lock file. hookyard runs most
+// handlers as detached processes, so two Dispatch calls can otherwise race a
+// Read-apply-Write and drop one's update. One file for the whole dir, not one
+// per session, so nothing accumulates.
 func lockStateDir(dir string) (unlock func(), err error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
@@ -304,10 +302,8 @@ var tmuxDisplay = func(pane string) ([]byte, error) {
 	return exec.Command("tmux", "display-message", "-p", "-t", pane, "#S\t#I").Output()
 }
 
-// beforeLock is overridden in tests to inject a write between the unlocked
-// pre-read/exec and the locked re-read, exercising the race where the
-// pre-read found the pane fresh (skipping the exec) but another process's
-// write makes the locked re-read stale.
+// beforeLock is overridden in tests to land a write between the unlocked
+// pre-read and the locked re-read.
 var beforeLock = func() {}
 
 // tmuxCoords returns (session, window, pane). Empty on any failure — hooks

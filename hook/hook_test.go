@@ -513,7 +513,7 @@ func TestDispatchClearsPaneWhenNoLongerUnderTmux(t *testing.T) {
 	}
 }
 
-// TestDispatchConcurrentEventsDoNotLoseUpdates covers R4a: post_tool, turn_end,
+// TestDispatchConcurrentEventsDoNotLoseUpdates: post_tool, turn_end,
 // prompt_submit and session_start all arrive as detached fire-and-forget
 // processes from hookyard, so concurrent Dispatch calls on the same session
 // must not silently clobber one another's read-modify-write.

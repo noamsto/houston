@@ -141,7 +141,7 @@ func TestEnvelopePiPostTool(t *testing.T) {
 }
 
 func TestEnvelopePiTurnEnd(t *testing.T) {
-	// AC2: a turn_end after a tool turn stays thinking (another LLM call
+	// A turn_end after a tool turn stays thinking (another LLM call
 	// follows); the next, tool-free turn_end is the final one → waiting.
 	dir := t.TempDir()
 	pre := envelope(t, "pi", "pre_tool", "tool_call", "s5", "Bash",
@@ -195,10 +195,6 @@ func TestEnvelopePiSessionShutdown(t *testing.T) {
 }
 
 func TestEnvelopePiSessionShutdownReloadIsNotAnEnd(t *testing.T) {
-	// pi's /reload emits session_shutdown (reason: reload) then re-emits
-	// session_start for the same session id, both as separate detached
-	// processes; if the start lands first, ending the session here would
-	// leave a live session marked ended.
 	dir := t.TempDir()
 	start := envelope(t, "pi", "session_start", "session_start", "s7b", "", nil,
 		map[string]any{"cwd": "/w", "session_id": "s7b"})
@@ -310,7 +306,7 @@ func TestEnvelopeFreshStateDirGetsWritten(t *testing.T) {
 }
 
 func TestEnvelopeClaudeViaEnvelopeMatchesNativePath(t *testing.T) {
-	// AC3: a claude-code envelope must yield the same SessionState as the
+	// A claude-code envelope must yield the same SessionState as the
 	// native payload, except for Agent.
 	t.Setenv("TMUX_PANE", "")
 	t.Setenv("TMUX", "")
