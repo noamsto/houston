@@ -215,6 +215,11 @@ type fakeControlClient struct {
 
 	done     chan struct{}
 	closeOne sync.Once
+
+	// onRun, when set, is called outside c.mu on every RunCommand — a hook
+	// for a test that needs to act mid-command (e.g. reconnect the control
+	// client) without deadlocking on c.mu.
+	onRun func(command string)
 }
 
 func newFakeControlClient() *fakeControlClient {
@@ -226,9 +231,21 @@ func newFakeControlClient() *fakeControlClient {
 
 func (c *fakeControlClient) RunCommand(command string) (string, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.runCallsList = append(c.runCallsList, command)
+	onRun := c.onRun
+	c.mu.Unlock()
+	if onRun != nil {
+		onRun(command)
+	}
 	return "", nil
+}
+
+// setOnRun arms the RunCommand hook under c.mu, so setting it races neither a
+// concurrent RunCommand nor the read inside it.
+func (c *fakeControlClient) setOnRun(fn func(command string)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.onRun = fn
 }
 
 func (c *fakeControlClient) Subscribe(paneID string) paneSub {

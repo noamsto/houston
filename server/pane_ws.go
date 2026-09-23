@@ -146,13 +146,6 @@ func servePane(conn *websocket.Conn, tm tmuxOps, cm controlManagerOps, registry 
 
 	sub := cc.Subscribe(paneID)
 
-	// A reconnect landing between the baseline above and this Subscribe would
-	// bump the generation without ever marking sub dirty, leaving input gated
-	// with nothing to trigger the write loop's verification. Force one now.
-	if cc.Generation() != verified.Load() {
-		cc.MarkPendingReseed(sub)
-	}
-
 	var serverChanged bool
 	defer func() {
 		// Ensure pane is resumed if we exit before the explicit continue
@@ -171,6 +164,27 @@ func servePane(conn *websocket.Conn, tm tmuxOps, cm controlManagerOps, registry 
 		cc.Unsubscribe(paneID, sub)
 		cm.ReleaseClient(pane.Session)
 	}()
+
+	// reverify re-checks the server if the generation moved since it was last
+	// verified, closing conn on mismatch. A reconnect between the baseline
+	// above and Subscribe bumps the generation without marking sub dirty, and
+	// one during the initial capture marks sub dirty too late to stop the
+	// seed write — so it runs before dims and again after the capture.
+	reverify := func() bool {
+		g := cc.Generation()
+		if g == verified.Load() {
+			return true
+		}
+		if !serverStillMatches(conn, tm, pane, paneID) {
+			serverChanged = true
+			return false
+		}
+		verified.Store(g)
+		return true
+	}
+	if !reverify() {
+		return
+	}
 
 	// Keepalive
 	conn.SetPongHandler(func(string) error {
@@ -191,8 +205,13 @@ func servePane(conn *websocket.Conn, tm tmuxOps, cm controlManagerOps, registry 
 	// Seed: capture-pane provides scrollback history and initial visible
 	// content. Pane is paused so no %output races with this seed. A capture
 	// failure costs scrollback, not the connection.
-	if _, err := sendSeed(conn, tm, pane); err != nil {
-		return
+	if seed, ok := captureSeed(tm, pane); ok {
+		if !reverify() {
+			return
+		}
+		if err := writeSeed(conn, seed); err != nil {
+			return
+		}
 	}
 
 	// Force the TUI to redraw via SIGWINCH (resize pane to same dimensions),
@@ -240,24 +259,6 @@ func serverStillMatches(conn wsWriter, tm tmuxOps, pane tmux.Pane, paneID string
 		return false
 	}
 	return true
-}
-
-// sendSeed pushes a capture-pane snapshot as the authoritative screen state.
-// Used on connect and again after any gap in the control stream.
-//
-// ok reports whether a seed was delivered; err is non-nil only when the
-// WebSocket write failed, which is always fatal. A capture-pane failure is
-// (false, nil), leaving the caller to decide whether it can proceed without
-// a seed.
-func sendSeed(conn wsWriter, tm tmuxOps, pane tmux.Pane) (ok bool, err error) {
-	seed, ok := captureSeed(tm, pane)
-	if !ok {
-		return false, nil
-	}
-	if err := writeSeed(conn, seed); err != nil {
-		return false, err
-	}
-	return true, nil
 }
 
 // captureSeed takes a capture-pane snapshot. The bool reports whether a
