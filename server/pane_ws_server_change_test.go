@@ -462,6 +462,35 @@ func TestPaneWSReconnectBeforeSubscribeToNewServerClosesWithoutSeed(t *testing.T
 	waitForRelease(t, cm)
 }
 
+// TestPaneWSReconnectDuringInitialCaptureClosesWithoutSeed: a reconnect
+// landing during the initial capture, after the pre-dims check passed, must
+// still be verified before that seed is written.
+func TestPaneWSReconnectDuringInitialCaptureClosesWithoutSeed(t *testing.T) {
+	fakeTmux := newFakeTmux()
+	fakeTmux.paneID = "%1"
+	fakeTmux.setResolve(tmux.Pane{Server: "100"}, nil)
+
+	fakeCC := newFakeControlClient()
+	cm := newFakeControlManager(fakeCC)
+
+	// onCapture also fires on later captures (e.g. the write loop's
+	// re-seed), so arm it to act only once.
+	var armed sync.Once
+	fakeTmux.setOnCapture(func() {
+		armed.Do(func() {
+			fakeTmux.setResolve(tmux.Pane{Server: "200"}, nil)
+			fakeCC.reconnect(fakeTmux.paneID)
+		})
+	})
+
+	conn, cleanup := startPaneWSWithPane(t, fakeTmux, cm, serverPane)
+	defer cleanup()
+
+	expectCloseWithoutSeed(t, conn, wsCloseServerChanged)
+
+	waitForRelease(t, cm)
+}
+
 // TestPaneWSReconnectBeforeSubscribeToSameServerKeepsInput: the same
 // generation bump with no server change behind it must not disrupt the
 // connection — the seed still ships and input still reaches SendKeys.
