@@ -66,6 +66,32 @@ func TestFromClaudeStatus(t *testing.T) {
 	}
 }
 
+func TestAgentScreenStateAndEpoch(t *testing.T) {
+	// agent-detect's "@agent_screen" for a hooks-less engine (pi, codex,
+	// cursor): "<state> <epoch> [name=count ...]".
+	for in, want := range map[string]string{
+		"processing 1790144005":   "processing",
+		"idle 1790144005":         "idle",
+		"waiting 1790144005 bg=2": "waiting",
+		"":                        "",
+	} {
+		if got := AgentScreenState(in); got != want {
+			t.Errorf("AgentScreenState(%q) = %q, want %q", in, got, want)
+		}
+	}
+	for in, want := range map[string]int64{
+		"processing 1790144005": 1790144005,
+		"idle 1790144005 bg=2":  1790144005,
+		"idle":                  0,
+		"idle notanumber":       0,
+		"":                      0,
+	} {
+		if got := AgentScreenEpoch(in); got != want {
+			t.Errorf("AgentScreenEpoch(%q) = %d, want %d", in, got, want)
+		}
+	}
+}
+
 func TestBlockedIsTheOnlyNeedsYouState(t *testing.T) {
 	// Exactly one state means "a human is required". The badge, the sort order
 	// and (later) push notifications all key off this, so nothing else may
