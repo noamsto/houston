@@ -117,6 +117,11 @@ func TestPaneWSClosesWhenServerChanges(t *testing.T) {
 
 	writeInput(t, conn, "a")
 
+	// Prove "a" was actually presented to SendKeys and refused for its stale
+	// generation, rather than the close simply winning the race before the
+	// read loop got to it — which would let removing the gate go unnoticed.
+	waitForRefusedCall(t, fakeCC, fakeTmux.paneID, "a")
+
 	fakeCC.markDirty(fakeTmux.paneID)
 
 	expectClose(t, conn, wsCloseServerChanged)
@@ -124,6 +129,22 @@ func TestPaneWSClosesWhenServerChanges(t *testing.T) {
 	waitForRelease(t, cm)
 	if slices.Contains(fakeCC.sendCallsFor(fakeTmux.paneID), "a") {
 		t.Fatal("input sent after the generation changed reached SendKeys")
+	}
+}
+
+// waitForRefusedCall polls cc.refusedCallsFor(paneID) until it contains want,
+// failing the test if it does not show up within 5s.
+func waitForRefusedCall(t *testing.T, cc *fakeControlClient, paneID, want string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if slices.Contains(cc.refusedCallsFor(paneID), want) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for a refused SendKeys(%q, %q); got %v", paneID, want, cc.refusedCallsFor(paneID))
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
@@ -272,6 +293,61 @@ func TestPaneWSUnknownServerNeverResolves(t *testing.T) {
 
 	writeInput(t, conn, "z")
 	waitForSendCall(t, fakeCC, fakeTmux.paneID, "z")
+}
+
+// TestPaneWSOpenTimeMismatchNeverZooms covers F2: the open-time server check
+// must run before auto-zoom, so a pane already on a different server at open
+// never has its window zoomed on our behalf.
+func TestPaneWSOpenTimeMismatchNeverZooms(t *testing.T) {
+	fakeTmux := newFakeTmux()
+	fakeTmux.paneID = "%1"
+	fakeTmux.setWindowPaneCount(2)
+	fakeTmux.setResolve(tmux.Pane{Server: "200"}, nil)
+
+	fakeCC := newFakeControlClient()
+	cm := newFakeControlManager(fakeCC)
+
+	conn, cleanup := startPaneWSWithPane(t, fakeTmux, cm, serverPane)
+	defer cleanup()
+
+	expectClose(t, conn, wsCloseServerChanged)
+
+	waitForRelease(t, cm)
+	if got := fakeTmux.zoomPaneCalls(); got != 0 {
+		t.Fatalf("zoomPaneCalls() = %d, want 0 (open-time mismatch must precede auto-zoom)", got)
+	}
+}
+
+// TestPaneWSServerChangeSkipsZoomRestore covers F2: a socket that closes
+// because the pane's server changed must not un-zoom on the way out — that
+// zoom toggle would hit an unrelated window on the new server.
+func TestPaneWSServerChangeSkipsZoomRestore(t *testing.T) {
+	fakeTmux := newFakeTmux()
+	fakeTmux.paneID = "%1"
+	fakeTmux.setWindowPaneCount(2)
+	fakeTmux.setResolve(tmux.Pane{Server: "100"}, nil)
+
+	fakeCC := newFakeControlClient()
+	cm := newFakeControlManager(fakeCC)
+
+	conn, cleanup := startPaneWSWithPane(t, fakeTmux, cm, serverPane)
+	defer cleanup()
+
+	readUntilType(t, conn, "seed", 5*time.Second)
+
+	if got := fakeTmux.zoomPaneCalls(); got != 1 {
+		t.Fatalf("zoomPaneCalls() after connect = %d, want 1 (auto-zoom on connect)", got)
+	}
+
+	fakeTmux.setResolve(tmux.Pane{Server: "200"}, nil)
+	fakeCC.reconnect(fakeTmux.paneID)
+
+	expectClose(t, conn, wsCloseServerChanged)
+
+	waitForRelease(t, cm)
+	if got := fakeTmux.zoomPaneCalls(); got != 1 {
+		t.Fatalf("zoomPaneCalls() after server-change close = %d, want 1 (zoom restore must be skipped)", got)
+	}
 }
 
 // TestPaneWSReconnectDuringReseedIsNotLost: a reconnect landing mid-capture

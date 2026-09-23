@@ -33,7 +33,7 @@ type controlClientOps interface {
 	AckReseed(s paneSub)
 	MarkPendingReseed(s paneSub)
 	Done() <-chan struct{}
-	SendKeys(paneID, text string) error
+	SendKeys(gen uint64, paneID, text string) error
 	Generation() uint64
 }
 
@@ -83,8 +83,8 @@ func (a controlClientAdapter) Done() <-chan struct{} {
 	return a.cc.Done()
 }
 
-func (a controlClientAdapter) SendKeys(paneID, text string) error {
-	return a.cc.SendKeys(paneID, text)
+func (a controlClientAdapter) SendKeys(gen uint64, paneID, text string) error {
+	return a.cc.SendKeys(gen, paneID, text)
 }
 
 func (a controlClientAdapter) Generation() uint64 {

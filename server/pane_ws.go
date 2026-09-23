@@ -105,6 +105,19 @@ func servePane(conn *websocket.Conn, tm tmuxOps, cm controlManagerOps, registry 
 		return
 	}
 
+	// verified is the generation, as of the last time the write loop confirmed
+	// pane's server is still the one it's streaming from. Baselined and
+	// checked here, right after acquiring the client and before any side
+	// effect (auto-zoom, pause, subscribe) that could land on a foreign
+	// server if a reconnect already happened.
+	verified := new(atomic.Uint64)
+	verified.Store(cc.Generation())
+	if !serverStillMatches(conn, tm, pane, paneID) {
+		_ = conn.Close()
+		cm.ReleaseClient(pane.Session)
+		return
+	}
+
 	// Per-connection lifetime. The control client is shared across every
 	// socket on this session, so its Done channel outlives this connection.
 	connDone := make(chan struct{})
@@ -135,14 +148,24 @@ func servePane(conn *websocket.Conn, tm tmuxOps, cm controlManagerOps, registry 
 
 	sub := cc.Subscribe(paneID)
 
+	// A reconnect landing between the baseline above and this Subscribe would
+	// bump the generation without ever marking sub dirty, leaving input gated
+	// with nothing to trigger the write loop's verification. Force one now.
+	if cc.Generation() != verified.Load() {
+		cc.MarkPendingReseed(sub)
+	}
+
+	var serverChanged bool
 	defer func() {
 		// Ensure pane is resumed if we exit before the explicit continue
 		if paused {
 			continueCmd := fmt.Sprintf("refresh-client -A %s:continue", paneID)
 			_, _ = cc.RunCommand(continueCmd)
 		}
-		// Restore zoom state if we auto-zoomed on connect
-		if weZoomed {
+		// Restore zoom state if we auto-zoomed on connect, unless the socket
+		// closed because the pane's server changed — the zoom toggle would
+		// then hit an unrelated window on the new server.
+		if weZoomed && !serverChanged {
 			_ = tm.ZoomPane(pane) // toggle off
 		}
 		close(connDone)
@@ -150,16 +173,6 @@ func servePane(conn *websocket.Conn, tm tmuxOps, cm controlManagerOps, registry 
 		cc.Unsubscribe(paneID, sub)
 		cm.ReleaseClient(pane.Session)
 	}()
-
-	// verified is the generation, as of the last time the write loop confirmed
-	// pane's server is still the one it's streaming from. Baselined before the
-	// resolve below, not after: a reconnect racing this open would otherwise
-	// be folded into the baseline and never show up as a generation change.
-	verified := new(atomic.Uint64)
-	verified.Store(cc.Generation())
-	if !serverStillMatches(conn, tm, pane, paneID) {
-		return
-	}
 
 	// Keepalive
 	conn.SetPongHandler(func(string) error {
@@ -202,7 +215,7 @@ func servePane(conn *websocket.Conn, tm tmuxOps, cm controlManagerOps, registry 
 	}
 
 	go paneWSReadLoop(conn, cc, paneID, verified)
-	paneWSWriteLoop(conn, tm, cc, registry, pane, paneID, sub, verified, connDone, metaEvery)
+	serverChanged = paneWSWriteLoop(conn, tm, cc, registry, pane, paneID, sub, verified, connDone, metaEvery)
 }
 
 // serverStillMatches checks pane's tmux server is still the one paneID
@@ -271,7 +284,11 @@ func writeSeed(conn wsWriter, seed string) error {
 	return conn.WriteMessage(websocket.TextMessage, msg)
 }
 
-func paneWSWriteLoop(conn wsWriter, tm tmuxOps, cc controlClientOps, registry *agents.Registry, pane tmux.Pane, paneID string, sub paneSub, verified *atomic.Uint64, connDone <-chan struct{}, metaEvery time.Duration) {
+// paneWSWriteLoop streams pane output to conn until it exits. serverChanged
+// reports whether it exited specifically because serverStillMatches found
+// the pane's server had changed — the one exit reason servePane's deferred
+// cleanup must treat differently (skipping the zoom restore).
+func paneWSWriteLoop(conn wsWriter, tm tmuxOps, cc controlClientOps, registry *agents.Registry, pane tmux.Pane, paneID string, sub paneSub, verified *atomic.Uint64, connDone <-chan struct{}, metaEvery time.Duration) (serverChanged bool) {
 	pingTicker := time.NewTicker(30 * time.Second)
 	defer pingTicker.Stop()
 
@@ -291,7 +308,7 @@ func paneWSWriteLoop(conn wsWriter, tm tmuxOps, cc controlClientOps, registry *a
 				slog.Debug("pane stream dirty, re-seeding", "target", pane.Target())
 				if g := cc.Generation(); g != verified.Load() {
 					if !serverStillMatches(conn, tm, pane, paneID) {
-						return
+						return true
 					}
 					verified.Store(g)
 				}
@@ -453,15 +470,15 @@ func paneWSReadLoop(conn *websocket.Conn, cc controlClientOps, paneID string, ve
 
 		switch msg.Type {
 		case "input":
-			if cc.Generation() != verified.Load() {
-				slog.Debug("dropping input pending tmux server check", "paneID", paneID)
-				continue
-			}
 			var input WSInput
 			if err := json.Unmarshal(msg.Data, &input); err != nil {
 				continue
 			}
-			if err := cc.SendKeys(paneID, input.Data); err != nil {
+			if err := cc.SendKeys(verified.Load(), paneID, input.Data); err != nil {
+				if errors.Is(err, tmux.ErrStaleGeneration) {
+					slog.Debug("dropping input pending tmux server check", "paneID", paneID)
+					continue
+				}
 				slog.Error("send keys failed", "error", err)
 			}
 

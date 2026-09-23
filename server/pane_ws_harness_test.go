@@ -208,6 +208,11 @@ type fakeControlClient struct {
 		data   string
 	}
 
+	refusedCallsList []struct {
+		paneID string
+		data   string
+	}
+
 	done     chan struct{}
 	closeOne sync.Once
 }
@@ -316,9 +321,18 @@ func (c *fakeControlClient) reconnect(paneID string) {
 	c.markDirty(paneID)
 }
 
-func (c *fakeControlClient) SendKeys(paneID, text string) error {
+// SendKeys mirrors tmux.ControlClient.SendKeys's generation gate: a stale gen
+// is recorded as refused rather than sent, and returns ErrStaleGeneration.
+func (c *fakeControlClient) SendKeys(gen uint64, paneID, text string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if gen != c.gen {
+		c.refusedCallsList = append(c.refusedCallsList, struct {
+			paneID string
+			data   string
+		}{paneID, text})
+		return tmux.ErrStaleGeneration
+	}
 	c.sendCallsList = append(c.sendCallsList, struct {
 		paneID string
 		data   string
@@ -337,6 +351,18 @@ func (c *fakeControlClient) sendCallsFor(paneID string) []string {
 	defer c.mu.Unlock()
 	var out []string
 	for _, call := range c.sendCallsList {
+		if call.paneID == paneID {
+			out = append(out, call.data)
+		}
+	}
+	return out
+}
+
+func (c *fakeControlClient) refusedCallsFor(paneID string) []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []string
+	for _, call := range c.refusedCallsList {
 		if call.paneID == paneID {
 			out = append(out, call.data)
 		}

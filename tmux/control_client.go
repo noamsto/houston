@@ -110,6 +110,12 @@ var (
 	errCmdDesync   = errors.New("control command stream desynchronised")
 )
 
+// ErrStaleGeneration is returned by SendKeys when the connection identified
+// by its gen argument is no longer the one cc.stdin writes to. It is not a
+// connection failure — the current connection may be perfectly healthy — so
+// callers must not treat it like one.
+var ErrStaleGeneration = errors.New("tmux control client: stale generation")
+
 func NewControlClient(session string) *ControlClient {
 	cc := &ControlClient{
 		session:      session,
@@ -263,6 +269,27 @@ func (cc *ControlClient) writeCommand(command string, reply chan commandResponse
 	// errCmdDesync means the stream was already desynchronised, and whoever
 	// desynchronised it already dropped the connection; dropping again would log
 	// a teardown per send for the whole window before the reconnect lands.
+	if err != nil && !errors.Is(err, errCmdDesync) {
+		cc.dropConnection("control command write failed", closeFn)
+	}
+	return err
+}
+
+// writeCommandGated is writeCommand plus a generation check made under the
+// same stdinMu section as the write. attach bumps gen before it takes
+// stdinMu to swap cc.stdin, so a caller that holds stdinMu and finds
+// cc.gen unchanged from gen is still writing to that connection's stdin —
+// checking and writing separately would leave a window where attach swaps
+// the connection out from under an already-approved write.
+func (cc *ControlClient) writeCommandGated(gen uint64, command string, reply chan commandResponse) error {
+	cc.stdinMu.Lock()
+	if cc.gen.Load() != gen {
+		cc.stdinMu.Unlock()
+		return ErrStaleGeneration
+	}
+	err := cc.writeCommandLocked(command, reply)
+	closeFn := cc.curClose
+	cc.stdinMu.Unlock()
 	if err != nil && !errors.Is(err, errCmdDesync) {
 		cc.dropConnection("control command write failed", closeFn)
 	}
@@ -778,14 +805,15 @@ func (cc *ControlClient) Unsubscribe(paneID string, s *PaneSub) {
 	}
 }
 
-// SendKeys sends text to a pane via the control mode connection.
-// Printable text uses -l (literal) which supports UTF-8. Control characters
-// and escape sequences are mapped to tmux key names to avoid embedding
-// raw control bytes in the CC command string.
-func (cc *ControlClient) SendKeys(paneID, text string) error {
+// SendKeys sends text to a pane via the control mode connection, refusing
+// with ErrStaleGeneration instead of writing if gen no longer names the live
+// connection. Printable text uses -l (literal) which supports UTF-8. Control
+// characters and escape sequences are mapped to tmux key names to avoid
+// embedding raw control bytes in the CC command string.
+func (cc *ControlClient) SendKeys(gen uint64, paneID, text string) error {
 	// Fast path: all printable text — send as literal
 	if isPrintable(text) {
-		return cc.sendLiteral(paneID, text)
+		return cc.sendLiteral(gen, paneID, text)
 	}
 
 	// Mixed content (e.g. paste with newlines): split into printable
@@ -796,7 +824,7 @@ func (cc *ControlClient) SendKeys(paneID, text string) error {
 		if b == 0x1b && i+1 < len(text) {
 			// Escape sequence — try to match and send as key name
 			if seqLen, name := matchEscSeq(text[i:]); seqLen > 0 {
-				if err := cc.SendSpecialKey(paneID, name); err != nil {
+				if err := cc.sendSpecialKeyGated(gen, paneID, name); err != nil {
 					return err
 				}
 				i += seqLen
@@ -804,7 +832,7 @@ func (cc *ControlClient) SendKeys(paneID, text string) error {
 			}
 		}
 		if b < 0x20 || b == 0x7f {
-			if err := cc.sendControl(paneID, b); err != nil {
+			if err := cc.sendControl(gen, paneID, b); err != nil {
 				return err
 			}
 			i++
@@ -814,7 +842,7 @@ func (cc *ControlClient) SendKeys(paneID, text string) error {
 			for j < len(text) && text[j] >= 0x20 && text[j] != 0x7f {
 				j++
 			}
-			if err := cc.sendLiteral(paneID, text[i:j]); err != nil {
+			if err := cc.sendLiteral(gen, paneID, text[i:j]); err != nil {
 				return err
 			}
 			i = j
@@ -832,12 +860,12 @@ func isPrintable(s string) bool {
 	return true
 }
 
-func (cc *ControlClient) sendLiteral(paneID, text string) error {
+func (cc *ControlClient) sendLiteral(gen uint64, paneID, text string) error {
 	escaped := strings.ReplaceAll(text, "'", "'\\''")
-	return cc.writeCommand(fmt.Sprintf("send-keys -t %s -l '%s'", paneID, escaped), nil)
+	return cc.writeCommandGated(gen, fmt.Sprintf("send-keys -t %s -l '%s'", paneID, escaped), nil)
 }
 
-func (cc *ControlClient) sendControl(paneID string, b byte) error {
+func (cc *ControlClient) sendControl(gen uint64, paneID string, b byte) error {
 	var name string
 	switch b {
 	case '\r', '\n':
@@ -853,10 +881,10 @@ func (cc *ControlClient) sendControl(paneID string, b byte) error {
 			name = fmt.Sprintf("C-%c", 'a'+rune(b)-1)
 		} else {
 			// Rare control char — send as hex
-			return cc.writeCommand(fmt.Sprintf("send-keys -t %s -H %02x", paneID, b), nil)
+			return cc.writeCommandGated(gen, fmt.Sprintf("send-keys -t %s -H %02x", paneID, b), nil)
 		}
 	}
-	return cc.SendSpecialKey(paneID, name)
+	return cc.sendSpecialKeyGated(gen, paneID, name)
 }
 
 // matchEscSeq tries to match a terminal escape sequence and returns its
@@ -883,6 +911,12 @@ func matchEscSeq(s string) (int, string) {
 // SendSpecialKey sends a named key (Enter, Escape, C-c, etc.) to a pane.
 func (cc *ControlClient) SendSpecialKey(paneID, key string) error {
 	return cc.writeCommand(fmt.Sprintf("send-keys -t %s %s", paneID, key), nil)
+}
+
+// sendSpecialKeyGated is SendSpecialKey with SendKeys's generation gate, used
+// internally so its callers stay atomic under gen's check-and-write.
+func (cc *ControlClient) sendSpecialKeyGated(gen uint64, paneID, key string) error {
+	return cc.writeCommandGated(gen, fmt.Sprintf("send-keys -t %s %s", paneID, key), nil)
 }
 
 // RunCommand sends a command and waits for the block tmux answers it with.
