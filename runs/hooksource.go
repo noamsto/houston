@@ -101,9 +101,36 @@ func (s *HookSource) Run(ctx context.Context, out chan<- Delta) error {
 
 	build := func(v hub.SessionView) (string, Run) {
 		gone := paneGone(v, panes.live, panes.at)
+		// The pane's @claude_status may only be trusted for a session that can
+		// still vouch for the pane: a foreign session's pane id may already
+		// belong to the next server incarnation's occupant. normalize returns
+		// exactly that foreign bit (it is the same paneForeign test that keeps
+		// the coordinates at all).
+		origPane := v.TmuxPane
 		v, foreign := normalize(v)
+		var tmuxState State
+		if !foreign && origPane != "" {
+			if st := panes.status[origPane]; st != "" {
+				tmuxState = FromClaudeStatus(st)
+			}
+		}
 		gone = gone || foreign
 		key, r := runFromSessionView(v, s.projects.resolved(v.CWD))
+		// A hook turn-end `waiting` (idle_prompt, Stop, a default notification)
+		// must not outrank the tmux layer's own verdict for the same pane: idle
+		// means not working and neither needs a
+		// human. permission_prompt is a distinct hook state and is never
+		// demoted. A hook-only run has no tmux verdict to consult and keeps the
+		// hook's blocked verdict.
+		if v.State == hook.StateWaiting && tmuxState == StateIdle {
+			r.State = tmuxState
+			r.Question = nil
+			// LastMessage is a waiting-only field (hub only populates it while
+			// StateWaiting), so a demoted idle run must drop it too, or the
+			// stale "Claude is waiting for your input" text survives the merge
+			// and reaches the detail view.
+			r.Activity.Message = ""
+		}
 		switch {
 		case gone:
 			if at, ok := endedAt[v.SessionID]; ok && v.UpdatedAt > at {
@@ -130,6 +157,14 @@ func (s *HookSource) Run(ctx context.Context, out chan<- Delta) error {
 		byKey := make(map[string]hub.SessionView, len(snap))
 		for _, v := range snap {
 			sids[v.SessionID] = true
+			// A role-grid pane parks on the crew bus under role:<branch>:<role>,
+			// not worker:<branch>; the tmux and crew layers already skip it (#99),
+			// and a role pane whose Claude runs with hooks installed must not
+			// slip back in through the hooks layer (#111). Gate on not-foreign
+			// for the same reason as the tmux verdict below.
+			if v.TmuxPane != "" && !paneForeign(v, panes) && panes.roles[v.TmuxPane] {
+				continue
+			}
 			nv, _ := normalize(v)
 			k := sessionKey(nv)
 			if w, ok := byKey[k]; !ok || newerSession(v, w) {
@@ -232,6 +267,12 @@ type paneSet struct {
 	at          time.Time
 	server      string
 	serverStart int64
+	// roles marks panes carrying a non-empty @crew_role; status carries each
+	// pane's raw @claude_status. Both are keyed by pane id off the same listing
+	// as live, and both are only trusted for a session that can vouch for the
+	// pane (not foreign).
+	roles  map[string]bool
+	status map[string]string
 }
 
 // listPanes lists the live panes along with the identity of the server that
@@ -246,8 +287,16 @@ func listPanes(l paneLister) (paneSet, bool) {
 		return paneSet{}, false
 	}
 	live := make(map[string]bool, len(panes))
+	roles := make(map[string]bool)
+	status := make(map[string]string, len(panes))
 	for _, p := range panes {
 		live[p.PaneID] = true
+		if p.CrewRole != "" {
+			roles[p.PaneID] = true
+		}
+		if p.ClaudeStatus != "" {
+			status[p.PaneID] = p.ClaudeStatus
+		}
 	}
 	var server string
 	var serverStart int64
@@ -261,7 +310,7 @@ func listPanes(l paneLister) (paneSet, bool) {
 			slog.Warn("hooks: pane listing carries no server identity, foreign-pane guard disabled")
 		}
 	}
-	return paneSet{live: live, at: at, server: server, serverStart: serverStart}, true
+	return paneSet{live: live, at: at, server: server, serverStart: serverStart, roles: roles, status: status}, true
 }
 
 // pollPanes publishes each successful listing until ctx ends. A failed one is

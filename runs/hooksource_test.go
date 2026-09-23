@@ -165,7 +165,7 @@ func TestEndRunClearsWhatOnlyALiveRunHas(t *testing.T) {
 
 type fakePanes struct {
 	mu          sync.Mutex
-	ids         []string
+	panes       []tmux.PaneOptions
 	err         error
 	server      string
 	serverStart int64
@@ -175,10 +175,24 @@ type fakePanes struct {
 // is stamped with this fake's current identity, same as a real listing
 // stamps every line with the server that produced it.
 func (f *fakePanes) set(err error, ids ...string) {
+	ps := make([]tmux.PaneOptions, len(ids))
+	for i, id := range ids {
+		ps[i] = tmux.PaneOptions{PaneID: id}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.err = err
-	f.ids = ids
+	f.panes = ps
+}
+
+// setPanes replaces the listing with fully-formed pane options, for tests that
+// need a pane's @crew_role or @claude_status. The fake's identity is stamped
+// onto each option at list time, same as set.
+func (f *fakePanes) setPanes(ps ...tmux.PaneOptions) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.err = nil
+	f.panes = ps
 }
 
 // setIdentity configures the identity stamped onto panes returned after this
@@ -196,9 +210,11 @@ func (f *fakePanes) ListPaneOptions() ([]tmux.PaneOptions, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
-	panes := make([]tmux.PaneOptions, len(f.ids))
-	for i, id := range f.ids {
-		panes[i] = tmux.PaneOptions{PaneID: id, ServerPID: f.server, ServerStart: f.serverStart}
+	panes := make([]tmux.PaneOptions, len(f.panes))
+	copy(panes, f.panes)
+	for i := range panes {
+		panes[i].ServerPID = f.server
+		panes[i].ServerStart = f.serverStart
 	}
 	return panes, nil
 }
@@ -820,5 +836,66 @@ func TestHookSourceWithdrawsThePaneWhenASessionEnds(t *testing.T) {
 		case <-timeout:
 			t.Fatalf("sawEnded=%v sawGone=%v, want both", sawEnded, sawGone)
 		}
+	}
+}
+
+// TestHookSourceSkipsRoleGridPanes is #111/#143: a role-grid pane parks on the
+// crew bus under role:<branch>:<role>, not worker:<branch>. The tmux and crew
+// layers already skip @crew_role panes (#99); a role pane running Claude with
+// hooks installed must not slip back in through the hooks layer.
+func TestHookSourceSkipsRoleGridPanes(t *testing.T) {
+	panes := &fakePanes{}
+	panes.setPanes(tmux.PaneOptions{PaneID: "%9", CrewRole: "plan-critic"})
+
+	// blockedState() is a live, same-server session on %9; without the filter
+	// it would emit a blocked run carrying a Question.
+	out := startHookSource(t, panes)
+	expectNoDelta(t, out, "a role-grid pane surfaced as its own run", func(d Delta) bool { return true })
+}
+
+// waitingMsg is hub's LastMessage for a turn-end waiting state.
+const waitingMsg = "Claude is waiting for your input"
+
+// TestHookSourceDemotesTurnEndWaitingAgainstTmux is #143 root cause 2: the
+// hooks layer's turn-end waiting (idle_prompt, Stop) must not outrank the tmux
+// layer's idle/done verdict for the same pane. A permission prompt is a
+// distinct hook state and always stays blocked.
+func TestHookSourceDemotesTurnEndWaitingAgainstTmux(t *testing.T) {
+	tests := []struct {
+		name      string
+		status    string
+		hookState hook.State
+		wantState State
+		wantQuest bool
+		wantMsg   string
+	}{
+		{"idle demotes a turn-end waiting", "idle 100 0", hook.StateWaiting, StateIdle, false, ""},
+		{"done keeps a turn-end waiting blocked", "done 100 0", hook.StateWaiting, StateBlocked, true, waitingMsg},
+		{"waiting keeps a turn-end waiting blocked", "waiting 100 0", hook.StateWaiting, StateBlocked, true, waitingMsg},
+		{"processing keeps a turn-end waiting blocked", "processing 100 0", hook.StateWaiting, StateBlocked, true, waitingMsg},
+		{"no status keeps a turn-end waiting blocked", "", hook.StateWaiting, StateBlocked, true, waitingMsg},
+		{"idle never demotes a permission prompt", "idle 100 0", hook.StatePermission, StateBlocked, true, waitingMsg},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			panes := &fakePanes{}
+			panes.setPanes(tmux.PaneOptions{PaneID: "%9", ClaudeStatus: tt.status})
+
+			st := blockedState()
+			st.State = tt.hookState
+			st.LastMessage = waitingMsg
+			out, _ := startHookSourceWith(t, panes, st, nil)
+
+			d := waitDelta(t, out, "waiting run", func(d Delta) bool { return d.Key == "%9" })
+			if d.Run.State != tt.wantState {
+				t.Errorf("State = %q, want %q", d.Run.State, tt.wantState)
+			}
+			if got := d.Run.Question != nil; got != tt.wantQuest {
+				t.Errorf("Question present = %v, want %v (%+v)", got, tt.wantQuest, d.Run.Question)
+			}
+			if d.Run.Activity.Message != tt.wantMsg {
+				t.Errorf("Activity.Message = %q, want %q — a demoted run must not keep waiting-only text", d.Run.Activity.Message, tt.wantMsg)
+			}
+		})
 	}
 }

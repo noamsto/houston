@@ -274,14 +274,17 @@ func TestDeltasFromCrewLogBlockedAlwaysCarriesAQuestion(t *testing.T) {
 		}
 	})
 
-	t.Run("watchdog source", func(t *testing.T) {
+	t.Run("watchdog informational source", func(t *testing.T) {
 		const fixture = `{"ts":1000,"crew_id":"c1","kind":"dispatch","branch":"fix/7","engine":"claude"}
-{"ts":1100,"crew_id":"c1","from":"worker:fix/7#s1","kind":"status","body":{"state":"blocked","detail":"quiet: cleared — awaited 300s, no reply (cycle 3 of 24)","source":"watchdog"}}
+{"ts":1100,"crew_id":"c1","from":"worker:fix/7#s1","kind":"status","body":{"state":"blocked","detail":"quiet: pane unchanged for 1800s","source":"watchdog"}}
 `
 		got := deltasFromCrewLog(strings.NewReader(fixture))
 		r := got["fix/7"]
-		if r.Question == nil || r.Question.Via != "watchdog" || r.Question.Text != crewWatchdogNote {
-			t.Fatalf("Question = %+v, want the synthesised watchdog note, not the raw detail", r.Question)
+		if r.State == StateBlocked {
+			t.Fatalf("State = %q, want not needs-attention — a watchdog check-in asks nobody anything", r.State)
+		}
+		if r.Question != nil {
+			t.Fatalf("Question = %+v, want nil", r.Question)
 		}
 		if r.Crew.Detail != "" {
 			t.Errorf("Detail = %q, want cleared — a watchdog note is not a current phase", r.Crew.Detail)
@@ -841,4 +844,47 @@ func TestPRNumberFromURL(t *testing.T) {
 			t.Errorf("prNumberFromURL(%q) = %q, want %q", in, got, want)
 		}
 	}
+}
+
+// TestDeltasFromCrewLogWatchdogAsksOnlyWhatTheHumanCanAnswer is #143 root
+// cause 3: a watchdog blocked status is liveness bookkeeping for the
+// dispatcher, not a question addressed to a human. Only the prefixes a human
+// can clear at the pane (prompt:/quota:) may raise the attention badge.
+func TestDeltasFromCrewLogWatchdogAsksOnlyWhatTheHumanCanAnswer(t *testing.T) {
+	status := func(detail string) string {
+		return `{"ts":1000,"crew_id":"c1","kind":"dispatch","branch":"fix/10","engine":"claude"}` + "\n" +
+			`{"ts":1100,"crew_id":"c1","from":"worker:fix/10#s1","kind":"status","body":{"state":"blocked","detail":"` + detail + `","source":"watchdog"}}` + "\n"
+	}
+
+	t.Run("informational prefixes ask nobody", func(t *testing.T) {
+		for _, detail := range []string{
+			"quiet: pane unchanged for 1800s",
+			"stalled: no output for 300s",
+			"turn-stall: token count static at 25.0k for 1800s",
+			"load: 1m load 9 on 8 cores for 60s",
+		} {
+			r := deltasFromCrewLog(strings.NewReader(status(detail)))["fix/10"]
+			if r.State == StateBlocked {
+				t.Errorf("%q: State = blocked, want not needs-attention", detail)
+			}
+			if r.Question != nil {
+				t.Errorf("%q: Question = %+v, want nil", detail, r.Question)
+			}
+		}
+	})
+
+	t.Run("prompt and quota are answerable at the pane", func(t *testing.T) {
+		for detail, want := range map[string]string{
+			"prompt: interactive prompt in pane %326 — worker is waiting on input nobody can give": crewWatchdogPromptNote,
+			"quota: quota exhausted — worker parked on the rate-limit prompt in pane %326":         crewWatchdogQuotaNote,
+		} {
+			r := deltasFromCrewLog(strings.NewReader(status(detail)))["fix/10"]
+			if r.State != StateBlocked {
+				t.Errorf("%q: State = %q, want blocked", detail, r.State)
+			}
+			if r.Question == nil || r.Question.Via != "pane" || r.Question.Text != want {
+				t.Errorf("%q: Question = %+v, want Via pane text %q", detail, r.Question, want)
+			}
+		}
+	})
 }
