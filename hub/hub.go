@@ -67,6 +67,8 @@ type Hub struct {
 	pruneTTL          time.Duration
 	log               *slog.Logger
 
+	preRemoveStat func(string) (os.FileInfo, error) // test seam for pruneEnded's race guard
+
 	mu       sync.RWMutex
 	sessions map[string]*Session
 	subs     map[chan SessionView]struct{}
@@ -135,6 +137,7 @@ func NewWithOptions(stateDir string, opts Options, log *slog.Logger) *Hub {
 		discoveryWindow:   window,
 		pruneTTL:          ttl,
 		log:               log,
+		preRemoveStat:     os.Stat,
 		sessions:          map[string]*Session{},
 		subs:              map[chan SessionView]struct{}{},
 	}
@@ -286,10 +289,7 @@ func (h *Hub) scan(dir string) error {
 }
 
 // preRemoveStat performs the second, pre-remove stat in pruneEnded's race
-// guard. It's a var (not a direct os.Stat call) purely so tests can
-// deterministically land a rewrite in the read-to-remove window instead of
-// racing a real goroutine against it.
-var preRemoveStat = os.Stat
+// guard. It lives on the Hub so tests can set their own without a global.
 
 // pruneEnded removes hook state files older than h.pruneTTL whose
 // last-written State is StateEnded. This is the only signal pruneEnded
@@ -347,7 +347,7 @@ func (h *Hub) pruneEnded(dir string) {
 		// A resumed session could rewrite the file between our read above
 		// and the remove below. If the file changed since, it's not ours to
 		// remove this pass.
-		after, err := preRemoveStat(path)
+		after, err := h.preRemoveStat(path)
 		if err != nil {
 			if !errors.Is(err, fs.ErrNotExist) {
 				h.log.Warn("prune: stat state file", "path", path, "err", err)
