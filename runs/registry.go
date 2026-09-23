@@ -297,7 +297,34 @@ func mergeInto(dst *Run, src Run) {
 		dst.Worktree = src.Worktree
 	}
 	if src.Tmux != nil {
-		dst.Tmux = src.Tmux
+		// Field-wise when both layers name the same pane: a higher layer that
+		// publishes a ref with an empty Server (a legacy hook state file written
+		// before tmux_server existed) must not erase the server pid the
+		// tmux-polling layer recorded. runPane's send-time mismatch check treats
+		// an empty Server as "unknown" and never refuses, so erasing it silently
+		// disables the guard. A ref for a different pane still wins wholesale:
+		// its server pid belongs to a different server incarnation and must not
+		// be grafted onto this pane.
+		switch {
+		case dst.Tmux == nil:
+			dst.Tmux = src.Tmux
+		case dst.Tmux.PaneID != src.Tmux.PaneID:
+			dst.Tmux = src.Tmux
+		default:
+			// dst.Tmux may alias a lower layer's ref; copy before writing so that
+			// layer keeps the values it published.
+			merged := *dst.Tmux
+			if src.Tmux.Session != "" {
+				merged.Session = src.Tmux.Session
+			}
+			if src.Tmux.Window != 0 {
+				merged.Window = src.Tmux.Window
+			}
+			if src.Tmux.Server != "" {
+				merged.Server = src.Tmux.Server
+			}
+			dst.Tmux = &merged
+		}
 	}
 	if src.Issue != nil {
 		dst.Issue = src.Issue

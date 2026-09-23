@@ -429,12 +429,13 @@ func TestApplyDoesNotRaceSubscribeClose(t *testing.T) {
 }
 
 func TestPointerRefsReplaceWholesale(t *testing.T) {
-	// Issue and TmuxRef are swapped, not merged. This is safe only while every
-	// source that publishes one publishes it complete. Crew and PR are the
+	// Issue is swapped, not merged. This is safe only while every source that
+	// publishes one publishes it complete. Crew, PR, and TmuxRef are the
 	// exceptions: two layers own different fields of each, so they merge
-	// field-wise instead — see TestCrewMergesFieldWise and
-	// TestPRMergesFieldWiseTmuxKeepsItsFields. If another ref ever starts arriving partial
-	// from more than one layer, this test is where that shows up.
+	// field-wise instead — see TestCrewMergesFieldWise,
+	// TestPRMergesFieldWiseTmuxKeepsItsFields, and TestTmuxMergesFieldWise.
+	// If another ref ever starts arriving partial from more than one layer,
+	// this test is where that shows up.
 	r := NewRegistry(DefaultOrder)
 	r.Apply(Delta{Source: "tmux", Key: "%1", Run: Run{Issue: &IssueRef{ID: "#1", Title: "rich"}}})
 	r.Apply(Delta{Source: "hooks", Key: "%1", Run: Run{Agent: "claude", Issue: &IssueRef{ID: "#1"}}})
@@ -650,6 +651,95 @@ func TestPRMergesFieldWiseTmuxKeepsItsFields(t *testing.T) {
 	got := r.Snapshot()[0].PR
 	if got == nil || got.URL != "https://github.com/x/y/pull/9" || got.State != "OPEN" || got.CheckState != "failure" || got.Mergeable != "MERGEABLE" {
 		t.Errorf("PR = %+v, want crew's URL with tmux's State/CheckState/Mergeable intact", got)
+	}
+}
+
+func TestTmuxMergesFieldWise(t *testing.T) {
+	// tmux polls the server pid; hooks sit above it. A legacy hook ref that
+	// leaves Server empty must not erase the pid tmux recorded — runPane's
+	// send-time guard reads an empty Server as "unknown" and never refuses, so
+	// erasing it silently disables the guard.
+	r := NewRegistry(DefaultOrder)
+	r.Apply(Delta{Source: "tmux", Key: "%5", Run: Run{
+		Agent: "claude",
+		Tmux:  &TmuxRef{Session: "s", Window: 1, PaneID: "%5", Server: "123"},
+	}})
+	r.Apply(Delta{Source: "hooks", Key: "%5", Run: Run{
+		State: StateRunning,
+		Tmux:  &TmuxRef{Session: "s", Window: 1, PaneID: "%5"},
+	}})
+
+	got := r.Snapshot()[0].Tmux
+	if got == nil || got.Server != "123" {
+		t.Fatalf("Tmux = %+v, want Server 123 preserved from the tmux layer", got)
+	}
+}
+
+func TestTmuxHigherLayerServerWinsOnSamePane(t *testing.T) {
+	r := NewRegistry(DefaultOrder)
+	r.Apply(Delta{Source: "tmux", Key: "%5", Run: Run{
+		Agent: "claude",
+		Tmux:  &TmuxRef{Session: "s", Window: 1, PaneID: "%5", Server: "123"},
+	}})
+	r.Apply(Delta{Source: "hooks", Key: "%5", Run: Run{
+		State: StateRunning,
+		Tmux:  &TmuxRef{Session: "s", Window: 1, PaneID: "%5", Server: "456"},
+	}})
+
+	if got := r.Snapshot()[0].Tmux; got == nil || got.Server != "456" {
+		t.Fatalf("Tmux = %+v, want the higher layer's explicit Server 456", got)
+	}
+}
+
+func TestTmuxRefForADifferentPaneWinsWholesale(t *testing.T) {
+	// A server pid belongs to the server incarnation that minted the pane.
+	// When the layers name different panes, the higher layer's whole ref wins —
+	// tmux's pid for %5 must not be grafted onto %9.
+	r := NewRegistry(DefaultOrder)
+	r.Apply(Delta{Source: "tmux", Key: "%5", Run: Run{
+		Agent: "claude",
+		Tmux:  &TmuxRef{Session: "s", Window: 1, PaneID: "%5", Server: "123"},
+	}})
+	r.Apply(Delta{Source: "hooks", Key: "%5", Run: Run{
+		State: StateRunning,
+		Tmux:  &TmuxRef{Session: "s", Window: 2, PaneID: "%9", Server: "999"},
+	}})
+
+	got := r.Snapshot()[0].Tmux
+	if got == nil || got.PaneID != "%9" || got.Server != "999" {
+		t.Fatalf("Tmux = %+v, want hooks' %%9/999 wholesale", got)
+	}
+}
+
+func TestTmuxMergeDoesNotMutateSourceRefs(t *testing.T) {
+	tmuxRef := &TmuxRef{Session: "s", Window: 1, PaneID: "%5", Server: "123"}
+	hooksRef := &TmuxRef{Session: "s", Window: 1, PaneID: "%5", Server: "456"}
+
+	var dst Run
+	mergeInto(&dst, Run{Agent: "claude", Tmux: tmuxRef}) // dst.Tmux aliases tmuxRef
+	mergeInto(&dst, Run{State: StateRunning, Tmux: hooksRef})
+
+	if dst.Tmux == nil || dst.Tmux.Server != "456" {
+		t.Fatalf("Tmux = %+v, want merged Server 456", dst.Tmux)
+	}
+	if tmuxRef.Server != "123" || tmuxRef.Session != "s" || tmuxRef.Window != 1 || tmuxRef.PaneID != "%5" {
+		t.Errorf("lower layer's ref mutated by the merge: %+v", tmuxRef)
+	}
+	if hooksRef.Server != "456" {
+		t.Errorf("source ref mutated by the merge: %+v", hooksRef)
+	}
+
+	// The empty higher-layer Server is the bug case: the merge must still not
+	// write through the aliased lower ref.
+	tmuxRef2 := &TmuxRef{Session: "s", Window: 1, PaneID: "%5", Server: "123"}
+	var dst2 Run
+	mergeInto(&dst2, Run{Agent: "claude", Tmux: tmuxRef2})
+	mergeInto(&dst2, Run{State: StateRunning, Tmux: &TmuxRef{Session: "s", Window: 1, PaneID: "%5"}})
+	if dst2.Tmux.Server != "123" {
+		t.Fatalf("Tmux = %+v, want Server 123 preserved", dst2.Tmux)
+	}
+	if tmuxRef2.Server != "123" {
+		t.Errorf("lower layer's ref mutated by the merge: %+v", tmuxRef2)
 	}
 }
 
