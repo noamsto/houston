@@ -479,7 +479,7 @@ func TestResolvePane(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			pane, n := resolvePane(testBus, "fix/412", tc.wins, tc.panes, testBusOf)
+			pane, n := resolvePane(testBus, "fix/412", "", tc.wins, tc.panes, testBusOf)
 			if n != tc.wantN {
 				t.Errorf("candidates = %d, want %d", n, tc.wantN)
 			}
@@ -497,11 +497,92 @@ func TestResolvePaneKeepsTwoBusesApart(t *testing.T) {
 	}
 	panes := []tmux.PaneOptions{agentPane("%1", "h:1"), agentPane("%2", "h:2")}
 
-	if pane, n := resolvePane(testBus, "main", wins, panes, testBusOf); pane != "%1" || n != 1 {
+	if pane, n := resolvePane(testBus, "main", "", wins, panes, testBusOf); pane != "%1" || n != 1 {
 		t.Errorf("bus A: got (%q, %d), want (%%1, 1) — the other bus's window must not count", pane, n)
 	}
-	if pane, n := resolvePane("/other/.git/crew", "main", wins, panes, testBusOf); pane != "%2" || n != 1 {
+	if pane, n := resolvePane("/other/.git/crew", "main", "", wins, panes, testBusOf); pane != "%2" || n != 1 {
 		t.Errorf("bus B: got (%q, %d), want (%%2, 1)", pane, n)
+	}
+}
+
+func TestResolvePaneRejectsTerminalState(t *testing.T) {
+	win := tmux.WindowOptions{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"}
+	panes := []tmux.PaneOptions{agentPane("%307", "h:1")}
+
+	// A terminal bus state means the worker session ended — don't join.
+	for _, state := range []State{StateDone, StateFailed} {
+		pane, n := resolvePane(testBus, "fix/412", state, []tmux.WindowOptions{win}, panes, testBusOf)
+		if n != 0 {
+			t.Errorf("state=%s: candidates = %d, want 0 — terminal state must not join", state, n)
+		}
+		if pane != "" {
+			t.Errorf("state=%s: paneID = %q, want empty", state, pane)
+		}
+	}
+}
+
+func TestResolvePaneJoinsNonTerminal(t *testing.T) {
+	win := tmux.WindowOptions{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"}
+	panes := []tmux.PaneOptions{agentPane("%307", "h:1")}
+
+	// Non-terminal or zero state → join still works.
+	for _, state := range []State{StateRunning, StateBlocked, StateReview, State("")} {
+		pane, n := resolvePane(testBus, "fix/412", state, []tmux.WindowOptions{win}, panes, testBusOf)
+		if n != 1 {
+			t.Errorf("state=%q: candidates = %d, want 1 — non-terminal must join", state, n)
+		}
+		if pane != "%307" {
+			t.Errorf("state=%q: paneID = %q, want %%307", state, pane)
+		}
+	}
+}
+
+func TestResolvePaneZeroStateJoins(t *testing.T) {
+	// Zero (empty) state means dispatch-only branch with no status yet —
+	// join must proceed exactly as before.
+	win := tmux.WindowOptions{Session: "h", Window: 1, Branch: "main", GitRoot: "/wt/a"}
+	panes := []tmux.PaneOptions{agentPane("%1", "h:1")}
+
+	pane, n := resolvePane(testBus, "main", "", []tmux.WindowOptions{win}, panes, testBusOf)
+	if n != 1 || pane != "%1" {
+		t.Errorf("got (%q, %d), want (%%1, 1) — zero state on one branch must still join", pane, n)
+	}
+}
+
+func TestScanRejectsStaleJoin(t *testing.T) {
+	// Bus with a done status record: the worker ended.
+	bus := t.TempDir()
+	rec := `{"ts":1000,"crew_id":"c1","from":"worker:fix/412#s1","kind":"dispatch","branch":"fix/412","engine":"claude"}
+{"ts":2000,"crew_id":"c1","from":"worker:fix/412#s1","kind":"status","body":{"state":"done"}}
+`
+	if err := os.WriteFile(filepath.Join(bus, "events.jsonl"), []byte(rec), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := crewScanner(
+		map[string]string{"/wt/a": bus},
+		[]tmux.WindowOptions{{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"}},
+		[]tmux.PaneOptions{agentPane("%307", "h:1")},
+	)
+
+	got, ok := s.scan()
+	if !ok {
+		t.Fatal("scan reported failure")
+	}
+
+	// The stale bus record must NOT join to the pane.
+	if r, found := got["%307"]; found {
+		t.Errorf("run joined to pane %%307: %+v — a terminal bus record must not join", r)
+	}
+
+	// The run must appear under the crew/<bus>/<branch> fallback key.
+	wantKey := "crew/" + bus + "/fix/412"
+	r, found := got[wantKey]
+	if !found {
+		t.Fatalf("no run under %q — keys: %v", wantKey, keysOf(got))
+	}
+	if r.State != StateDone {
+		t.Errorf("State = %s, want done", r.State)
 	}
 }
 

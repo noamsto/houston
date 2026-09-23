@@ -153,7 +153,7 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 			r.Project = project
 			r.Role = RoleWorker
 			r.Worktree = worktreeFor(bus, branch, wins, s.crewDir)
-			paneID, candidates := resolvePane(bus, branch, wins, panes, s.crewDir)
+			paneID, candidates := resolvePane(bus, branch, r.State, wins, panes, s.crewDir)
 			key := paneID
 			if candidates != 1 {
 				key = "crew/" + bus + "/" + branch
