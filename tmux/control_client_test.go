@@ -1732,6 +1732,36 @@ func TestReconnectMarksSubscribersDirty(t *testing.T) {
 	}
 }
 
+// TestReconnectBumpsGeneration uses recordingDialer, not scriptedDialer's
+// immediate EOF, so the test controls exactly when the connection drops
+// rather than racing Start() against a transcript that ends right away.
+func TestReconnectBumpsGeneration(t *testing.T) {
+	d := &recordingDialer{}
+	cc := NewControlClient("test")
+	cc.dial = d.dial
+	cc.backoff = time.Millisecond
+
+	sub := cc.Subscribe("%1")
+
+	if err := cc.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = cc.Close() }()
+
+	if got := cc.Generation(); got != 1 {
+		t.Fatalf("Generation() after Start = %d, want 1", got)
+	}
+
+	first := d.connAt(t, 0)
+	_ = first.pw.Close() // drop the connection; supervise re-dials
+
+	expectDirty(t, sub, "subscriber after re-attach")
+
+	if got := cc.Generation(); got != 2 {
+		t.Fatalf("Generation() after reconnect = %d, want 2", got)
+	}
+}
+
 // TestReattachClearsGapState covers R12: a gap outstanding on a connection
 // that has since died must not let an unrelated %continue on the new
 // connection re-seed anybody.

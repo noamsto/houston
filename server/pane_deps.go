@@ -17,6 +17,7 @@ type tmuxOps interface {
 	ForceRedraw(p tmux.Pane) error
 	ListPanes(session string, window int) ([]tmux.PaneInfo, error)
 	ListWindows(session string) ([]tmux.Window, error)
+	ResolvePane(paneID string) (tmux.Pane, error)
 }
 
 // paneSub is one subscriber's handle on a pane's output stream.
@@ -33,6 +34,7 @@ type controlClientOps interface {
 	MarkPendingReseed(s paneSub)
 	Done() <-chan struct{}
 	SendKeys(paneID, text string) error
+	Generation() uint64
 }
 
 // controlManagerOps hands out ref-counted control clients per session.
@@ -83,6 +85,10 @@ func (a controlClientAdapter) Done() <-chan struct{} {
 
 func (a controlClientAdapter) SendKeys(paneID, text string) error {
 	return a.cc.SendKeys(paneID, text)
+}
+
+func (a controlClientAdapter) Generation() uint64 {
+	return a.cc.Generation()
 }
 
 // controlManagerAdapter wraps *tmux.ControlManager so GetClient returns the

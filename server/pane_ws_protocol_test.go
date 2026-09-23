@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -329,7 +330,7 @@ func TestPaneWSAckBeforeWrite(t *testing.T) {
 		started: make(chan struct{}),
 	}
 
-	go paneWSWriteLoop(gw, fakeTmux, fakeCC, agents.NewRegistry(generic.New()), harnessPane, sub, connDone, metaPollInterval)
+	go paneWSWriteLoop(gw, fakeTmux, fakeCC, agents.NewRegistry(generic.New()), harnessPane, fakeTmux.paneID, sub, new(atomic.Uint64), connDone, metaPollInterval)
 
 	<-gw.started
 

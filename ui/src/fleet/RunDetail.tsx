@@ -116,6 +116,7 @@ function RunDetailBody({ run, tab, streamConnected, now, onBack, backLabel }: { 
         ) : lifecycle.state === 'ended' ? (
           <div className="run-detail-empty">
             <p>Terminal session ended.</p>
+            {lifecycle.endedReason && <p>{lifecycle.endedReason}</p>}
             <button type="button" className="run-detail-back-cta" onClick={lifecycle.reconnect}>Reconnect</button>
           </div>
         ) : (
@@ -129,6 +130,7 @@ function RunDetailBody({ run, tab, streamConnected, now, onBack, backLabel }: { 
               onFocus={() => {}}
               onClose={onBack}
               onConnectionChange={lifecycle.onConnectionChange}
+              onEnded={lifecycle.end}
             />
           </>
         )}

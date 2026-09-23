@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -27,6 +28,10 @@ type ControlClient struct {
 	// dial opens one control-mode connection. Overridable in tests.
 	dial    func() (io.ReadCloser, io.Writer, func() error, error)
 	backoff time.Duration // initial reconnect delay; doubles to backoffMax
+
+	// gen counts attaches: a consumer that baselines against it can tell
+	// whether a reconnect happened since, without racing connMu.
+	gen atomic.Uint64
 
 	closeMu  sync.Mutex
 	closed   bool
@@ -172,6 +177,8 @@ func (cc *ControlClient) Start() error {
 
 // attach installs a freshly dialled connection and re-asserts client options.
 func (cc *ControlClient) attach(w io.Writer, closeFn func() error) {
+	cc.gen.Add(1)
+
 	// Installed before the first enrolled write: that write can fail, and
 	// gone is what RunCommand reads to decide whether a connection is live
 	// (connOK is what ControlManager.SessionStates reads). Left stale, it would
@@ -398,6 +405,11 @@ func (cc *ControlClient) Connected() bool {
 	defer cc.connMu.RUnlock()
 	return cc.connOK
 }
+
+// Generation counts attaches: it advances every time a new connection is
+// installed, so a caller comparing against a baseline it took earlier can
+// tell whether a reconnect happened since.
+func (cc *ControlClient) Generation() uint64 { return cc.gen.Load() }
 
 // StateChanged receives on every connect/disconnect transition. It is a
 // coalescing notification, not an edge counter: a read means "re-read

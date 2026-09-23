@@ -2,10 +2,12 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"slices"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -14,6 +16,10 @@ import (
 	"github.com/noamsto/houston/parser"
 	"github.com/noamsto/houston/tmux"
 )
+
+// wsCloseServerChanged is a private-use close code (RFC 6455 §7.4.2, range
+// 4000-4999): the client must not treat it like an ordinary drop and retry.
+const wsCloseServerChanged = 4409
 
 // wsUpgrader validates Origin against the same allowlist as the HTTP API.
 // This runs regardless of whether auth is enabled: -no-auth disables the
@@ -145,6 +151,16 @@ func servePane(conn *websocket.Conn, tm tmuxOps, cm controlManagerOps, registry 
 		cm.ReleaseClient(pane.Session)
 	}()
 
+	// verified is the generation, as of the last time the write loop confirmed
+	// pane's server is still the one it's streaming from. Baselined before the
+	// resolve below, not after: a reconnect racing this open would otherwise
+	// be folded into the baseline and never show up as a generation change.
+	verified := new(atomic.Uint64)
+	verified.Store(cc.Generation())
+	if !serverStillMatches(conn, tm, pane, paneID) {
+		return
+	}
+
 	// Keepalive
 	conn.SetPongHandler(func(string) error {
 		return conn.SetReadDeadline(time.Now().Add(45 * time.Second))
@@ -185,8 +201,35 @@ func servePane(conn *websocket.Conn, tm tmuxOps, cm controlManagerOps, registry 
 		paused = false
 	}
 
-	go paneWSReadLoop(conn, cc, paneID)
-	paneWSWriteLoop(conn, tm, cc, registry, pane, sub, connDone, metaEvery)
+	go paneWSReadLoop(conn, cc, paneID, verified)
+	paneWSWriteLoop(conn, tm, cc, registry, pane, paneID, sub, verified, connDone, metaEvery)
+}
+
+// serverStillMatches checks pane's tmux server is still the one paneID
+// resolves to, closing conn and returning false if not. pane.Server == ""
+// means the caller (the legacy pane-address route) never knew the server to
+// begin with, so there is nothing to verify.
+func serverStillMatches(conn wsWriter, tm tmuxOps, pane tmux.Pane, paneID string) bool {
+	if pane.Server == "" {
+		return true
+	}
+	fresh, err := tm.ResolvePane(paneID)
+	if err != nil {
+		if errors.Is(err, tmux.ErrPaneNotFound) {
+			slog.Info("pane websocket closing: pane gone", "paneID", paneID)
+			_ = conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(wsCloseServerChanged, "tmux server changed"))
+			return false
+		}
+		slog.Warn("pane websocket closing: could not verify tmux server", "paneID", paneID, "error", err)
+		_ = conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "could not verify tmux server"))
+		return false
+	}
+	if tmux.ServerMismatch(pane.Server, fresh.Server) {
+		slog.Info("pane websocket closing: server mismatch", "paneID", paneID, "pane_server", pane.Server, "fresh_server", fresh.Server)
+		_ = conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(wsCloseServerChanged, "tmux server changed"))
+		return false
+	}
+	return true
 }
 
 // sendSeed pushes a capture-pane snapshot as the authoritative screen state.
@@ -228,7 +271,7 @@ func writeSeed(conn wsWriter, seed string) error {
 	return conn.WriteMessage(websocket.TextMessage, msg)
 }
 
-func paneWSWriteLoop(conn wsWriter, tm tmuxOps, cc controlClientOps, registry *agents.Registry, pane tmux.Pane, sub paneSub, connDone <-chan struct{}, metaEvery time.Duration) {
+func paneWSWriteLoop(conn wsWriter, tm tmuxOps, cc controlClientOps, registry *agents.Registry, pane tmux.Pane, paneID string, sub paneSub, verified *atomic.Uint64, connDone <-chan struct{}, metaEvery time.Duration) {
 	pingTicker := time.NewTicker(30 * time.Second)
 	defer pingTicker.Stop()
 
@@ -246,6 +289,12 @@ func paneWSWriteLoop(conn wsWriter, tm tmuxOps, cc controlClientOps, registry *a
 				// The stream has a hole. Everything buffered was discarded,
 				// so capture-pane is the only trustworthy screen state.
 				slog.Debug("pane stream dirty, re-seeding", "target", pane.Target())
+				if g := cc.Generation(); g != verified.Load() {
+					if !serverStillMatches(conn, tm, pane, paneID) {
+						return
+					}
+					verified.Store(g)
+				}
 				seed, ok := captureSeed(tm, pane)
 				if !ok {
 					// Cannot re-seed, so the screen is unrecoverable on this
@@ -259,6 +308,15 @@ func paneWSWriteLoop(conn wsWriter, tm tmuxOps, cc controlClientOps, registry *a
 				// produced after the capture queues behind it instead of
 				// being dropped for the duration of the write.
 				cc.AckReseed(sub)
+				if cc.Generation() != verified.Load() {
+					// A reconnect landed during the capture. markDirtyLocked
+					// was a no-op while sub was still dirty, so AckReseed just
+					// erased the only record of it. Re-arm so the next
+					// iteration verifies, and don't send a seed that may be
+					// the new server's.
+					cc.MarkPendingReseed(sub)
+					continue
+				}
 				if err := writeSeed(conn, seed); err != nil {
 					return
 				}
@@ -375,7 +433,7 @@ func metaPollLoop(tm tmuxOps, registry *agents.Registry, pane tmux.Pane, done <-
 	}
 }
 
-func paneWSReadLoop(conn *websocket.Conn, cc controlClientOps, paneID string) {
+func paneWSReadLoop(conn *websocket.Conn, cc controlClientOps, paneID string, verified *atomic.Uint64) {
 	defer func() { _ = conn.Close() }()
 
 	for {
@@ -395,6 +453,10 @@ func paneWSReadLoop(conn *websocket.Conn, cc controlClientOps, paneID string) {
 
 		switch msg.Type {
 		case "input":
+			if cc.Generation() != verified.Load() {
+				slog.Debug("dropping input pending tmux server check", "paneID", paneID)
+				continue
+			}
 			var input WSInput
 			if err := json.Unmarshal(msg.Data, &input); err != nil {
 				continue

@@ -4,6 +4,10 @@
 // stays confined to the classic address kind — see fleet/noPaneRoutes.test.ts.
 export type TerminalAddress = { kind: 'run'; id: string } | { kind: 'pane'; target: string }
 
+// Private-use close code: the pane's tmux server changed underneath the
+// socket. usePaneSocket must not auto-retry on this code.
+export const WS_CLOSE_SERVER_CHANGED = 4409
+
 export function terminalKey(a: TerminalAddress): string {
   return a.kind === 'run' ? `run:${a.id}` : `pane:${a.target}`
 }

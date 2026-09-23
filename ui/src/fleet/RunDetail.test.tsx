@@ -28,12 +28,13 @@ async function lastTerminalInstance(): Promise<Terminal> {
 const now = 1_800_000_000_000 // fixed ms
 
 let mockConnected = true
+let mockEnded: string | null = null
 let lastSocketPath: string | null = null
 const sendInput = vi.fn()
 vi.mock('../hooks/usePaneSocket', () => ({
   usePaneSocket: (path: string | null) => {
     lastSocketPath = path
-    return { connected: mockConnected, sendInput, sendResize: vi.fn() }
+    return { connected: mockConnected, ended: mockEnded, sendInput, sendResize: vi.fn() }
   },
 }))
 
@@ -65,6 +66,7 @@ beforeEach(() => {
 afterEach(async () => {
   cleanup()
   mockConnected = true
+  mockEnded = null
   lastSocketPath = null
   desktop = true
   sendInput.mockClear()
@@ -182,6 +184,15 @@ describe('RunDetail terminal lifecycle', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('ends the session immediately (no 10s grace) and shows the reason when the terminal socket reports tmux server changed', () => {
+    const r = liveRun()
+    mockEnded = 'tmux server changed'
+    render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
+
+    expect(screen.getByText(/session ended/i)).toBeTruthy()
+    expect(screen.getByText('tmux server changed')).toBeTruthy()
   })
 
   it('case 4: a stale SSE stream shows a reconnecting indicator but keeps the terminal mounted', () => {

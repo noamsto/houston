@@ -39,6 +39,15 @@ type fakeTmux struct {
 	forceRedrawN int
 	zoomPaneN    int
 	captureModeN int
+
+	resolvePane tmux.Pane
+	resolveErr  error
+	resolveN    int
+
+	// onCapture, when set, is called outside f.mu on every CapturePane — a
+	// hook for a test that needs to act mid-capture (e.g. reconnect the
+	// control client) without deadlocking on f.mu.
+	onCapture func()
 }
 
 func newFakeTmux() *fakeTmux {
@@ -84,8 +93,13 @@ func (f *fakeTmux) GetPaneSize(p tmux.Pane) (width, height int, err error) {
 // to measure per-second polling rate.
 func (f *fakeTmux) CapturePane(p tmux.Pane, lines int) (string, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.seed, nil
+	onCapture := f.onCapture
+	seed := f.seed
+	f.mu.Unlock()
+	if onCapture != nil {
+		onCapture()
+	}
+	return seed, nil
 }
 
 func (f *fakeTmux) CapturePaneWithMode(p tmux.Pane, lines int) (tmux.CaptureResult, error) {
@@ -112,6 +126,35 @@ func (f *fakeTmux) ListWindows(session string) ([]tmux.Window, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.windows, nil
+}
+
+func (f *fakeTmux) ResolvePane(paneID string) (tmux.Pane, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resolveN++
+	return f.resolvePane, f.resolveErr
+}
+
+// setResolve configures what ResolvePane returns from this call on.
+func (f *fakeTmux) setResolve(p tmux.Pane, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resolvePane = p
+	f.resolveErr = err
+}
+
+func (f *fakeTmux) resolveCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.resolveN
+}
+
+// setOnCapture arms the CapturePane hook under f.mu, so setting it races
+// neither a concurrent CapturePane nor the read inside it.
+func (f *fakeTmux) setOnCapture(fn func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.onCapture = fn
 }
 
 func (f *fakeTmux) forceRedrawCalls() int {
@@ -153,6 +196,8 @@ func (s *fakePaneSub) C() <-chan tmux.PaneEvent { return s.ch }
 // mutable state, including the dirty flag on every fakePaneSub it owns.
 type fakeControlClient struct {
 	mu sync.Mutex
+
+	gen uint64
 
 	subs map[string][]*fakePaneSub
 
@@ -208,14 +253,67 @@ func (c *fakeControlClient) AckReseed(s paneSub) {
 	s.(*fakePaneSub).dirty = false
 }
 
+// MarkPendingReseed mirrors tmux.ControlClient.MarkPendingReseed: clear the
+// flag, then drain-and-post so the event isn't lost behind an already-dirty
+// channel.
 func (c *fakeControlClient) MarkPendingReseed(s paneSub) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	s.(*fakePaneSub).dirty = true
+	fs := s.(*fakePaneSub)
+	fs.dirty = false // drainAndMarkLocked is a no-op while already dirty
+	c.drainAndMarkLocked(fs)
 }
 
 func (c *fakeControlClient) Done() <-chan struct{} {
 	return c.done
+}
+
+func (c *fakeControlClient) Generation() uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.gen
+}
+
+// drainAndMarkLocked drains sub's channel and posts a Dirty event, mirroring
+// tmux.ControlClient.markDirtyLocked. Callers must hold c.mu.
+func (c *fakeControlClient) drainAndMarkLocked(s *fakePaneSub) {
+	if s.dirty {
+		return
+	}
+	for {
+		select {
+		case <-s.ch:
+		default:
+			s.ch <- tmux.PaneEvent{Dirty: true}
+			s.dirty = true
+			return
+		}
+	}
+}
+
+// bumpGeneration simulates a control-client reconnect's generation advance,
+// without also marking any subscriber dirty.
+func (c *fakeControlClient) bumpGeneration() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.gen++
+}
+
+// markDirty posts a plain Dirty event to paneID's subscribers, with no
+// generation bump — an ordinary re-seed with no server change behind it.
+func (c *fakeControlClient) markDirty(paneID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, s := range c.subs[paneID] {
+		c.drainAndMarkLocked(s)
+	}
+}
+
+// reconnect simulates a control-client reconnect: the generation advances
+// and every subscriber on paneID is marked dirty, same as markAllDirty.
+func (c *fakeControlClient) reconnect(paneID string) {
+	c.bumpGeneration()
+	c.markDirty(paneID)
 }
 
 func (c *fakeControlClient) SendKeys(paneID, text string) error {
@@ -358,14 +456,26 @@ func (m *fakeControlManager) releaseClientCalls() []string {
 	return append([]string(nil), m.releaseCallsList...)
 }
 
-// harnessPane is the fixed pane target used by every startPaneWS call.
+// harnessPane is the fixed pane target used by every startPaneWS call. Its
+// Server is empty, so the run-route server check never fires for it.
 var harnessPane = tmux.Pane{Session: "harness-session", Window: 0, Index: 0}
+
+// serverPane is harnessPane with a known server, as the run route sets it
+// (runPane populates pane.Server before servePane is ever called).
+var serverPane = tmux.Pane{Session: "harness-session", Window: 0, Index: 0, Server: "100"}
 
 // startPaneWS upgrades a fresh httptest connection into servePane, running
 // the real production loop against fake dependencies. The handler performs
 // no origin/auth checking — that surface is tested elsewhere against the
 // real Server.
 func startPaneWS(t *testing.T, tm tmuxOps, cm controlManagerOps) (conn *websocket.Conn, cleanup func()) {
+	t.Helper()
+	return startPaneWSWithPane(t, tm, cm, harnessPane)
+}
+
+// startPaneWSWithPane is startPaneWS for a caller that needs a pane other
+// than harnessPane — e.g. serverPane, whose Server arms the open-time check.
+func startPaneWSWithPane(t *testing.T, tm tmuxOps, cm controlManagerOps, pane tmux.Pane) (conn *websocket.Conn, cleanup func()) {
 	t.Helper()
 
 	harnessRegistry := agents.NewRegistry(generic.New())
@@ -376,7 +486,7 @@ func startPaneWS(t *testing.T, tm tmuxOps, cm controlManagerOps) (conn *websocke
 		if err != nil {
 			return
 		}
-		servePane(c, tm, cm, harnessRegistry, harnessPane, 10*time.Millisecond)
+		servePane(c, tm, cm, harnessRegistry, pane, 10*time.Millisecond)
 	}))
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")

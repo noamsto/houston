@@ -41,6 +41,27 @@ $ _`
 	}
 }
 
+func TestServerMismatch(t *testing.T) {
+	cases := []struct {
+		name string
+		a, b string
+		want bool
+	}{
+		{"both empty", "", "", false},
+		{"a empty", "", "100", false},
+		{"b empty", "100", "", false},
+		{"equal", "100", "100", false},
+		{"different", "100", "200", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ServerMismatch(tc.a, tc.b); got != tc.want {
+				t.Errorf("ServerMismatch(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestPaneTarget(t *testing.T) {
 	cases := []struct {
 		name string
