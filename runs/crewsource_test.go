@@ -409,6 +409,17 @@ func agentPane(id, target string) tmux.PaneOptions {
 	return tmux.PaneOptions{PaneID: id, Target: target, ClaudeStatus: "processing 1 "}
 }
 
+// agentPaneAt is agentPane with a controllable activity epoch (the second
+// field of lazytmux's @claude_status), for exercising resolvePane's
+// terminal-state timestamp rule. epoch 0 reproduces an unknown/missing epoch.
+func agentPaneAt(id, target string, epoch int64) tmux.PaneOptions {
+	status := "idle"
+	if epoch != 0 {
+		status = fmt.Sprintf("idle %d ", epoch)
+	}
+	return tmux.PaneOptions{PaneID: id, Target: target, ClaudeStatus: status}
+}
+
 func rolePane(id, target, role string) tmux.PaneOptions {
 	return tmux.PaneOptions{PaneID: id, Target: target, ClaudeStatus: "waiting", CrewRole: role}
 }
@@ -482,7 +493,7 @@ func TestResolvePane(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			pane, n := resolvePane(testBus, "fix/412", "", tc.wins, tc.panes, testBusOf)
+			pane, n := resolvePane(testBus, "fix/412", "", 0, tc.wins, tc.panes, testBusOf)
 			if n != tc.wantN {
 				t.Errorf("candidates = %d, want %d", n, tc.wantN)
 			}
@@ -500,26 +511,54 @@ func TestResolvePaneKeepsTwoBusesApart(t *testing.T) {
 	}
 	panes := []tmux.PaneOptions{agentPane("%1", "h:1"), agentPane("%2", "h:2")}
 
-	if pane, n := resolvePane(testBus, "main", "", wins, panes, testBusOf); pane != "%1" || n != 1 {
+	if pane, n := resolvePane(testBus, "main", "", 0, wins, panes, testBusOf); pane != "%1" || n != 1 {
 		t.Errorf("bus A: got (%q, %d), want (%%1, 1) — the other bus's window must not count", pane, n)
 	}
-	if pane, n := resolvePane("/other/.git/crew", "main", "", wins, panes, testBusOf); pane != "%2" || n != 1 {
+	if pane, n := resolvePane("/other/.git/crew", "main", "", 0, wins, panes, testBusOf); pane != "%2" || n != 1 {
 		t.Errorf("bus B: got (%q, %d), want (%%2, 1)", pane, n)
 	}
 }
 
-func TestResolvePaneRejectsTerminalState(t *testing.T) {
+func TestResolvePaneTerminalStateSameSessionJoins(t *testing.T) {
+	// The worker's own pane sits idle in its window after it finished — the
+	// normal state until `crew reap` reclaims it. Pane epoch <= the terminal
+	// record's timestamp means nothing touched the pane since: same session.
 	win := tmux.WindowOptions{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"}
-	panes := []tmux.PaneOptions{agentPane("%307", "h:1")}
+	panes := []tmux.PaneOptions{agentPaneAt("%307", "h:1", 100)}
 
-	// A terminal bus state means the worker session ended — don't join.
 	for _, state := range []State{StateDone, StateFailed} {
-		pane, n := resolvePane(testBus, "fix/412", state, []tmux.WindowOptions{win}, panes, testBusOf)
-		if n != 0 {
-			t.Errorf("state=%s: candidates = %d, want 0 — terminal state must not join", state, n)
+		pane, n := resolvePane(testBus, "fix/412", state, 100, []tmux.WindowOptions{win}, panes, testBusOf)
+		if n != 1 || pane != "%307" {
+			t.Errorf("state=%s: got (%q, %d), want (%%307, 1) — epoch <= record ts is the same session", state, pane, n)
 		}
-		if pane != "" {
-			t.Errorf("state=%s: paneID = %q, want empty", state, pane)
+	}
+}
+
+func TestResolvePaneTerminalStateNewOccupantDoesNotJoin(t *testing.T) {
+	// Issue #132's scenario: a new session took the pane after the old one
+	// finished. The pane's activity epoch is now newer than the terminal
+	// bus record — don't join the stale record onto it.
+	win := tmux.WindowOptions{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"}
+	panes := []tmux.PaneOptions{agentPaneAt("%307", "h:1", 200)}
+
+	for _, state := range []State{StateDone, StateFailed} {
+		pane, n := resolvePane(testBus, "fix/412", state, 100, []tmux.WindowOptions{win}, panes, testBusOf)
+		if n != 0 || pane != "" {
+			t.Errorf("state=%s: got (%q, %d), want (\"\", 0) — a newer pane epoch means a new occupant", state, pane, n)
+		}
+	}
+}
+
+func TestResolvePaneTerminalStateUnknownEpochDoesNotJoin(t *testing.T) {
+	// An unknown pane epoch (0) on a terminal record fails closed — identity
+	// can't be confirmed either way.
+	win := tmux.WindowOptions{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"}
+	panes := []tmux.PaneOptions{agentPaneAt("%307", "h:1", 0)}
+
+	for _, state := range []State{StateDone, StateFailed} {
+		pane, n := resolvePane(testBus, "fix/412", state, 100, []tmux.WindowOptions{win}, panes, testBusOf)
+		if n != 0 || pane != "" {
+			t.Errorf("state=%s: got (%q, %d), want (\"\", 0) — unknown epoch must fail closed", state, pane, n)
 		}
 	}
 }
@@ -528,9 +567,9 @@ func TestResolvePaneJoinsNonTerminal(t *testing.T) {
 	win := tmux.WindowOptions{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"}
 	panes := []tmux.PaneOptions{agentPane("%307", "h:1")}
 
-	// Non-terminal or zero state → join still works.
+	// Non-terminal or zero state → join still works, regardless of epoch.
 	for _, state := range []State{StateRunning, StateBlocked, StateReview, State("")} {
-		pane, n := resolvePane(testBus, "fix/412", state, []tmux.WindowOptions{win}, panes, testBusOf)
+		pane, n := resolvePane(testBus, "fix/412", state, 0, []tmux.WindowOptions{win}, panes, testBusOf)
 		if n != 1 {
 			t.Errorf("state=%q: candidates = %d, want 1 — non-terminal must join", state, n)
 		}
@@ -546,14 +585,16 @@ func TestResolvePaneZeroStateJoins(t *testing.T) {
 	win := tmux.WindowOptions{Session: "h", Window: 1, Branch: "main", GitRoot: "/wt/a"}
 	panes := []tmux.PaneOptions{agentPane("%1", "h:1")}
 
-	pane, n := resolvePane(testBus, "main", "", []tmux.WindowOptions{win}, panes, testBusOf)
+	pane, n := resolvePane(testBus, "main", "", 0, []tmux.WindowOptions{win}, panes, testBusOf)
 	if n != 1 || pane != "%1" {
 		t.Errorf("got (%q, %d), want (%%1, 1) — zero state on one branch must still join", pane, n)
 	}
 }
 
 func TestScanRejectsStaleJoin(t *testing.T) {
-	// Bus with a done status record: the worker ended.
+	// Bus with a done status record: the worker ended, and — issue #132's
+	// scenario — a new session has since taken over its pane (activity epoch
+	// newer than the done record's timestamp).
 	bus := t.TempDir()
 	rec := `{"ts":1000,"crew_id":"c1","from":"worker:fix/412#s1","kind":"dispatch","branch":"fix/412","engine":"claude"}
 {"ts":2000,"crew_id":"c1","from":"worker:fix/412#s1","kind":"status","body":{"state":"done"}}
@@ -565,7 +606,7 @@ func TestScanRejectsStaleJoin(t *testing.T) {
 	s := crewScanner(
 		map[string]string{"/wt/a": bus},
 		[]tmux.WindowOptions{{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"}},
-		[]tmux.PaneOptions{agentPane("%307", "h:1")},
+		[]tmux.PaneOptions{agentPaneAt("%307", "h:1", 999)},
 	)
 
 	got, ok := s.scan()
@@ -573,9 +614,9 @@ func TestScanRejectsStaleJoin(t *testing.T) {
 		t.Fatal("scan reported failure")
 	}
 
-	// The stale bus record must NOT join to the pane.
+	// The stale bus record must NOT join to the new occupant's pane.
 	if r, found := got["%307"]; found {
-		t.Errorf("run joined to pane %%307: %+v — a terminal bus record must not join", r)
+		t.Errorf("run joined to pane %%307: %+v — a newer pane epoch means a new occupant", r)
 	}
 
 	// The run must appear under the crew/<bus>/<branch> fallback key.
@@ -586,6 +627,44 @@ func TestScanRejectsStaleJoin(t *testing.T) {
 	}
 	if r.State != StateDone {
 		t.Errorf("State = %s, want done", r.State)
+	}
+}
+
+func TestScanJoinsTerminalRecordToItsOwnIdlePane(t *testing.T) {
+	// Issue #132's regression case: the worker finished and its own pane
+	// still sits idle in its window, untouched since — the normal state
+	// until `crew reap` reclaims it. The run must still join to that pane,
+	// not split into a stale history card plus an anonymous live-pane card.
+	bus := t.TempDir()
+	rec := `{"ts":1000,"crew_id":"c1","from":"worker:fix/412#s1","kind":"dispatch","branch":"fix/412","engine":"claude"}
+{"ts":2000,"crew_id":"c1","from":"worker:fix/412#s1","kind":"status","body":{"state":"done"}}
+`
+	if err := os.WriteFile(filepath.Join(bus, "events.jsonl"), []byte(rec), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := crewScanner(
+		map[string]string{"/wt/a": bus},
+		[]tmux.WindowOptions{{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"}},
+		[]tmux.PaneOptions{agentPaneAt("%307", "h:1", 2)},
+	)
+
+	got, ok := s.scan()
+	if !ok {
+		t.Fatal("scan reported failure")
+	}
+
+	r, found := got["%307"]
+	if !found {
+		t.Fatalf("run did not join to pane %%307 — keys: %v, want the done record to join its own idle pane", keysOf(got))
+	}
+	if r.State != StateDone {
+		t.Errorf("State = %s, want done", r.State)
+	}
+
+	wantKey := "crew/" + bus + "/fix/412"
+	if _, found := got[wantKey]; found {
+		t.Errorf("run also published under the fallback key %q — must not split into two cards", wantKey)
 	}
 }
 
