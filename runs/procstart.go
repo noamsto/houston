@@ -8,14 +8,12 @@ import (
 	"time"
 )
 
-// probeBroken ensures the foreground-process probe's broken-probe warning
-// (as opposed to the legitimate "process/leader has exited") fires once per
-// process, not once per join attempt.
 var probeBroken sync.Once
 
-// warnProbeBroken logs, once, that the foreground-process probe itself is
-// failing rather than reporting a legitimately gone process — meaning
-// terminal crew records will stop joining their panes.
+// warnProbeBroken logs, once per process, a probe failure that is not a
+// legitimately exited process: every such failure fails the terminal join
+// closed, so a probe broken for good would otherwise stop every finished
+// worker joining its pane with no trace above Debug.
 func warnProbeBroken(err error) {
 	probeBroken.Do(func() {
 		slog.Warn("crew source: foreground-process probe failed, terminal crew records will not join their panes", "error", err)

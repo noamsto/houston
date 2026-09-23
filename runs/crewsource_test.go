@@ -798,9 +798,8 @@ func TestResolvePaneTerminalPiNewOccupantDoesNotJoin(t *testing.T) {
 
 func TestResolvePaneTerminalSiblingNewOccupantDoesNotMakeItAmbiguous(t *testing.T) {
 	// The finished worker's own pane (%40, pid 1) sits idle alongside a brand
-	// new occupant (%41, pid 2) that also went idle within grace. Before the
-	// process-start check, both looked like the same session and the join was
-	// ambiguous (2 candidates); the check now tells them apart.
+	// new occupant (%41, pid 2) that also went idle within grace. Only the
+	// worker's engine started inside the session, so the join is unambiguous.
 	win := tmux.WindowOptions{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"}
 	panes := []tmux.PaneOptions{
 		{PaneID: "%40", Target: "h:1", ClaudeStatus: "idle 100 ", PanePID: 1},

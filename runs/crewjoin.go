@@ -107,10 +107,8 @@ const terminalJoinGrace int64 = 300
 // written it.
 const sessionStartSlack int64 = 30
 
-// sameSession reports whether a foreground engine that started at unix time
-// start could be the same session as the bus record: started no more than
-// sessionStartSlack before the session's own epoch, and no later than the
-// record itself.
+// sameSession reports whether an engine started at start could have written
+// the record: 0 for start or session means unknown and never matches.
 func sameSession(start, session, recordAt int64) bool {
 	return start > 0 && session > 0 && start >= session-sessionStartSlack && start <= recordAt
 }
