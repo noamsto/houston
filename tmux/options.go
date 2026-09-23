@@ -20,7 +20,7 @@ const windowOptionsFormat = "#{session_name}" + optSep + "#{window_index}" + opt
 
 const paneOptionsFormat = "#{pane_id}" + optSep + "#{session_name}:#{window_index}" + optSep + "#{@claude_status}" + optSep + "#{@agent_screen}" + optSep +
 	"#{@claude_task}" + optSep + "#{pane_current_command}" + optSep + "#{pane_index}" + optSep + "#{pane_active}" + optSep +
-	"#{@crew_role}" + optSep + "#{pid}" + optSep + "#{start_time}"
+	"#{@crew_role}" + optSep + "#{pid}" + optSep + "#{start_time}" + optSep + "#{pane_pid}"
 
 // WindowOptions is lazytmux's per-window enrichment. Every field may be empty:
 // a window with no linked issue or PR simply has none.
@@ -67,6 +67,7 @@ type PaneOptions struct {
 	// one minted by a since-restarted server reusing the same id.
 	ServerPID   string
 	ServerStart int64
+	PanePID     int // #{pane_pid}: the pane's first process — usually the login shell; 0 when unparseable
 }
 
 func (c *Client) ListWindowOptions() ([]WindowOptions, error) {
@@ -110,22 +111,23 @@ func ParsePaneOptions(out string) []PaneOptions {
 	var res []PaneOptions
 	for _, line := range strings.Split(out, "\n") {
 		f := strings.Split(line, optSep)
-		if len(f) != 11 {
+		if len(f) != 12 {
 			continue
 		}
 		idx, err := strconv.Atoi(f[6])
 		if err != nil {
 			continue
 		}
-		// start_time is parsed leniently: this function is also TmuxSource's
-		// ground truth for every pane's capabilities, so a strict parse would
-		// turn one unexpandable #{start_time} into "every pane vanished" and
-		// drop every run's capabilities rather than just its identity.
+		// start_time and pane_pid are parsed leniently: this function is also
+		// TmuxSource's ground truth for every pane's capabilities, so a strict
+		// parse would turn one unexpandable field into "every pane vanished"
+		// and drop every run's capabilities rather than just its identity.
 		start, _ := strconv.ParseInt(f[10], 10, 64)
+		panePID, _ := strconv.Atoi(f[11])
 		res = append(res, PaneOptions{
 			PaneID: f[0], Target: f[1], ClaudeStatus: f[2], AgentScreen: f[3],
 			ClaudeTask: f[4], Command: f[5], Index: idx, Active: f[7] == "1",
-			CrewRole: f[8], ServerPID: f[9], ServerStart: start,
+			CrewRole: f[8], ServerPID: f[9], ServerStart: start, PanePID: panePID,
 		})
 	}
 	return res
