@@ -67,16 +67,20 @@ func TestParseWindowOptionsSurvivesPipeInFreeText(t *testing.T) {
 }
 
 func TestParsePaneOptions(t *testing.T) {
-	out := "%307\x1fhouston:1\x1fprocessing 1788848628 \x1fand add a ci task\x1fnode\x1f0\x1f1\x1f\x1f1966\x1f1790086864\n" +
-		"%283\x1fdispatcher:1\x1f\x1f\x1fbash\x1f1\x1f0\x1f\x1f1966\x1f1790086864\n" +
-		"%284\x1fdispatcher:1\x1fwaiting\x1f\x1fnode\x1f2\x1f0\x1fspec-critic\x1f1966\x1f1790086864\n"
+	out := "%307\x1fhouston:1\x1fprocessing 1788848628 \x1f\x1fand add a ci task\x1fnode\x1f0\x1f1\x1f\x1f1966\x1f1790086864\n" +
+		"%283\x1fdispatcher:1\x1f\x1f\x1f\x1fbash\x1f1\x1f0\x1f\x1f1966\x1f1790086864\n" +
+		"%284\x1fdispatcher:1\x1fwaiting\x1f\x1f\x1fnode\x1f2\x1f0\x1fspec-critic\x1f1966\x1f1790086864\n" +
+		"%290\x1fhouston:2\x1f\x1fprocessing 1790144005\x1f\x1fpi\x1f0\x1f0\x1f\x1f1966\x1f1790086864\n"
 
 	got := ParsePaneOptions(out)
-	if len(got) != 3 {
-		t.Fatalf("%d panes, want 3", len(got))
+	if len(got) != 4 {
+		t.Fatalf("%d panes, want 4", len(got))
 	}
 	if got[0].PaneID != "%307" || got[0].ClaudeStatus != "processing 1788848628 " {
 		t.Errorf("got %+v", got[0])
+	}
+	if got[0].AgentScreen != "" {
+		t.Errorf("AgentScreen = %q, want empty on a claude pane", got[0].AgentScreen)
 	}
 	if got[0].ClaudeTask != "and add a ci task" {
 		t.Errorf("task = %q", got[0].ClaudeTask)
@@ -99,14 +103,18 @@ func TestParsePaneOptions(t *testing.T) {
 	if got[2].CrewRole != "spec-critic" {
 		t.Errorf("role pane CrewRole = %q, want spec-critic", got[2].CrewRole)
 	}
+	if got[3].AgentScreen != "processing 1790144005" || got[3].ClaudeStatus != "" {
+		t.Errorf("pi pane = %+v, want agent_screen set and no claude status", got[3])
+	}
 }
 
 func TestParsePaneOptionsSkipsShortLines(t *testing.T) {
-	// A line missing crew_role, pid, and start_time (pre-identity format) or
-	// missing just crew_role must be skipped rather than misparsed.
+	// A line missing crew_role/pid/start_time (pre-identity format), and one
+	// missing the agent_screen field, must both be skipped rather than
+	// misparsed; a full 11-field line is kept.
 	out := "%307\x1fhouston:1\x1f\x1f\x1fnode\x1f0\x1f1\n" +
 		"%283\x1fdispatcher:1\x1f\x1f\x1fbash\x1f1\x1f0\x1f1966\x1f1790086864\n" +
-		"%284\x1fdispatcher:1\x1f\x1f\x1fbash\x1f1\x1f0\x1f\x1f1966\x1f1790086864\n"
+		"%284\x1fdispatcher:1\x1f\x1f\x1f\x1fbash\x1f1\x1f0\x1f\x1f1966\x1f1790086864\n"
 
 	got := ParsePaneOptions(out)
 	if len(got) != 1 {
@@ -118,7 +126,7 @@ func TestParsePaneOptionsSkipsShortLines(t *testing.T) {
 }
 
 func TestParsePaneOptionsToleratesNonNumericStartTime(t *testing.T) {
-	out := "%307\x1fhouston:1\x1f\x1f\x1fnode\x1f0\x1f1\x1f\x1f1966\x1fsometime\n"
+	out := "%307\x1fhouston:1\x1f\x1f\x1f\x1fnode\x1f0\x1f1\x1f\x1f1966\x1fsometime\n"
 
 	got := ParsePaneOptions(out)
 	if len(got) != 1 {
@@ -134,12 +142,20 @@ func TestParsePaneOptionsToleratesNonNumericStartTime(t *testing.T) {
 // disable it — the parser alone cannot notice, since it only ever sees
 // hand-built fixtures.
 func TestPaneOptionsFormatCarriesTheServerIdentity(t *testing.T) {
-	if n := strings.Count(paneOptionsFormat, optSep); n != 9 {
-		t.Errorf("%d separators, want 9 — ParsePaneOptions requires 10 fields", n)
+	if n := strings.Count(paneOptionsFormat, optSep); n != 10 {
+		t.Errorf("%d separators, want 10 — ParsePaneOptions requires 11 fields", n)
 	}
 	for _, f := range []string{"#{pid}", "#{start_time}"} {
 		if !strings.Contains(paneOptionsFormat, f) {
 			t.Errorf("format lost %s: the pane listing no longer identifies its server", f)
 		}
+	}
+}
+
+// The screen-scraped engines (pi, codex, cursor) carry no @claude_status, so
+// the pane listing must expose @agent_screen for a crew record to join them.
+func TestPaneOptionsFormatCarriesAgentScreen(t *testing.T) {
+	if !strings.Contains(paneOptionsFormat, "#{@agent_screen}") {
+		t.Error("format lost #{@agent_screen}: pi/codex/cursor panes would never join a crew record")
 	}
 }

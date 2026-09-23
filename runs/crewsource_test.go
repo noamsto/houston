@@ -424,6 +424,13 @@ func rolePane(id, target, role string) tmux.PaneOptions {
 	return tmux.PaneOptions{PaneID: id, Target: target, ClaudeStatus: "waiting", CrewRole: role}
 }
 
+// piPane is an agent pane from the hooks-less side: agent-detect stamps
+// @agent_screen ("<state> <epoch> [name=count ...]") instead of
+// @claude_status, so the crew layer must recognize it as an agent pane too.
+func piPane(id, target, state string, epoch int64) tmux.PaneOptions {
+	return tmux.PaneOptions{PaneID: id, Target: target, AgentScreen: fmt.Sprintf("%s %d", state, epoch)}
+}
+
 func TestResolvePane(t *testing.T) {
 	win := func(window int, branch, root string) tmux.WindowOptions {
 		return tmux.WindowOptions{Session: "h", Window: window, Branch: branch, GitRoot: root}
@@ -534,12 +541,29 @@ func TestResolvePaneTerminalStateSameSessionJoins(t *testing.T) {
 	}
 }
 
+func TestResolvePaneTerminalStateWithinGraceJoins(t *testing.T) {
+	// The worker posts its terminal bus status and THEN ends its final turn,
+	// so its own Stop hook stamps the pane's epoch seconds after the record
+	// (observed +4s and +13s live). Inside the grace window it is still that
+	// same finished session — join it, or the run splits into a history card
+	// plus an anonymous live-pane card.
+	win := tmux.WindowOptions{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"}
+	panes := []tmux.PaneOptions{agentPaneAt("%307", "h:1", 113)}
+
+	for _, state := range []State{StateDone, StateFailed} {
+		pane, n := resolvePane(testBus, "fix/412", state, 100, []tmux.WindowOptions{win}, panes, testBusOf)
+		if n != 1 || pane != "%307" {
+			t.Errorf("state=%s: got (%q, %d), want (%%307, 1) — a pane stamped just after the record is the same session", state, pane, n)
+		}
+	}
+}
+
 func TestResolvePaneTerminalStateNewOccupantDoesNotJoin(t *testing.T) {
 	// Issue #132's scenario: a new session took the pane after the old one
-	// finished. The pane's activity epoch is now newer than the terminal
-	// bus record — don't join the stale record onto it.
+	// finished, and its first activity stamp lands beyond the grace window —
+	// don't join the stale record onto it.
 	win := tmux.WindowOptions{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"}
-	panes := []tmux.PaneOptions{agentPaneAt("%307", "h:1", 200)}
+	panes := []tmux.PaneOptions{agentPaneAt("%307", "h:1", 100+terminalJoinGrace+1)}
 
 	for _, state := range []State{StateDone, StateFailed} {
 		pane, n := resolvePane(testBus, "fix/412", state, 100, []tmux.WindowOptions{win}, panes, testBusOf)
@@ -547,6 +571,69 @@ func TestResolvePaneTerminalStateNewOccupantDoesNotJoin(t *testing.T) {
 			t.Errorf("state=%s: got (%q, %d), want (\"\", 0) — a newer pane epoch means a new occupant", state, pane, n)
 		}
 	}
+}
+
+func TestResolvePaneTerminalStateNewOccupantWithinGraceDoesNotJoin(t *testing.T) {
+	// The grace window exists because the finished worker's own Stop hook
+	// stamps the pane a few seconds after its bus record. It must not let a
+	// genuinely new occupant in: an actively working pane (processing) within
+	// the window is still issue #132's new session, not the finished worker.
+	win := tmux.WindowOptions{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"}
+	panes := []tmux.PaneOptions{{PaneID: "%307", Target: "h:1", ClaudeStatus: "processing 130 "}}
+
+	for _, state := range []State{StateDone, StateFailed} {
+		pane, n := resolvePane(testBus, "fix/412", state, 100, []tmux.WindowOptions{win}, panes, testBusOf)
+		if n != 0 || pane != "" {
+			t.Errorf("state=%s: got (%q, %d), want (\"\", 0) — an actively working pane is a new occupant even inside grace", state, pane, n)
+		}
+	}
+}
+
+func TestResolvePaneJoinsPiPane(t *testing.T) {
+	// A pi worker's pane carries @agent_screen and no @claude_status; the join
+	// must recognize it as an agent pane, or the crew record splits into a
+	// crew-only history card beside an anonymous live-pane card.
+	win := tmux.WindowOptions{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"}
+	panes := []tmux.PaneOptions{piPane("%307", "h:1", "processing", 100)}
+
+	pane, n := resolvePane(testBus, "fix/412", StateRunning, 0, []tmux.WindowOptions{win}, panes, testBusOf)
+	if n != 1 || pane != "%307" {
+		t.Errorf("got (%q, %d), want (%%307, 1) — a pi pane is an agent pane", pane, n)
+	}
+}
+
+func TestResolvePanePiPaneTerminalIdentity(t *testing.T) {
+	win := tmux.WindowOptions{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"}
+
+	// An at-rest pi session (agent-detect's idle) within grace is the finished
+	// worker's own pane.
+	t.Run("idle within grace joins", func(t *testing.T) {
+		panes := []tmux.PaneOptions{piPane("%307", "h:1", "idle", 113)}
+		pane, n := resolvePane(testBus, "fix/412", StateDone, 100, []tmux.WindowOptions{win}, panes, testBusOf)
+		if n != 1 || pane != "%307" {
+			t.Errorf("got (%q, %d), want (%%307, 1)", pane, n)
+		}
+	})
+
+	// A working pi session within grace is a new occupant — rule 2, same as
+	// the claude processing case.
+	t.Run("processing within grace does not join", func(t *testing.T) {
+		panes := []tmux.PaneOptions{piPane("%307", "h:1", "processing", 130)}
+		pane, n := resolvePane(testBus, "fix/412", StateDone, 100, []tmux.WindowOptions{win}, panes, testBusOf)
+		if n != 0 || pane != "" {
+			t.Errorf("got (%q, %d), want (\"\", 0) — an actively working pi pane is a new occupant", pane, n)
+		}
+	})
+
+	// A pi pane whose @agent_screen has no parseable epoch fails closed on a
+	// terminal record.
+	t.Run("unknown epoch does not join", func(t *testing.T) {
+		panes := []tmux.PaneOptions{{PaneID: "%307", Target: "h:1", AgentScreen: "idle"}}
+		pane, n := resolvePane(testBus, "fix/412", StateDone, 100, []tmux.WindowOptions{win}, panes, testBusOf)
+		if n != 0 || pane != "" {
+			t.Errorf("got (%q, %d), want (\"\", 0) — unknown @agent_screen epoch must fail closed", pane, n)
+		}
+	})
 }
 
 func TestResolvePaneTerminalStateUnknownEpochDoesNotJoin(t *testing.T) {

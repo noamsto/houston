@@ -109,3 +109,29 @@ func ClaudeStatusEpoch(v string) int64 {
 	}
 	return n
 }
+
+// AgentScreenState reads the first field of agent-detect's @agent_screen pane
+// option — "<state> <epoch> [name=count …]" — for an engine without Claude
+// hooks (pi, codex, cursor). The vocabulary is agent-detect's manifest states
+// (processing, idle, waiting); empty when the option is blank.
+func AgentScreenState(v string) string {
+	fields := strings.Fields(v)
+	if len(fields) == 0 {
+		return ""
+	}
+	return fields[0]
+}
+
+// AgentScreenEpoch parses the second field of @agent_screen into a unix-seconds
+// timestamp, mirroring ClaudeStatusEpoch. Zero if missing or not a number.
+func AgentScreenEpoch(v string) int64 {
+	fields := strings.Fields(v)
+	if len(fields) < 2 {
+		return 0
+	}
+	n, err := strconv.ParseInt(fields[1], 10, 64)
+	if err != nil {
+		return 0
+	}
+	return n
+}

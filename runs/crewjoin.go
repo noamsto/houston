@@ -8,29 +8,38 @@ import "github.com/noamsto/houston/tmux"
 // reaches busOf: `git -C ""` is a documented no-op, so it would resolve to
 // houston's own cwd and pull unrelated windows into that bus.
 //
-// A candidate's @claude_status must be non-empty because that is TmuxSource's
-// own test for "this pane is an agent run" — joining onto a shell pane would
-// let the crew layer's Agent promote that shell into a listed run.
+// A candidate must carry a non-empty @claude_status or @agent_screen, the two
+// tmux options that mark an agent pane — Claude hooks stamp the former, and
+// agent-detect the latter for pi, codex and cursor. Joining onto a shell pane
+// would let the crew layer's Agent promote that shell into a listed run.
 //
 // busState is the crew-bus Run.State for this branch, from the latest status
 // record, and busUpdatedAt is that record's timestamp (unix seconds — see
 // Run.UpdatedAt). When busState is terminal (StateDone or StateFailed), the
 // worker session that wrote those bus records has ended, but its own pane
 // commonly still sits idle in its window until `crew reap` reclaims it — the
-// normal case, not a stale join. So a terminal record still joins iff the
-// candidate pane's own activity epoch (ClaudeStatusEpoch(p.ClaudeStatus)) is
-// <= busUpdatedAt: nothing has touched the pane since the worker finished, so
-// it is the same session. A pane epoch newer than busUpdatedAt means a new
-// occupant took the pane over — don't join. A non-positive pane epoch (0 for
-// unknown/missing, or a malformed negative value) on a terminal record fails
-// closed — don't join, since identity can't be confirmed. A zero busState
-// (dispatch-only branch with no status yet) is not terminal and does not
-// gate.
+// normal case, not a stale join. A terminal record still joins iff the pane
+// looks like that same finished session:
+//
+//   - its activity epoch — ClaudeStatusEpoch(@claude_status) on a Claude pane,
+//     else AgentScreenEpoch(@agent_screen) — is within terminalJoinGrace seconds
+//     of the record. The worker posts its terminal status and then ends its
+//     final turn, so the Stop hook stamps the pane a few seconds later, not
+//     earlier;
+//   - and its state word says the session has finished: done/idle/failed for
+//     @claude_status, idle for @agent_screen. An actively working pane
+//     (processing, or waiting on a prompt) is a new occupant — issue #132 —
+//     even inside the grace window.
+//
+// A non-positive pane epoch (0 for unknown/missing, or a malformed negative
+// value) on a terminal record fails closed — don't join, since identity can't
+// be confirmed. A zero busState (dispatch-only branch with no status yet) is
+// not terminal and does not gate.
 func resolvePane(bus, branch string, busState State, busUpdatedAt int64, wins []tmux.WindowOptions, panes []tmux.PaneOptions, busOf func(gitRoot string) string) (paneID string, candidates int) {
 	terminal := busState == StateDone || busState == StateFailed
 	byTarget := windowsByTarget(wins)
 	for _, p := range panes {
-		if p.ClaudeStatus == "" {
+		if p.ClaudeStatus == "" && p.AgentScreen == "" {
 			continue
 		}
 		// A role-grid pane (@crew_role set) reports to the bus under
@@ -47,8 +56,8 @@ func resolvePane(bus, branch string, busState State, busUpdatedAt int64, wins []
 			continue
 		}
 		if terminal {
-			epoch := ClaudeStatusEpoch(p.ClaudeStatus)
-			if epoch <= 0 || epoch > busUpdatedAt {
+			epoch := paneActivityEpoch(p)
+			if epoch <= 0 || epoch > busUpdatedAt+terminalJoinGrace || !finishedPaneState(p) {
 				continue
 			}
 		}
@@ -59,6 +68,45 @@ func resolvePane(bus, branch string, busState State, busUpdatedAt int64, wins []
 		return "", candidates
 	}
 	return paneID, candidates
+}
+
+// terminalJoinGrace bounds how far a terminal bus record's timestamp may lag
+// the finished session's own last pane stamp. The worker posts its terminal
+// status and then ends its final turn, so the Stop hook writes the pane's
+// `done` epoch seconds later (observed +4s and +13s on a live bus). Five
+// minutes covers a slow final turn with wide margin; a genuinely new occupant
+// is rejected by finishedPaneState regardless of this window.
+const terminalJoinGrace int64 = 300
+
+// paneActivityEpoch is the candidate pane's last agent-activity epoch: the
+// @claude_status epoch on a Claude pane, else the @agent_screen epoch on a
+// screen-scraped one (pi, codex, cursor). 0 when neither parses.
+func paneActivityEpoch(p tmux.PaneOptions) int64 {
+	if p.ClaudeStatus != "" {
+		return ClaudeStatusEpoch(p.ClaudeStatus)
+	}
+	return AgentScreenEpoch(p.AgentScreen)
+}
+
+// finishedPaneState reports whether the pane's own state word says the session
+// on it has finished, so a terminal bus record may join it. A Claude pane
+// finishing normally ends on `done`; a passive `idle` write preserves that
+// stamp, and a StopFailure ends on `error`. A screen-scraped pane has no
+// done/failed word — agent-detect's `idle` is its at-rest state, so anything
+// else (processing, waiting) is an actively working occupant. A pane with
+// neither option passes; it is not a candidate in the first place.
+func finishedPaneState(p tmux.PaneOptions) bool {
+	if p.ClaudeStatus != "" {
+		switch FromClaudeStatus(p.ClaudeStatus) {
+		case StateDone, StateIdle, StateFailed:
+			return true
+		}
+		return false
+	}
+	if p.AgentScreen != "" {
+		return AgentScreenState(p.AgentScreen) == "idle"
+	}
+	return true
 }
 
 // worktreeFor is the working directory the crew layer publishes for (bus,
