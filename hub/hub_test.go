@@ -357,11 +357,10 @@ func TestPruneEnded(t *testing.T) {
 
 	// Simulate a resumed session rewriting the file between pruneEnded's
 	// read and its remove: land a real mtime change in that window via the
-	// test-only preRemoveStat seam, right where the guard's second stat
-	// happens.
+	// test-only preRemoveStat seam on the Hub, right where the guard's second
+	// stat happens.
 	racedPath := hook.Path(dir, "raced-with-resume")
-	prevPreRemoveStat := preRemoveStat
-	preRemoveStat = func(path string) (os.FileInfo, error) {
+	h.preRemoveStat = func(path string) (os.FileInfo, error) {
 		if path == racedPath {
 			if err := os.Chtimes(path, time.Now(), time.Now()); err != nil {
 				t.Fatalf("Chtimes: %v", err)
@@ -369,7 +368,6 @@ func TestPruneEnded(t *testing.T) {
 		}
 		return os.Stat(path)
 	}
-	defer func() { preRemoveStat = prevPreRemoveStat }()
 
 	h.pruneEnded(filepath.Join(dir, "claude"))
 
