@@ -293,7 +293,11 @@ update. The tmux `display-message` exec stays outside the lock.
 
 The lock serializes writes but doesn't order them — a detached event can
 still land after a later one, so a late `post_tool` landing after a `turn_end`
-leaves a card `thinking` until the next event corrects it.
+leaves a card `thinking` until the next event corrects it. The same race
+applies to pi's final `turn_end` and `agent_settled`: `apply`'s `EventTurnEnd`
+case guards against this by skipping the `thinking` transition when the state
+is already `waiting` — a `turn_end` after the run settled can only be a late
+one.
 
 houston only sees events hookyard's manifest subscribes it to. The
 engine-scoped `pi:agent_settled`, `pi:session_shutdown`, `codex:SessionEnd`

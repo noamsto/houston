@@ -223,7 +223,14 @@ func apply(s *SessionState, event string, ev Event, now int64) {
 		s.State = StateWaiting
 	case EventTurnEnd:
 		// pi's turn_end after any LLM response is always intermediate: pi's
-		// final signal is agent_settled, mapped to Stop above.
+		// final signal is agent_settled, mapped to Stop above. But when
+		// agent_settled and the final turn_end arrive as detached
+		// fire-and-forget processes, the lock serialises them without
+		// ordering — if turn_end lands after agent_settled it must not
+		// flip the run from waiting back to thinking.
+		if s.State == StateWaiting {
+			break
+		}
 		clearTool()
 		s.State = StateThinking
 	case EventPreCompact:

@@ -82,6 +82,29 @@ func TestDispatchStopWaiting(t *testing.T) {
 	}
 }
 
+func TestDispatchTurnEndOnWaitingNoOp(t *testing.T) {
+	// pi's agent_settled and the final turn_end arrive as detached
+	// fire-and-forget processes. When turn_end lands after agent_settled,
+	// it must not flip the run from waiting back to thinking.
+	dir := t.TempDir()
+	dispatch(t, dir, EventStop, map[string]any{"session_id": "s-late"})
+	got := dispatch(t, dir, EventTurnEnd, map[string]any{"session_id": "s-late"})
+	if got.State != StateWaiting {
+		t.Errorf("late turn_end after Stop → %q, want waiting", got.State)
+	}
+}
+
+func TestDispatchTurnEndAfterPromptLeavesThinking(t *testing.T) {
+	// A new run's prompt_submit → thinking then a legitimate intermediate
+	// turn_end must stay thinking (existing behaviour unchanged).
+	dir := t.TempDir()
+	dispatch(t, dir, EventUserPromptSubmit, map[string]any{"session_id": "s-normal"})
+	got := dispatch(t, dir, EventTurnEnd, map[string]any{"session_id": "s-normal"})
+	if got.State != StateThinking {
+		t.Errorf("turn_end after prompt → %q, want thinking", got.State)
+	}
+}
+
 func TestDispatchNotificationPermissionPrompt(t *testing.T) {
 	dir := t.TempDir()
 	got := dispatch(t, dir, EventNotification, map[string]any{
