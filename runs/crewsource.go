@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -27,13 +28,17 @@ type CrewSource struct {
 	// scan() runs only on this source's own goroutine, so a plain map needs no
 	// mutex — do not add one, and do not read this from another goroutine.
 	crewDirs map[string]string
+
+	// procStart is the terminal join's identity probe (resolvePane's
+	// procStart parameter) — a field so tests stay hermetic.
+	procStart procStartFunc
 }
 
 func NewCrewSource(c lister, every time.Duration) *CrewSource {
 	if every <= 0 {
 		every = 3 * time.Second
 	}
-	return &CrewSource{client: c, every: every, crewDirs: map[string]string{}}
+	return &CrewSource{client: c, every: every, crewDirs: map[string]string{}, procStart: foregroundStart}
 }
 
 func (s *CrewSource) Name() string { return "crew" }
@@ -153,13 +158,13 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 			r.Project = project
 			r.Role = RoleWorker
 			r.Worktree = worktreeFor(bus, branch, wins, s.crewDir)
-			paneID, candidates := resolvePane(bus, branch, r.State, r.UpdatedAt, wins, panes, s.crewDir)
+			paneID, candidates := resolvePane(bus, branch, r.State, r.UpdatedAt, r.session, wins, panes, s.crewDir, s.procStart)
 			key := paneID
 			if candidates != 1 {
 				key = "crew/" + bus + "/" + branch
 				slog.Debug("crew source: no pane join", "bus", bus, "branch", branch, "candidates", candidates)
 			}
-			out[key] = r
+			out[key] = r.Run
 		}
 	}
 	return out, true
@@ -170,8 +175,8 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 // the same common git dir and therefore to one bus, which is the correct
 // dedupe; two repos each holding a `main` record stay apart. Split out from
 // scan() so the root list can be injected in tests without going through tmux.
-func (s *CrewSource) scanRoots(roots []string) map[string]map[string]Run {
-	merged := map[string]map[string]Run{}
+func (s *CrewSource) scanRoots(roots []string) map[string]map[string]crewBranch {
+	merged := map[string]map[string]crewBranch{}
 	for _, repo := range roots {
 		dir := s.crewDir(repo)
 		if dir == "" {
@@ -189,7 +194,7 @@ func (s *CrewSource) scanRoots(roots []string) map[string]map[string]Run {
 			}
 			for branch, r := range deltasFromCrewLog(f) {
 				if merged[dir] == nil {
-					merged[dir] = map[string]Run{}
+					merged[dir] = map[string]crewBranch{}
 				}
 				merged[dir][branch] = r
 			}
@@ -302,10 +307,18 @@ func watchdogActionableNote(detail string) string {
 	return crewWatchdogPromptNote
 }
 
+// crewBranch is deltasFromCrewLog's per-branch fold result. session is the
+// s<epoch> of the worker id on the latest status record (0 when unknown) —
+// kept off Run because it is crew-join evidence, not API.
+type crewBranch struct {
+	Run
+	session int64
+}
+
 // deltasFromCrewLog folds one bus log into the latest state per branch. The bus
 // is append-only, so later records win.
-func deltasFromCrewLog(rd io.Reader) map[string]Run {
-	out := map[string]Run{}
+func deltasFromCrewLog(rd io.Reader) map[string]crewBranch {
+	out := map[string]crewBranch{}
 	// lastStatusTS and dispatcherReplyTS are compared by timestamp, not by
 	// line order, to decide whether a blocked question has been answered —
 	// see the retirement pass below.
@@ -368,6 +381,7 @@ func deltasFromCrewLog(rd io.Reader) map[string]Run {
 			if err := json.Unmarshal(rec.Body, &body); err == nil && body.State != "" {
 				r.State = FromCrewState(body.State)
 				r.UpdatedAt = rec.TS / 1000
+				r.session = sessionEpoch(rec.From)
 				lastStatusTS[branch] = rec.TS
 				// Latest status wins, including an empty detail: a stale phase
 				// must not outlive the status that replaced it. A watchdog
@@ -419,6 +433,32 @@ func deltasFromCrewLog(rd io.Reader) map[string]Run {
 	}
 
 	return out
+}
+
+// sessionEpoch extracts <epoch> from a worker id "worker:<branch>#s<epoch>-<pid>".
+// dispatch mints this id before it creates the window and launches the
+// engine; <pid> is dispatch's own short-lived pid and carries nothing.
+func sessionEpoch(from string) int64 {
+	if !strings.HasPrefix(from, "worker:") {
+		return 0
+	}
+	i := strings.LastIndex(from, "#")
+	if i < 0 {
+		return 0
+	}
+	seg := from[i+1:]
+	if !strings.HasPrefix(seg, "s") {
+		return 0
+	}
+	digits := seg[1:]
+	if j := strings.IndexByte(digits, '-'); j >= 0 {
+		digits = digits[:j]
+	}
+	n, err := strconv.ParseInt(digits, 10, 64)
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
 }
 
 // branchFromWorker turns "worker:fix/412#s1788-42" into "fix/412".

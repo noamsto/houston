@@ -62,6 +62,44 @@ func TestDeltasFromCrewLogSurvivesGarbageLines(t *testing.T) {
 	}
 }
 
+func TestDeltasFromCrewLogTracksSessionEpoch(t *testing.T) {
+	log := `{"ts":1000,"crew_id":"c1","from":"worker:fix/412#s10-1","kind":"status","body":{"state":"working"}}
+{"ts":1100,"crew_id":"c1","from":"worker:fix/412#s20-2","kind":"status","body":{"state":"working"}}
+{"ts":1200,"crew_id":"c1","from":"worker:b","kind":"status","body":{"state":"working"}}
+`
+	got := deltasFromCrewLog(strings.NewReader(log))
+
+	if got["fix/412"].session != 20 {
+		t.Errorf("fix/412 session = %d, want 20 — the latest status wins, same as State/UpdatedAt", got["fix/412"].session)
+	}
+	if got["b"].session != 0 {
+		t.Errorf("b session = %d, want 0 — a bare worker id carries no session", got["b"].session)
+	}
+}
+
+func TestSessionEpoch(t *testing.T) {
+	tests := []struct {
+		from string
+		want int64
+	}{
+		{"worker:fix/412#s1788-42", 1788},
+		{"worker:fix/412#s1", 1},
+		{"worker:fix/412", 0},
+		{"worker:a#sx-1", 0},
+		{"worker:a#s-1", 0},
+		{"worker:a#1788-42", 0},
+		{"worker:a#s0-1", 0},
+		{"role:fix/412:plan-critic", 0},
+		{"dispatcher:c", 0},
+		{"worker:feat/x#y#s99-1", 99},
+	}
+	for _, tc := range tests {
+		if got := sessionEpoch(tc.from); got != tc.want {
+			t.Errorf("sessionEpoch(%q) = %d, want %d", tc.from, got, tc.want)
+		}
+	}
+}
+
 func TestScanFindsBusFromInsideAWorktree(t *testing.T) {
 	// Worktree-per-branch is this project's mandated topology, and it is the
 	// case that was broken: <worktree>/.git is a file, so the bus lives under
@@ -209,7 +247,7 @@ func TestTickCrewDeltasKeepsADispatchedRunWithNoStatusYet(t *testing.T) {
 	}
 }
 
-func keysOf(m map[string]Run) []string {
+func keysOf[V any](m map[string]V) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
 		out = append(out, k)
@@ -217,7 +255,7 @@ func keysOf(m map[string]Run) []string {
 	return out
 }
 
-func busKeysOf(m map[string]map[string]Run) []string {
+func busKeysOf[V any](m map[string]map[string]V) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
 		out = append(out, k)
@@ -431,6 +469,27 @@ func piPane(id, target, state string, epoch int64) tmux.PaneOptions {
 	return tmux.PaneOptions{PaneID: id, Target: target, AgentScreen: fmt.Sprintf("%s %d", state, epoch)}
 }
 
+// startAt is a procStartFunc that reports ts for every pid, for tests that
+// don't care which pane's process was probed.
+func startAt(ts int64) procStartFunc {
+	return func(panePID int) int64 { return ts }
+}
+
+// startsByPID is a procStartFunc keyed by pane pid, for tests distinguishing
+// which pane's process was probed.
+func startsByPID(m map[int]int64) procStartFunc {
+	return func(panePID int) int64 { return m[panePID] }
+}
+
+// noProbe fails the test if resolvePane's identity probe is ever called — for
+// non-terminal cases, where it must not be reached.
+func noProbe(t *testing.T) procStartFunc {
+	return func(panePID int) int64 {
+		t.Fatalf("procStart called with pid %d, want no probe on a non-terminal record", panePID)
+		return 0
+	}
+}
+
 func TestResolvePane(t *testing.T) {
 	win := func(window int, branch, root string) tmux.WindowOptions {
 		return tmux.WindowOptions{Session: "h", Window: window, Branch: branch, GitRoot: root}
@@ -500,7 +559,7 @@ func TestResolvePane(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			pane, n := resolvePane(testBus, "fix/412", "", 0, tc.wins, tc.panes, testBusOf)
+			pane, n := resolvePane(testBus, "fix/412", "", 0, 0, tc.wins, tc.panes, testBusOf, noProbe(t))
 			if n != tc.wantN {
 				t.Errorf("candidates = %d, want %d", n, tc.wantN)
 			}
@@ -518,10 +577,10 @@ func TestResolvePaneKeepsTwoBusesApart(t *testing.T) {
 	}
 	panes := []tmux.PaneOptions{agentPane("%1", "h:1"), agentPane("%2", "h:2")}
 
-	if pane, n := resolvePane(testBus, "main", "", 0, wins, panes, testBusOf); pane != "%1" || n != 1 {
+	if pane, n := resolvePane(testBus, "main", "", 0, 0, wins, panes, testBusOf, noProbe(t)); pane != "%1" || n != 1 {
 		t.Errorf("bus A: got (%q, %d), want (%%1, 1) — the other bus's window must not count", pane, n)
 	}
-	if pane, n := resolvePane("/other/.git/crew", "main", "", 0, wins, panes, testBusOf); pane != "%2" || n != 1 {
+	if pane, n := resolvePane("/other/.git/crew", "main", "", 0, 0, wins, panes, testBusOf, noProbe(t)); pane != "%2" || n != 1 {
 		t.Errorf("bus B: got (%q, %d), want (%%2, 1)", pane, n)
 	}
 }
@@ -534,7 +593,7 @@ func TestResolvePaneTerminalStateSameSessionJoins(t *testing.T) {
 	panes := []tmux.PaneOptions{agentPaneAt("%307", "h:1", 100)}
 
 	for _, state := range []State{StateDone, StateFailed} {
-		pane, n := resolvePane(testBus, "fix/412", state, 100, []tmux.WindowOptions{win}, panes, testBusOf)
+		pane, n := resolvePane(testBus, "fix/412", state, 100, 50, []tmux.WindowOptions{win}, panes, testBusOf, startAt(60))
 		if n != 1 || pane != "%307" {
 			t.Errorf("state=%s: got (%q, %d), want (%%307, 1) — epoch <= record ts is the same session", state, pane, n)
 		}
@@ -551,7 +610,7 @@ func TestResolvePaneTerminalStateWithinGraceJoins(t *testing.T) {
 	panes := []tmux.PaneOptions{agentPaneAt("%307", "h:1", 113)}
 
 	for _, state := range []State{StateDone, StateFailed} {
-		pane, n := resolvePane(testBus, "fix/412", state, 100, []tmux.WindowOptions{win}, panes, testBusOf)
+		pane, n := resolvePane(testBus, "fix/412", state, 100, 50, []tmux.WindowOptions{win}, panes, testBusOf, startAt(60))
 		if n != 1 || pane != "%307" {
 			t.Errorf("state=%s: got (%q, %d), want (%%307, 1) — a pane stamped just after the record is the same session", state, pane, n)
 		}
@@ -567,7 +626,7 @@ func TestResolvePaneTerminalStateNewOccupantDoesNotJoin(t *testing.T) {
 	panes := []tmux.PaneOptions{agentPaneAt("%307", "h:1", 3700)}
 
 	for _, state := range []State{StateDone, StateFailed} {
-		pane, n := resolvePane(testBus, "fix/412", state, 100, []tmux.WindowOptions{win}, panes, testBusOf)
+		pane, n := resolvePane(testBus, "fix/412", state, 100, 50, []tmux.WindowOptions{win}, panes, testBusOf, startAt(60))
 		if n != 0 || pane != "" {
 			t.Errorf("state=%s: got (%q, %d), want (\"\", 0) — a newer pane epoch means a new occupant", state, pane, n)
 		}
@@ -583,27 +642,26 @@ func TestResolvePaneTerminalStateNewOccupantWithinGraceDoesNotJoin(t *testing.T)
 	panes := []tmux.PaneOptions{{PaneID: "%307", Target: "h:1", ClaudeStatus: "processing 130 "}}
 
 	for _, state := range []State{StateDone, StateFailed} {
-		pane, n := resolvePane(testBus, "fix/412", state, 100, []tmux.WindowOptions{win}, panes, testBusOf)
+		pane, n := resolvePane(testBus, "fix/412", state, 100, 50, []tmux.WindowOptions{win}, panes, testBusOf, startAt(60))
 		if n != 0 || pane != "" {
 			t.Errorf("state=%s: got (%q, %d), want (\"\", 0) — an actively working pane is a new occupant even inside grace", state, pane, n)
 		}
 	}
 }
 
-func TestResolvePaneTerminalStateIdleNewOccupantWithinGraceJoins(t *testing.T) {
-	// Known limitation of the task-prescribed grace rule, pinned so it is
-	// explicit rather than hidden: SessionStart writes an idle @claude_status
-	// with a fresh epoch, so a brand-new session that sits idle at its prompt
-	// within terminalJoinGrace is indistinguishable from the finished worker's
-	// own preserved idle stamp, and joins. A new session that did any work
-	// (processing) is rejected (see the test above). The code comment and
-	// CLAUDE.md state this; the PR carries a follow-up for a stronger signal.
+func TestResolvePaneTerminalStateIdleNewOccupantWithinGraceDoesNotJoin(t *testing.T) {
+	// #158 — the finished pane's idle stamp and a new session's SessionStart
+	// idle look the same; the engine's start time doesn't. The pane went idle
+	// within grace (200), but its foreground engine started at 150, after the
+	// record was written at 100 — too late to be the session that wrote it.
 	win := tmux.WindowOptions{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"}
 	panes := []tmux.PaneOptions{agentPaneAt("%307", "h:1", 200)}
 
-	pane, n := resolvePane(testBus, "fix/412", StateDone, 100, []tmux.WindowOptions{win}, panes, testBusOf)
-	if n != 1 || pane != "%307" {
-		t.Errorf("got (%q, %d), want (%%307, 1) — the accepted residual: an idle new session within grace joins", pane, n)
+	for _, state := range []State{StateDone, StateFailed} {
+		pane, n := resolvePane(testBus, "fix/412", state, 100, 50, []tmux.WindowOptions{win}, panes, testBusOf, startAt(150))
+		if n != 0 || pane != "" {
+			t.Errorf("state=%s: got (%q, %d), want (\"\", 0) — an engine that started after the record is a new session", state, pane, n)
+		}
 	}
 }
 
@@ -614,7 +672,7 @@ func TestResolvePaneJoinsPiPane(t *testing.T) {
 	win := tmux.WindowOptions{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"}
 	panes := []tmux.PaneOptions{piPane("%307", "h:1", "processing", 100)}
 
-	pane, n := resolvePane(testBus, "fix/412", StateRunning, 0, []tmux.WindowOptions{win}, panes, testBusOf)
+	pane, n := resolvePane(testBus, "fix/412", StateRunning, 0, 0, []tmux.WindowOptions{win}, panes, testBusOf, noProbe(t))
 	if n != 1 || pane != "%307" {
 		t.Errorf("got (%q, %d), want (%%307, 1) — a pi pane is an agent pane", pane, n)
 	}
@@ -627,7 +685,7 @@ func TestResolvePanePiPaneTerminalIdentity(t *testing.T) {
 	// worker's own pane.
 	t.Run("idle within grace joins", func(t *testing.T) {
 		panes := []tmux.PaneOptions{piPane("%307", "h:1", "idle", 113)}
-		pane, n := resolvePane(testBus, "fix/412", StateDone, 100, []tmux.WindowOptions{win}, panes, testBusOf)
+		pane, n := resolvePane(testBus, "fix/412", StateDone, 100, 50, []tmux.WindowOptions{win}, panes, testBusOf, startAt(60))
 		if n != 1 || pane != "%307" {
 			t.Errorf("got (%q, %d), want (%%307, 1)", pane, n)
 		}
@@ -637,7 +695,7 @@ func TestResolvePanePiPaneTerminalIdentity(t *testing.T) {
 	// the claude processing case.
 	t.Run("processing within grace does not join", func(t *testing.T) {
 		panes := []tmux.PaneOptions{piPane("%307", "h:1", "processing", 130)}
-		pane, n := resolvePane(testBus, "fix/412", StateDone, 100, []tmux.WindowOptions{win}, panes, testBusOf)
+		pane, n := resolvePane(testBus, "fix/412", StateDone, 100, 50, []tmux.WindowOptions{win}, panes, testBusOf, startAt(60))
 		if n != 0 || pane != "" {
 			t.Errorf("got (%q, %d), want (\"\", 0) — an actively working pi pane is a new occupant", pane, n)
 		}
@@ -647,7 +705,7 @@ func TestResolvePanePiPaneTerminalIdentity(t *testing.T) {
 	// terminal record.
 	t.Run("unknown epoch does not join", func(t *testing.T) {
 		panes := []tmux.PaneOptions{{PaneID: "%307", Target: "h:1", AgentScreen: "idle"}}
-		pane, n := resolvePane(testBus, "fix/412", StateDone, 100, []tmux.WindowOptions{win}, panes, testBusOf)
+		pane, n := resolvePane(testBus, "fix/412", StateDone, 100, 50, []tmux.WindowOptions{win}, panes, testBusOf, startAt(60))
 		if n != 0 || pane != "" {
 			t.Errorf("got (%q, %d), want (\"\", 0) — unknown @agent_screen epoch must fail closed", pane, n)
 		}
@@ -661,7 +719,7 @@ func TestResolvePaneTerminalStateUnknownEpochDoesNotJoin(t *testing.T) {
 	panes := []tmux.PaneOptions{agentPaneAt("%307", "h:1", 0)}
 
 	for _, state := range []State{StateDone, StateFailed} {
-		pane, n := resolvePane(testBus, "fix/412", state, 100, []tmux.WindowOptions{win}, panes, testBusOf)
+		pane, n := resolvePane(testBus, "fix/412", state, 100, 50, []tmux.WindowOptions{win}, panes, testBusOf, startAt(60))
 		if n != 0 || pane != "" {
 			t.Errorf("state=%s: got (%q, %d), want (\"\", 0) — unknown epoch must fail closed", state, pane, n)
 		}
@@ -674,7 +732,7 @@ func TestResolvePaneJoinsNonTerminal(t *testing.T) {
 
 	// Non-terminal or zero state → join still works, regardless of epoch.
 	for _, state := range []State{StateRunning, StateBlocked, StateReview, State("")} {
-		pane, n := resolvePane(testBus, "fix/412", state, 0, []tmux.WindowOptions{win}, panes, testBusOf)
+		pane, n := resolvePane(testBus, "fix/412", state, 0, 0, []tmux.WindowOptions{win}, panes, testBusOf, noProbe(t))
 		if n != 1 {
 			t.Errorf("state=%q: candidates = %d, want 1 — non-terminal must join", state, n)
 		}
@@ -690,9 +748,68 @@ func TestResolvePaneZeroStateJoins(t *testing.T) {
 	win := tmux.WindowOptions{Session: "h", Window: 1, Branch: "main", GitRoot: "/wt/a"}
 	panes := []tmux.PaneOptions{agentPane("%1", "h:1")}
 
-	pane, n := resolvePane(testBus, "main", "", 0, []tmux.WindowOptions{win}, panes, testBusOf)
+	pane, n := resolvePane(testBus, "main", "", 0, 0, []tmux.WindowOptions{win}, panes, testBusOf, noProbe(t))
 	if n != 1 || pane != "%1" {
 		t.Errorf("got (%q, %d), want (%%1, 1) — zero state on one branch must still join", pane, n)
+	}
+}
+
+func TestResolvePaneTerminalSessionIdentity(t *testing.T) {
+	win := tmux.WindowOptions{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"}
+	panes := []tmux.PaneOptions{agentPaneAt("%307", "h:1", 100)}
+
+	tests := []struct {
+		name    string
+		start   int64
+		session int64
+		want    bool
+	}{
+		{"starts after the epoch", 60, 50, true},
+		{"starts at the record", 100, 50, true},
+		{"starts after the record", 101, 50, false},
+		{"starts inside the slack before the epoch", 25, 50, true},
+		{"starts before the epoch minus slack", 19, 50, false},
+		{"unknown start", 0, 50, false},
+		{"unknown session", 60, 0, false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, state := range []State{StateDone, StateFailed} {
+				pane, n := resolvePane(testBus, "fix/412", state, 100, tc.session, []tmux.WindowOptions{win}, panes, testBusOf, startAt(tc.start))
+				got := n == 1 && pane == "%307"
+				if got != tc.want {
+					t.Errorf("state=%s start=%d session=%d: joined=%v, want %v", state, tc.start, tc.session, got, tc.want)
+				}
+			}
+		})
+	}
+}
+
+func TestResolvePaneTerminalPiNewOccupantDoesNotJoin(t *testing.T) {
+	win := tmux.WindowOptions{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"}
+	panes := []tmux.PaneOptions{piPane("%307", "h:1", "idle", 113)}
+
+	pane, n := resolvePane(testBus, "fix/412", StateDone, 100, 50, []tmux.WindowOptions{win}, panes, testBusOf, startAt(150))
+	if n != 0 || pane != "" {
+		t.Errorf("got (%q, %d), want (\"\", 0) — a pi engine that started after the record is a new occupant", pane, n)
+	}
+}
+
+func TestResolvePaneTerminalSiblingNewOccupantDoesNotMakeItAmbiguous(t *testing.T) {
+	// The finished worker's own pane (%40, pid 1) sits idle alongside a brand
+	// new occupant (%41, pid 2) that also went idle within grace. Before the
+	// process-start check, both looked like the same session and the join was
+	// ambiguous (2 candidates); the check now tells them apart.
+	win := tmux.WindowOptions{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"}
+	panes := []tmux.PaneOptions{
+		{PaneID: "%40", Target: "h:1", ClaudeStatus: "idle 100 ", PanePID: 1},
+		{PaneID: "%41", Target: "h:1", ClaudeStatus: "idle 150 ", PanePID: 2},
+	}
+
+	pane, n := resolvePane(testBus, "fix/412", StateDone, 100, 50, []tmux.WindowOptions{win}, panes, testBusOf, startsByPID(map[int]int64{1: 60, 2: 150}))
+	if n != 1 || pane != "%40" {
+		t.Errorf("got (%q, %d), want (%%40, 1) — only the finished worker's own pane passes identity", pane, n)
 	}
 }
 
@@ -753,6 +870,7 @@ func TestScanJoinsTerminalRecordToItsOwnIdlePane(t *testing.T) {
 		[]tmux.WindowOptions{{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"}},
 		[]tmux.PaneOptions{agentPaneAt("%307", "h:1", 2)},
 	)
+	s.procStart = startAt(1)
 
 	got, ok := s.scan()
 	if !ok {
@@ -773,6 +891,59 @@ func TestScanJoinsTerminalRecordToItsOwnIdlePane(t *testing.T) {
 	}
 }
 
+func TestScanRejectsIdleNewOccupantWithinGrace(t *testing.T) {
+	// The production entry point for #158: a done status posted from
+	// worker:fix/412#s1000-7 (session 1000) at ts 2000000 (UpdatedAt 2000)
+	// left the worker's pane idle at epoch 2100 — within terminalJoinGrace of
+	// the record — but the pane's foreground engine is what decides identity.
+	bus := t.TempDir()
+	rec := `{"ts":1000000,"crew_id":"c1","from":"worker:fix/412#s1000","kind":"dispatch","branch":"fix/412","engine":"claude"}
+{"ts":2000000,"crew_id":"c1","from":"worker:fix/412#s1000-7","kind":"status","body":{"state":"done"}}
+`
+	if err := os.WriteFile(filepath.Join(bus, "events.jsonl"), []byte(rec), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wins := []tmux.WindowOptions{{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"}}
+	panes := []tmux.PaneOptions{{PaneID: "%307", Target: "h:1", ClaudeStatus: "idle 2100 ", PanePID: 4242}}
+
+	t.Run("engine started after the record does not join", func(t *testing.T) {
+		var gotPID int
+		s := crewScanner(map[string]string{"/wt/a": bus}, wins, panes)
+		s.procStart = func(panePID int) int64 {
+			gotPID = panePID
+			return 2050
+		}
+
+		got, ok := s.scan()
+		if !ok {
+			t.Fatal("scan reported failure")
+		}
+		if gotPID != 4242 {
+			t.Errorf("probe saw pid %d, want 4242", gotPID)
+		}
+		if _, found := got["%307"]; found {
+			t.Error("joined to %307 despite the engine starting after the record")
+		}
+		wantKey := "crew/" + bus + "/fix/412"
+		if _, found := got[wantKey]; !found {
+			t.Fatalf("no run under %q — keys: %v", wantKey, keysOf(got))
+		}
+	})
+
+	t.Run("engine started before the record joins", func(t *testing.T) {
+		s := crewScanner(map[string]string{"/wt/a": bus}, wins, panes)
+		s.procStart = startAt(1500)
+
+		got, ok := s.scan()
+		if !ok {
+			t.Fatal("scan reported failure")
+		}
+		if _, found := got["%307"]; !found {
+			t.Fatalf("run did not join to %%307 — keys: %v", keysOf(got))
+		}
+	})
+}
+
 // writeBus creates a bus directory holding one dispatch record per branch.
 func writeBus(t *testing.T, branches ...string) string {
 	t.Helper()
@@ -788,11 +959,14 @@ func writeBus(t *testing.T, branches ...string) string {
 }
 
 // crewScanner builds a CrewSource whose bus lookup is pre-seeded, so scan()
-// exercises the join without shelling out to git.
+// exercises the join without shelling out to git. procStart defaults to
+// startAt(0) — unknown, so a terminal join fails closed unless a test
+// overrides s.procStart.
 func crewScanner(dirs map[string]string, wins []tmux.WindowOptions, panes []tmux.PaneOptions) *CrewSource {
 	return &CrewSource{
-		client:   &fakeLister{steps: []fakeStep{{wins: wins, panes: panes}}},
-		crewDirs: dirs,
+		client:    &fakeLister{steps: []fakeStep{{wins: wins, panes: panes}}},
+		crewDirs:  dirs,
+		procStart: startAt(0),
 	}
 }
 
