@@ -1829,6 +1829,78 @@ func TestSendKeysRefusesStaleGenerationForMixedContent(t *testing.T) {
 	}
 }
 
+// TestSendKeysReportsPartialDeliveryOnGenerationChange covers #156: mixed
+// content is several independent writes, so a generation that moves after one
+// of them landed can leave a prefix written. SendKeys must report how much
+// landed instead of looking like a full drop. Segment 1's write is parked so
+// the generation moves in the window between it and segment 2's gate — the
+// same interleaving a reconnect produces.
+func TestSendKeysReportsPartialDeliveryOnGenerationChange(t *testing.T) {
+	d := &recordingDialer{}
+	cc := NewControlClient("test")
+	cc.dial = d.dial
+	cc.backoff = time.Millisecond
+
+	if err := cc.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = cc.Close() }()
+
+	conn := d.connAt(t, 0)
+	conn.ackAttach(t)
+
+	gen := cc.Generation()
+
+	// Park segment 1's write so the generation can move between it and
+	// segment 2's gate.
+	park, parked := make(chan struct{}), make(chan struct{})
+	conn.mu.Lock()
+	conn.parkWrite, conn.parked = park, parked
+	conn.mu.Unlock()
+
+	sent := make(chan error, 1)
+	go func() { sent <- cc.SendKeys(gen, "%0", "a\nb") }()
+
+	select {
+	case <-parked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the first send-keys segment never reached the parked write")
+	}
+
+	// Move the generation while segment 1 holds stdinMu, then let it finish:
+	// segment 1 lands on the connection, segment 2 is refused.
+	cc.gen.Add(1)
+	close(park)
+
+	var err error
+	select {
+	case err = <-sent:
+	case <-time.After(5 * time.Second):
+		t.Fatal("SendKeys never returned")
+	}
+
+	var partial *PartialSendError
+	if !errors.As(err, &partial) {
+		t.Fatalf("SendKeys error = %v (%T), want *PartialSendError", err, err)
+	}
+	if partial.Sent != 1 || partial.Total != 3 {
+		t.Fatalf("PartialSendError = %+v, want Sent=1 Total=3", partial)
+	}
+	if !errors.Is(err, ErrStaleGeneration) {
+		t.Fatalf("errors.Is(err, ErrStaleGeneration) = false; err = %v", err)
+	}
+
+	// Only segment 1 may have reached the connection; nothing past the moved
+	// generation may have.
+	got := conn.written()
+	if !strings.Contains(got, "send-keys -t %0 -l 'a'") {
+		t.Fatalf("segment 1 did not land; wrote %q", got)
+	}
+	if strings.Contains(got, "send-keys -t %0 Enter") || strings.Contains(got, "send-keys -t %0 -l 'b'") {
+		t.Fatalf("a segment past the moved generation reached the connection: %q", got)
+	}
+}
+
 // TestReattachClearsGapState covers R12: a gap outstanding on a connection
 // that has since died must not let an unrelated %continue on the new
 // connection re-seed anybody.

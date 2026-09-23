@@ -169,7 +169,7 @@ func servePane(conn *websocket.Conn, tm tmuxOps, cm controlManagerOps, registry 
 	// verified, closing conn on mismatch. A reconnect between the baseline
 	// above and Subscribe bumps the generation without marking sub dirty, and
 	// one during the initial capture marks sub dirty too late to stop the
-	// seed write — so it runs before dims and again after the capture.
+	// seed write — so it runs before the dims write and again after the capture.
 	reverify := func() bool {
 		g := cc.Generation()
 		if g == verified.Load() {
@@ -182,9 +182,6 @@ func servePane(conn *websocket.Conn, tm tmuxOps, cm controlManagerOps, registry 
 		verified.Store(g)
 		return true
 	}
-	if !reverify() {
-		return
-	}
 
 	// Keepalive
 	conn.SetPongHandler(func(string) error {
@@ -192,9 +189,18 @@ func servePane(conn *websocket.Conn, tm tmuxOps, cm controlManagerOps, registry 
 	})
 	_ = conn.SetReadDeadline(time.Now().Add(45 * time.Second))
 
-	// Send pane dimensions so the frontend can resize xterm.js to match.
+	// Fetch pane dimensions so the frontend can resize xterm.js to match.
 	// Absolute cursor positions in %output depend on matching dimensions.
-	if w, h, err := tm.GetPaneSize(pane); err == nil && w > 0 && h > 0 {
+	// Fetched before the server re-check and written only after it passes —
+	// the same fetch-then-check-then-write order the seed path uses. A
+	// reconnect landing inside GetPaneSize (a tmux CLI exec addressed by
+	// session:window.index) would otherwise read the new server's pane size
+	// and send those cols/rows before this socket notices and closes.
+	w, h, sizeErr := tm.GetPaneSize(pane)
+	if !reverify() {
+		return
+	}
+	if sizeErr == nil && w > 0 && h > 0 {
 		dimsJSON, _ := json.Marshal(WSDims{Cols: w, Rows: h})
 		dimsMsg, _ := json.Marshal(WSMessage{Type: "dims", Data: dimsJSON})
 		if err := conn.WriteMessage(websocket.TextMessage, dimsMsg); err != nil {
@@ -471,6 +477,15 @@ func paneWSReadLoop(conn *websocket.Conn, cc controlClientOps, paneID string, ve
 				continue
 			}
 			if err := cc.SendKeys(verified.Load(), paneID, input.Data); err != nil {
+				// A generation that moved mid-input writes a prefix and refuses
+				// the rest; that partial delivery is worth an operator's
+				// attention, unlike the full drop below.
+				var partial *tmux.PartialSendError
+				if errors.As(err, &partial) && partial.Sent > 0 {
+					slog.Warn("partial input delivery pending tmux server check",
+						"paneID", paneID, "sent", partial.Sent, "total", partial.Total)
+					continue
+				}
 				if errors.Is(err, tmux.ErrStaleGeneration) {
 					slog.Debug("dropping input pending tmux server check", "paneID", paneID)
 					continue
