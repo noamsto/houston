@@ -342,8 +342,11 @@ func (h *Hub) pruneEnded(dir string) {
 		}
 
 		// A resumed session could rewrite the file between our read above
-		// and the remove below. If the file changed since, it's not ours to
-		// remove this pass.
+		// and the remove below. hook.Write always writes a temp file and
+		// renames it over the target, replacing the inode. Check both
+		// SameFile (detects rename-based rewrites regardless of mtime
+		// granularity) and mtime equality (belt for an in-place writer).
+		// If either changed, the file isn't ours to remove this pass.
 		after, err := h.preRemoveStat(path)
 		if err != nil {
 			if !errors.Is(err, fs.ErrNotExist) {
@@ -351,7 +354,7 @@ func (h *Hub) pruneEnded(dir string) {
 			}
 			continue
 		}
-		if !after.ModTime().Equal(before.ModTime()) {
+		if !os.SameFile(before, after) || !after.ModTime().Equal(before.ModTime()) {
 			continue
 		}
 

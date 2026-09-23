@@ -355,14 +355,39 @@ func TestPruneEnded(t *testing.T) {
 		t.Fatalf("Chtimes: %v", err)
 	}
 
+	writeState(t, dir, hook.SessionState{
+		SessionID: "raced-via-rename",
+		State:     hook.StateEnded,
+		UpdatedAt: oldTime.Unix(),
+	})
+	if err := os.Chtimes(hook.Path(dir, "raced-via-rename"), oldTime, oldTime); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+
 	// Simulate a resumed session rewriting the file between pruneEnded's
 	// read and its remove: land a real mtime change in that window via the
 	// test-only preRemoveStat seam on the Hub, right where the guard's second
 	// stat happens.
 	racedPath := hook.Path(dir, "raced-with-resume")
+	renamePath := hook.Path(dir, "raced-via-rename")
 	h.preRemoveStat = func(path string) (os.FileInfo, error) {
 		if path == racedPath {
 			if err := os.Chtimes(path, time.Now(), time.Now()); err != nil {
+				t.Fatalf("Chtimes: %v", err)
+			}
+		}
+		if path == renamePath {
+			// Simulate a resumed session writing via rename (hook.Write style)
+			// then restoring the original mtime. SameFile catches the inode
+			// change even though the mtime is identical.
+			if err := hook.Write(path, hook.SessionState{
+				SessionID: "raced-via-rename",
+				State:     hook.StateEnded,
+				UpdatedAt: oldTime.Unix(),
+			}); err != nil {
+				t.Fatalf("hook.Write: %v", err)
+			}
+			if err := os.Chtimes(path, oldTime, oldTime); err != nil {
 				t.Fatalf("Chtimes: %v", err)
 			}
 		}
@@ -382,5 +407,8 @@ func TestPruneEnded(t *testing.T) {
 	}
 	if _, err := os.Stat(racedPath); err != nil {
 		t.Errorf("raced-with-resume: want kept, stat err = %v", err)
+	}
+	if _, err := os.Stat(renamePath); err != nil {
+		t.Errorf("raced-via-rename: want kept, stat err = %v", err)
 	}
 }
