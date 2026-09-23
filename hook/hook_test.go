@@ -1,9 +1,11 @@
 package hook
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -414,6 +416,53 @@ func TestDispatchRetriesAfterAFailedDisplayMessage(t *testing.T) {
 	}
 }
 
+func TestDispatchStaleUnderLockRetries(t *testing.T) {
+	// The unlocked pre-read can find the pane fresh (skipping the tmux exec)
+	// while another process's write lands before the lock is taken, so the
+	// locked re-read is stale. Dispatch must still emit the "display-message
+	// failed" shape (fetchedCoords was never set) so the next event retries.
+	dir := t.TempDir()
+	calls := stubTmuxDisplay(t, func(string) ([]byte, error) {
+		return []byte("sess\t0"), nil
+	})
+	t.Setenv("TMUX_PANE", "%20")
+	t.Setenv("TMUX", "/s,1966,0")
+	dispatch(t, dir, EventSessionStart, map[string]any{"session_id": "s"})
+	if *calls != 1 {
+		t.Fatalf("setup: tmuxDisplay called %d times, want 1", *calls)
+	}
+
+	orig := beforeLock
+	t.Cleanup(func() { beforeLock = orig })
+	beforeLock = func() {
+		if err := Write(Path(dir, "s"), SessionState{TmuxPane: "%99", TmuxServer: "1966"}); err != nil {
+			t.Fatalf("beforeLock write: %v", err)
+		}
+	}
+
+	before := *calls
+	got := dispatch(t, dir, EventPostToolUse, map[string]any{"session_id": "s", "tool_name": "Bash"})
+	if *calls != before {
+		t.Errorf("tmuxDisplay called %d new times during the racing dispatch, want 0", *calls-before)
+	}
+	if got.TmuxPane != "%20" {
+		t.Errorf("TmuxPane = %q, want %%20 (current $TMUX_PANE)", got.TmuxPane)
+	}
+	if got.TmuxSession != "" {
+		t.Errorf("TmuxSession = %q, want empty (failed-display-message shape)", got.TmuxSession)
+	}
+
+	beforeLock = orig
+	before = *calls
+	got = dispatch(t, dir, EventPostToolUse, map[string]any{"session_id": "s", "tool_name": "Bash"})
+	if *calls != before+1 {
+		t.Errorf("tmuxDisplay called %d times on retry, want 1", *calls-before)
+	}
+	if got.TmuxSession != "sess" {
+		t.Errorf("TmuxSession = %q after retry, want sess", got.TmuxSession)
+	}
+}
+
 func TestDispatchSessionStartAlwaysRefreshes(t *testing.T) {
 	// Even with an unchanged environment, SessionStart must recompute — it
 	// marks a fresh (or resumed) process, and a stale entry from a killed
@@ -461,5 +510,49 @@ func TestDispatchClearsPaneWhenNoLongerUnderTmux(t *testing.T) {
 
 	if got.TmuxSession != "" || got.TmuxWindow != "" || got.TmuxPane != "" || got.TmuxServer != "" {
 		t.Errorf("coordinates not cleared outside tmux: %+v", got)
+	}
+}
+
+// TestDispatchConcurrentEventsDoNotLoseUpdates: post_tool, turn_end,
+// prompt_submit and session_start all arrive as detached fire-and-forget
+// processes from hookyard, so concurrent Dispatch calls on the same session
+// must not silently clobber one another's read-modify-write.
+func TestDispatchConcurrentEventsDoNotLoseUpdates(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("TMUX_PANE", "")
+	t.Setenv("TMUX", "")
+
+	payload, err := json.Marshal(map[string]any{
+		"session_id":      "concurrent",
+		"hook_event_name": EventUserPromptSubmit,
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	const n = 50
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	wg.Add(n)
+	for range n {
+		go func() {
+			defer wg.Done()
+			errs <- Dispatch(EventUserPromptSubmit, dir, bytes.NewReader(payload))
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("Dispatch: %v", err)
+		}
+	}
+
+	got, err := Read(Path(dir, "concurrent"))
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if got.Turn != n {
+		t.Errorf("Turn = %d after %d concurrent UserPromptSubmit, want %d", got.Turn, n, n)
 	}
 }

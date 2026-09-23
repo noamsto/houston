@@ -155,6 +155,11 @@ func TestHubSeedsDiscoveredSessionOnStart(t *testing.T) {
 	if snap[0].State != hook.StateIdle {
 		t.Errorf("State = %q, want idle", snap[0].State)
 	}
+	// synthesizeFromTranscript builds a SessionState with no Agent; the view
+	// must still default to claude.
+	if snap[0].Agent != hook.AgentClaude {
+		t.Errorf("Agent = %q, want %q", snap[0].Agent, hook.AgentClaude)
+	}
 }
 
 func TestHubHookStateWinsOverDiscovery(t *testing.T) {

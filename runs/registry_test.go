@@ -518,6 +518,37 @@ func TestCapsTerminalGoesFalseAfterTmuxLayerGoesGone(t *testing.T) {
 	}
 }
 
+func TestAgentComposesHooksOverCrewOverTmux(t *testing.T) {
+	r := NewRegistry(DefaultOrder)
+	r.Apply(Delta{Source: "tmux", Key: "%1", Run: Run{Agent: "claude"}})
+	r.Apply(Delta{Source: "crew", Key: "%1", Run: Run{Agent: "pi"}})
+	r.Apply(Delta{Source: "hooks", Key: "%1", Run: Run{Agent: "pi"}})
+
+	got := r.Snapshot()
+	if len(got) != 1 || got[0].Agent != "pi" {
+		t.Fatalf("Agent = %+v, want pi — hooks outranks crew and tmux in DefaultOrder", got)
+	}
+}
+
+func TestAgentFromHooksListsAPaneWithNoTmuxAgent(t *testing.T) {
+	// pi panes carry no @claude_status, so TmuxSource never labels them —
+	// the hooks layer must still make the run listed with a working terminal.
+	r := NewRegistry(DefaultOrder)
+	r.Apply(Delta{Source: "tmux", Key: "%1", Run: Run{Agent: ""}})
+	r.Apply(Delta{Source: "hooks", Key: "%1", Run: Run{
+		Agent: "pi",
+		Caps:  Caps{Terminal: true, Reply: true, Kill: true},
+	}})
+
+	got := r.Snapshot()
+	if len(got) != 1 || got[0].Agent != "pi" {
+		t.Fatalf("Agent = %+v, want pi", got)
+	}
+	if !got[0].Caps.Terminal {
+		t.Errorf("Caps.Terminal = false, want true — the tmux layer is present even with no agent label")
+	}
+}
+
 func TestCapsReplyRequiresLayerNotJustFlag(t *testing.T) {
 	r := NewRegistry(DefaultOrder)
 	// Matches what crewsource.go publishes today: no Caps set on the delta.

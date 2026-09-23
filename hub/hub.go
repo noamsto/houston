@@ -45,6 +45,7 @@ type SessionView struct {
 	InputTokens    int         `json:"input_tokens"`
 	OutputTokens   int         `json:"output_tokens"`
 	TranscriptPath string      `json:"transcript_path,omitempty"`
+	Agent          string      `json:"agent"`
 }
 
 // DefaultPruneTTL is how long an ended hook state file is kept after its
@@ -508,6 +509,8 @@ func viewSignature(v SessionView) string {
 	b.WriteString(strconv.Itoa(v.OutputTokens))
 	b.WriteByte('|')
 	b.WriteString(strconv.Itoa(len(v.Preview)))
+	b.WriteByte('|')
+	b.WriteString(v.Agent)
 	return b.String()
 }
 
@@ -532,6 +535,12 @@ func mergeStateIntoView(v *SessionView, s hook.SessionState) {
 	v.Since = s.Since
 	v.UpdatedAt = s.UpdatedAt
 	v.TranscriptPath = s.TranscriptPath
+	// Legacy files, native Claude hooks, and transcript discovery all carry
+	// no engine — default them to claude rather than leaving the view blank.
+	v.Agent = s.Agent
+	if v.Agent == "" {
+		v.Agent = hook.AgentClaude
+	}
 }
 
 // applyTranscriptEvent updates trail/preview/telemetry on sess from one event.

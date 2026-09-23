@@ -162,6 +162,7 @@ export interface TrailChip {
 // Mirror of hub.SessionView
 export interface SessionView {
   session_id: string
+  agent: string
   cwd?: string
   tmux_session?: string
   tmux_window?: string

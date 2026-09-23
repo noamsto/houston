@@ -260,6 +260,8 @@
   color: var(--text); font-size: 14px; font-weight: 600; letter-spacing: -0.01em;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* flex:none so the agent chip stays intact instead of shrinking/wrapping alongside the name. */
+.run-detail-heading .run-chip { flex: none; }
 
 .run-detail-tabs { display: flex; gap: 4px; padding: 10px 12px 4px; }
 .run-detail-tabs button {

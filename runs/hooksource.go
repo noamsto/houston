@@ -22,8 +22,10 @@ type paneLister interface {
 	ListPaneOptions() ([]tmux.PaneOptions, error)
 }
 
-// HookSource publishes Claude Code hook state. It rides the existing hub rather
-// than re-watching the state dir and re-tailing transcripts.
+// HookSource publishes hook state for every engine houston's hub tracks
+// (Claude Code, and pi/codex/cursor via hookyard envelopes). It rides the
+// existing hub rather than re-watching the state dir and re-tailing
+// transcripts.
 type HookSource struct {
 	hub      *hub.Hub
 	panes    paneLister
@@ -388,7 +390,7 @@ func endRun(r Run) Run {
 func runFromSessionView(v hub.SessionView, project string) (string, Run) {
 	repo, branch := repoAndBranch(v.CWD, v.GitBranch)
 	r := Run{
-		Agent:     "claude",
+		Agent:     v.Agent,
 		State:     FromHookState(v.State),
 		Repo:      repo,
 		Branch:    branch,
