@@ -81,8 +81,9 @@ func resolvePane(bus, branch string, busState State, busUpdatedAt int64, wins []
 // the finished session's own last pane stamp. The worker posts its terminal
 // status and then ends its final turn, so the Stop hook writes the pane's
 // `done` epoch seconds later (observed +4s and +13s on a live bus). Five
-// minutes covers a slow final turn with wide margin; a genuinely new occupant
-// is rejected by finishedPaneState regardless of this window.
+// minutes covers a slow final turn with wide margin; an actively working new occupant
+// is rejected by finishedPaneState; an idle one within the window is the accepted
+// residual (#158).
 const terminalJoinGrace int64 = 300
 
 // paneActivityEpoch is the candidate pane's last agent-activity epoch: the
