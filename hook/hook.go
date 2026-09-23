@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -24,6 +25,10 @@ const (
 	EventSubagentStop     = "SubagentStop"
 	EventPreCompact       = "PreCompact"
 )
+
+// AgentClaude is the SessionState.Agent value for the native Claude Code
+// payload path and for a hookyard envelope with engine "claude-code".
+const AgentClaude = "claude"
 
 // MustHaveEvents is the minimum set houston needs for reliable card status.
 var MustHaveEvents = []string{
@@ -54,22 +59,64 @@ type Event struct {
 }
 
 // Dispatch merges one event into the session's state file under stateDir.
-// event (CLI arg) is trusted over the payload's HookEventName so wrappers work.
+// stdin is either Claude Code's native hook payload or a hookyard envelope
+// (auto-detected by a non-empty top-level "engine"); event (CLI arg) is
+// trusted over the native payload's HookEventName so wrappers work, but is
+// ignored in envelope mode, where the envelope's own event is authoritative.
 func Dispatch(event string, stateDir string, stdin io.Reader) error {
-	var ev Event
-	if err := json.NewDecoder(stdin).Decode(&ev); err != nil && !errors.Is(err, io.EOF) {
+	var in input
+	if err := json.NewDecoder(stdin).Decode(&in); err != nil && !errors.Is(err, io.EOF) {
 		return fmt.Errorf("decode event: %w", err)
 	}
-	if event == "" {
-		event = ev.HookEventName
+
+	var ev Event
+	var agent string
+	if in.Engine != "" {
+		var err error
+		event, ev, agent, err = fromEnvelope(in)
+		if err != nil {
+			return err
+		}
+		if event == "" {
+			return nil // envelope event houston doesn't track
+		}
+	} else {
+		ev = in.Event
+		if event == "" {
+			event = ev.HookEventName
+		}
 	}
 	if ev.SessionID == "" {
 		return fmt.Errorf("missing session_id in hook payload")
 	}
 
 	path := Path(stateDir, ev.SessionID)
-	prev, _ := Read(path)
 
+	// The tmux exec must stay outside the lock below (it's the slow part of
+	// Dispatch), so decide up front — from an unlocked read — whether this
+	// event needs a fresh display-message. A --resume of the same session id
+	// in another pane (or after a tmux restart) must not keep the first pane
+	// recorded: the stale id is another agent's pane, and the run's
+	// reply/terminal target follows it. Outside tmux both env values are
+	// empty, so a recorded pane is cleared, not kept.
+	pane, server := tmuxEnv()
+	pre, _ := Read(path)
+	var fetchedCoords bool
+	var sess, win, p string
+	if event == EventSessionStart || paneStale(pre, pane, server) {
+		sess, win, p = tmuxCoords()
+		fetchedCoords = true
+	}
+
+	unlock, err := lockStateDir(filepath.Dir(path))
+	if err != nil {
+		return fmt.Errorf("lock state dir: %w", err)
+	}
+	defer unlock()
+
+	// Re-read under the lock: another process may have written since pre was
+	// read above, so pre's staleness verdict can be out of date.
+	prev, _ := Read(path)
 	now := time.Now().Unix()
 	next := prev
 	next.SessionID = ev.SessionID
@@ -80,15 +127,18 @@ func Dispatch(event string, stateDir string, stdin io.Reader) error {
 		next.CWD = ev.CWD
 	}
 	next.UpdatedAt = now
-	// A --resume of the same session id in another pane (or after a tmux
-	// restart) must not keep the first pane recorded: the stale id is another
-	// agent's pane, and the run's reply/terminal target follows it. Outside
-	// tmux both env values are empty, so a recorded pane is cleared, not kept.
-	pane, server := tmuxEnv()
-	stale := next.TmuxPane != pane || next.TmuxServer != server ||
-		(next.TmuxPane != "" && next.TmuxSession == "") // last display-message failed
-	if event == EventSessionStart || stale {
-		next.TmuxSession, next.TmuxWindow, next.TmuxPane = tmuxCoords()
+	if agent != "" {
+		next.Agent = agent
+	}
+	if event == EventSessionStart || paneStale(prev, pane, server) {
+		if fetchedCoords {
+			next.TmuxSession, next.TmuxWindow, next.TmuxPane = sess, win, p
+		} else {
+			// The unlocked check found nothing stale, so no display-message
+			// ran; report the "failed" shape so the next event retries — a
+			// second exec can't happen inside the lock.
+			next.TmuxSession, next.TmuxWindow, next.TmuxPane = "", "", pane
+		}
 		next.TmuxServer = server
 		next.PID = os.Getppid()
 	} else if next.PID == 0 {
@@ -97,6 +147,34 @@ func Dispatch(event string, stateDir string, stdin io.Reader) error {
 
 	apply(&next, event, ev, now)
 	return Write(path, next)
+}
+
+// paneStale reports whether s's recorded tmux pane/server no longer matches
+// the environment the hook is running under now.
+func paneStale(s SessionState, pane, server string) bool {
+	return s.TmuxPane != pane || s.TmuxServer != server ||
+		(s.TmuxPane != "" && s.TmuxSession == "") // last display-message failed
+}
+
+// lockStateDir takes an exclusive flock on dir's lock file, serializing
+// concurrent Dispatch calls (post_tool, turn_end, prompt_submit and
+// session_start all arrive as detached fire-and-forget processes from
+// hookyard, so two can otherwise race a Read-apply-Write and silently drop
+// one's update). One lock file for the whole dir, not one per session, so
+// nothing accumulates for hub/prune to skip over.
+func lockStateDir(dir string) (unlock func(), err error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(filepath.Join(dir, ".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return func() { _ = f.Close() }, nil
 }
 
 func apply(s *SessionState, event string, ev Event, now int64) {
@@ -109,6 +187,7 @@ func apply(s *SessionState, event string, ev Event, now int64) {
 	case EventSessionStart:
 		s.State = StateStarting
 		s.Source = ev.Source
+		s.TurnTool = false
 	case EventSessionEnd:
 		s.State = StateEnded
 		s.Reason = ev.Reason
@@ -116,11 +195,13 @@ func apply(s *SessionState, event string, ev Event, now int64) {
 	case EventUserPromptSubmit:
 		s.State = StateThinking
 		s.Turn++
+		s.TurnTool = false
 		clearTool()
 	case EventPreToolUse:
 		s.State = StateToolRunning
 		s.Tool = ev.ToolName
 		s.ToolInputHint = ToolHint(ev.ToolName, ev.ToolInput)
+		s.TurnTool = true
 	case EventPostToolUse:
 		s.State = StateThinking
 		clearTool()
@@ -137,8 +218,16 @@ func apply(s *SessionState, event string, ev Event, now int64) {
 		}
 		s.LastMessage = ev.Message
 	case EventStop, EventSubagentStop:
-		s.State = StateWaiting
 		clearTool()
+		// pi fires turn_end (mapped to Stop) after every LLM response, not just
+		// the final one: a turn that ran a tool is followed by another LLM
+		// call, so it's still "thinking", not "waiting".
+		if s.Agent == "pi" && s.TurnTool {
+			s.State = StateThinking
+		} else {
+			s.State = StateWaiting
+		}
+		s.TurnTool = false
 	case EventPreCompact:
 		s.State = StateCompacting
 	}

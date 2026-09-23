@@ -24,6 +24,7 @@ func TestRunFromSessionViewKeysOnPane(t *testing.T) {
 		TmuxServer:  "1234",
 		State:       hook.StateToolRunning,
 		Tool:        "Bash",
+		Agent:       "claude",
 	}, "")
 
 	if key != "%307" {
@@ -113,6 +114,33 @@ func TestRunFromSessionViewCarriesTheProject(t *testing.T) {
 	_, r = runFromSessionView(hub.SessionView{SessionID: "abc", CWD: "/wt/feat"}, "")
 	if r.Project != "" {
 		t.Errorf("Project = %q, want empty when unresolved", r.Project)
+	}
+}
+
+func TestRunFromSessionViewCarriesTheAgent(t *testing.T) {
+	_, r := runFromSessionView(hub.SessionView{SessionID: "abc-123", Agent: "pi"}, "")
+	if r.Agent != "pi" {
+		t.Errorf("Agent = %q, want pi", r.Agent)
+	}
+}
+
+func TestHookSourceDefaultsALegacyStateToClaude(t *testing.T) {
+	st := hook.SessionState{SessionID: "legacy", State: hook.StateIdle, UpdatedAt: time.Now().Unix()}
+	out, _ := startHookSourceWith(t, nil, st, nil)
+
+	d := waitDelta(t, out, "legacy run", func(d Delta) bool { return d.Key == "claude/legacy" })
+	if d.Run.Agent != "claude" {
+		t.Errorf("Agent = %q, want claude — hub.mergeStateIntoView defaults an empty engine", d.Run.Agent)
+	}
+}
+
+func TestHookSourcePropagatesThePiAgent(t *testing.T) {
+	st := hook.SessionState{SessionID: "pi1", State: hook.StateIdle, Agent: "pi", UpdatedAt: time.Now().Unix()}
+	out, _ := startHookSourceWith(t, nil, st, nil)
+
+	d := waitDelta(t, out, "pi run", func(d Delta) bool { return d.Key == "claude/pi1" })
+	if d.Run.Agent != "pi" {
+		t.Errorf("Agent = %q, want pi", d.Run.Agent)
 	}
 }
 

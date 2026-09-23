@@ -54,7 +54,7 @@ export const AgentCard = memo(function AgentCard({ view, onOpen }: Props) {
       <div className="card-id">
         <div className="agent-glyph">{name.slice(0, 1).toUpperCase()}</div>
         <div className="id-meta">
-          <div className="id-agent">claude-code</div>
+          <div className="id-agent">{view.agent}</div>
           <div className="id-session" title={view.session_id}>{name}</div>
           {windowName && <div className="id-window">{windowName}</div>}
         </div>

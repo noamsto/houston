@@ -45,7 +45,7 @@ func printUsage(w *os.File) {
 
 Usage:
   houston [flags]              start the web server (default)
-  houston hook [<event>]       handle a Claude Code hook (stdin = event JSON)
+  houston hook [<event>]       handle a Claude Code hook payload or a hookyard envelope (stdin)
   houston hooks install        install houston's hooks into ~/.claude/settings.json
   houston hooks check          report which hooks are installed
   houston doctor               full environment check

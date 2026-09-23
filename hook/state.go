@@ -3,7 +3,7 @@
 //
 // Two subdirectories under the state dir:
 //
-//	<state-dir>/claude/<session-id>.json  — rich per-Claude-session state
+//	<state-dir>/claude/<session-id>.json  — per-session state, any engine
 //	<state-dir>/*.json                    — legacy pane-keyed status (see status/)
 //
 // Hooks write to the former. The server's hub watches both.
@@ -68,6 +68,15 @@ type SessionState struct {
 	Since     int64 `json:"since,omitempty"` // unix-sec state entered
 	UpdatedAt int64 `json:"updated_at"`      // unix-sec last hook fired
 	PID       int   `json:"pid,omitempty"`
+
+	// Agent is the engine that produced this state ("claude", "codex",
+	// "cursor", "pi"). Empty for the native Claude payload path and for
+	// legacy files; hub.mergeStateIntoView defaults those to "claude".
+	Agent string `json:"agent,omitempty"`
+	// TurnTool records whether the current pi turn ran a tool, so a pi
+	// turn_end can tell an intermediate turn (another LLM call follows)
+	// from the final one. See apply's Stop/SubagentStop case.
+	TurnTool bool `json:"turn_tool,omitempty"`
 }
 
 // Read loads a state document. If the file is missing, returns zero value with nil error.

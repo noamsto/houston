@@ -311,6 +311,26 @@ func TestMergeStateIntoViewSurfacesLastMessageOnlyWhileWaiting(t *testing.T) {
 	}
 }
 
+func TestMergeStateIntoViewAgent(t *testing.T) {
+	tests := []struct {
+		name  string
+		agent string
+		want  string
+	}{
+		{"engine set", "pi", "pi"},
+		{"engine empty defaults to claude", "", "claude"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var v SessionView
+			mergeStateIntoView(&v, hook.SessionState{Agent: tt.agent})
+			if v.Agent != tt.want {
+				t.Errorf("Agent = %q, want %q", v.Agent, tt.want)
+			}
+		})
+	}
+}
+
 func TestPruneEnded(t *testing.T) {
 	dir := t.TempDir()
 	h := NewWithOptions(dir, Options{ClaudeProjectsDir: "-", PruneTTL: time.Hour}, silentLog())

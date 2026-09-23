@@ -109,6 +109,12 @@ describe('RunDetail', () => {
     expect(screen.getByText('feat/97-dogfood-houston-as-a-phone-user-and-file')).toBeTruthy()
     expect(screen.queryByText(/feat-97-dogfood-houston-as-a-phone-user-and-file\/feat/)).toBeNull()
   })
+
+  it('shows the agent chip in the header', () => {
+    const r = run({ agent: 'pi' })
+    render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="activity" />)
+    expect(screen.getByText('pi')).toBeTruthy()
+  })
 })
 
 describe('RunDetail terminal lifecycle', () => {

@@ -52,6 +52,7 @@ export function RunDetail({ runs, hasSnapshot, streamConnected, now, id, tab, on
             <span className="run-dot" style={{ background: `var(--state-${run.state}, var(--text-faint))` }} />
             <span className="run-detail-project">{projectOf(run)}</span>
             <span className="run-detail-name">{run.branch || nameLabel(run)}</span>
+            <span className="run-chip">{run.agent}</span>
             <span className="run-age">{agoLabel(run.updated_at, now)}</span>
           </div>
         )}

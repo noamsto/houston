@@ -1,9 +1,11 @@
 package hook
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -461,5 +463,49 @@ func TestDispatchClearsPaneWhenNoLongerUnderTmux(t *testing.T) {
 
 	if got.TmuxSession != "" || got.TmuxWindow != "" || got.TmuxPane != "" || got.TmuxServer != "" {
 		t.Errorf("coordinates not cleared outside tmux: %+v", got)
+	}
+}
+
+// TestDispatchConcurrentEventsDoNotLoseUpdates covers R4a: post_tool, turn_end,
+// prompt_submit and session_start all arrive as detached fire-and-forget
+// processes from hookyard, so concurrent Dispatch calls on the same session
+// must not silently clobber one another's read-modify-write.
+func TestDispatchConcurrentEventsDoNotLoseUpdates(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("TMUX_PANE", "")
+	t.Setenv("TMUX", "")
+
+	payload, err := json.Marshal(map[string]any{
+		"session_id":      "concurrent",
+		"hook_event_name": EventUserPromptSubmit,
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	const n = 50
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	wg.Add(n)
+	for range n {
+		go func() {
+			defer wg.Done()
+			errs <- Dispatch(EventUserPromptSubmit, dir, bytes.NewReader(payload))
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("Dispatch: %v", err)
+		}
+	}
+
+	got, err := Read(Path(dir, "concurrent"))
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if got.Turn != n {
+		t.Errorf("Turn = %d after %d concurrent UserPromptSubmit, want %d", got.Turn, n, n)
 	}
 }

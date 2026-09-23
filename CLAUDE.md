@@ -7,6 +7,7 @@ Mission control for AI coding agents. A mobile-friendly web dashboard for monito
 - **Claude Code** - via tmux session monitoring
 - **Amp** - via tmux session monitoring
 - **OpenCode** - via native API integration
+- **pi, Codex, Cursor** - via hookyard's normalized hook envelope (see "Hook ingestion" below); Fleet shows the engine as the run's `agent`
 
 ### OpenCode Setup
 
@@ -234,6 +235,69 @@ already verified in `TerminalPane.tsx` / `useTouchGestures.ts`.
 ## Navigation
 
 Every shell tab is a hash route — `#/fleet`, `#/crews`, `#/workspace`, `#/dispatch` (`ui/src/fleet/routes.ts`, `useShellTab`) — so Back/Forward move between tabs and reload restores the tab. A run detail (`#/fleet/<id>/<tab>`) keeps the tab it was opened from, and its back button returns there. On mobile a tab tap always writes the hash (closing the detail overlay); on desktop the detail is a persistent pane, so a rail switch while a run is selected is state-only (no history entry, not restored on reload).
+
+## Hook ingestion
+
+`houston hook` (`hook.Dispatch`) accepts two shapes on stdin, auto-detected by
+a non-empty top-level `engine` field (Claude's native payload never has one):
+Claude Code's native hook payload, or hookyard's normalized envelope
+(`{engine, canonical_event, native_event, session_id, cwd, tool_name,
+tool_input, native}`, `native` carrying the engine's own payload). In envelope
+mode the envelope's own event is authoritative and a CLI `<event>` arg is
+ignored (that arg exists for `houston hooks install`'s native Claude
+registrations, which never send an envelope).
+
+`engine: claude-code` decodes `native` as today's `Event` and runs the native
+Claude path unchanged. Other engines map canonical events onto houston's
+internal (Claude) event vocabulary:
+
+| envelope | houston event | notes |
+|---|---|---|
+| `session_start` | SessionStart | |
+| `prompt_submit` | UserPromptSubmit | Turn++ |
+| `pre_tool` | PreToolUse | tool + hint from the envelope's normalized `tool_name`/`tool_input` |
+| `post_tool` | PostToolUse | |
+| `pre_compact` | PreCompact | |
+| `turn_end` | Stop | see pi exception below |
+| `""` + pi `session_shutdown` | SessionEnd | |
+| anything else | — | no-op: no state-file write |
+
+`TranscriptPath` comes from the native payload's `transcript_path`, else pi's
+`session_file`.
+
+**pi exception:** pi fires `turn_end` after every LLM response, not just the
+final one, so a naive `turn_end` → waiting would flap a pi card to "waiting"
+between every tool batch. A state-file field `turn_tool` (set only by
+`pre_tool`, which hookyard runs synchronously in its verdict lane, so it lands
+before that turn's `turn_end`) tracks whether the turn that just ended ran a
+tool: a pi `turn_end` with `turn_tool` set stays `thinking`; only a no-tool
+turn goes `waiting`. Known limit: an aborted pi run whose last turn ran a tool
+stays `thinking` until its next event. pi has no Notification, so a pi run
+never shows a permission prompt.
+
+The state file records `agent` (`claude`/`codex`/`cursor`/`pi`); an empty
+value (legacy files, native Claude hooks, transcript-discovered sessions)
+reads as `claude` — the default lives in `hub.mergeStateIntoView`, not in the
+hook package.
+
+`Dispatch` serializes its read-modify-write with a `flock` on
+`<state-dir>/claude/.lock`, because hookyard fires most events (`post_tool`,
+`turn_end`, `prompt_submit`, `session_start`) as detached fire-and-forget
+processes that would otherwise race a Read→apply→Write and silently drop an
+update. The tmux `display-message` exec stays outside the lock.
+
+lazytmux does not set `@claude_status` on pi (or codex/cursor) panes, so the
+tmux layer never lists them on its own — they reach Fleet through the hooks
+layer only, keyed by the same pane id, so the tmux layer still supplies
+branch/crew enrichment and terminal caps. `runs/crewjoin.go`'s `resolvePane`
+also gates on `@claude_status`, so a pi crew worker's bus record doesn't join
+its pane yet.
+
+The hub's transcript parser is Claude's: a pi session file yields preview text
+but no trail/tokens.
+
+`SessionState.PID` is the hook's parent process — under hookyard that is the
+router, not the agent — and isn't read anywhere in houston.
 
 ## Project and role (Fleet)
 
