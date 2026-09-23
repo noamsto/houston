@@ -11,7 +11,20 @@ import "github.com/noamsto/houston/tmux"
 // A candidate's @claude_status must be non-empty because that is TmuxSource's
 // own test for "this pane is an agent run" — joining onto a shell pane would
 // let the crew layer's Agent promote that shell into a listed run.
-func resolvePane(bus, branch string, wins []tmux.WindowOptions, panes []tmux.PaneOptions, busOf func(gitRoot string) string) (paneID string, candidates int) {
+//
+// busState is the crew-bus Run.State for this branch, from the latest status
+// record. When busState is terminal (StateDone or StateFailed), the worker
+// session that wrote those bus records has ended — the record must not join to
+// any live pane, since the pane's current occupant is a different session.
+// A zero busState (dispatch-only branch with no status yet) is not terminal
+// and does not gate.
+func resolvePane(bus, branch string, busState State, wins []tmux.WindowOptions, panes []tmux.PaneOptions, busOf func(gitRoot string) string) (paneID string, candidates int) {
+	// A terminal bus state means the session that wrote those records ended.
+	// Do not join the stale record to a pane whose current occupant is a
+	// different (or any) session.
+	if busState == StateDone || busState == StateFailed {
+		return "", 0
+	}
 	byTarget := windowsByTarget(wins)
 	for _, p := range panes {
 		if p.ClaudeStatus == "" {
