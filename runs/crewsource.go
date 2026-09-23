@@ -268,11 +268,39 @@ type crewStatusBody struct {
 // own description: there is no worker text here to quote.
 const crewBlockedNoDetail = "Blocked, no detail given."
 
-// crewWatchdogNote is the question synthesised for a blocked status whose
-// source is "watchdog": the raw prefix-coded detail (e.g. "quiet: cleared —
-// awaited 300s, no reply (cycle 3 of 24)") is internal bookkeeping and must
-// never reach user-facing copy.
-const crewWatchdogNote = "Checking in — no reply needed."
+// crewWatchdogPromptNote and crewWatchdogQuotaNote are the questions synthesised
+// for a watchdog blocked status whose reserved prefix names something a human
+// can clear at the pane. The watchdog's own script detail (e.g. "prompt:
+// interactive prompt in pane %326 — ...") is dispatcher-facing and
+// prefix-coded, so it never reaches user-facing copy.
+const (
+	crewWatchdogPromptNote = "Parked on an interactive prompt in its pane — open the terminal and press Esc to dismiss it."
+	crewWatchdogQuotaNote  = "Parked on a rate-limit prompt in its pane — open the terminal and press Esc; it resumes from intact context."
+)
+
+// watchdogNeedsHuman reports whether a watchdog status's reserved detail prefix
+// names something a human must clear at the pane. prompt: (an interactive
+// prompt) and quota: (a rate-limit or session-limit refusal) are actionable
+// there; every other prefix — turn-stall:, quiet:, stalled:, load: — is
+// liveness bookkeeping for the dispatcher, and a watchdog status is never a
+// worker question by construction. dead: is posted as `failed`, so it never
+// reaches the blocked branch. Requiring the colon keeps a detail that merely
+// begins with the word from misclassifying.
+func watchdogNeedsHuman(detail string) bool {
+	prefix, _, ok := strings.Cut(detail, ":")
+	if !ok {
+		return false
+	}
+	return prefix == "prompt" || prefix == "quota"
+}
+
+func watchdogActionableNote(detail string) string {
+	prefix, _, _ := strings.Cut(detail, ":")
+	if prefix == "quota" {
+		return crewWatchdogQuotaNote
+	}
+	return crewWatchdogPromptNote
+}
 
 // deltasFromCrewLog folds one bus log into the latest state per branch. The bus
 // is append-only, so later records win.
@@ -354,13 +382,20 @@ func deltasFromCrewLog(rd io.Reader) map[string]Run {
 				}
 				r.Question = nil
 				if r.State == StateBlocked {
-					if body.Source == "watchdog" {
-						r.Question = &Question{Text: crewWatchdogNote, Via: "watchdog"}
-					} else {
+					switch {
+					case body.Source != "watchdog":
 						r.Question = &Question{Text: crewBlockedNoDetail, Via: "crew"}
 						if body.Detail != "" {
 							r.Question.Text = body.Detail
 						}
+					case watchdogNeedsHuman(body.Detail):
+						// Actionable at the pane: a human clears the prompt there, so
+						// the question routes to the terminal rather than the bus.
+						r.Question = &Question{Text: watchdogActionableNote(body.Detail), Via: "pane"}
+					default:
+						// Liveness bookkeeping the dispatcher owns; nobody is addressed,
+						// so it must not raise houston's attention badge.
+						r.State = StateRunning
 					}
 				}
 			}

@@ -62,7 +62,7 @@ export interface Activity {
 
 export interface Question {
   text: string
-  via: string // "pane" | "crew" | "watchdog"
+  via: string // "pane" | "crew" (legacy "watchdog" is no longer produced)
 }
 
 export interface Tokens {
