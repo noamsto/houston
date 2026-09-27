@@ -113,6 +113,24 @@ var (
 // connection failure: the current connection may be healthy.
 var ErrStaleGeneration = errors.New("tmux control client: stale generation")
 
+// PartialSendError reports that SendKeys wrote part of its input before the
+// control client's generation moved and the remaining segments were refused.
+// It is only ever returned in place of ErrStaleGeneration and unwraps to it,
+// so errors.Is(err, ErrStaleGeneration) still matches, while the counts let a
+// caller tell a partial paste apart from a full drop.
+type PartialSendError struct {
+	Sent  int // segments written before the refusal
+	Total int // segments the input decomposes into
+}
+
+func (e *PartialSendError) Error() string {
+	return fmt.Sprintf("tmux control client: sent %d of %d input segments before the connection changed", e.Sent, e.Total)
+}
+
+// Unwrap reports ErrStaleGeneration: a PartialSendError is a stale-generation
+// refusal with a count of what landed before it.
+func (e *PartialSendError) Unwrap() error { return ErrStaleGeneration }
+
 func NewControlClient(session string) *ControlClient {
 	cc := &ControlClient{
 		session:      session,
@@ -800,11 +818,55 @@ func (cc *ControlClient) Unsubscribe(paneID string, s *PaneSub) {
 	}
 }
 
+// keysSegment is one tmux send-keys call SendKeys makes for a chunk of input:
+// exactly one of literal, control, or key is meaningful.
+type keysSegment struct {
+	literal   string // printable run, sent with -l
+	isControl bool
+	control   byte   // raw control byte, sent by name
+	key       string // matched escape sequence, sent as a key name
+}
+
+// splitKeys decomposes mixed input into the send-keys calls SendKeys makes for
+// it, in order. isPrintable input never reaches here: SendKeys sends it as one
+// literal segment.
+func splitKeys(text string) []keysSegment {
+	var segs []keysSegment
+	i := 0
+	for i < len(text) {
+		b := text[i]
+		if b == 0x1b && i+1 < len(text) {
+			// Escape sequence — try to match and send as key name
+			if seqLen, name := matchEscSeq(text[i:]); seqLen > 0 {
+				segs = append(segs, keysSegment{key: name})
+				i += seqLen
+				continue
+			}
+		}
+		if b < 0x20 || b == 0x7f {
+			segs = append(segs, keysSegment{isControl: true, control: b})
+			i++
+			continue
+		}
+		// Collect run of printable bytes
+		j := i + 1
+		for j < len(text) && text[j] >= 0x20 && text[j] != 0x7f {
+			j++
+		}
+		segs = append(segs, keysSegment{literal: text[i:j]})
+		i = j
+	}
+	return segs
+}
+
 // SendKeys sends text to a pane via the control mode connection, refusing
 // with ErrStaleGeneration instead of writing if gen no longer names the live
 // connection. Printable text uses -l (literal) which supports UTF-8. Control
 // characters and escape sequences are mapped to tmux key names to avoid
-// embedding raw control bytes in the CC command string.
+// embedding raw control bytes in the CC command string. A mixed-content input
+// is several independent writes, so a generation that moves mid-input can
+// leave a prefix written; that case returns a *PartialSendError carrying how
+// many segments landed.
 func (cc *ControlClient) SendKeys(gen uint64, paneID, text string) error {
 	// Fast path: all printable text — send as literal
 	if isPrintable(text) {
@@ -813,35 +875,24 @@ func (cc *ControlClient) SendKeys(gen uint64, paneID, text string) error {
 
 	// Mixed content (e.g. paste with newlines): split into printable
 	// segments and control characters, send each appropriately.
-	i := 0
-	for i < len(text) {
-		b := text[i]
-		if b == 0x1b && i+1 < len(text) {
-			// Escape sequence — try to match and send as key name
-			if seqLen, name := matchEscSeq(text[i:]); seqLen > 0 {
-				if err := cc.sendSpecialKeyGated(gen, paneID, name); err != nil {
-					return err
-				}
-				i += seqLen
-				continue
-			}
+	segs := splitKeys(text)
+	for i, seg := range segs {
+		var err error
+		switch {
+		case seg.key != "":
+			err = cc.sendSpecialKeyGated(gen, paneID, seg.key)
+		case seg.isControl:
+			err = cc.sendControl(gen, paneID, seg.control)
+		default:
+			err = cc.sendLiteral(gen, paneID, seg.literal)
 		}
-		if b < 0x20 || b == 0x7f {
-			if err := cc.sendControl(gen, paneID, b); err != nil {
-				return err
-			}
-			i++
-		} else {
-			// Collect run of printable bytes
-			j := i + 1
-			for j < len(text) && text[j] >= 0x20 && text[j] != 0x7f {
-				j++
-			}
-			if err := cc.sendLiteral(gen, paneID, text[i:j]); err != nil {
-				return err
-			}
-			i = j
+		if err == nil {
+			continue
 		}
+		if errors.Is(err, ErrStaleGeneration) {
+			return &PartialSendError{Sent: i, Total: len(segs)}
+		}
+		return err
 	}
 	return nil
 }

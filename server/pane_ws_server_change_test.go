@@ -64,6 +64,20 @@ func expectClose(t *testing.T, conn *websocket.Conn, code int) {
 // frame is seen before the close arrives.
 func expectCloseWithoutSeed(t *testing.T, conn *websocket.Conn, code int) {
 	t.Helper()
+	expectCloseWithoutFrame(t, conn, code, "seed")
+}
+
+// expectCloseWithoutDims is expectClose, but also fails the moment a "dims"
+// frame is seen before the close arrives.
+func expectCloseWithoutDims(t *testing.T, conn *websocket.Conn, code int) {
+	t.Helper()
+	expectCloseWithoutFrame(t, conn, code, "dims")
+}
+
+// expectCloseWithoutFrame reads until the connection closes, asserting the
+// close code and failing the moment a frame of type forbidden arrives first.
+func expectCloseWithoutFrame(t *testing.T, conn *websocket.Conn, code int, forbidden string) {
+	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		if time.Now().After(deadline) {
@@ -85,8 +99,8 @@ func expectCloseWithoutSeed(t *testing.T, conn *websocket.Conn, code int) {
 		if err := json.Unmarshal(raw, &env); err != nil {
 			t.Fatalf("unmarshal envelope: %v", err)
 		}
-		if env.Type == "seed" {
-			t.Fatal("a seed frame reached the client before the close: a foreign seed was sent")
+		if env.Type == forbidden {
+			t.Fatalf("a %s frame reached the client before the close: a foreign frame was sent", forbidden)
 		}
 	}
 }
@@ -487,6 +501,36 @@ func TestPaneWSReconnectDuringInitialCaptureClosesWithoutSeed(t *testing.T) {
 	defer cleanup()
 
 	expectCloseWithoutSeed(t, conn, wsCloseServerChanged)
+
+	waitForRelease(t, cm)
+}
+
+// TestPaneWSReconnectDuringDimsFetchSendsNoDims covers #160: a reconnect
+// (generation bump) that also moves the pane to a new server, landing inside
+// the dims fetch, must not let the new server's pane size reach the client.
+// The fetch happens before the re-check and the write only after it, the same
+// order the seed path uses, so the socket closes 4409 with no dims frame.
+func TestPaneWSReconnectDuringDimsFetchSendsNoDims(t *testing.T) {
+	fakeTmux := newFakeTmux()
+	fakeTmux.paneID = "%1"
+	fakeTmux.setPaneSize(120, 40)
+	fakeTmux.setResolve(tmux.Pane{Server: "100"}, nil)
+
+	fakeCC := newFakeControlClient()
+	cm := newFakeControlManager(fakeCC)
+
+	var armed sync.Once
+	fakeTmux.setOnGetPaneSize(func() {
+		armed.Do(func() {
+			fakeTmux.setResolve(tmux.Pane{Server: "200"}, nil)
+			fakeCC.bumpGeneration()
+		})
+	})
+
+	conn, cleanup := startPaneWSWithPane(t, fakeTmux, cm, serverPane)
+	defer cleanup()
+
+	expectCloseWithoutDims(t, conn, wsCloseServerChanged)
 
 	waitForRelease(t, cm)
 }

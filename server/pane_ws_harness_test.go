@@ -48,6 +48,12 @@ type fakeTmux struct {
 	// hook for a test that needs to act mid-capture (e.g. reconnect the
 	// control client) without deadlocking on f.mu.
 	onCapture func()
+
+	// onGetPaneSize, when set, is called outside f.mu on every GetPaneSize —
+	// a hook for a test that needs to act after the dims fetch (e.g. move the
+	// pane to a new server and reconnect the control client) without
+	// deadlocking on f.mu.
+	onGetPaneSize func()
 }
 
 func newFakeTmux() *fakeTmux {
@@ -83,8 +89,13 @@ func (f *fakeTmux) ZoomPane(p tmux.Pane) error {
 
 func (f *fakeTmux) GetPaneSize(p tmux.Pane) (width, height int, err error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.paneWidth, f.paneHeight, nil
+	onSize := f.onGetPaneSize
+	width, height = f.paneWidth, f.paneHeight
+	f.mu.Unlock()
+	if onSize != nil {
+		onSize()
+	}
+	return width, height, nil
 }
 
 // CapturePane is deliberately independent of CapturePaneWithMode: the real
@@ -157,6 +168,21 @@ func (f *fakeTmux) setOnCapture(fn func()) {
 	f.onCapture = fn
 }
 
+// setOnGetPaneSize arms the GetPaneSize hook under f.mu, so setting it races
+// neither a concurrent GetPaneSize nor the read inside it.
+func (f *fakeTmux) setOnGetPaneSize(fn func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.onGetPaneSize = fn
+}
+
+// setPaneSize configures the dims GetPaneSize reports from this call on.
+func (f *fakeTmux) setPaneSize(w, h int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.paneWidth, f.paneHeight = w, h
+}
+
 func (f *fakeTmux) forceRedrawCalls() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -220,6 +246,11 @@ type fakeControlClient struct {
 	// for a test that needs to act mid-command (e.g. reconnect the control
 	// client) without deadlocking on c.mu.
 	onRun func(command string)
+
+	// sendErr, when set, is returned from SendKeys after the call is recorded
+	// as sent, so a test can drive the read loop's handling of a delivery
+	// failure (e.g. a partial paste).
+	sendErr error
 }
 
 func newFakeControlClient() *fakeControlClient {
@@ -354,7 +385,14 @@ func (c *fakeControlClient) SendKeys(gen uint64, paneID, text string) error {
 		paneID string
 		data   string
 	}{paneID, text})
-	return nil
+	return c.sendErr
+}
+
+// setSendErr configures the error SendKeys returns on a passing gate.
+func (c *fakeControlClient) setSendErr(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sendErr = err
 }
 
 func (c *fakeControlClient) runCalls() []string {
