@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import type { Run } from '../api/runs'
 import { fetchTool } from '../api/chat'
 import type { ChatToolDetail } from '../api/chat'
@@ -6,8 +6,9 @@ import { sendImage, sendKey, sendText } from '../api/terminal'
 import type { TerminalAddress } from '../api/terminal'
 import { useRunChat } from '../hooks/useRunChat'
 import { useStickyScroll } from '../hooks/useStickyScroll'
-import { buildItems, provisionalTool, reconcileOptimistic, toolsSummary } from './chatModel'
+import { buildItems, provisionalTool, reconcileOptimistic, toolRowLabel } from './chatModel'
 import type { AssistantItem, ChatItem, DividerItem, Optimistic, ToolCall, ToolsItem, UserItem } from './chatModel'
+import { kindGlyph, statusGlyph } from './chatGlyphs'
 import { ChatMarkdown } from './chatMarkdown'
 import { agoLabel, subtitle } from './format'
 
@@ -37,14 +38,16 @@ function UserBubble({ item }: { item: UserItem }) {
 function Divider({ item }: { item: DividerItem }) {
   return (
     <div className="chat-divider" data-seq={item.seq} data-id={item.id}>
+      <span className="chat-glyph" aria-hidden="true">⚑</span>
       {item.text}
     </div>
   )
 }
 
 /** Reveals `item.text` progressively over ~1s when `live`, else complete
- *  immediately. Each id is revealed only once — a later render of the same
- *  id (e.g. more text folded in) is shown complete right away. */
+ *  immediately. Text folded in mid-reveal continues from what is already
+ *  shown and finishes ~1s after the growth. Each id is revealed only once — a
+ *  later render of the same id after its reveal is shown complete right away. */
 function AssistantBubble({ item, live, reducedMotion, revealed, onRevealed, onTick }: {
   item: AssistantItem
   live: boolean
@@ -56,6 +59,7 @@ function AssistantBubble({ item, live, reducedMotion, revealed, onRevealed, onTi
   const shouldReveal = live && !reducedMotion && !revealed.has(item.id)
   const [display, setDisplay] = useState(shouldReveal ? '' : item.text)
   const [complete, setComplete] = useState(!shouldReveal)
+  const shownRef = useRef(0)
 
   useEffect(() => {
     if (!shouldReveal) {
@@ -64,18 +68,17 @@ function AssistantBubble({ item, live, reducedMotion, revealed, onRevealed, onTi
       return
     }
     const total = item.text.length
-    const perTick = Math.max(1, Math.ceil(total / REVEAL_TICKS))
-    let shown = 0
+    const perTick = Math.max(1, Math.ceil((total - shownRef.current) / REVEAL_TICKS))
     const timer = setInterval(() => {
-      shown += perTick
+      shownRef.current = Math.min(total, shownRef.current + perTick)
       onTick()
-      if (shown >= total) {
+      if (shownRef.current >= total) {
         setDisplay(item.text)
         setComplete(true)
         onRevealed(item.id)
         clearInterval(timer)
       } else {
-        setDisplay(item.text.slice(0, shown))
+        setDisplay(item.text.slice(0, shownRef.current))
       }
     }, REVEAL_MS / REVEAL_TICKS)
     return () => clearInterval(timer)
@@ -99,6 +102,7 @@ type ToolDetailState = { status: 'idle' } | { status: 'loading' } | { status: 'e
 
 function ToolCallRow({ call, runId }: { call: ToolCall; runId: string }) {
   const [detail, setDetail] = useState<ToolDetailState>({ status: 'idle' })
+  const status = statusGlyph(call.status)
 
   const handleClick = () => {
     if (detail.status === 'loading' || detail.status === 'ready') return
@@ -112,10 +116,21 @@ function ToolCallRow({ call, runId }: { call: ToolCall; runId: string }) {
   return (
     <div className="chat-tool-call">
       <button type="button" className="chat-tool-call-row" onClick={handleClick}>
+        <span className="chat-tool-kind" aria-hidden="true">{kindGlyph(call.kind)}</span>
         <span className="chat-tool-name">{call.tool}</span>
         {call.title && <span className="chat-tool-title">{call.title}</span>}
-        {call.status && <span className="chat-tool-status">{call.status}</span>}
-        {call.subagent && <span className="chat-tool-subagent">subagent</span>}
+        {call.status && (
+          <span className="chat-tool-status" data-status={call.status}>
+            {status && <span className="chat-glyph" aria-hidden="true">{status}</span>}
+            {call.status}
+          </span>
+        )}
+        {call.subagent && (
+          <span className="chat-tool-subagent">
+            <span className="chat-glyph" aria-hidden="true">⑂</span>
+            subagent
+          </span>
+        )}
       </button>
       {detail.status === 'loading' && <div className="chat-tool-detail">Loading…</div>}
       {detail.status === 'error' && <div className="chat-tool-detail error">Couldn't load tool detail</div>}
@@ -145,7 +160,14 @@ function ToolsRow({ item, runId }: { item: ToolsItem; runId: string }) {
         aria-expanded={expanded}
         onClick={() => setExpanded((e) => !e)}
       >
-        {toolsSummary(item.rows)}
+        {item.rows.map((row, i) => (
+          <Fragment key={i}>
+            {i > 0 && ' · '}
+            <span className="chat-glyph" aria-hidden="true">{kindGlyph(row.kind)}</span>
+            {toolRowLabel(row)}
+            {row.failed && <span className="chat-glyph-after" aria-hidden="true">✗</span>}
+          </Fragment>
+        ))}
       </button>
       {expanded && (
         <div className="chat-tools-calls">
@@ -173,18 +195,31 @@ function ChatItemRow({ item, runId, live, reducedMotion, revealed, onRevealed, o
   return <AssistantBubble item={item} live={live} reducedMotion={reducedMotion} revealed={revealed} onRevealed={onRevealed} onTick={onTick} />
 }
 
-function Composer({ run, onSend }: { run: Run; onSend: (text: string) => void }) {
+/** `onSend` resolves to an error reason, or null once the text was sent. */
+function Composer({ run, onSend }: { run: Run; onSend: (text: string) => Promise<string | null> }) {
   const [text, setText] = useState('')
+  const [sending, setSending] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const disabled = !run.caps.terminal
   const address: TerminalAddress = { kind: 'run', id: run.id }
 
+  const attempt = async (send: () => Promise<string | null>, clearsText: boolean) => {
+    setError(null)
+    setSending(true)
+    const err = await send()
+    setSending(false)
+    if (err) {
+      setError(err)
+      return
+    }
+    if (clearsText) setText('')
+  }
+
   const handleSend = () => {
     const trimmed = text.trim()
-    if (!trimmed) return
-    onSend(trimmed)
-    void sendText(address, trimmed)
-    setText('')
+    if (!trimmed || sending) return
+    void attempt(() => onSend(trimmed), true)
   }
 
   const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -193,15 +228,15 @@ function Composer({ run, onSend }: { run: Run; onSend: (text: string) => void })
     if (!file) return
     const sent = text.trim()
     const data = await readBase64(file)
-    void sendImage(address, sent, { name: file.name, type: file.type, data })
-    setText('')
+    void attempt(() => sendImage(address, sent, { name: file.name, type: file.type, data }), true)
   }
 
   return (
     <div className="chat-composer">
       {disabled && <div className="chat-composer-reason">No live terminal for this run</div>}
+      {error && <div className="chat-composer-error" role="alert">{error}</div>}
       <div className="chat-composer-row">
-        <button type="button" className="chat-composer-esc" disabled={disabled} onClick={() => void sendKey(address, 'Escape')}>
+        <button type="button" className="chat-composer-esc" disabled={disabled} onClick={() => void attempt(() => sendKey(address, 'Escape'), false)}>
           Esc
         </button>
         <textarea
@@ -219,10 +254,10 @@ function Composer({ run, onSend }: { run: Run; onSend: (text: string) => void })
           rows={1}
         />
         <input ref={fileInputRef} type="file" style={{ display: 'none' }} onChange={(e) => void handleFile(e)} />
-        <button type="button" className="chat-composer-attach" disabled={disabled} onClick={() => fileInputRef.current?.click()}>
-          📎
+        <button type="button" className="chat-composer-attach" aria-label="Attach image" disabled={disabled} onClick={() => fileInputRef.current?.click()}>
+          <span aria-hidden="true">⊕</span>
         </button>
-        <button type="button" className="chat-composer-send" disabled={disabled} onClick={handleSend}>
+        <button type="button" className="chat-composer-send" disabled={disabled || sending} onClick={handleSend}>
           Send
         </button>
       </div>
@@ -280,9 +315,12 @@ export function ChatTab({ run, now }: { run: Run; now: number }) {
     void loadEarlier()
   }
 
-  const handleSend = (text: string) => {
+  const handleSend = async (text: string) => {
     const localId = `local-${Date.now()}-${Math.random().toString(36).slice(2)}`
     setPending((p) => [...p, { localId, text, sentAt: Date.now() }])
+    const err = await sendText({ kind: 'run', id: run.id }, text)
+    if (err) setPending((p) => p.filter((x) => x.localId !== localId))
+    return err
   }
 
   if (status === 'loading') return <div className="run-detail-empty">Loading chat…</div>
@@ -339,11 +377,16 @@ export function ChatTab({ run, now }: { run: Run; now: number }) {
             <div className="chat-provisional" data-id="provisional">
               <span className="chat-tool-name">{provisional.tool}</span>
               {provisional.hint && <span className="activity-hint">{provisional.hint}</span>}
-              <span className="chat-provisional-marker">⋯</span>
+              <span className="chat-provisional-marker" aria-hidden="true">⋯</span>
             </div>
           )}
 
-          {(run.state === 'running' || run.state === 'thinking') && <div className="chat-working">working…</div>}
+          {(run.state === 'running' || run.state === 'thinking') && (
+            <div className="chat-working">
+              <span className="chat-working-dot" aria-hidden="true">●</span>
+              working…
+            </div>
+          )}
         </div>
 
         {!stuck && (

@@ -2,11 +2,10 @@ import { describe, expect, it } from 'vitest'
 import type { ChatUpdate } from '../api/chat'
 import {
   buildItems,
-  isCommentary,
   mergeUpdates,
   provisionalTool,
   reconcileOptimistic,
-  toolsSummary,
+  toolRowLabel,
 } from './chatModel'
 
 function textUpdate(id: string, seq: number, text: string, extra: Partial<ChatUpdate> = {}): ChatUpdate {
@@ -49,33 +48,38 @@ describe('mergeUpdates', () => {
   })
 })
 
-describe('isCommentary', () => {
+describe('commentary classification', () => {
+  function commentaryOf(updates: ChatUpdate[], id: string): boolean | undefined {
+    const item = buildItems(updates).find((i) => i.id === id)
+    return item?.kind === 'assistant' ? item.commentary : undefined
+  }
+
   it('is true when _meta.phase is explicitly commentary', () => {
     const u = textUpdate('a', 1, 'narrating', { _meta: { phase: 'commentary' } })
-    expect(isCommentary(u, [u])).toBe(true)
+    expect(commentaryOf([u], 'a')).toBe(true)
   })
 
   it('is true when a later tool_call shares the messageId', () => {
     const u = textUpdate('a', 1, 'about to read', { _meta: { messageId: 'm1' } })
     const call = toolCall('t1', 2, { _meta: { messageId: 'm1' } })
-    expect(isCommentary(u, [u, call])).toBe(true)
+    expect(commentaryOf([u, call], 'a')).toBe(true)
   })
 
   it('is false when the shared-messageId tool_call is earlier, not later', () => {
     const call = toolCall('t1', 1, { _meta: { messageId: 'm1' } })
     const u = textUpdate('a', 2, 'final answer', { _meta: { messageId: 'm1' } })
-    expect(isCommentary(u, [call, u])).toBe(false)
+    expect(commentaryOf([call, u], 'a')).toBe(false)
   })
 
   it('is false with no messageId and no explicit phase', () => {
     const u = textUpdate('a', 1, 'plain text')
-    expect(isCommentary(u, [u])).toBe(false)
+    expect(commentaryOf([u], 'a')).toBe(false)
   })
 
   it('is false when a later tool_call has a different messageId', () => {
     const u = textUpdate('a', 1, 'final answer', { _meta: { messageId: 'm1' } })
     const call = toolCall('t1', 2, { _meta: { messageId: 'm2' } })
-    expect(isCommentary(u, [u, call])).toBe(false)
+    expect(commentaryOf([u, call], 'a')).toBe(false)
   })
 })
 
@@ -119,11 +123,11 @@ describe('buildItems', () => {
 
   it('collapses a run of consecutive tool_calls into one tools item with per-tool rows', () => {
     const items = buildItems([
-      toolCall('t1', 1, { _meta: { tool: 'Read' } }),
+      toolCall('t1', 1, { kind: 'read', _meta: { tool: 'Read' } }),
       toolCallUpdate('u1', 2, 't1', { status: 'completed' }),
-      toolCall('t2', 3, { _meta: { tool: 'Read' } }),
+      toolCall('t2', 3, { kind: 'read', _meta: { tool: 'Read' } }),
       toolCallUpdate('u2', 4, 't2', { status: 'completed' }),
-      toolCall('t3', 5, { _meta: { tool: 'Edit' } }),
+      toolCall('t3', 5, { kind: 'edit', _meta: { tool: 'Edit' } }),
       toolCallUpdate('u3', 6, 't3', { status: 'completed' }),
     ])
     expect(items).toHaveLength(1)
@@ -132,10 +136,10 @@ describe('buildItems', () => {
     expect(tools.seq).toBe(1)
     expect(tools.calls.map((c) => c.status)).toEqual(['completed', 'completed', 'completed'])
     expect(tools.rows).toEqual([
-      { tool: 'Read', title: undefined, status: 'completed', count: 2, failed: false },
-      { tool: 'Edit', title: undefined, status: 'completed', count: 1, failed: false },
+      { tool: 'Read', kind: 'read', title: undefined, status: 'completed', count: 2, failed: false },
+      { tool: 'Edit', kind: 'edit', title: undefined, status: 'completed', count: 1, failed: false },
     ])
-    expect(toolsSummary(tools.rows)).toBe('Read ×2 · Edit')
+    expect(tools.rows.map(toolRowLabel)).toEqual(['Read ×2', 'Edit'])
   })
 
   it('never merges a failed call into a non-failed row of the same tool', () => {
@@ -177,6 +181,26 @@ describe('buildItems', () => {
 
   it('returns an empty list for no updates', () => {
     expect(buildItems([])).toEqual([])
+  })
+
+  it('classifies commentary in linear time: each tool_call _meta is read a bounded number of times', () => {
+    const n = 200
+    let metaReads = 0
+    const updates: ChatUpdate[] = []
+    for (let i = 0; i < n; i++) {
+      // Odd chunks never match a later tool_call, forcing a full scan per chunk.
+      const messageId = i % 2 === 0 ? `m${i}` : `final${i}`
+      updates.push(textUpdate(`a${i}`, 2 * i, `text ${i}`, { _meta: { messageId } }))
+      const call = toolCall(`t${i}`, 2 * i + 1)
+      const meta = { messageId: `m${i}`, tool: 'Read' }
+      Object.defineProperty(call, '_meta', { get: () => { metaReads++; return meta } })
+      updates.push(call)
+    }
+
+    const items = buildItems(updates)
+
+    expect(items.filter((i) => i.kind === 'assistant' && i.commentary)).toHaveLength(n / 2)
+    expect(metaReads).toBeLessThanOrEqual(n * 5)
   })
 })
 

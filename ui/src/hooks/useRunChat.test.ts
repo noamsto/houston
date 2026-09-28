@@ -114,6 +114,59 @@ describe('useRunChat', () => {
     expect(fake.instances[1].url).toBe('/api/runs/r1/chat/stream?after=e2.1')
   })
 
+  it('drops a loadEarlier page that resolves after an SSE reset, and aborts its fetch', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(page('e1', [upd(5), upd(6)], true)))
+    const { result } = renderHook(() => useRunChat('r1', true))
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    const first = fake.instances[0]
+
+    let resolveEarlier!: (r: Response) => void
+    fetchMock.mockReturnValueOnce(new Promise<Response>((resolve) => { resolveEarlier = resolve }))
+    let earlier!: Promise<void>
+    act(() => { earlier = result.current.loadEarlier() })
+    const earlierInit = fetchMock.mock.calls[1][1] as RequestInit
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(page('e2', [upd(1)], false)))
+    act(() => { first.emit('reset', null) })
+    await waitFor(() => expect(fake.instances.length).toBe(2))
+    expect(fake.instances[1].url).toBe('/api/runs/r1/chat/stream?after=e2.1')
+
+    await act(async () => {
+      resolveEarlier(jsonResponse(page('e1', [upd(3), upd(4)], false)))
+      await earlier
+    })
+
+    expect(earlierInit.signal?.aborted).toBe(true)
+    expect(result.current.updates.map((u) => u.seq)).toEqual([1])
+    expect(result.current.more).toBe(false)
+    expect(fake.instances.length).toBe(2)
+    expect(fake.instances[1].closed).toBe(false)
+  })
+
+  it('drops a loadEarlier page that resolves after retry()', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(page('e1', [upd(5), upd(6)], true)))
+    const { result } = renderHook(() => useRunChat('r1', true))
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+
+    let resolveEarlier!: (r: Response) => void
+    fetchMock.mockReturnValueOnce(new Promise<Response>((resolve) => { resolveEarlier = resolve }))
+    let earlier!: Promise<void>
+    act(() => { earlier = result.current.loadEarlier() })
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(page('e2', [upd(9)], true)))
+    act(() => { result.current.retry() })
+    await waitFor(() => expect(fake.instances.length).toBe(2))
+
+    await act(async () => {
+      resolveEarlier(jsonResponse(page('e1', [upd(3), upd(4)], false)))
+      await earlier
+    })
+
+    expect(result.current.updates.map((u) => u.seq)).toEqual([9])
+    expect(result.current.more).toBe(true)
+    expect(fake.instances.length).toBe(2)
+  })
+
   it('a 404 on the initial load sets status unavailable and opens no stream', async () => {
     fetchMock.mockResolvedValueOnce(notFoundResponse())
     const { result } = renderHook(() => useRunChat('r1', true))

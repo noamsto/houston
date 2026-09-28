@@ -7,6 +7,7 @@ import { installFakeEventSource } from '../testing/fakeEventSource'
 import type { FakeEventSourceHandle } from '../testing/fakeEventSource'
 
 const now = 1_800_000_000_000 // fixed ms
+const REVEAL_TICK_MS = 1000 / 16
 
 function run(p: Partial<Run> = {}): Run {
   return {
@@ -146,6 +147,52 @@ describe('ChatTab', () => {
     expect(Array.from(rows).map((r) => r.querySelector('.chat-tool-name')?.textContent)).toEqual(['Read', 'Read', 'Edit'])
   })
 
+  it('prefixes tool rows with aria-hidden kind glyphs and marks a failed call with ✗', async () => {
+    const { container } = await renderReady({}, {
+      page: page('e1', [
+        toolCall('t1', 1, 'Read', { kind: 'read' }),
+        toolCall('t2', 2, 'Read', { kind: 'read' }),
+        toolCall('t3', 3, 'Bash', { kind: 'execute', status: 'failed' }),
+        toolCall('t4', 4, 'Mystery', { kind: 'switch_mode', status: 'in_progress' }),
+      ]),
+    })
+
+    const toggle = screen.getByRole('button', { name: 'Read ×2 · Bash · Mystery' })
+    expect(toggle.textContent).toBe('▤Read ×2 · ❯Bash✗ · ◇Mystery')
+    const hidden = Array.from(toggle.querySelectorAll('[aria-hidden="true"]')).map((el) => el.textContent)
+    expect(hidden).toEqual(['▤', '❯', '✗', '◇'])
+
+    fireEvent.click(toggle)
+    const calls = within(container.querySelector('.chat-tools-calls')!)
+    const failedRow = calls.getByRole('button', { name: 'Bash failed' })
+    expect(failedRow.querySelector('.chat-tool-kind')?.textContent).toBe('❯')
+    const status = failedRow.querySelector('.chat-tool-status')!
+    expect(status.getAttribute('data-status')).toBe('failed')
+    expect(status.querySelector('[aria-hidden="true"]')?.textContent).toBe('✗')
+    expect(calls.getAllByRole('button', { name: 'Read completed' })[0].querySelector('.chat-tool-status [aria-hidden="true"]')?.textContent).toBe('✓')
+    expect(calls.getByRole('button', { name: 'Mystery in_progress' }).querySelector('.chat-tool-status [aria-hidden="true"]')?.textContent).toBe('◌')
+  })
+
+  it('gives the subagent tag, divider and working line aria-hidden glyphs', async () => {
+    const { container } = await renderReady({ state: 'running' }, {
+      page: page('e1', [
+        userChunk('d1', 1, 'ignored', { _meta: { origin: 'task-notification' } }),
+        toolCall('t1', 2, 'Task', { kind: 'think', _meta: { tool: 'Task', subagent: 'explorer' } }),
+      ]),
+    })
+
+    const divider = container.querySelector('[data-id="d1"]')!
+    expect(divider.querySelector('[aria-hidden="true"]')?.textContent).toBe('⚑')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Task' }))
+    const row = within(container.querySelector('.chat-tools-calls')!).getByRole('button', { name: 'Task completed subagent' })
+    expect(row.querySelector('.chat-tool-subagent [aria-hidden="true"]')?.textContent).toBe('⑂')
+
+    const working = container.querySelector('.chat-working')!
+    expect(working.querySelector('.chat-working-dot')?.getAttribute('aria-hidden')).toBe('true')
+    expect(working.textContent).toBe('●working…')
+  })
+
   it('fetches and shows a diff when an edit call is tapped', async () => {
     const { container, fetchMock } = await renderReady({}, {
       page: page('e1', [toolCall('t1', 1, 'Edit')]),
@@ -197,11 +244,12 @@ describe('ChatTab', () => {
   it('composer Send posts input and shows an optimistic bubble that reconciles on the matching chunk', async () => {
     const { fetchMock } = await renderReady({}, { page: page('e1', []) })
 
-    const textarea = screen.getByPlaceholderText('Message…')
+    const textarea = screen.getByPlaceholderText('Message…') as HTMLTextAreaElement
     fireEvent.change(textarea, { target: { value: 'ping the server' } })
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
 
-    expect(screen.getByText('ping the server')).toBeTruthy()
+    expect(document.querySelector('.chat-optimistic')?.textContent).toBe('ping the server')
+    await waitFor(() => expect(textarea.value).toBe(''))
     const [url, init] = fetchMock.mock.calls[fetchMock.mock.calls.length - 1] as [string, RequestInit?]
     expect(url).toBe('/api/runs/r1/input')
     expect(JSON.parse(String(init?.body))).toEqual({ type: 'text', text: 'ping the server' })
@@ -213,6 +261,33 @@ describe('ChatTab', () => {
 
     await waitFor(() => expect(document.querySelector('.chat-optimistic')).toBeNull())
     expect(screen.getByText('ping the server')).toBeTruthy()
+  })
+
+  it('a failed Send keeps the text, shows the error, and leaves no optimistic bubble', async () => {
+    const { fetchMock } = await renderReady({}, { page: page('e1', []) })
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes('/input')) return Promise.resolve({ status: 500, ok: false, json: async () => ({}), text: async () => 'boom' } as Response)
+      return Promise.resolve(jsonResponse(page('e1', [])))
+    })
+
+    const textarea = screen.getByPlaceholderText('Message…') as HTMLTextAreaElement
+    fireEvent.change(textarea, { target: { value: 'ping the server' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('HTTP 500'))
+    expect(textarea.value).toBe('ping the server')
+    expect(document.querySelector('.chat-optimistic')).toBeNull()
+  })
+
+  it('a failed Esc shows the error inline', async () => {
+    const { fetchMock } = await renderReady({}, { page: page('e1', []) })
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes('/input')) return Promise.resolve({ status: 401, ok: false, json: async () => ({}), text: async () => '' } as Response)
+      return Promise.resolve(jsonResponse(page('e1', [])))
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Esc' }))
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('session expired — reload'))
   })
 
   it('Esc chip sends the Escape key', async () => {
@@ -268,6 +343,37 @@ describe('ChatTab', () => {
 
       act(() => { vi.advanceTimersByTime(600) })
       expect(container.querySelector('[data-id="live1"]')!.textContent).toBe(full)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('typewriter: a live item that grows mid-reveal keeps its progress and finishes within ~1s of the growth', async () => {
+    const { container } = await renderReady({}, { page: page('e1', []) })
+    const es = fake.instances[0]
+    const first = 'the first streamed paragraph of this reply'
+    const second = 'a second paragraph folded into the same message'
+
+    vi.useFakeTimers()
+    try {
+      act(() => {
+        es.emit('updates', [textUpdate('a1', 1, first, { _meta: { messageId: 'm1' } })])
+      })
+      act(() => { vi.advanceTimersByTime(500) })
+      const mid = container.querySelector('[data-id="a1"]')!.textContent!
+      expect(mid.length).toBeGreaterThan(0)
+
+      act(() => {
+        es.emit('updates', [textUpdate('a2', 2, second, { _meta: { messageId: 'm1' } })])
+      })
+      act(() => { vi.advanceTimersByTime(REVEAL_TICK_MS) })
+      const afterGrowth = container.querySelector('[data-id="a1"]')!.textContent!
+      expect(afterGrowth.startsWith(mid)).toBe(true)
+      expect(afterGrowth.length).toBeGreaterThan(mid.length)
+
+      act(() => { vi.advanceTimersByTime(1100) })
+      const paragraphs = container.querySelectorAll('[data-id="a1"] p')
+      expect(Array.from(paragraphs).map((p) => p.textContent)).toEqual([first, second])
     } finally {
       vi.useRealTimers()
     }

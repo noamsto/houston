@@ -37,7 +37,11 @@ export function useRunChat(runId: string, enabled: boolean): UseRunChatResult {
 
   const epochRef = useRef<string | null>(null)
   const esRef = useRef<EventSource | null>(null)
-  const loadingEarlierRef = useRef(false)
+  // Bumped by every fresh load (mount, retry, SSE reset/reconnect) and by
+  // teardown, so a loadEarlier started under an older generation drops its
+  // result instead of overwriting newer state.
+  const generationRef = useRef(0)
+  const earlierRef = useRef<AbortController | null>(null)
   const updatesRef = useRef<ChatUpdate[]>([])
   const connRef = useRef<{ openStream: (epoch: string, seq: number) => void } | null>(null)
 
@@ -57,6 +61,12 @@ export function useRunChat(runId: string, enabled: boolean): UseRunChatResult {
     setLiveIds(new Set())
     setMore(false)
     epochRef.current = null
+
+    function newGeneration() {
+      generationRef.current++
+      earlierRef.current?.abort()
+      earlierRef.current = null
+    }
 
     function closeStream() {
       esRef.current?.close()
@@ -106,6 +116,7 @@ export function useRunChat(runId: string, enabled: boolean): UseRunChatResult {
     }
 
     async function loadNewest() {
+      newGeneration()
       try {
         const page = await fetchChatPage(runId, { limit: 50, signal: controller.signal })
         if (cancelled) return
@@ -132,6 +143,7 @@ export function useRunChat(runId: string, enabled: boolean): UseRunChatResult {
     return () => {
       cancelled = true
       controller.abort()
+      newGeneration()
       clearTimeout(retryTimer)
       closeStream()
       connRef.current = null
@@ -139,13 +151,16 @@ export function useRunChat(runId: string, enabled: boolean): UseRunChatResult {
   }, [runId, enabled, retryToken])
 
   const loadEarlier = useCallback(async () => {
-    if (!enabled || loadingEarlierRef.current || !more) return
+    if (!enabled || earlierRef.current || !more) return
     const oldest = updatesRef.current[0]?.seq
     if (oldest === undefined) return
 
-    loadingEarlierRef.current = true
+    const generation = generationRef.current
+    const controller = new AbortController()
+    earlierRef.current = controller
     try {
-      const page = await fetchChatPage(runId, { before: oldest, limit: 50 })
+      const page = await fetchChatPage(runId, { before: oldest, limit: 50, signal: controller.signal })
+      if (generation !== generationRef.current) return
       if (page.epoch !== epochRef.current) {
         epochRef.current = page.epoch
         setUpdates(page.updates)
@@ -157,9 +172,10 @@ export function useRunChat(runId: string, enabled: boolean): UseRunChatResult {
         setMore(page.more)
       }
     } catch (e) {
+      if (generation !== generationRef.current) return
       if (e instanceof ChatUnavailable) setStatus('unavailable')
     } finally {
-      loadingEarlierRef.current = false
+      if (earlierRef.current === controller) earlierRef.current = null
     }
   }, [runId, enabled, more])
 

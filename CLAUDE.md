@@ -546,4 +546,4 @@ This model is the primary defense; the following are additional layers:
 
 **Go:** `github.com/gorilla/websocket` and `github.com/fsnotify/fsnotify` (hub state-dir watcher) — the only external dependencies. Everything else is stdlib.
 
-**React:** `@xterm/xterm`, `@xterm/addon-fit`, `@xterm/addon-web-links`, `allotment`, `react`, `react-dom`, `react-markdown`, `remark-gfm`
+**React:** `@xterm/xterm`, `@xterm/addon-fit`, `@xterm/addon-web-links`, `allotment`, `react`, `react-dom`, `react-markdown`, `remark-gfm`, `remark-breaks`

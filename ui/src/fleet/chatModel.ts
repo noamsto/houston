@@ -9,15 +9,24 @@ export function mergeUpdates(existing: ChatUpdate[], incoming: ChatUpdate[]): Ch
 }
 
 /**
- * An `agent_message_chunk` is commentary when explicitly marked so, or when
- * a later tool_call in the same stream shares its messageId (R1: the reader
- * emits text immediately, before the tool call that follows it is known).
+ * Ids of the `agent_message_chunk`s that are commentary: explicitly marked
+ * so, or sharing a messageId with a later tool_call in the same stream (R1:
+ * the reader emits text immediately, before the tool call that follows it is
+ * known). One backwards pass over seq-ascending `sorted`.
  */
-export function isCommentary(u: ChatUpdate, all: ChatUpdate[]): boolean {
-  if (u._meta?.phase === 'commentary') return true
-  const messageId = u._meta?.messageId
-  if (!messageId) return false
-  return all.some((o) => o.sessionUpdate === 'tool_call' && o.seq > u.seq && o._meta?.messageId === messageId)
+function commentaryIds(sorted: ChatUpdate[]): Set<string> {
+  const ids = new Set<string>()
+  const laterToolMessageIds = new Set<string>()
+  for (let i = sorted.length - 1; i >= 0; i--) {
+    const u = sorted[i]
+    const meta = u._meta
+    if (u.sessionUpdate === 'tool_call') {
+      if (meta?.messageId) laterToolMessageIds.add(meta.messageId)
+    } else if (u.sessionUpdate === 'agent_message_chunk') {
+      if (meta?.phase === 'commentary' || (meta?.messageId && laterToolMessageIds.has(meta.messageId))) ids.add(u.id)
+    }
+  }
+  return ids
 }
 
 function textOf(u: ChatUpdate): string {
@@ -61,6 +70,7 @@ export interface ToolCall {
 
 export interface ToolRow {
   tool: string
+  kind?: string
   title?: string
   status?: string
   count: number
@@ -92,14 +102,14 @@ function toolRows(calls: ToolCall[]): ToolRow[] {
       last.status = call.status
       last.count++
     } else {
-      rows.push({ tool: call.tool, title: call.title, status: call.status, count: 1, failed })
+      rows.push({ tool: call.tool, kind: call.kind, title: call.title, status: call.status, count: 1, failed })
     }
   }
   return rows
 }
 
-export function toolsSummary(rows: ToolRow[]): string {
-  return rows.map((r) => (r.count > 1 ? `${r.tool} ×${r.count}` : r.tool)).join(' · ')
+export function toolRowLabel(row: ToolRow): string {
+  return row.count > 1 ? `${row.tool} ×${row.count}` : row.tool
 }
 
 /**
@@ -111,6 +121,7 @@ export function toolsSummary(rows: ToolRow[]): string {
  */
 export function buildItems(updates: ChatUpdate[]): ChatItem[] {
   const sorted = [...updates].sort((a, b) => a.seq - b.seq)
+  const commentary = commentaryIds(sorted)
   const items: ChatItem[] = []
   const toolCallsById = new Map<string, ToolCall>()
 
@@ -136,9 +147,9 @@ export function buildItems(updates: ChatUpdate[]): ChatItem[] {
       const messageId = u._meta?.messageId
       if (currentAssistant && messageId && messageId === currentAssistantMessageId) {
         currentAssistant.text += '\n\n' + textOf(u)
-        currentAssistant.commentary = currentAssistant.commentary || isCommentary(u, sorted)
+        currentAssistant.commentary = currentAssistant.commentary || commentary.has(u.id)
       } else {
-        currentAssistant = { kind: 'assistant', id: u.id, text: textOf(u), commentary: isCommentary(u, sorted), seq: u.seq }
+        currentAssistant = { kind: 'assistant', id: u.id, text: textOf(u), commentary: commentary.has(u.id), seq: u.seq }
         currentAssistantMessageId = messageId
         items.push(currentAssistant)
       }
