@@ -21,8 +21,8 @@ import (
 var ErrToolNotFound = errors.New("chat: tool call not found")
 
 // claude reads a Claude Code transcript (~/.claude/projects/<slug>/<sid>.jsonl).
-// See spec resolutions R1-R7 (docs/superpowers/specs/... slice-1 artifact) for
-// the mapping this implements.
+// The record mapping is measured in
+// docs/superpowers/specs/2026-09-27-mobile-chat-and-dispatcher-home.md.
 type claude struct {
 	logf func(string)
 
@@ -236,8 +236,8 @@ func (c *claude) decodeUser(rec claudeRecord, ts int64, nextID func() string, di
 		}
 	}
 
-	// R6 legacy fallback: no origin, not isMeta, not a tool_result — a
-	// human prompt iff its content is plain text not starting with "<".
+	// Older Claude Code writes no origin: a human prompt is then plain text
+	// not starting with "<".
 	t, ok := joinTextBlocks(text, blocks, isArray)
 	if !ok || strings.HasPrefix(t, "<") {
 		return nil

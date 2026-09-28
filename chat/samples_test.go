@@ -138,11 +138,8 @@ func checkSampleFile(t *testing.T, r Reader, path string) {
 
 		switch u.SessionUpdate {
 		case SessionUpdateUserMessageChunk:
-			// R6's human-prompt filter is specifically what keeps a
-			// "<system-reminder>"-style injected turn out of the human
-			// bubble; a task-notification legitimately starts with
-			// "<task-notification>" so that check is origin-less chunks
-			// only.
+			// A task-notification legitimately starts with "<", so the
+			// no-injected-text check covers origin-less chunks only.
 			if _, ok := u.Meta["origin"]; !ok {
 				userChunksNoOrigin++
 				for _, c := range u.Content {
@@ -200,7 +197,7 @@ func checkSubagentFile(t *testing.T, r Reader, path string) {
 // readIncrementalByLine mirrors the session's directory layout (including
 // any subagents dir, so subagent-link lookups behave identically) into a
 // temp dir, then replays the file one line at a time, carrying the cursor
-// forward, to check R1 chunking-independence against a real sample.
+// forward, to check chunking-independence against a real sample.
 func readIncrementalByLine(t *testing.T, r Reader, origPath string, data []byte) []Update {
 	t.Helper()
 

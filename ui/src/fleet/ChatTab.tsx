@@ -284,18 +284,14 @@ export function ChatTab({ run, now }: { run: Run; now: number }) {
   }, [pending.length])
 
   const reconciled = useMemo(() => reconcileOptimistic(pending, updates, nowTick), [pending, updates, nowTick])
-  // Drop confirmed bubbles during render (React's documented "adjusting
-  // state" pattern — see useTerminalLifecycle.ts) rather than in an effect:
-  // it's a pure function of `pending`/`updates`, so an effect would just be
-  // an extra cascading render for the same result.
+  // Drop confirmed bubbles during render (React's "adjusting state" pattern,
+  // as in useTerminalLifecycle.ts).
   if (reconciled.confirmed.length > 0) {
     setPending((p) => p.filter((x) => !reconciled.confirmed.includes(x.localId)))
   }
 
-  // "Since" is anchored to the newest update timestamp we've already seen,
-  // not wall-clock time: render must stay pure (no Date.now() here), and a
-  // transcript-relative cutoff is what `provisionalTool` compares `u.ts`
-  // against anyway — it also sidesteps client/server clock skew.
+  // "Since" is the newest transcript timestamp seen: provisionalTool compares
+  // it with u.ts, and render stays free of Date.now().
   const latestTs = updates.length ? updates[updates.length - 1].ts : 0
   const [toolShown, setToolShown] = useState<{ tool: string; since: number } | null>(
     run.activity.tool ? { tool: run.activity.tool, since: latestTs } : null,

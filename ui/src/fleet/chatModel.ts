@@ -10,9 +10,9 @@ export function mergeUpdates(existing: ChatUpdate[], incoming: ChatUpdate[]): Ch
 
 /**
  * Ids of the `agent_message_chunk`s that are commentary: explicitly marked
- * so, or sharing a messageId with a later tool_call in the same stream (R1:
- * the reader emits text immediately, before the tool call that follows it is
- * known). One backwards pass over seq-ascending `sorted`.
+ * so, or sharing a messageId with a later tool_call in the same stream (the
+ * reader emits text before the tool call that follows it is known). One
+ * backwards pass over seq-ascending `sorted`.
  */
 function commentaryIds(sorted: ChatUpdate[]): Set<string> {
   const ids = new Set<string>()

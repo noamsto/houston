@@ -296,9 +296,7 @@ func mergeInto(dst *Run, src Run) {
 	if src.Project != "" && dst.Project == "" {
 		dst.Project = src.Project
 	}
-	// First opinion wins, matching Project: only the hooks layer sets Session
-	// today, but composeLocked's precedence order must not let a later layer
-	// override a session another layer already named.
+	// First opinion wins, like Project.
 	if src.Session != "" && dst.Session == "" {
 		dst.Session = src.Session
 	}

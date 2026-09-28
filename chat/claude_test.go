@@ -106,7 +106,7 @@ func TestClaudeGolden(t *testing.T) {
 	}
 }
 
-// TestClaudeSubagentLink covers R3: _meta.subagent appears on the Agent
+// TestClaudeSubagentLink: _meta.subagent appears on the Agent
 // tool's tool_call_update only when the subagent file it names actually
 // exists next to the transcript.
 func TestClaudeSubagentLink(t *testing.T) {
@@ -164,7 +164,7 @@ func TestClaudeSubagentLink(t *testing.T) {
 	})
 }
 
-// TestClaudeUnknownOriginLogsOnce covers R7: an unknown origin.kind is
+// TestClaudeUnknownOriginLogsOnce: an unknown origin.kind is
 // reported once per distinct value, not once per record.
 func TestClaudeUnknownOriginLogsOnce(t *testing.T) {
 	raw, err := os.ReadFile(fixturePath("unknown_origin"))
