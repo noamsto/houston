@@ -1,20 +1,21 @@
 import { useCallback, useEffect, useState } from 'react'
 
-export type DetailTab = 'activity' | 'terminal'
+export type DetailTab = 'chat' | 'activity' | 'terminal'
 
 export interface DetailRoute {
   id: string
-  tab: DetailTab
+  tab?: DetailTab
 }
 
 export function parseDetailRoute(hash: string): DetailRoute | null {
   const m = hash.match(/^#\/fleet\/([^/]+)(?:\/([^/]*))?$/)
   if (!m) return null
-  return { id: m[1], tab: m[2] === 'terminal' ? 'terminal' : 'activity' }
+  if (m[2] === 'chat' || m[2] === 'activity' || m[2] === 'terminal') return { id: m[1], tab: m[2] }
+  return { id: m[1] }
 }
 
-export function runHash(id: string, tab: DetailTab = 'activity'): string {
-  return `#/fleet/${id}/${tab}`
+export function runHash(id: string, tab?: DetailTab): string {
+  return tab ? `#/fleet/${id}/${tab}` : `#/fleet/${id}`
 }
 
 export function useDetailRoute(): DetailRoute | null {

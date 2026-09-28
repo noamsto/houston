@@ -291,7 +291,7 @@ describe('DispatchView submit', () => {
     rerender(<DispatchView runs={[run({ id: 'crew:w', branch: 'feat/7-x', crew: { name: '200-1' } })]} />)
 
     const link = screen.getByRole('link', { name: 'Open run' }) as HTMLAnchorElement
-    expect(link.getAttribute('href')).toBe('#/fleet/crew:w/activity')
+    expect(link.getAttribute('href')).toBe('#/fleet/crew:w')
     expect(screen.queryByText(/Waiting for it to appear/)).toBeNull()
   })
 

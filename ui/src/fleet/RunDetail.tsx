@@ -9,7 +9,7 @@ import { useStickyScroll } from '../hooks/useStickyScroll'
 import { ReplyComposer } from './ReplyComposer'
 import './fleet.css'
 
-type Tab = 'activity' | 'terminal'
+type Tab = 'chat' | 'activity' | 'terminal'
 
 interface RunDetailProps {
   runs: Run[]
@@ -17,7 +17,7 @@ interface RunDetailProps {
   streamConnected: boolean
   now: number
   id: string
-  tab: Tab
+  tab?: Tab
   onBack?: () => void
   backLabel?: string
 }
@@ -41,6 +41,8 @@ export function RunDetail({ runs, hasSnapshot, streamConnected, now, id, tab, on
   // it, every cold deep link would flash "not found" for the one tick before
   // the initial SSE snapshot lands.
   const run = hasSnapshot ? runs.find((r) => r.id === id) : undefined
+  // No Chat tab UI yet: an undefined or 'chat' route tab renders as Activity.
+  const resolvedTab: Exclude<Tab, 'chat'> = tab === undefined || tab === 'chat' ? 'activity' : tab
 
   return (
     <div className="run-detail">
@@ -67,13 +69,13 @@ export function RunDetail({ runs, hasSnapshot, streamConnected, now, id, tab, on
           <button type="button" className="run-detail-back-cta" onClick={onBack}>Back to {backLabel}</button>
         </div>
       ) : (
-        <RunDetailBody run={run} tab={tab} streamConnected={streamConnected} now={now} onBack={onBack} backLabel={backLabel} />
+        <RunDetailBody run={run} tab={resolvedTab} streamConnected={streamConnected} now={now} onBack={onBack} backLabel={backLabel} />
       )}
     </div>
   )
 }
 
-function RunDetailBody({ run, tab, streamConnected, now, onBack, backLabel }: { run: Run; tab: Tab; streamConnected: boolean; now: number; onBack: () => void; backLabel: string }) {
+function RunDetailBody({ run, tab, streamConnected, now, onBack, backLabel }: { run: Run; tab: Exclude<Tab, 'chat'>; streamConnected: boolean; now: number; onBack: () => void; backLabel: string }) {
   const capable = run.caps.terminal && Boolean(run.tmux)
   const lifecycle = useTerminalLifecycle(run.id, capable, tab === 'terminal', streamConnected)
 
@@ -83,7 +85,7 @@ function RunDetailBody({ run, tab, streamConnected, now, onBack, backLabel }: { 
   // Terminal tab were never offered. Once it *has* gone live, a later
   // capability loss is shown explicitly instead (see the terminal branch
   // below) rather than silently falling back here.
-  const effectiveTab: Tab = tab === 'terminal' && !run.caps.terminal && !lifecycle.everLive ? 'activity' : tab
+  const effectiveTab: Exclude<Tab, 'chat'> = tab === 'terminal' && !run.caps.terminal && !lifecycle.everLive ? 'activity' : tab
 
   return (
     <>
