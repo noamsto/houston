@@ -7,6 +7,7 @@ import { TerminalPane } from '../components/TerminalPane'
 import { useTerminalLifecycle } from './useTerminalLifecycle'
 import { useStickyScroll } from '../hooks/useStickyScroll'
 import { ReplyComposer } from './ReplyComposer'
+import { ChatTab } from './ChatTab'
 import './fleet.css'
 
 type Tab = 'chat' | 'activity' | 'terminal'
@@ -41,8 +42,6 @@ export function RunDetail({ runs, hasSnapshot, streamConnected, now, id, tab, on
   // it, every cold deep link would flash "not found" for the one tick before
   // the initial SSE snapshot lands.
   const run = hasSnapshot ? runs.find((r) => r.id === id) : undefined
-  // No Chat tab UI yet: an undefined or 'chat' route tab renders as Activity.
-  const resolvedTab: Exclude<Tab, 'chat'> = tab === undefined || tab === 'chat' ? 'activity' : tab
 
   return (
     <div className="run-detail">
@@ -69,23 +68,31 @@ export function RunDetail({ runs, hasSnapshot, streamConnected, now, id, tab, on
           <button type="button" className="run-detail-back-cta" onClick={onBack}>Back to {backLabel}</button>
         </div>
       ) : (
-        <RunDetailBody run={run} tab={resolvedTab} streamConnected={streamConnected} now={now} onBack={onBack} backLabel={backLabel} />
+        <RunDetailBody run={run} tab={tab} streamConnected={streamConnected} now={now} onBack={onBack} backLabel={backLabel} />
       )}
     </div>
   )
 }
 
-function RunDetailBody({ run, tab, streamConnected, now, onBack, backLabel }: { run: Run; tab: Exclude<Tab, 'chat'>; streamConnected: boolean; now: number; onBack: () => void; backLabel: string }) {
+function RunDetailBody({ run, tab, streamConnected, now, onBack, backLabel }: { run: Run; tab?: Tab; streamConnected: boolean; now: number; onBack: () => void; backLabel: string }) {
   const capable = run.caps.terminal && Boolean(run.tmux)
   const lifecycle = useTerminalLifecycle(run.id, capable, tab === 'terminal', streamConnected)
+  const chatOffered = Boolean(run.caps.chat)
 
   // A deep link to `.../terminal` for a run that has never actually gone live
   // (never had, or already lost, terminal capability before the view ever
   // mounted it) isn't an error — it degrades to Activity, the same as if the
   // Terminal tab were never offered. Once it *has* gone live, a later
   // capability loss is shown explicitly instead (see the terminal branch
-  // below) rather than silently falling back here.
-  const effectiveTab: Exclude<Tab, 'chat'> = tab === 'terminal' && !run.caps.terminal && !lifecycle.everLive ? 'activity' : tab
+  // below) rather than silently falling back here. An undefined or 'chat'
+  // route tab resolves to Chat when offered, else Activity; an explicit
+  // 'activity' always wins even when Chat is offered.
+  const effectiveTab: Tab =
+    tab === 'terminal'
+      ? !run.caps.terminal && !lifecycle.everLive ? 'activity' : 'terminal'
+      : tab === 'activity'
+        ? 'activity'
+        : chatOffered ? 'chat' : 'activity'
 
   return (
     <>
@@ -93,6 +100,16 @@ function RunDetailBody({ run, tab, streamConnected, now, onBack, backLabel }: { 
         <button type="button" className="run-detail-tabs-back" onClick={onBack} aria-label={`Back to ${backLabel}`}>
           <span aria-hidden>‹</span> {backLabel}
         </button>
+        {chatOffered && (
+          <button
+            type="button"
+            className={effectiveTab === 'chat' ? 'on' : ''}
+            aria-pressed={effectiveTab === 'chat'}
+            onClick={() => goToTab(run.id, 'chat')}
+          >
+            Chat
+          </button>
+        )}
         <button
           type="button"
           className={effectiveTab === 'activity' ? 'on' : ''}
@@ -113,7 +130,9 @@ function RunDetailBody({ run, tab, streamConnected, now, onBack, backLabel }: { 
         )}
       </nav>
       <div className={`run-detail-body${effectiveTab === 'terminal' ? ' terminal' : ''}`}>
-        {effectiveTab === 'activity' ? (
+        {effectiveTab === 'chat' ? (
+          <ChatTab key={run.id} run={run} now={now} />
+        ) : effectiveTab === 'activity' ? (
           <ActivityTab key={run.id} run={run} now={now} />
         ) : !run.tmux ? (
           <div className="run-detail-empty">Terminal — coming soon.</div>
