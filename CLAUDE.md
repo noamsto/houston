@@ -419,9 +419,14 @@ conversation. Design and measured per-engine mapping:
   from byte 0: the hub ring (`hub/chat.go`, 500 per session) and a scroll-back
   re-read of the file land on the same seqs, across houston restarts too.
 - **Epoch**: every cursor is `<epoch>.<seq>`, epoch = a hash of (session id,
-  ring generation); the raw session id never reaches the wire. The generation
-  bumps when the transcript shrinks or its path changes. A new session in the
-  same pane is a new run `Session`, hence a new epoch.
+  transcript path, hash of the file's first line, ring generation); the raw
+  session id never reaches the wire. The generation bumps when the reader
+  reports a reset (the file shrank, or the bytes before the cursor changed —
+  `chat.Cursor.Pending` fingerprints them) or the path changes; it restarts at
+  0 with houston, which is why the file identity is in the hash. A brand-new
+  session whose file has no complete line yet resets once when its first line
+  lands. A new session in the same pane is a new run `Session`, hence a new
+  epoch.
 - **`_meta` keys**: `messageId` (on text chunks and tool calls), `tool` (tool
   name — `title` is the human hint), `origin: task-notification` (rendered as
   a divider), `subagent` (on the Agent/Task call's update). The claude reader
@@ -440,7 +445,9 @@ conversation. Design and measured per-engine mapping:
   then EOF on an epoch mismatch, a cursor the ring can't serve, the run's
   Session changing (checked every 2 s), or the session going away;
   `GET /api/runs/{id}/chat/tool/{callId}` → name/input/output/diff, texts
-  capped at 16 KiB. Ladder: 503 no registry · 404 `no such run` · 404 `no chat`.
+  capped at 16 KiB and an input over 16 KiB omitted (both set `truncated`); a
+  failed call carries its error output and no diff. Ladder: 503 no registry ·
+  404 `no such run` · 404 `no chat`.
 - **Real-transcript check**: `HOUSTON_SAMPLES=<dir> go test -tags samples ./chat/`
   replays `<dir>/claude-code/*.jsonl` and logs counts only; it skips when
   unset. Never commit transcript content — fixtures under `chat/testdata/` are
@@ -539,4 +546,4 @@ This model is the primary defense; the following are additional layers:
 
 **Go:** `github.com/gorilla/websocket` and `github.com/fsnotify/fsnotify` (hub state-dir watcher) — the only external dependencies. Everything else is stdlib.
 
-**React:** `@xterm/xterm`, `@xterm/addon-fit`, `@xterm/addon-web-links`, `allotment`, `react`, `react-dom`
+**React:** `@xterm/xterm`, `@xterm/addon-fit`, `@xterm/addon-web-links`, `allotment`, `react`, `react-dom`, `react-markdown`, `remark-gfm`

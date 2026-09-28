@@ -1,10 +1,12 @@
 package hub
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"io/fs"
+	"os"
 	"strconv"
 
 	"github.com/noamsto/houston/chat"
@@ -24,6 +26,7 @@ const chatRingSize = 500
 type chatState struct {
 	reader chat.Reader
 	path   string
+	head   string // firstLineHash of path, captured whenever the stream starts at byte 0
 	cursor chat.Cursor
 	gen    uint64
 	total  uint64        // Seq of the newest update
@@ -38,9 +41,38 @@ type ChatPage struct {
 	More    bool          `json:"more"`
 }
 
-func chatEpoch(sessionID string, gen uint64) string {
-	sum := sha256.Sum256([]byte(sessionID + "\x00" + strconv.FormatUint(gen, 10)))
+// chatEpoch names a stream. gen restarts at 0 with houston, so the epoch
+// also names the file (path and first line): after a restart, an epoch a
+// client already holds can only come back for the same transcript.
+func chatEpoch(sessionID, path, head string, gen uint64) string {
+	sum := sha256.Sum256([]byte(sessionID + "\x00" + path + "\x00" + head + "\x00" + strconv.FormatUint(gen, 10)))
 	return hex.EncodeToString(sum[:])[:12]
+}
+
+func (c *chatState) epoch(sessionID string) string {
+	return chatEpoch(sessionID, c.path, c.head, c.gen)
+}
+
+// firstLineHash hashes the file's first complete line, or returns "" while
+// it has none. It streams, so a huge first line costs no memory.
+func firstLineHash(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = f.Close() }()
+	h := sha256.New()
+	r := bufio.NewReader(f)
+	for {
+		chunk, err := r.ReadSlice('\n')
+		h.Write(chunk)
+		if err == nil {
+			return hex.EncodeToString(h.Sum(nil))
+		}
+		if !errors.Is(err, bufio.ErrBufferFull) {
+			return ""
+		}
+	}
 }
 
 // chatLocked returns the session's chat state, creating it on first use, or
@@ -69,6 +101,7 @@ func (c *chatState) setPath(path string) {
 
 func (c *chatState) restart(path string) {
 	c.path = path
+	c.head = ""
 	c.cursor = chat.Cursor{}
 	c.gen++
 	c.total = 0
@@ -108,7 +141,7 @@ func (c *chatState) slice(from, to uint64) []chat.Update {
 }
 
 func (c *chatState) page(sessionID string, from, to uint64) ChatPage {
-	return ChatPage{Epoch: chatEpoch(sessionID, c.gen), Updates: c.slice(from, to), More: from > 1 && from < to}
+	return ChatPage{Epoch: c.epoch(sessionID), Updates: c.slice(from, to), More: from > 1 && from < to}
 }
 
 // pageFrom is the oldest seq of a limit-sized page ending before before.
@@ -134,7 +167,9 @@ func (h *Hub) chatFor(sessionID string) (*Session, *chatState, error) {
 
 // refreshChat reads the transcript's new complete lines into the ring. The
 // read runs outside h.mu; its result is dropped if the stream restarted or
-// advanced meanwhile.
+// advanced meanwhile. A stream starting at byte 0 also (re)captures the
+// file's first line for the epoch; while the file has none, the first one to
+// arrive changes the epoch, so a brand-new session's stream resets once.
 func (h *Hub) refreshChat(sessionID string) {
 	h.mu.Lock()
 	sess, ok := h.sessions[sessionID]
@@ -147,7 +182,7 @@ func (h *Hub) refreshChat(sessionID string) {
 		h.mu.Unlock()
 		return
 	}
-	reader, path, cursor, gen := c.reader, c.path, c.cursor, c.gen
+	reader, path, cursor, gen, head := c.reader, c.path, c.cursor, c.gen, c.head
 	h.mu.Unlock()
 
 	updates, next, reset, err := reader.Read(path, cursor)
@@ -157,17 +192,22 @@ func (h *Hub) refreshChat(sessionID string) {
 		}
 		return
 	}
+	newHead := head
+	if reset || head == "" {
+		newHead = firstLineHash(path)
+	}
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.sessions[sessionID] != sess || c.gen != gen || c.path != path || c.cursor.Offset != cursor.Offset {
+	if h.sessions[sessionID] != sess || c.gen != gen || c.path != path || c.head != head || c.cursor.Offset != cursor.Offset {
 		return
 	}
 	if reset {
 		c.restart(path)
 	}
+	c.head = newHead
 	c.cursor = next
-	if len(updates) == 0 && !reset {
+	if len(updates) == 0 && !reset && newHead == head {
 		return
 	}
 	for _, u := range updates {
@@ -209,7 +249,7 @@ func (h *Hub) ChatPage(sessionID string, before uint64, limit int) (ChatPage, er
 		h.mu.Unlock()
 		return p, nil
 	}
-	reader, path, gen, total := c.reader, c.path, c.gen, c.total
+	reader, path, gen, head, total := c.reader, c.path, c.gen, c.head, c.total
 	h.mu.Unlock()
 
 	all, _, _, err := reader.Read(path, chat.Cursor{})
@@ -233,13 +273,13 @@ func (h *Hub) ChatPage(sessionID string, before uint64, limit int) (ChatPage, er
 	if h.sessions[sessionID] != sess {
 		return ChatPage{}, ErrNoChat
 	}
-	if c.gen != gen || c.path != path {
+	if c.gen != gen || c.path != path || c.head != head {
 		// The stream restarted under the re-read; its newest page is
 		// always inside the ring (limit ≤ 100 < chatRingSize).
 		to := c.total + 1
 		return c.page(sessionID, max(c.first(), pageFrom(to, limit)), to), nil
 	}
-	return ChatPage{Epoch: chatEpoch(sessionID, gen), Updates: ups, More: len(ups) > 0 && ups[0].Seq > 1}, nil
+	return ChatPage{Epoch: chatEpoch(sessionID, path, head, gen), Updates: ups, More: len(ups) > 0 && ups[0].Seq > 1}, nil
 }
 
 // ChatSince returns the ring's updates with seq > after. ok is false when
@@ -253,7 +293,7 @@ func (h *Hub) ChatSince(sessionID, epoch string, after uint64) ([]chat.Update, b
 	if err != nil {
 		return nil, false, err
 	}
-	if epoch != chatEpoch(sessionID, c.gen) || after > c.total || after+1 < c.first() {
+	if epoch != c.epoch(sessionID) || after > c.total || after+1 < c.first() {
 		return nil, false, nil
 	}
 	return c.slice(after+1, c.total+1), true, nil
@@ -267,7 +307,7 @@ func (h *Hub) ChatEpoch(sessionID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return chatEpoch(sessionID, c.gen), nil
+	return c.epoch(sessionID), nil
 }
 
 // ChatSubscribe returns a channel signalled (coalescing, never blocking the

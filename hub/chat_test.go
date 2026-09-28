@@ -410,6 +410,105 @@ func TestChatTranscriptPathChangeResets(t *testing.T) {
 	}
 }
 
+// epochAfterRestart starts a fresh hub over f's state dir, as a houston
+// restart would, and returns its epoch once it has read up to seq want.
+func (f *chatFixture) epochAfterRestart(want uint64) string {
+	f.t.Helper()
+	h := NewWithOptions(f.dir, Options{ClaudeProjectsDir: "-"}, silentLog())
+	startHub(f.t, h)
+	sid := f.state.SessionID
+	waitUntil(f.t, fmt.Sprintf("restarted hub at seq %d", want), func() bool {
+		p, err := h.ChatPage(sid, 0, 1)
+		return err == nil && len(p.Updates) == 1 && p.Updates[0].Seq == want
+	})
+	e, err := h.ChatEpoch(sid)
+	if err != nil {
+		f.t.Fatalf("restarted hub ChatEpoch: %v", err)
+	}
+	return e
+}
+
+func TestChatEpochSurvivesRestartOfAnUnchangedFile(t *testing.T) {
+	f := newChatFixture(t, "chat-r1", "", humans(1, 3))
+	f.waitNewest(3)
+	if got, want := f.epochAfterRestart(3), f.epoch(); got != want {
+		t.Errorf("epoch after restart = %s, want %s", got, want)
+	}
+}
+
+// A stale client's epoch must not name different content after a restart:
+// the in-process renumber moved this hub to generation 1, and a fresh hub
+// starts back at generation 0 over the rewritten file.
+func TestChatEpochAfterRenumberAndRestartIsNew(t *testing.T) {
+	f := newChatFixture(t, "chat-r2", "", humans(1, 5))
+	f.waitNewest(5)
+	stale := f.epoch()
+
+	if err := os.WriteFile(f.transcript, []byte(humans(6, 7)), 0o644); err != nil {
+		t.Fatalf("rewrite transcript: %v", err)
+	}
+	f.poke()
+	waitUntil(t, "epoch change", func() bool { return f.epoch() != stale })
+	f.waitNewest(2)
+
+	if got := f.epochAfterRestart(2); got == stale {
+		t.Errorf("restarted hub reuses the stale epoch %s for different content", got)
+	}
+}
+
+func TestChatEpochNamesTheTranscriptPath(t *testing.T) {
+	body := humans(1, 2)
+	f := newChatFixture(t, "chat-r3", "", body)
+	f.waitNewest(2)
+	before := f.epoch()
+
+	moved := filepath.Join(t.TempDir(), "moved.jsonl")
+	if err := os.WriteFile(moved, []byte(body), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+	f.state.TranscriptPath = moved
+	f.poke()
+
+	if got := f.epochAfterRestart(2); got == before {
+		t.Errorf("epoch %s unchanged after the transcript path changed", got)
+	}
+}
+
+// A brand-new session's file has no complete line yet, so its identity is
+// unknown; the first line makes it known, which resets the stream once.
+func TestChatEmptySessionResetsOnceOnItsFirstLine(t *testing.T) {
+	f := newChatFixture(t, "chat-r4", "", "")
+	waitUntil(t, "chat state", func() bool { _, err := f.h.ChatEpoch("chat-r4"); return err == nil })
+	empty := f.epoch()
+
+	ch, unsub, err := f.h.ChatSubscribe("chat-r4")
+	if err != nil {
+		t.Fatalf("ChatSubscribe: %v", err)
+	}
+	defer unsub()
+
+	f.appendAndPoke(humans(1, 1))
+	f.waitNewest(1)
+	known := f.epoch()
+	if known == empty {
+		t.Fatalf("epoch %s unchanged once the first line arrived", known)
+	}
+	select {
+	case <-ch:
+	default:
+		t.Error("subscriber not notified")
+	}
+
+	f.appendAndPoke(humans(2, 2))
+	f.waitNewest(2)
+	if e := f.epoch(); e != known {
+		t.Errorf("epoch changed on a later append: %s → %s", known, e)
+	}
+	if got := f.epochAfterRestart(2); got != known {
+		t.Errorf("epoch after restart = %s, want %s", got, known)
+	}
+}
+
 func TestChatNoChat(t *testing.T) {
 	f := newChatFixture(t, "chat-pi", "pi", humans(1, 2))
 	for _, sid := range []string{"chat-pi", "no-such-session"} {

@@ -22,6 +22,8 @@ const (
 
 	// maxChatToolText caps each of a tool detail's output, oldText and
 	// newText, so one huge Read or Write result can't balloon the response.
+	// An input over it (a Write's carries the whole file) is omitted rather
+	// than cut, since a cut would no longer be JSON.
 	maxChatToolText = 16 << 10
 
 	// chatStartPage is how far back a cursorless stream starts when the
@@ -313,7 +315,11 @@ func (s *Server) handleRunChatTool(w http.ResponseWriter, r *http.Request) {
 		Title:      u.Title,
 		Kind:       u.Kind,
 		Status:     u.Status,
-		Input:      u.RawInput,
+	}
+	if len(u.RawInput) > maxChatToolText {
+		d.Truncated = true
+	} else {
+		d.Input = u.RawInput
 	}
 	d.Name, _ = u.Meta["tool"].(string)
 	capText := func(s string) string {

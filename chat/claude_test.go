@@ -377,6 +377,50 @@ func TestClaudeTruncationResets(t *testing.T) {
 	}
 }
 
+// TestClaudeRegrowPastCursorResets: a file truncated and regrown past the
+// cursor (or replaced at the same path) between two reads is no longer the
+// stream the cursor points into, even though it isn't shorter than Offset.
+func TestClaudeRegrowPastCursorResets(t *testing.T) {
+	first := `{"type":"user","timestamp":"2024-01-01T00:00:00.000Z","origin":{"kind":"human"},"message":{"role":"user","content":"old session"}}` + "\n"
+	replaced := `{"type":"user","timestamp":"2024-01-02T00:00:00.000Z","origin":{"kind":"human"},"message":{"role":"user","content":"new session, one"}}` + "\n" +
+		`{"type":"user","timestamp":"2024-01-02T00:00:01.000Z","origin":{"kind":"human"},"message":{"role":"user","content":"new session, two"}}` + "\n"
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "s1.jsonl")
+	if err := os.WriteFile(path, []byte(first), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := NewClaude(nil)
+	_, cur, _, err := r.Read(path, Cursor{})
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+
+	if err := os.WriteFile(path, []byte(replaced), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, next, reset, err := r.Read(path, cur)
+	if err != nil {
+		t.Fatalf("Read after regrow: %v", err)
+	}
+	if !reset {
+		t.Fatalf("reset = false after the file was replaced by a longer one")
+	}
+	want, wantNext, _, _ := r.Read(path, Cursor{})
+	if !equalUpdates(t, got, want) {
+		t.Fatalf("updates after reset:\n got: %s\nwant: %s", marshalUpdates(t, got), marshalUpdates(t, want))
+	}
+	if next.Offset != wantNext.Offset {
+		t.Errorf("next.Offset = %d, want %d", next.Offset, wantNext.Offset)
+	}
+
+	// A cursor without a fingerprint (written before it existed) keeps the
+	// size-only check.
+	if _, _, reset, _ := r.Read(path, Cursor{Offset: cur.Offset}); reset {
+		t.Errorf("reset = true for a cursor with no fingerprint")
+	}
+}
+
 func TestClaudeConcurrentUse(t *testing.T) {
 	raw, err := os.ReadFile(fixturePath("tool_detail"))
 	if err != nil {
@@ -495,6 +539,56 @@ func TestClaudeTool(t *testing.T) {
 		_, err := r.Tool(path, "does-not-exist")
 		if !errors.Is(err, ErrToolNotFound) {
 			t.Fatalf("err = %v, want ErrToolNotFound", err)
+		}
+	})
+}
+
+// TestClaudeToolFailedEditHasNoDiff: a failed or denied edit changed
+// nothing, so its detail carries the error output and no diff — a diff
+// built from the input would read as if it had been applied.
+func TestClaudeToolFailedEditHasNoDiff(t *testing.T) {
+	path := fixturePath("tool_errors")
+	r := NewClaude(nil)
+
+	for _, tc := range []struct {
+		name, id, wantText string
+	}{
+		{"Edit", "toolu_edit_err", "<tool_use_error>String to replace not found in file.\nString: foo</tool_use_error>"},
+		{"MultiEdit", "toolu_multi_err", "<tool_use_error>File has not been read yet. Read it first before writing to it.</tool_use_error>"},
+		{"Write with string toolUseResult", "toolu_write_err", "The user doesn't want to proceed with this tool use. The tool use was rejected."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			u, err := r.Tool(path, tc.id)
+			if err != nil {
+				t.Fatalf("Tool: %v", err)
+			}
+			if u.Status != StatusFailed {
+				t.Errorf("Status = %q, want %q", u.Status, StatusFailed)
+			}
+			if got := findText(u.Content); got != tc.wantText {
+				t.Errorf("output text = %q, want %q", got, tc.wantText)
+			}
+			if d := findDiff(u.Content); d != nil {
+				t.Errorf("failed call carries a diff: %+v", d)
+			}
+		})
+	}
+
+	// Without toolUseResult the original file is unknown, so a diff from
+	// the input would show an overwrite as a creation.
+	t.Run("Write without toolUseResult", func(t *testing.T) {
+		u, err := r.Tool(path, "toolu_write_nores")
+		if err != nil {
+			t.Fatalf("Tool: %v", err)
+		}
+		if u.Status != StatusCompleted {
+			t.Errorf("Status = %q, want %q", u.Status, StatusCompleted)
+		}
+		if d := findDiff(u.Content); d != nil {
+			t.Errorf("Write without toolUseResult carries a diff: %+v", d)
+		}
+		if got := findText(u.Content); got != "File created successfully at: /tmp/e.go" {
+			t.Errorf("output text = %q", got)
 		}
 	})
 }

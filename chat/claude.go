@@ -3,6 +3,8 @@ package chat
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -106,7 +108,7 @@ func (c *claude) Read(path string, from Cursor) (updates []Update, next Cursor, 
 	}
 
 	offset := from.Offset
-	if info.Size() < offset {
+	if info.Size() < offset || (len(from.Pending) > 0 && !bytes.Equal(from.Pending, tailPrint(f, offset))) {
 		reset = true
 		offset = 0
 	}
@@ -137,7 +139,29 @@ func (c *claude) Read(path string, from Cursor) (updates []Update, next Cursor, 
 		}
 	}
 
-	return updates, Cursor{Offset: pos}, reset, nil
+	return updates, Cursor{Offset: pos, Pending: tailPrint(f, pos)}, reset, nil
+}
+
+// tailPrintLen is how many bytes before a cursor's Offset its fingerprint
+// covers.
+const tailPrintLen = 64
+
+// tailPrint fingerprints the bytes just before offset, so a Read can tell
+// that the file under a cursor was replaced even when it isn't shorter —
+// truncated and regrown past Offset, or a new file at the same path. It is
+// nil at offset 0, where there is nothing to lose.
+func tailPrint(f *os.File, offset int64) json.RawMessage {
+	if offset <= 0 {
+		return nil
+	}
+	n := min(offset, tailPrintLen)
+	buf := make([]byte, n)
+	if _, err := f.ReadAt(buf, offset-n); err != nil {
+		return nil
+	}
+	sum := sha256.Sum256(buf)
+	b, _ := json.Marshal(hex.EncodeToString(sum[:]))
+	return b
 }
 
 func (c *claude) decodeLine(line []byte, lineOffset int64, dir, sid string) []Update {
@@ -400,6 +424,10 @@ func (c *claude) Tool(path, toolCallID string) (*Update, error) {
 		u.Status = StatusCompleted
 	}
 	u.Content = toolResultContent(result.Content)
+	if result.IsError {
+		// A failed or denied edit changed nothing; its output is the error.
+		return u, nil
+	}
 	if diff := buildDiff(name, input, tr); diff != nil {
 		u.Content = append(u.Content, *diff)
 	}
@@ -438,6 +466,11 @@ func buildDiff(name string, input json.RawMessage, tr claudeToolUseResult) *Cont
 		}
 		return &Content{Type: "diff", Path: in.FilePath, OldText: strings.Join(olds, "\n\n"), NewText: strings.Join(news, "\n\n")}
 	case "Write":
+		// Without toolUseResult the original file is unknown, and a diff
+		// from the input alone would show an overwrite as a creation.
+		if tr.FilePath == "" {
+			return nil
+		}
 		old := ""
 		if tr.OriginalFile != nil {
 			old = *tr.OriginalFile

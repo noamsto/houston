@@ -80,9 +80,9 @@ type Location struct {
 }
 
 // Cursor is a Reader's resume point. Offset is the byte offset of the next
-// unread line. Pending carries engine-specific carry-over state across
-// reads (open message ids, in-flight call ids); the claude reader never
-// sets it because every mapping decision is made from a single line.
+// unread line. Pending is reader-private carry-over state, opaque to
+// callers; the claude reader keeps a fingerprint of the bytes before Offset
+// there so a replaced file is detected.
 type Cursor struct {
 	Offset  int64           `json:"offset"`
 	Pending json.RawMessage `json:"pending,omitempty"`
@@ -95,9 +95,9 @@ type Reader interface {
 	// Engine names the engine this Reader handles (e.g. "claude-code").
 	Engine() string
 	// Read returns the updates since from, and the cursor to resume at.
-	// reset is true when the file was shorter than from.Offset (truncation
-	// or a reused path); the caller must treat the returned updates as a
-	// fresh stream starting at ordinal 1.
+	// reset is true when the file no longer continues from from (it got
+	// shorter, or the bytes before Offset changed); the caller must treat the
+	// returned updates as a fresh stream starting at ordinal 1.
 	Read(path string, from Cursor) (updates []Update, next Cursor, reset bool, err error)
 	// Tool returns the full detail (rawInput, output/diff) of one tool
 	// call, for the expand-on-tap route. ErrToolNotFound if no tool_use

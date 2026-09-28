@@ -19,7 +19,9 @@
 // a trailing partial line is left for the next call (the returned Cursor's
 // Offset stops before it). No Update is ever replaced or retracted by a
 // Reader — an ID, once emitted, is final. If the file is shorter than the
-// Cursor's Offset (truncation, or a new session reusing the same path),
+// Cursor's Offset, or no longer holds the bytes the Cursor was taken after
+// (truncated and regrown, or a new session reusing the same path — a Reader
+// may fingerprint them in Cursor.Pending, which callers treat as opaque),
 // Read reports reset=true and starts over from offset 0; the caller is
 // responsible for treating that as a new stream (new epoch, ordinals
 // restart) since Seq itself is assigned by the caller, not the Reader.

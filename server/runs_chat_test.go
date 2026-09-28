@@ -757,6 +757,33 @@ func TestRunChatToolUnderTheCapIsNotTruncated(t *testing.T) {
 	}
 }
 
+func TestRunChatToolOmitsAnOversizedInput(t *testing.T) {
+	content, _ := json.Marshal(strings.Repeat("a", 64<<10))
+	f := newFakeChat(1)
+	f.tools["big"] = &chat.Update{ToolCallID: "big", Meta: map[string]any{"tool": "Write"},
+		RawInput: json.RawMessage(`{"file_path":"/p","content":` + string(content) + `}`)}
+	f.tools["small"] = &chat.Update{ToolCallID: "small", Meta: map[string]any{"tool": "Write"},
+		RawInput: json.RawMessage(`{"file_path":"/p","content":"x"}`)}
+	s := newChatServer(t, f, chatSID)
+
+	for _, tc := range []struct {
+		id        string
+		wantInput bool
+	}{{"big", false}, {"small", true}} {
+		rec := doChat(t, s, chatRunPath(t, s)+"/tool/"+tc.id)
+		var got map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("%s: decode: %v", tc.id, err)
+		}
+		if _, ok := got["input"]; ok != tc.wantInput {
+			t.Errorf("%s: input present = %v, want %v (%d bytes)", tc.id, ok, tc.wantInput, rec.Body.Len())
+		}
+		if got["truncated"] != !tc.wantInput {
+			t.Errorf("%s: truncated = %v, want %v", tc.id, got["truncated"], !tc.wantInput)
+		}
+	}
+}
+
 // --- auth ---
 
 func TestRunChatRoutesAreBehindTheAuthGate(t *testing.T) {
