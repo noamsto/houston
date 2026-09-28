@@ -124,6 +124,13 @@ func TestRunFromSessionViewCarriesTheAgent(t *testing.T) {
 	}
 }
 
+func TestRunFromSessionViewSetsSession(t *testing.T) {
+	_, r := runFromSessionView(hub.SessionView{SessionID: "abc-123"}, "")
+	if r.Session != "abc-123" {
+		t.Errorf("Session = %q, want abc-123 — the chat lookup key", r.Session)
+	}
+}
+
 func TestHookSourceDefaultsALegacyStateToClaude(t *testing.T) {
 	st := hook.SessionState{SessionID: "legacy", State: hook.StateIdle, UpdatedAt: time.Now().Unix()}
 	out, _ := startHookSourceWith(t, nil, st, nil)

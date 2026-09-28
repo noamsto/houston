@@ -33,6 +33,10 @@ type Run struct {
 	Since     int64 `json:"since,omitempty"`
 	UpdatedAt int64 `json:"updated_at"`
 
+	// Session is the hub session id the hooks layer named. Internal — used to
+	// look up the run's chat transcript — and never on the wire.
+	Session string `json:"-"`
+
 	// Stale means a source stopped reporting. The Run keeps its last known
 	// values and says so; it is never a State, because a stale run still has
 	// one.
@@ -131,4 +135,7 @@ type Caps struct {
 	Terminal bool `json:"terminal"`
 	Reply    bool `json:"reply"`
 	Kill     bool `json:"kill"`
+	// Chat is true when the hooks layer names a session whose engine has a
+	// chat reader (chat.For(Agent) != nil).
+	Chat bool `json:"chat"`
 }

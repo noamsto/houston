@@ -396,6 +396,7 @@ func runFromSessionView(v hub.SessionView, project string) (string, Run) {
 		Branch:    branch,
 		Project:   project,
 		Worktree:  v.CWD,
+		Session:   v.SessionID,
 		UpdatedAt: v.UpdatedAt,
 		Since:     v.Since,
 		Tokens:    Tokens{Input: v.InputTokens, Output: v.OutputTokens},

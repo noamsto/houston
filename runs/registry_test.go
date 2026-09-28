@@ -2,6 +2,7 @@ package runs
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -907,5 +908,103 @@ func TestForeignHookRunAndItsFormerPaneComposeAsTwoRuns(t *testing.T) {
 	}
 	if !paneRun.Caps.Terminal {
 		t.Errorf("pane Caps.Terminal = false, want true — the pane's own run still owns it")
+	}
+}
+
+func TestRunSessionNeverSerialized(t *testing.T) {
+	r := NewRegistry(DefaultOrder)
+	r.Apply(Delta{Source: "hooks", Key: "%1", Run: Run{Agent: "claude", Session: "sess-abc"}})
+
+	b, err := json.Marshal(r.Snapshot()[0])
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	for k := range m {
+		if strings.EqualFold(k, "session") {
+			t.Fatalf("wire payload has key %q, want Session never serialized", k)
+		}
+	}
+}
+
+func TestMergeIntoSessionFirstNonEmptyWins(t *testing.T) {
+	dst := Run{Session: "first"}
+	mergeInto(&dst, Run{Session: "second"})
+	if dst.Session != "first" {
+		t.Errorf("Session = %q, want first — first non-empty wins", dst.Session)
+	}
+
+	var empty Run
+	mergeInto(&empty, Run{Session: "filled"})
+	if empty.Session != "filled" {
+		t.Errorf("Session = %q, want filled — a src opinion fills an empty dst", empty.Session)
+	}
+}
+
+func TestRunSignatureIncludesSession(t *testing.T) {
+	r := NewRegistry(DefaultOrder)
+	sub := r.Subscribe()
+	defer r.Unsubscribe(sub)
+
+	r.Apply(Delta{Source: "hooks", Key: "%1", Run: Run{Agent: "claude", Session: "sess-a"}})
+	r.Apply(Delta{Source: "hooks", Key: "%1", Run: Run{Agent: "claude", Session: "sess-b"}})
+
+	if n := len(sub); n != 2 {
+		t.Fatalf("%d broadcasts, want 2 — a Session flip must reach a subscriber", n)
+	}
+}
+
+func TestCapsChat(t *testing.T) {
+	tests := []struct {
+		name  string
+		hooks *Run // nil means no hooks layer applied
+		tmux  bool
+		want  bool
+	}{
+		{"claude with session", &Run{Agent: "claude", Session: "sess-1"}, false, true},
+		{"pi with session", &Run{Agent: "pi", Session: "sess-1"}, false, false},
+		{"claude with no session", &Run{Agent: "claude"}, false, false},
+		{"tmux-only, no hooks layer", nil, true, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := NewRegistry(DefaultOrder)
+			if tt.tmux {
+				r.Apply(Delta{Source: "tmux", Key: "%1", Run: Run{Agent: "claude"}})
+			}
+			if tt.hooks != nil {
+				r.Apply(Delta{Source: "hooks", Key: "%1", Run: *tt.hooks})
+			}
+
+			got := r.Snapshot()
+			if len(got) != 1 {
+				t.Fatalf("%d runs, want 1", len(got))
+			}
+			if got[0].Caps.Chat != tt.want {
+				t.Errorf("Caps.Chat = %v, want %v", got[0].Caps.Chat, tt.want)
+			}
+		})
+	}
+}
+
+func TestCapsChatBroadcastsWhenSessionArrivesLater(t *testing.T) {
+	r := NewRegistry(DefaultOrder)
+	r.Apply(Delta{Source: "hooks", Key: "%1", Run: Run{Agent: "claude"}})
+
+	sub := r.Subscribe()
+	defer r.Unsubscribe(sub)
+
+	r.Apply(Delta{Source: "hooks", Key: "%1", Run: Run{Agent: "claude", Session: "sess-1"}})
+
+	select {
+	case run := <-sub:
+		if !run.Caps.Chat {
+			t.Errorf("Caps.Chat = false, want true once the hooks layer names a session")
+		}
+	default:
+		t.Fatal("no broadcast — a Session arriving must flip Caps.Chat and re-emit")
 	}
 }

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/noamsto/houston/chat"
 )
 
 // Delta is one source's view of one run. A source publishes only the fields it
@@ -179,14 +181,18 @@ func (r *Registry) composeLocked(key string) (Run, bool) {
 // disappears, whereas HookSource asserts from a cached ref that can outlive
 // the pane it names. A composed run can still carry a non-nil Tmux ref
 // (hooksource.go's cached ref) alongside Caps.Terminal == false — that's
-// intended: Caps is the affordance signal, not Tmux != nil.
+// intended: Caps is the affordance signal, not Tmux != nil. Chat is likewise
+// derived from the hooks layer's own Session and Agent, not the composed
+// run's — a lower layer's Agent must never grant it.
 func deriveCaps(bySource map[string]Run) Caps {
 	_, hasTmux := bySource["tmux"]
 	_, hasCrew := bySource["crew"]
+	hooks, hasHooks := bySource["hooks"]
 	return Caps{
 		Terminal: hasTmux,
 		Kill:     hasTmux,
 		Reply:    hasTmux || hasCrew,
+		Chat:     hasHooks && hooks.Session != "" && chat.For(hooks.Agent) != nil,
 	}
 }
 
@@ -249,6 +255,8 @@ func runSignature(r Run) string {
 	b.WriteByte('|')
 	b.WriteString(r.Activity.Tool + "," + r.Activity.Hint + "," + r.Activity.Message + "," + r.Activity.Task + "," + r.Activity.Preview)
 	b.WriteByte('|')
+	b.WriteString(r.Session)
+	b.WriteByte('|')
 	if r.Stale {
 		b.WriteByte('S')
 	}
@@ -260,6 +268,9 @@ func runSignature(r Run) string {
 	}
 	if r.Caps.Kill {
 		b.WriteByte('K')
+	}
+	if r.Caps.Chat {
+		b.WriteByte('C')
 	}
 	return b.String()
 }
@@ -284,6 +295,12 @@ func mergeInto(dst *Run, src Run) {
 	// lower layer took from the window's @git_root.
 	if src.Project != "" && dst.Project == "" {
 		dst.Project = src.Project
+	}
+	// First opinion wins, matching Project: only the hooks layer sets Session
+	// today, but composeLocked's precedence order must not let a later layer
+	// override a session another layer already named.
+	if src.Session != "" && dst.Session == "" {
+		dst.Session = src.Session
 	}
 	// A dispatcher window also carries a crew record, so the crew source's
 	// "worker" must not demote it.
