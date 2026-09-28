@@ -64,6 +64,7 @@ Houston scans ports 4096-4100 by default. Use `--no-opencode` to disable.
 │  POST /api/runs/:id/reply     - Reply to a run        │
 │  WS   /api/runs/:id/terminal  - Run terminal I/O      │
 │  POST /api/runs/:id/input     - Send text/key/image   │
+│  GET  /api/runs/:id/chat*     - Chat page, SSE, tool  │
 │  GET  /api/sessions?stream=1  - SSE session stream    │
 │  WS   /api/pane/:target/ws   - Pane I/O (bidi)        │
 │    (classic views only, pending removal)              │
@@ -127,7 +128,8 @@ houston/
 ├── terminal/
 │   └── font.go          # Terminal font size control (kitty)
 ├── agents/              # Agent type detection (claude-code, amp)
-├── hub/                 # Session discovery + transcript tracking
+├── chat/                # Standalone ACP transcript readers (stdlib only)
+├── hub/                 # Session discovery + transcript tracking + chat ring
 ├── runs/                # Run registry (tmux/hook/crew sources)
 ├── hook/                # Claude hook install/doctor/state
 ├── contrib/             # OpenCode plugin
@@ -396,6 +398,62 @@ the allowlist that bounds it lives there, not on the socket:
   routes) based on the `TerminalAddress` it's given — see
   `ui/src/api/terminal.ts`.
 
+## Chat
+
+A run's Chat tab renders the agent's own session transcript as a
+conversation. Design and measured per-engine mapping:
+`docs/superpowers/specs/2026-09-27-mobile-chat-and-dispatcher-home.md`
+(slice 1); what was built: `docs/superpowers/plans/2026-09-27-chat-tab-slice-1.md`.
+
+- **`chat/` is standalone**: it imports only the standard library
+  (`chat/boundary_test.go` fails otherwise) so it can move to its own module.
+  It speaks ACP `session/update` shapes (`chat.Update`: `user_message_chunk`,
+  `agent_message_chunk`, `tool_call`, `tool_call_update`) plus `id`/`seq`/`ts`.
+  `chat.For(agent)` picks the reader; only claude-code (`"claude"`,
+  `"claude-code"`) has one, so every other engine has no Chat tab yet.
+  `chat.ToolTitle` mirrors `hook.ToolHint`; `hub/chat_title_test.go` pins them.
+- **Readers must be chunking-independent**: reading a file in one call or in
+  any number of incremental calls yields the same updates. They consume only
+  complete lines, never replace an emitted update, and keep no per-file state
+  (safe for concurrent use). That is what makes `seq` = the update's ordinal
+  from byte 0: the hub ring (`hub/chat.go`, 500 per session) and a scroll-back
+  re-read of the file land on the same seqs, across houston restarts too.
+- **Epoch**: every cursor is `<epoch>.<seq>`, epoch = a hash of (session id,
+  transcript path, hash of the file's first line, ring generation); the raw
+  session id never reaches the wire. The generation bumps when the reader
+  reports a reset (the file shrank, or the bytes before the cursor changed —
+  `chat.Cursor.Pending` fingerprints them) or the path changes; it restarts at
+  0 with houston, which is why the file identity is in the hash. A brand-new
+  session whose file has no complete line yet resets once when its first line
+  lands. A new session in the same pane is a new run `Session`, hence a new
+  epoch.
+- **`_meta` keys**: `messageId` (on text chunks and tool calls), `tool` (tool
+  name — `title` is the human hint), `origin: task-notification` (rendered as
+  a divider), `subagent` (on the Agent/Task call's update). The claude reader
+  never sets `phase`: the UI treats a text chunk as commentary when
+  `_meta.phase == "commentary"` or a later `tool_call` shares its `messageId`.
+  Tool input and output never ride the stream; the tool route serves them.
+- **Run → session**: `runs.Run.Session` (`json:"-"`) is set by the hooks layer.
+  `caps.chat` is true when the key's hooks layer names a Session whose agent
+  has a reader (`deriveCaps`); the UI offers the tab from it (no probe), and it
+  is the default tab when the route names none (`#/fleet/<id>`).
+- **Routes** (`server/runs_chat.go`, behind the `/api/` auth gate; none touches
+  tmux): `GET /api/runs/{id}/chat?before=<seq>&limit=<≤100>` →
+  `{epoch, updates, more}`; `GET /api/runs/{id}/chat/stream?after=<epoch>.<seq>`
+  → SSE `updates` batches with `id: <epoch>.<last seq>` (`Last-Event-ID` wins
+  over `after`, so a native EventSource reconnect resumes with no gap), `reset`
+  then EOF on an epoch mismatch, a cursor the ring can't serve, the run's
+  Session changing (checked every 2 s), or the session going away;
+  `GET /api/runs/{id}/chat/tool/{callId}` → name/input/output/diff, texts
+  capped at 16 KiB and an input over 16 KiB omitted (both set `truncated`); a
+  failed call carries its error output and no diff. Ladder: 503 no registry ·
+  404 `no such run` · 404 `no chat`.
+- **Real-transcript check**: `HOUSTON_SAMPLES=<dir> go test -tags samples ./chat/`
+  replays `<dir>/claude-code/*.jsonl` and logs counts only; it skips when
+  unset. Never commit transcript content — fixtures under `chat/testdata/` are
+  hand-written. `go run -tags tools ./cmd/sessionlog <file>` prints a file as
+  ACP JSONL for eyeballing.
+
 ## Dispatch
 
 The Dispatch tab starts a worker by running the host's `dispatch` CLI
@@ -488,4 +546,4 @@ This model is the primary defense; the following are additional layers:
 
 **Go:** `github.com/gorilla/websocket` and `github.com/fsnotify/fsnotify` (hub state-dir watcher) — the only external dependencies. Everything else is stdlib.
 
-**React:** `@xterm/xterm`, `@xterm/addon-fit`, `@xterm/addon-web-links`, `allotment`, `react`, `react-dom`
+**React:** `@xterm/xterm`, `@xterm/addon-fit`, `@xterm/addon-web-links`, `allotment`, `react`, `react-dom`, `react-markdown`, `remark-gfm`, `remark-breaks`

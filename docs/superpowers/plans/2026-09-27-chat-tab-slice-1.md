@@ -8,6 +8,27 @@ Binding authority: `docs/superpowers/specs/2026-09-27-mobile-chat-and-dispatcher
 (slice 1, "Per-engine mapping (measured)"), which defers to
 `docs/superpowers/specs/2026-09-07-houston-overhaul-design.md`.
 
+## As built (where this plan changed during spec/plan review)
+
+Spec- and plan-critic review changed these points; the sections below are
+updated to match:
+
+- **Seq is the update's ordinal from byte 0**, which requires every reader
+  to be chunking-independent (complete lines only, no replaced updates, no
+  per-file reader state). The ring and a scroll-back re-read then agree on
+  seqs, across houston restarts too.
+- **Epoch cursor.** Every cursor is `<epoch>.<seq>`, epoch = hash(session id,
+  ring generation), so a new session in the same pane or a truncated file can
+  never be resumed into. Pages carry `epoch`; SSE ids are `<epoch>.<seq>`.
+- **Commentary** is derived by the consumer (`_meta.messageId` shared with a
+  later `tool_call`), not set by the claude reader: holding text back until its
+  message closed would delay narration, and re-emitting would break ordinals.
+- **Tab offering** uses a server-derived `caps.chat` instead of probing the
+  first page (a probe would also have broken an unchanged RunDetail test).
+- **Routes/test details**: tool output never rides the stream; the tool route
+  returns name/input/output/diff with each text capped at 16 KiB; the samples
+  test takes its directory from `HOUSTON_SAMPLES`.
+
 ## Problem
 
 A run's only readable history on a phone is the Activity tab (an 8-chip trail and
@@ -61,7 +82,7 @@ type Reader interface {
 
 type Cursor struct {
     Offset  int64           // bytes consumed
-    Pending json.RawMessage // reader-private carry-over (open message.id, in-flight calls)
+    Pending json.RawMessage // reader-private carry-over for engines that need it (claude needs none)
 }
 
 func For(engine string) Reader // nil = no reader (hook baseline, plan 1c)
@@ -90,7 +111,7 @@ Implements the spec's measured mapping, in ACP terms:
 | `type:user`, `origin.kind=="task-notification"` | `user_message_chunk` + `_meta.origin="task-notification"` (UI: divider) |
 | `type:user`, `isMeta` | dropped |
 | `type:user` with `tool_result` blocks | `tool_call_update` → `completed` / `failed` (`is_error`), matched by `tool_use_id` |
-| `type:assistant` `text` blocks | `agent_message_chunk`, text joined across records sharing `message.id`; `_meta.phase="commentary"` when the same message also holds a `tool_use` |
+| `type:assistant` `text` blocks | `agent_message_chunk` per text record (measured: never >1 text block per `message.id`), `_meta.messageId`; commentary = a later `tool_call` shares the messageId (derived by the UI) |
 | `type:assistant` `tool_use` | `tool_call` (`in_progress`, `title`, `kind`, `locations` from `file_path`/`path`) |
 | `type:assistant` `thinking` | dropped |
 | `attachment` `queued_command` with `commandMode:"prompt"` | `user_message_chunk` |
@@ -102,8 +123,11 @@ Implements the spec's measured mapping, in ACP terms:
   reader takes an optional `func(string)` logger, still stdlib-only).
 - Records without `origin` (older Claude Code): fall back to "role user,
   string content, not `isMeta`, not starting with `<`" — cover with a fixture.
-- `Pending` carries the open `message.id` and in-flight call ids so a read that
-  stops mid-message resumes correctly.
+- `isSidechain` records are dropped before any other rule; a subagent's
+  `_meta.subagent` goes on the call's `tool_call_update` (the agent id comes
+  from the result's `toolUseResult.agentId`).
+- Every mapping row is decidable from one line, so `Pending` stays nil and a
+  read stopping anywhere resumes exactly (only complete lines are consumed).
 
 **Fixtures:** hand-written minimal JSONL in `chat/testdata/claude/`, one per
 mapping row (split `message.id`, parallel tool calls, task-notification,
@@ -120,8 +144,10 @@ expected ACP JSONL. **Never copy real transcripts into the repo** —
   untouched — Fleet cards must not change.
 - The ring publishes to per-session subscribers (same pattern as `Subscribe`, but
   keyed by session id and only created while a chat stream is open).
-- `Hub.Chat(sessionID, before Seq, limit)` for pages; beyond the ring it
-  re-reads the file from 0 via the reader (no caching; scroll-back only).
+- `Hub.ChatPage(sid, before, limit)`, `ChatSince(sid, epoch, after)`,
+  `ChatSubscribe` (coalescing buffer-1 notify, closed when the session is
+  removed), `ChatTool`, `ChatEpoch`. Pages beyond the ring re-read the file
+  from 0 via the reader (no caching; scroll-back only).
 - `Agent` normalization: `SessionView.Agent` is `"claude"` for the native path
   (`hook.AgentClaude`) — register the claude reader under that value, and
   under `"claude-code"`; add a test that both resolve.
@@ -132,14 +158,19 @@ expected ACP JSONL. **Never copy real transcripts into the repo** —
   `v.SessionID` in `runFromSessionView`. Never serialized; add a test that the
   runs JSON has no session field.
 - Composition: first non-empty wins (hooks is the only layer that sets it).
+- `Caps.Chat` (`deriveCaps`): the hooks layer names a Session and
+  `chat.For(agent) != nil`. This is what offers the tab.
 
 ### 5. Routes (`server/runs_chat.go`)
 
-- `GET /api/runs/{id}/chat?before=<seq>&limit=<n≤100>` → `{updates, more}` (houston-wrapped `chat.Update`s).
-- `GET /api/runs/{id}/chat/stream?after=<seq>` → SSE: `event: updates`
-  (batch), `event: reset` (session id behind the run changed — e.g. a new
-  session in the same pane), keep-alive comments every 25 s.
-- `GET /api/runs/{id}/chat/tool/{callId}` → `{name, input, output (≤16 KB), error}`.
+- `GET /api/runs/{id}/chat?before=<seq>&limit=<n≤100>` → `{epoch, updates, more}`.
+- `GET /api/runs/{id}/chat/stream?after=<epoch>.<seq>` → SSE: `event: updates`
+  (batch, `id: <epoch>.<last seq>`; `Last-Event-ID` wins over `after`),
+  `event: reset` then EOF (epoch mismatch, a cursor the ring can't serve, the
+  run's Session changed, or the session was removed), keep-alive comments
+  every 25 s.
+- `GET /api/runs/{id}/chat/tool/{callId}` → `{toolCallId, name, title, kind,
+  status, input, output, truncated, diff?}`, texts capped at 16 KiB.
 - Ladder: 503 registry not started · 404 unknown run · 404 `no chat` when the
   run has no `Session` or its engine has no reader (UI hides the tab).
 - Behind the existing auth middleware (it is under `/api/`); add a test that
@@ -153,8 +184,9 @@ expected ACP JSONL. **Never copy real transcripts into the repo** —
 - `ui/src/hooks/useRunChat.ts`: page + `EventSource`, dedupe by `id`,
   reconnect with `after=<last seq>`, `reset` clears. Unmount closes the stream
   (test with the DOM test utility from the 2026-09-08 lifecycle plan).
-- `RunDetail`: `Tab = 'chat' | 'activity' | 'terminal'`. Chat is offered iff a
-  first page returns 200; it becomes the default tab when offered. Activity
+- `RunDetail`: `Tab = 'chat' | 'activity' | 'terminal'`. Chat is offered iff
+  `run.caps.chat`; it becomes the default tab when offered and the route names
+  no tab (`#/fleet/<id>`). Activity
   stays for runs without chat (removed in a later plan once 1b/1c land).
 - `ChatTab.tsx` renders per the canvas screen 2: `user` bubble right,
   `assistant` plain text (markdown subset: paragraphs, inline code, fenced
@@ -198,7 +230,7 @@ removing Activity, desktop console changes beyond the tab appearing.
 1. `go test ./chat/... ./hub/... ./runs/... ./server/...` and `-race` on
    `chat/` and `hub/`.
 2. **Real-file check, not committed:** a throwaway test (build tag
-   `samples`, reads `tmp/samples/claude-code/*.jsonl` if present, skips
+   `samples`, reads `$HOUSTON_SAMPLES/claude-code/*.jsonl` if set, skips
    otherwise) asserts for every sample: `user_message_chunk`s without
    `_meta.origin` == records with `origin.kind=="human"` + queued prompts; no
    message text starts with `<`; every `tool_use` id yields exactly one

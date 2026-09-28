@@ -74,6 +74,7 @@ export interface Caps {
   terminal: boolean
   reply: boolean
   kill: boolean
+  chat?: boolean
 }
 
 // Mirror of runs.Run.

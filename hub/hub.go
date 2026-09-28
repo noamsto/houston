@@ -105,6 +105,8 @@ type Session struct {
 
 	lastTurn         int    // last turn whose trail was cleared (UserPromptSubmit bumps Turn)
 	lastBroadcastSig string // last broadcast view signature; skip duplicates
+
+	chat *chatState // nil until first use, and for agents without a chat.Reader
 }
 
 // New creates a hub rooted at stateDir with default options. Call Run to start it.
@@ -375,6 +377,9 @@ func (h *Hub) handleFSEvent(evt fsnotify.Event) {
 	case evt.Op&fsnotify.Remove != 0:
 		sid := sessionIDFromPath(evt.Name)
 		h.mu.Lock()
+		if sess, ok := h.sessions[sid]; ok && sess.chat != nil {
+			sess.chat.closeSubs()
+		}
 		delete(h.sessions, sid)
 		h.mu.Unlock()
 	}
@@ -408,6 +413,9 @@ func (h *Hub) loadStateFile(path string) {
 		sess.trail = sess.trail[:0]
 	}
 	sess.transcriptPath = s.TranscriptPath
+	if sess.chat != nil {
+		sess.chat.setPath(s.TranscriptPath)
+	}
 	view := sess.view
 	h.mu.Unlock()
 
@@ -431,6 +439,10 @@ func (h *Hub) refreshAllTranscripts() {
 }
 
 func (h *Hub) refreshTranscript(sessionID string) {
+	// Ahead of the trail read's early return: that reader consumes partial
+	// lines, so it can be caught up while the chat reader is not.
+	h.refreshChat(sessionID)
+
 	h.mu.Lock()
 	sess, ok := h.sessions[sessionID]
 	if !ok || sess.transcriptPath == "" {

@@ -81,7 +81,7 @@ describe('ConsoleShell layout', () => {
 
     const list = screen.getByLabelText('fleet list')
     fireEvent.click(cardFor(list, 'branch-a'))
-    expect(window.location.hash).toBe('#/fleet/a/activity')
+    expect(window.location.hash).toBe('#/fleet/a')
 
     act(() => { window.dispatchEvent(new HashChangeEvent('hashchange')) })
 

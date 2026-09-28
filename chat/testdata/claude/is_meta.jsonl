@@ -1,0 +1,1 @@
+{"type":"user","uuid":"u3","parentUuid":"u2","timestamp":"2024-01-01T00:00:02.000Z","isSidechain":false,"isMeta":true,"message":{"role":"user","content":[{"type":"text","text":"meta note"}]}}

@@ -1,0 +1,2 @@
+{"type":"attachment","uuid":"at1","parentUuid":null,"timestamp":"2024-01-01T00:00:12.000Z","attachment":{"type":"queued_command","commandMode":"prompt","prompt":"also check the linter","origin":{"kind":"human"}}}
+{"type":"attachment","uuid":"at2","parentUuid":"at1","timestamp":"2024-01-01T00:00:13.000Z","attachment":{"type":"queued_command","commandMode":"task-notification","prompt":"dropped"}}

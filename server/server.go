@@ -99,6 +99,13 @@ type Server struct {
 	runs     *runs.Registry
 	runPanes runPaneOps
 
+	// chat serves a run's chat transcript; the hub in production. chatPing
+	// and chatCheck override the stream's keep-alive and session-check
+	// intervals when non-zero.
+	chat      chatSource
+	chatPing  time.Duration
+	chatCheck time.Duration
+
 	// replyRunner delivers a crew answer. It exists so a test can observe that
 	// no command ran, which no assertion about the response alone can prove.
 	replyRunner replyRunner
@@ -216,6 +223,7 @@ func New(cfg Config) (*Server, error) {
 			return strconv.FormatInt(time.Now().Unix(), 10) + "-" + strconv.Itoa(os.Getpid())
 		},
 	}
+	s.chat = s.hub
 
 	// Run the hub in the background. It watches <status-dir>/claude/ and the
 	// transcripts referenced from hook state files.
@@ -359,6 +367,9 @@ func (s *Server) Handler() http.Handler {
 	apiMux.HandleFunc("POST /api/runs/{id}/reply", s.handleRunReply)
 	apiMux.HandleFunc("GET /api/runs/{id}/terminal", s.handleRunTerminal)
 	apiMux.HandleFunc("POST /api/runs/{id}/input", s.handleRunInput)
+	apiMux.HandleFunc("GET /api/runs/{id}/chat", s.handleRunChat)
+	apiMux.HandleFunc("GET /api/runs/{id}/chat/stream", s.handleRunChatStream)
+	apiMux.HandleFunc("GET /api/runs/{id}/chat/tool/{callId}", s.handleRunChatTool)
 	apiMux.HandleFunc("GET /api/workspace", s.handleWorkspace)
 	apiMux.HandleFunc("POST /api/dispatch", s.handleDispatch)
 	apiMux.HandleFunc("GET /api/dispatch/options", s.handleDispatchOptions)

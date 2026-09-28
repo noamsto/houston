@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { waitFor } from '@testing-library/react'
 import { RunDetail } from './RunDetail'
 import type { Run } from '../api/runs'
 import type { Terminal } from '@xterm/xterm'
+import { installFakeEventSource } from '../testing/fakeEventSource'
+import type { FakeEventSourceHandle } from '../testing/fakeEventSource'
 
 // Subclass the real Terminal so xterm's real DOM/buffer behavior keeps
 // working, while letting tests inspect the instance TerminalPane actually
@@ -488,5 +491,95 @@ describe('RunDetail activity timeline', () => {
       rerender(<RunDetail runs={[a, b]} hasSnapshot streamConnected now={now} id="b" tab="activity" />)
       expect(screen.queryByRole('button', { name: /latest/i })).toBeNull()
     })
+  })
+})
+
+describe('RunDetail chat tab', () => {
+  let fake: FakeEventSourceHandle
+
+  beforeEach(() => {
+    fake = installFakeEventSource()
+  })
+
+  afterEach(() => {
+    fake.uninstall()
+  })
+
+  function chatRun(p: Partial<Run> = {}): Run {
+    return run({ caps: { terminal: true, reply: true, kill: true, chat: true }, ...p })
+  }
+
+  function stubChatFetch(body: unknown, status = 200) {
+    vi.mocked(fetch).mockImplementation((input: string | URL | Request) => {
+      const url = String(input)
+      if (url.includes('/chat')) {
+        return Promise.resolve({
+          ok: status < 300,
+          status,
+          json: async () => body,
+          text: async () => JSON.stringify(body),
+        } as Response)
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({}), text: async () => '' } as Response)
+    })
+  }
+
+  const emptyPage = { epoch: 'e1', updates: [], more: false }
+
+  it('offers and selects the Chat tab by default when caps.chat is true and no tab is routed', async () => {
+    stubChatFetch(emptyPage)
+    const r = chatRun()
+    render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} />)
+
+    const chatBtn = screen.getByRole('button', { name: 'Chat' })
+    expect(chatBtn.getAttribute('aria-pressed')).toBe('true')
+    await waitFor(() => expect(screen.queryByText(/loading chat/i)).toBeNull())
+  })
+
+  it('an explicit tab="activity" wins over an offered Chat tab', async () => {
+    stubChatFetch(emptyPage)
+    const r = chatRun()
+    render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="activity" />)
+
+    expect(screen.getByRole('button', { name: 'Activity' }).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByRole('button', { name: 'Chat' }).getAttribute('aria-pressed')).toBe('false')
+    expect(vi.mocked(fetch).mock.calls.some((c) => String(c[0]).includes('/chat'))).toBe(false)
+  })
+
+  it('offers no Chat tab and defaults to Activity exactly as before when caps.chat is absent', () => {
+    const r = run()
+    render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} />)
+
+    expect(screen.queryByRole('button', { name: 'Chat' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Activity' }).getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('shows the Chat tab once a rerender flips caps.chat to true', () => {
+    const r = run()
+    const { rerender } = render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} />)
+    expect(screen.queryByRole('button', { name: 'Chat' })).toBeNull()
+
+    stubChatFetch(emptyPage)
+    const withChat = chatRun()
+    rerender(<RunDetail runs={[withChat]} hasSnapshot streamConnected now={now} id={withChat.id} />)
+    expect(screen.getByRole('button', { name: 'Chat' })).toBeTruthy()
+  })
+
+  it('a deep link to tab="chat" without caps.chat degrades to Activity', () => {
+    const r = run()
+    render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="chat" />)
+
+    expect(screen.queryByRole('button', { name: 'Chat' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Activity' }).getAttribute('aria-pressed')).toBe('true')
+    expect(vi.mocked(fetch).mock.calls.some((c) => String(c[0]).includes('/chat'))).toBe(false)
+  })
+
+  it('shows "Chat unavailable" with a Retry when the chat page fetch 404s', async () => {
+    stubChatFetch({}, 404)
+    const r = chatRun()
+    render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} />)
+
+    await waitFor(() => expect(screen.getByText(/chat unavailable/i)).toBeTruthy())
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy()
   })
 })

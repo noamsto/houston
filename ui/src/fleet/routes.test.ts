@@ -13,10 +13,12 @@ describe('parseDetailRoute', () => {
   it.each([
     ['#/fleet', null],
     ['#/fleet/', null],
-    ['#/fleet/pane-1', { id: 'pane-1', tab: 'activity' }],
+    ['#/fleet/pane-1', { id: 'pane-1' }],
+    ['#/fleet/pane-1/chat', { id: 'pane-1', tab: 'chat' }],
+    ['#/fleet/pane-1/activity', { id: 'pane-1', tab: 'activity' }],
     ['#/fleet/pane-1/terminal', { id: 'pane-1', tab: 'terminal' }],
-    ['#/fleet/pane-1/bogus', { id: 'pane-1', tab: 'activity' }],
-    ['#/fleet/pane-1/', { id: 'pane-1', tab: 'activity' }],
+    ['#/fleet/pane-1/bogus', { id: 'pane-1' }],
+    ['#/fleet/pane-1/', { id: 'pane-1' }],
     ['#/agents', null],
     ['#/fleet/a/b/c', null],
   ])('%s -> %j', (hash, expected) => {
@@ -28,7 +30,7 @@ describe('useDetailRoute', () => {
   it('reads the initial hash and updates on hashchange', () => {
     window.location.hash = '#/fleet/pane-1'
     const { result } = renderHook(() => useDetailRoute())
-    expect(result.current).toEqual({ id: 'pane-1', tab: 'activity' })
+    expect(result.current).toEqual({ id: 'pane-1' })
 
     act(() => {
       window.location.hash = '#/fleet/pane-2/terminal'

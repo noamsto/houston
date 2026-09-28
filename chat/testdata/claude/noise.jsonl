@@ -1,0 +1,11 @@
+{"type":"system","uuid":"s1","parentUuid":null,"timestamp":"2024-01-01T00:00:20.000Z"}
+{"type":"last-prompt","uuid":"s2","parentUuid":"s1","timestamp":"2024-01-01T00:00:21.000Z"}
+{"type":"permission-mode","uuid":"s3","parentUuid":"s2","timestamp":"2024-01-01T00:00:22.000Z"}
+{"type":"mode","uuid":"s4","parentUuid":"s3","timestamp":"2024-01-01T00:00:23.000Z"}
+{"type":"custom-title","uuid":"s5","parentUuid":"s4","timestamp":"2024-01-01T00:00:24.000Z"}
+{"type":"atis-latch","uuid":"s6","parentUuid":"s5","timestamp":"2024-01-01T00:00:25.000Z"}
+{"type":"agent-name","uuid":"s7","parentUuid":"s6","timestamp":"2024-01-01T00:00:26.000Z"}
+{"type":"queue-operation","uuid":"s8","parentUuid":"s7","timestamp":"2024-01-01T00:00:27.000Z"}
+{"type":"file-history-snapshot","uuid":"s9","parentUuid":"s8","timestamp":"2024-01-01T00:00:28.000Z"}
+{"type":"file-history-delta","uuid":"s10","parentUuid":"s9","timestamp":"2024-01-01T00:00:29.000Z"}
+{"type":"cost-state","uuid":"s11","parentUuid":"s10","timestamp":"2024-01-01T00:00:30.000Z"}
