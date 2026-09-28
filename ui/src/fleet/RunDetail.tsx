@@ -1,10 +1,11 @@
-import { useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { Run } from '../api/runs'
 import { collapseTrail } from './activityTimeline'
 import { agoLabel, nameLabel, subtitle } from './format'
 import { projectOf } from './fleetList'
 import { TerminalPane } from '../components/TerminalPane'
 import { useTerminalLifecycle } from './useTerminalLifecycle'
+import { useStickyScroll } from '../hooks/useStickyScroll'
 import { ReplyComposer } from './ReplyComposer'
 import './fleet.css'
 
@@ -141,7 +142,6 @@ function RunDetailBody({ run, tab, streamConnected, now, onBack, backLabel }: { 
 }
 
 const TRAIL_WINDOW = 10
-const STICK_SLOP_PX = 24
 
 function ActivityTab({ run, now }: { run: Run; now: number }) {
   const a = run.activity
@@ -149,46 +149,15 @@ function ActivityTab({ run, now }: { run: Run; now: number }) {
   const [visible, setVisible] = useState(TRAIL_WINDOW)
   const [messageOpen, setMessageOpen] = useState(false)
   const [previewOpen, setPreviewOpen] = useState(false)
-  const [stuck, setStuck] = useState(true)
-  const scroller = useRef<HTMLDivElement>(null)
-  const stuckRef = useRef(true)
-  const anchor = useRef<{ height: number; top: number } | null>(null)
-
-  const setStick = (v: boolean) => {
-    stuckRef.current = v
-    setStuck(v)
-  }
-
-  const onScroll = () => {
-    const el = scroller.current
-    if (!el) return
-    setStick(el.scrollHeight - el.scrollTop - el.clientHeight < STICK_SLOP_PX)
-  }
+  const { ref: scroller, stuck, onScroll, preserveAnchor, scrollToLatest } = useStickyScroll<HTMLDivElement>(
+    [rows, a.message, messageOpen, previewOpen, visible, run.question],
+    visible,
+  )
 
   const showEarlier = () => {
-    const el = scroller.current
-    if (el) anchor.current = { height: el.scrollHeight, top: el.scrollTop }
-    setStick(false)
+    preserveAnchor()
     setVisible((v) => v + TRAIL_WINDOW)
   }
-
-  const scrollToLatest = () => {
-    const el = scroller.current
-    if (el) el.scrollTop = el.scrollHeight
-    setStick(true)
-  }
-
-  useLayoutEffect(() => {
-    const el = scroller.current
-    if (!el || !anchor.current) return
-    el.scrollTop = anchor.current.top + (el.scrollHeight - anchor.current.height)
-    anchor.current = null
-  }, [visible])
-
-  useLayoutEffect(() => {
-    const el = scroller.current
-    if (el && stuckRef.current) el.scrollTop = el.scrollHeight
-  }, [rows, a.message, messageOpen, previewOpen, visible, run.question])
 
   const shown = rows.slice(-visible)
   const hidden = rows.length - shown.length
