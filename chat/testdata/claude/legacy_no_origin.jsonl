@@ -1,0 +1,2 @@
+{"type":"user","uuid":"u30","parentUuid":null,"timestamp":"2024-01-01T00:00:16.000Z","message":{"role":"user","content":"legacy plain message"}}
+{"type":"user","uuid":"u31","parentUuid":"u30","timestamp":"2024-01-01T00:00:17.000Z","message":{"role":"user","content":"<system-reminder>ignore me</system-reminder>"}}

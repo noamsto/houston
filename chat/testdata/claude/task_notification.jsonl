@@ -1,0 +1,1 @@
+{"type":"user","uuid":"u2","parentUuid":"u1","timestamp":"2024-01-01T00:00:01.000Z","isSidechain":false,"isMeta":false,"origin":{"kind":"task-notification"},"promptSource":"system","message":{"role":"user","content":"<task-notification>build finished</task-notification>"}}

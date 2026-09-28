@@ -1,0 +1,2 @@
+{"type":"user","uuid":"u4","parentUuid":null,"timestamp":"2024-01-01T00:00:03.000Z","isSidechain":true,"agentId":"abc123","origin":{"kind":"human"},"message":{"role":"user","content":"side text"}}
+{"type":"assistant","uuid":"u5","parentUuid":"u4","timestamp":"2024-01-01T00:00:04.000Z","isSidechain":true,"agentId":"abc123","message":{"id":"msg_side","role":"assistant","content":[{"type":"text","text":"side reply"}]}}

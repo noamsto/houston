@@ -1,0 +1,2 @@
+{"type":"user","uuid":"u40","parentUuid":null,"timestamp":"2024-01-01T00:00:18.000Z","origin":{"kind":"weird-thing"},"message":{"role":"user","content":"first"}}
+{"type":"user","uuid":"u41","parentUuid":"u40","timestamp":"2024-01-01T00:00:19.000Z","origin":{"kind":"weird-thing"},"message":{"role":"user","content":"second"}}

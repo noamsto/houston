@@ -1,0 +1,2 @@
+{"id":"249:0","seq":0,"ts":1704067206000,"sessionUpdate":"agent_message_chunk","content":[{"type":"content","content":{"type":"text","text":"Reading the file"}}],"_meta":{"messageId":"msg_1"}}
+{"id":"483:0","seq":0,"ts":1704067207000,"sessionUpdate":"tool_call","toolCallId":"toolu_1","title":"example.go","kind":"read","status":"in_progress","locations":[{"path":"/tmp/example.go"}],"_meta":{"messageId":"msg_1","tool":"Read"}}

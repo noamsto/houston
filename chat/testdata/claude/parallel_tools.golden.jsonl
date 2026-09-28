@@ -1,0 +1,4 @@
+{"id":"0:0","seq":0,"ts":1704067208000,"sessionUpdate":"tool_call","toolCallId":"toolu_10","title":"run tests","kind":"execute","status":"in_progress","_meta":{"messageId":"msg_2","tool":"Bash"}}
+{"id":"259:0","seq":0,"ts":1704067209000,"sessionUpdate":"tool_call","toolCallId":"toolu_11","title":"run vet","kind":"execute","status":"in_progress","_meta":{"messageId":"msg_2","tool":"Bash"}}
+{"id":"516:0","seq":0,"ts":1704067210000,"sessionUpdate":"tool_call_update","toolCallId":"toolu_10","status":"completed"}
+{"id":"753:0","seq":0,"ts":1704067211000,"sessionUpdate":"tool_call_update","toolCallId":"toolu_11","status":"failed"}

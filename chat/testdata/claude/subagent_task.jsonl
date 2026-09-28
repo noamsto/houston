@@ -1,0 +1,2 @@
+{"type":"assistant","uuid":"a20","parentUuid":null,"timestamp":"2024-01-01T00:00:14.000Z","message":{"id":"msg_3","role":"assistant","content":[{"type":"tool_use","id":"toolu_20","name":"Agent","input":{"prompt":"investigate the flake"}}]}}
+{"type":"user","uuid":"u20","parentUuid":"a20","timestamp":"2024-01-01T00:00:15.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_20","content":"done","is_error":false}]},"toolUseResult":{"agentId":"abc123","type":"agent"}}

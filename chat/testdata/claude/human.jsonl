@@ -1,0 +1,1 @@
+{"type":"user","uuid":"u1","parentUuid":null,"timestamp":"2024-01-01T00:00:00.000Z","isSidechain":false,"isMeta":false,"origin":{"kind":"human"},"promptSource":"typed","turnOrigin":"human","message":{"role":"user","content":"fix the failing test"}}
