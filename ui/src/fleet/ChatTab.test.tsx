@@ -182,7 +182,7 @@ describe('ChatTab', () => {
     })
 
     const divider = container.querySelector('[data-id="d1"]')!
-    expect(divider.querySelector('[aria-hidden="true"]')?.textContent).toBe('⚑')
+    expect(divider.querySelector('[aria-hidden="true"]')?.textContent).toBe('✦')
 
     fireEvent.click(screen.getByRole('button', { name: 'Task' }))
     const row = within(container.querySelector('.chat-tools-calls')!).getByRole('button', { name: 'Task completed subagent' })

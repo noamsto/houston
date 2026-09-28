@@ -27,7 +27,7 @@ describe('chatGlyphs', () => {
   })
 
   it('uses no codepoint that has an emoji form', () => {
-    const all = [...Object.values(KIND_GLYPH), '✓', '✗', '◌', '⚑', '⑂', '●', '⋯']
+    const all = [...Object.values(KIND_GLYPH), '✓', '✗', '◌', '✦', '⑂', '●', '⋯']
     for (const g of all) expect(g).not.toMatch(HAS_EMOJI_FORM)
   })
 })

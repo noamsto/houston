@@ -38,7 +38,7 @@ function UserBubble({ item }: { item: UserItem }) {
 function Divider({ item }: { item: DividerItem }) {
   return (
     <div className="chat-divider" data-seq={item.seq} data-id={item.id}>
-      <span className="chat-glyph" aria-hidden="true">⚑</span>
+      <span className="chat-glyph" aria-hidden="true">✦</span>
       {item.text}
     </div>
   )

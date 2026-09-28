@@ -6,7 +6,7 @@ export type ToolKind = (typeof TOOL_KINDS)[number]
 
 export const KIND_GLYPH: Record<ToolKind, string> = {
   read: '▤',
-  edit: '✎',
+  edit: '⎀',
   delete: '⌫',
   move: '⇄',
   search: '⌕',
