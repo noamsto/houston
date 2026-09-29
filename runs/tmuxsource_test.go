@@ -97,6 +97,25 @@ func TestDeltasFromTmuxSkipsRolePanes(t *testing.T) {
 	}
 }
 
+func TestDeltasFromTmuxKeepsTheGridLeadPane(t *testing.T) {
+	// The dispatcher stamps @crew_role=lead on the worker's own pane in a role
+	// grid; it is the worker, so it stays a listed run while the critics don't.
+	got := deltasFromTmux(
+		[]tmux.WindowOptions{{Session: "houston", Window: 1, Branch: "fix/412", CrewName: "ash"}},
+		[]tmux.PaneOptions{
+			{PaneID: "%40", Target: "houston:1", ClaudeStatus: "processing 1", CrewRole: "lead"},
+			{PaneID: "%41", Target: "houston:1", ClaudeStatus: "waiting", CrewRole: "plan-critic"},
+		},
+		fakeProject,
+	)
+	if len(got) != 1 {
+		t.Fatalf("%d deltas, want 1 (the lead only)", len(got))
+	}
+	if got[0].Key != "%40" {
+		t.Errorf("Key = %q, want the lead pane %%40", got[0].Key)
+	}
+}
+
 func TestDeltasFromTmuxSkipsPanesWithNoWindow(t *testing.T) {
 	got := deltasFromTmux(nil, []tmux.PaneOptions{{PaneID: "%9", Target: "ghost:1"}}, fakeProject)
 	if len(got) != 0 {
