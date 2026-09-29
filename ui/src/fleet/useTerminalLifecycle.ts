@@ -12,7 +12,7 @@ const DISCONNECT_GRACE_MS = 10_000
 interface TerminalLifecycleResult {
   /** Has the terminal ever actually gone live for the current run id? Distinguishes a
    *  deep link to a run that never had (or already lost) terminal capability — which
-   *  degrades silently to Activity — from an in-session loss, which is shown explicitly. */
+   *  degrades silently to Chat — from an in-session loss, which is shown explicitly. */
   everLive: boolean
   state: TerminalLifecycle
   /** SSE stream is stale while the terminal is otherwise live — "we don't know", not "it's gone". */
@@ -36,7 +36,7 @@ interface TerminalLifecycleResult {
  *
  * `capable` (run.caps.terminal && has tmux data) drives the "ended"/recovery
  * transitions on its own, independent of `onTerminalTab` — switching to the
- * Activity tab and back must not, by itself, read as the pane dying.
+ * Chat tab and back must not, by itself, read as the pane dying.
  * `onTerminalTab` only feeds the "has this ever actually been shown" latch.
  *
  * Transitions are computed during render (React's documented pattern for

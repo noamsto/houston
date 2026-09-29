@@ -91,7 +91,7 @@ function isFailed(call: ToolCall): boolean {
   return call.status === 'failed'
 }
 
-/** collapseTrail-style rows: consecutive calls of the same tool AND same failed-ness merge. */
+/** Consecutive calls of the same tool AND same failed-ness merge. */
 function toolRows(calls: ToolCall[]): ToolRow[] {
   const rows: ToolRow[] = []
   for (const call of calls) {

@@ -10,7 +10,7 @@ import { buildItems, provisionalTool, reconcileOptimistic, toolRowLabel } from '
 import type { AssistantItem, ChatItem, DividerItem, Optimistic, ToolCall, ToolsItem, UserItem } from './chatModel'
 import { kindGlyph, statusGlyph } from './chatGlyphs'
 import { ChatMarkdown } from './chatMarkdown'
-import { agoLabel, subtitle } from './format'
+import { RunQuestion, RunStatusStrip } from './RunStatusStrip'
 
 const REVEAL_TICKS = 16
 const REVEAL_MS = 1000
@@ -319,28 +319,41 @@ export function ChatTab({ run, now }: { run: Run; now: number }) {
     return err
   }
 
-  if (status === 'loading') return <div className="run-detail-empty">Loading chat…</div>
+  const header = (
+    <>
+      <RunStatusStrip run={run} now={now} />
+      <RunQuestion run={run} />
+    </>
+  )
+
+  if (status === 'loading') {
+    return (
+      <div className="chat">
+        {header}
+        <div className="run-detail-empty">Loading chat…</div>
+      </div>
+    )
+  }
   if (status === 'unavailable' || status === 'error') {
     return (
-      <div className="run-detail-empty">
-        <p>{status === 'unavailable' ? 'Chat unavailable' : "Couldn't load chat"}</p>
-        <button type="button" className="run-detail-back-cta" onClick={retry}>Retry</button>
+      <div className="chat">
+        {header}
+        <div className="run-detail-empty">
+          <p>{status === 'unavailable' ? 'Chat unavailable' : "Couldn't load chat"}</p>
+          <button type="button" className="run-detail-back-cta" onClick={retry}>Retry</button>
+        </div>
       </div>
     )
   }
 
   return (
     <div className="chat">
-      <div className="chat-glance">
-        <span className="run-dot" style={{ background: `var(--state-${run.state}, var(--text-faint))` }} />
-        <span className="activity-status">{subtitle(run)}</span>
-        <span className="activity-meta">{agoLabel(run.updated_at, now)}</span>
-      </div>
+      {header}
 
       <div className="chat-timeline-wrap">
         <div className="chat-timeline" ref={scroller} onScroll={onScroll}>
           {more && (
-            <button type="button" className="activity-earlier" onClick={handleShowEarlier}>
+            <button type="button" className="chat-earlier" onClick={handleShowEarlier}>
               Show earlier
             </button>
           )}
@@ -372,7 +385,7 @@ export function ChatTab({ run, now }: { run: Run; now: number }) {
           {provisional && (
             <div className="chat-provisional" data-id="provisional">
               <span className="chat-tool-name">{provisional.tool}</span>
-              {provisional.hint && <span className="activity-hint">{provisional.hint}</span>}
+              {provisional.hint && <span className="chat-hint">{provisional.hint}</span>}
               <span className="chat-provisional-marker" aria-hidden="true">⋯</span>
             </div>
           )}
@@ -386,7 +399,7 @@ export function ChatTab({ run, now }: { run: Run; now: number }) {
         </div>
 
         {!stuck && (
-          <button type="button" className="activity-latest" onClick={scrollToLatest}>
+          <button type="button" className="chat-latest" onClick={scrollToLatest}>
             ↓ Latest
           </button>
         )}

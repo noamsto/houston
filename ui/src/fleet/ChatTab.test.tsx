@@ -308,6 +308,20 @@ describe('ChatTab', () => {
     expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true)
   })
 
+  it('shows the status strip and a crew question both while loading and once loaded', async () => {
+    installFetch({ page: page('e1', []) })
+    const r = run({ state: 'blocked', question: { text: 'Ship it?', via: 'crew' } })
+    render(<ChatTab run={r} now={now} />)
+
+    expect(screen.getByText(/loading chat/i)).toBeTruthy()
+    expect(screen.getByText('needs you')).toBeTruthy()
+    expect(screen.getByText('Ship it?')).toBeTruthy()
+
+    await waitFor(() => expect(screen.queryByText(/loading chat/i)).toBeNull())
+    expect(screen.getByText('needs you')).toBeTruthy()
+    expect(screen.getByText('Ship it?')).toBeTruthy()
+  })
+
   it('shows a provisional tool row from run.activity while running, gone once the matching tool_call arrives', async () => {
     const { container } = await renderReady(
       { state: 'running', activity: { tool: 'Edit', hint: 'foo.ts' } },
