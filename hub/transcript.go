@@ -93,8 +93,7 @@ type usage struct {
 // ReadTranscriptFrom reads JSONL events from byteOffset and returns the new
 // offset so callers can resume.
 func ReadTranscriptFrom(path string, byteOffset int64) ([]TranscriptEvent, int64, error) {
-	// The hub polls every known session's transcript each tick and most
-	// haven't grown; skipping them here avoids a 64 KiB reader per poll.
+	// Polled every tick for every session; most haven't grown.
 	fi, err := os.Stat(path)
 	if err != nil {
 		return nil, byteOffset, err

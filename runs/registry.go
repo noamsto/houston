@@ -216,15 +216,6 @@ func idFor(key string) string {
 	}
 }
 
-// runSignature is a cheap comparable summary of the fields that matter to a
-// subscriber, mirroring hub.broadcastIfChanged: skip fan-out when nothing
-// material changed since the last broadcast for this key, so a poller that
-// re-emits an unchanged layer every tick does not cost every subscriber an
-// SSE event every tick too.
-//
-// A struct rather than a joined string: it compares with == and shares the
-// Run's strings instead of copying them, so a poll that changes nothing
-// allocates nothing.
 type signature struct {
 	agent, state, repo, project, role, branch, worktree string
 
@@ -247,6 +238,11 @@ type signature struct {
 	stale, capTerminal, capReply, capKill, capChat bool
 }
 
+// runSignature is a cheap comparable summary of the fields that matter to a
+// subscriber, mirroring hub.broadcastIfChanged: skip fan-out when nothing
+// material changed since the last broadcast for this key, so a poller that
+// re-emits an unchanged layer every tick does not cost every subscriber an
+// SSE event every tick too.
 func runSignature(r Run) signature {
 	s := signature{
 		agent:       r.Agent,

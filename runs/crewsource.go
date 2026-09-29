@@ -33,10 +33,9 @@ type CrewSource struct {
 	// procStart parameter) — a field so tests stay hermetic.
 	procStart procStartFunc
 
-	// logs caches each bus log's parse keyed by path, reused while the file's
-	// size and mtime are unchanged — most logs are idle between ticks, and
-	// re-parsing them all dominated this source's cost. Same single-goroutine
-	// rule as crewDirs. Callers only read the cached Runs' pointer fields.
+	// logs caches each bus log's parse by path, reused while size and mtime
+	// hold. Same single-goroutine rule as crewDirs. The cached Runs are shared
+	// across ticks, so nothing may write through their pointer fields.
 	logs map[string]crewLog
 }
 
@@ -217,8 +216,6 @@ func (s *CrewSource) scanRoots(roots []string) map[string]map[string]crewBranch 
 	return merged
 }
 
-// readCrewLog returns path's parsed runs, re-parsing only when the file's size
-// or mtime moved since the last scan.
 func (s *CrewSource) readCrewLog(path string) (crewLog, bool) {
 	fi, err := os.Stat(path)
 	if err != nil {
