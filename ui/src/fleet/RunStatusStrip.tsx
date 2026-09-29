@@ -35,7 +35,7 @@ export function RunStatusStrip({ run, now }: { run: Run; now: number }) {
       {crew && (
         <div className="run-status-line run-status-crew">
           {crew.codename && run.role !== 'dispatcher' && <span className="run-status-codename">{crew.codename}</span>}
-          <span>{crewInfo}</span>
+          <span className="run-status-engine">{crewInfo}</span>
           {detail && <span className="run-status-detail">{detail}</span>}
         </div>
       )}

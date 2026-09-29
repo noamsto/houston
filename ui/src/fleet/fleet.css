@@ -288,7 +288,7 @@
   flex: none; display: flex; flex-direction: column; gap: 2px; font-size: 12.5px;
 }
 .run-status-line {
-  display: flex; align-items: baseline; gap: 8px; min-width: 0; white-space: nowrap;
+  display: flex; align-items: baseline; gap: 8px; min-width: 0; overflow: hidden; white-space: nowrap;
 }
 .run-status-state { flex: none; font-weight: 600; }
 .run-status-state.needs-you {
@@ -305,8 +305,9 @@
   color: var(--text-faint); font-size: 12px;
 }
 .run-status-crew { color: var(--text-dim); font-size: 12px; }
-.run-status-codename { font-weight: 600; color: var(--text-strong); }
-.run-status-detail { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.run-status-codename { flex: none; font-weight: 600; color: var(--text-strong); }
+.run-status-engine { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.run-status-detail { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .run-detail-question {
   flex: none; padding: 10px 12px; border-radius: 8px;
   border: 1px solid var(--accent); border-left: 4px solid var(--state-blocked);
