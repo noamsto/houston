@@ -46,7 +46,7 @@ type replyRunner func(ctx context.Context, x replyExec) replyResult
 // does no option parsing, so a leading-dash answer is already literal and a
 // "--" would be consumed as the recipient.
 func execCrewReply(ctx context.Context, x replyExec) replyResult {
-	cmd := exec.CommandContext(ctx, x.Argv[0], x.Argv[1:]...)
+	cmd := exec.CommandContext(ctx, x.Argv[0], x.Argv[1:]...) //nolint:gosec // argv is built by the handler from validated run ids; recipient is guarded against option parsing
 	cmd.Dir = x.Dir
 	cmd.Env = append(os.Environ(), "CREW_ID="+x.CrewID)
 	var stderr strings.Builder

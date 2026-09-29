@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -264,25 +265,13 @@ func TestMessageParser_MultilineMessages(t *testing.T) {
 	}
 
 	// Check for tool call
-	hasToolCall := false
-	for _, msgType := range types {
-		if msgType == ToolCall {
-			hasToolCall = true
-			break
-		}
-	}
+	hasToolCall := slices.Contains(types, ToolCall)
 	if !hasToolCall {
 		t.Error("expected to find a ToolCall message")
 	}
 
 	// Check for tool output
-	hasToolOutput := false
-	for _, msgType := range types {
-		if msgType == ToolOutput {
-			hasToolOutput = true
-			break
-		}
-	}
+	hasToolOutput := slices.Contains(types, ToolOutput)
 	if !hasToolOutput {
 		t.Error("expected to find ToolOutput messages")
 	}

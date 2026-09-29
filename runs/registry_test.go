@@ -35,7 +35,7 @@ func TestLowerPrecedenceCannotBlankAHigherField(t *testing.T) {
 	r.Apply(Delta{Source: "hooks", Key: "%1", Run: Run{Agent: "claude", State: StateRunning}})
 	r.Apply(Delta{Source: "tmux", Key: "%1", Run: Run{State: ""}})
 
-	if got := r.Snapshot()[0].State; got != StateRunning {
+	if got := firstRun(t, r).State; got != StateRunning {
 		t.Fatalf("State = %q, want %q — an empty field must not overwrite a set one", got, StateRunning)
 	}
 }
@@ -44,12 +44,12 @@ func TestCrewBeatsTmuxButNotHooks(t *testing.T) {
 	r := NewRegistry(DefaultOrder)
 	r.Apply(Delta{Source: "tmux", Key: "%1", Run: Run{State: StateIdle}})
 	r.Apply(Delta{Source: "crew", Key: "%1", Run: Run{Agent: "claude", State: StateBlocked}})
-	if got := r.Snapshot()[0].State; got != StateBlocked {
+	if got := firstRun(t, r).State; got != StateBlocked {
 		t.Fatalf("State = %q, want %q", got, StateBlocked)
 	}
 
 	r.Apply(Delta{Source: "hooks", Key: "%1", Run: Run{State: StateRunning}})
-	if got := r.Snapshot()[0].State; got != StateRunning {
+	if got := firstRun(t, r).State; got != StateRunning {
 		t.Fatalf("State = %q, want %q", got, StateRunning)
 	}
 }
@@ -71,7 +71,7 @@ func TestQuestionForcesBlockedOverHooksRunning(t *testing.T) {
 		Activity: Activity{Tool: "Bash"},
 	}})
 
-	got := r.Snapshot()[0]
+	got := firstRun(t, r)
 	if got.State != StateBlocked {
 		t.Fatalf("State = %q, want %q — a surviving Question must force blocked even though hooks composed running", got.State, StateBlocked)
 	}
@@ -91,7 +91,7 @@ func TestAnsweredCrewLayerStopsForcingBlocked(t *testing.T) {
 		r.Apply(Delta{Source: "hooks", Key: "%1", Run: Run{State: StateRunning}})
 		r.Apply(Delta{Source: "crew", Key: "%1", Run: Run{State: "", Question: nil}})
 
-		got := r.Snapshot()[0]
+		got := firstRun(t, r)
 		if got.State != StateRunning {
 			t.Fatalf("State = %q, want %q — an answered question must stop forcing blocked", got.State, StateRunning)
 		}
@@ -109,7 +109,7 @@ func TestAnsweredCrewLayerStopsForcingBlocked(t *testing.T) {
 			Question: &Question{Text: "still waiting", Via: "crew"},
 		}})
 
-		got := r.Snapshot()[0]
+		got := firstRun(t, r)
 		if got.State != StateBlocked {
 			t.Fatalf("State = %q, want %q — the badge must stay lit while the question stands", got.State, StateBlocked)
 		}
@@ -204,7 +204,7 @@ func TestSubscribeReceivesComposedRun(t *testing.T) {
 	r.Apply(Delta{Source: "hooks", Key: "%1", Run: Run{State: StateRunning}})
 
 	var last Run
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		select {
 		case last = <-sub:
 		default:
@@ -310,7 +310,7 @@ func TestDispatcherRoleSurvivesCrewLayer(t *testing.T) {
 	r.Apply(Delta{Source: "tmux", Key: "%1", Run: Run{Agent: "claude", Role: RoleDispatcher}})
 	r.Apply(Delta{Source: "crew", Key: "%1", Run: Run{Role: RoleWorker}})
 
-	if got := r.Snapshot()[0].Role; got != RoleDispatcher {
+	if got := firstRun(t, r).Role; got != RoleDispatcher {
 		t.Errorf("Role = %q, want dispatcher — the crew layer's worker must not demote it", got)
 	}
 }
@@ -388,7 +388,7 @@ func TestApplyDoesNotRaceSubscribeClose(t *testing.T) {
 	var churned atomic.Int64
 	giveUp := time.Now().Add(5 * time.Second)
 
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		applyWG.Add(1)
 		go func(n int) {
 			defer applyWG.Done()
@@ -441,7 +441,7 @@ func TestPointerRefsReplaceWholesale(t *testing.T) {
 	r.Apply(Delta{Source: "tmux", Key: "%1", Run: Run{Issue: &IssueRef{ID: "#1", Title: "rich"}}})
 	r.Apply(Delta{Source: "hooks", Key: "%1", Run: Run{Agent: "claude", Issue: &IssueRef{ID: "#1"}}})
 
-	got := r.Snapshot()[0]
+	got := firstRun(t, r)
 	if got.Issue.Title != "" {
 		t.Fatalf("Issue.Title = %q — if refs ever merge field-by-field, update the sources that rely on wholesale replacement", got.Issue.Title)
 	}
@@ -486,7 +486,7 @@ func TestCrewMergesFieldWise(t *testing.T) {
 		Crew: &CrewRef{Name: "crab-crew", Tier: "lead"},
 	}})
 
-	got := r.Snapshot()[0].Crew
+	got := firstRun(t, r).Crew
 	if got == nil {
 		t.Fatal("Crew = nil, want both layers' fields merged")
 	}
@@ -622,6 +622,7 @@ func fillNonZero(v reflect.Value) {
 		for i := 0; i < v.NumField(); i++ {
 			fillNonZero(v.Field(i))
 		}
+	default:
 	}
 }
 
@@ -680,7 +681,7 @@ func TestPRMergesFieldWiseTmuxKeepsItsFields(t *testing.T) {
 		PR: &PRRef{Number: "9", URL: "https://github.com/x/y/pull/9"},
 	}})
 
-	got := r.Snapshot()[0].PR
+	got := firstRun(t, r).PR
 	if got == nil || got.URL != "https://github.com/x/y/pull/9" || got.State != "OPEN" || got.CheckState != "failure" || got.Mergeable != "MERGEABLE" {
 		t.Errorf("PR = %+v, want crew's URL with tmux's State/CheckState/Mergeable intact", got)
 	}
@@ -701,7 +702,7 @@ func TestTmuxMergesFieldWise(t *testing.T) {
 		Tmux:  &TmuxRef{Session: "s", Window: 1, PaneID: "%5"},
 	}})
 
-	got := r.Snapshot()[0].Tmux
+	got := firstRun(t, r).Tmux
 	if got == nil || got.Server != "123" {
 		t.Fatalf("Tmux = %+v, want Server 123 preserved from the tmux layer", got)
 	}
@@ -718,7 +719,7 @@ func TestTmuxHigherLayerServerWinsOnSamePane(t *testing.T) {
 		Tmux:  &TmuxRef{Session: "s", Window: 1, PaneID: "%5", Server: "456"},
 	}})
 
-	if got := r.Snapshot()[0].Tmux; got == nil || got.Server != "456" {
+	if got := firstRun(t, r).Tmux; got == nil || got.Server != "456" {
 		t.Fatalf("Tmux = %+v, want the higher layer's explicit Server 456", got)
 	}
 }
@@ -737,7 +738,7 @@ func TestTmuxRefForADifferentPaneWinsWholesale(t *testing.T) {
 		Tmux:  &TmuxRef{Session: "s", Window: 2, PaneID: "%9", Server: "999"},
 	}})
 
-	got := r.Snapshot()[0].Tmux
+	got := firstRun(t, r).Tmux
 	if got == nil || got.PaneID != "%9" || got.Server != "999" {
 		t.Fatalf("Tmux = %+v, want hooks' %%9/999 wholesale", got)
 	}
@@ -780,7 +781,7 @@ func TestCrewBusFieldsMergeAndReachTheSignature(t *testing.T) {
 	r.Apply(Delta{Source: "tmux", Key: "%1", Run: Run{Agent: "claude", Crew: &CrewRef{Codename: "Ferris"}}})
 	r.Apply(Delta{Source: "crew", Key: "%1", Run: Run{Crew: &CrewRef{Name: "c", Title: "fix it", Model: "sonnet", Detail: "review"}}})
 
-	got := r.Snapshot()[0].Crew
+	got := firstRun(t, r).Crew
 	if got.Title != "fix it" || got.Model != "sonnet" || got.Detail != "review" || got.Codename != "Ferris" {
 		t.Errorf("Crew = %+v", got)
 	}
@@ -806,7 +807,7 @@ func TestPRURLForADifferentNumberIsNotMergedIntoTmuxsPR(t *testing.T) {
 	r.Apply(Delta{Source: "tmux", Key: "%1", Run: Run{Agent: "claude", PR: &PRRef{Number: "9", State: "OPEN"}}})
 	r.Apply(Delta{Source: "crew", Key: "%1", Run: Run{PR: &PRRef{Number: "7", URL: "https://github.com/x/y/pull/7"}}})
 
-	got := r.Snapshot()[0].PR
+	got := firstRun(t, r).PR
 	if got.URL != "" && got.Number == "9" {
 		t.Errorf("PR = %+v, hybrid of tmux #9 and crew's pull/7 URL", got)
 	}
@@ -843,7 +844,7 @@ func TestQuestionOnACrewLayerForcesBlockedOverEndedHooks(t *testing.T) {
 	}})
 	r.Apply(Delta{Source: "hooks", Key: "%1", Run: Run{Agent: "claude", State: StateDone}})
 
-	got := r.Snapshot()[0]
+	got := firstRun(t, r)
 	if got.State != StateBlocked {
 		t.Fatalf("State = %q, want blocked while the crew question stands", got.State)
 	}
@@ -854,7 +855,7 @@ func TestProjectKeepsTheLowestLayersOpinion(t *testing.T) {
 	r.Apply(Delta{Source: "tmux", Key: "%1", Run: Run{Agent: "claude", Project: "from-git-root"}})
 	r.Apply(Delta{Source: "hooks", Key: "%1", Run: Run{Agent: "claude", Project: "from-a-drifted-cwd"}})
 
-	if got := r.Snapshot()[0].Project; got != "from-git-root" {
+	if got := firstRun(t, r).Project; got != "from-git-root" {
 		t.Errorf("Project = %q, want the tmux layer's — a hook cwd must not override it", got)
 	}
 
@@ -915,7 +916,7 @@ func TestRunSessionNeverSerialized(t *testing.T) {
 	r := NewRegistry(DefaultOrder)
 	r.Apply(Delta{Source: "hooks", Key: "%1", Run: Run{Agent: "claude", Session: "sess-abc"}})
 
-	b, err := json.Marshal(r.Snapshot()[0])
+	b, err := json.Marshal(firstRun(t, r))
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
@@ -1007,4 +1008,13 @@ func TestCapsChatBroadcastsWhenSessionArrivesLater(t *testing.T) {
 	default:
 		t.Fatal("no broadcast — a Session arriving must flip Caps.Chat and re-emit")
 	}
+}
+
+func firstRun(t *testing.T, r *Registry) Run {
+	t.Helper()
+	snap := r.Snapshot()
+	if len(snap) == 0 {
+		t.Fatal("registry has no listed runs")
+	}
+	return snap[0]
 }

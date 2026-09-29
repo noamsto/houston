@@ -571,7 +571,7 @@ func startPaneWSWithPane(t *testing.T, tm tmuxOps, cm controlManagerOps, pane tm
 	}))
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
-	clientConn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	clientConn, _, err := websocket.DefaultDialer.Dial(wsURL, nil) //nolint:bodyclose // gorilla: a successful upgrade needs no body close
 	if err != nil {
 		srv.Close()
 		t.Fatalf("dial pane ws: %v", err)

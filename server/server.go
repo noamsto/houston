@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -685,6 +686,7 @@ func (s *Server) buildAgentStripItems(activeSession string, activeWindow, active
 				indicator = "working"
 			case parser.TypeDone:
 				indicator = "done"
+			case parser.TypeIdle:
 			}
 
 			var paneCommand string
@@ -783,10 +785,8 @@ func classifyProcess(cmd string) ProcessType {
 
 	// Shells - always idle
 	shells := []string{"bash", "zsh", "fish", "sh", "dash", "ksh", "tcsh", "csh"}
-	for _, s := range shells {
-		if cmd == s {
-			return ProcessShell
-		}
+	if slices.Contains(shells, cmd) {
+		return ProcessShell
 	}
 
 	// Interactive tools - waiting for user input, effectively idle
@@ -799,10 +799,8 @@ func classifyProcess(cmd string) ProcessType {
 		"tmux", "screen", // multiplexers (nested)
 		"fzf", "sk", // fuzzy finders
 	}
-	for _, i := range interactive {
-		if cmd == i {
-			return ProcessInteractive
-		}
+	if slices.Contains(interactive, cmd) {
+		return ProcessInteractive
 	}
 
 	// Known server/daemon processes
@@ -812,10 +810,8 @@ func classifyProcess(cmd string) ProcessType {
 		"postgres", "mysql", "redis", "mongo", "sqlite", // databases
 		"docker", "podman", "containerd", // containers
 	}
-	for _, s := range servers {
-		if cmd == s {
-			return ProcessServer
-		}
+	if slices.Contains(servers, cmd) {
+		return ProcessServer
 	}
 
 	return ProcessUnknown
@@ -880,23 +876,19 @@ func parsePaneTarget(path string) (tmux.Pane, error) {
 	}
 
 	// Parse session:window.pane
-	var session string
 	var window, pane int
 
-	colonIdx := strings.Index(path, ":")
-	if colonIdx == -1 {
+	session, rest, ok := strings.Cut(path, ":")
+	if !ok {
 		return tmux.Pane{Session: path, Window: 0, Index: 0}, nil
 	}
 
-	session = path[:colonIdx]
-	rest := path[colonIdx+1:]
-
-	dotIdx := strings.Index(rest, ".")
-	if dotIdx == -1 {
+	winStr, paneStr, ok := strings.Cut(rest, ".")
+	if !ok {
 		_, _ = fmt.Sscanf(rest, "%d", &window)
 	} else {
-		_, _ = fmt.Sscanf(rest[:dotIdx], "%d", &window)
-		_, _ = fmt.Sscanf(rest[dotIdx+1:], "%d", &pane)
+		_, _ = fmt.Sscanf(winStr, "%d", &window)
+		_, _ = fmt.Sscanf(paneStr, "%d", &pane)
 	}
 
 	return tmux.Pane{Session: session, Window: window, Index: pane}, nil
@@ -959,8 +951,7 @@ func saveImages(images []imageUpload) (paths []string, status int, err error) {
 
 		// Write image to temp file with sanitized filename
 		safeName := filepath.Base(img.Name)
-		tmpPath := fmt.Sprintf("/tmp/houston-%d-%s", time.Now().UnixNano(), safeName)
-		tmpFile, err := os.Create(tmpPath)
+		tmpFile, err := os.CreateTemp("/tmp", "houston-*-"+strings.ReplaceAll(safeName, "*", "_"))
 		if err != nil {
 			slog.Error("failed to create temp file", "error", err, "index", i)
 			// Clean up any files created so far on error

@@ -150,10 +150,7 @@ func (f *fakeLister) ListWindowOptions() ([]tmux.WindowOptions, error) {
 func (f *fakeLister) ListPaneOptions() ([]tmux.PaneOptions, error) {
 	// step() must only be called once per tick; ListWindowOptions already
 	// advanced the cursor for this tick, so replay the same step here.
-	i := f.calls - 1
-	if i < 0 {
-		i = 0
-	}
+	i := max(f.calls-1, 0)
 	if i >= len(f.steps) {
 		i = len(f.steps) - 1
 	}
@@ -218,7 +215,7 @@ func TestTmuxSourceRun(t *testing.T) {
 	}
 
 	cancel()
-	if err := <-done; err != context.Canceled {
+	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run returned %v, want context.Canceled", err)
 	}
 }

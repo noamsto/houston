@@ -67,7 +67,7 @@ func TestPaneWSUpgradeSucceedsWithQueryToken(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	wsURL := "ws://" + strings.TrimPrefix(srv.URL, "http://") + testPaneTarget(t) + "?token=secret"
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil) //nolint:bodyclose // gorilla: a successful upgrade needs no body close
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}

@@ -206,7 +206,11 @@ func TestHubTrailNotResetOnSameTurnEvent(t *testing.T) {
 		s := findSession(h, "tr-2")
 		return s != nil && len(s.Trail) > 0 && s.Trail[len(s.Trail)-1].Tool == "Grep"
 	})
-	if got := findSession(h, "tr-2"); len(got.Trail) < 3 {
+	got := findSession(h, "tr-2")
+	if got == nil {
+		t.Fatal("session tr-2 vanished")
+	}
+	if len(got.Trail) < 3 {
 		t.Fatalf("trail reset on same-turn event: len = %d, want >= 3", len(got.Trail))
 	}
 }

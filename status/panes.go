@@ -62,7 +62,7 @@ func ReadPaneStatuses() []PaneStatus {
 		}
 
 		path := filepath.Join(PanesDir, entry.Name())
-		data, err := os.ReadFile(path)
+		data, err := os.ReadFile(path) //nolint:gosec // path is a directory entry under the fixed PanesDir
 		if err != nil {
 			continue
 		}

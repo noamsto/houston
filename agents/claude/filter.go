@@ -12,10 +12,7 @@ func DetectMode(output string) parser.Mode {
 	lines := strings.Split(output, "\n")
 
 	// Only check last 5 lines where status bar appears
-	start := len(lines) - 5
-	if start < 0 {
-		start = 0
-	}
+	start := max(len(lines)-5, 0)
 
 	// Strip ANSI codes - Claude Code now wraps mode text with color codes
 	bottomLines := ansi.Strip(strings.Join(lines[start:], "\n"))
@@ -38,21 +35,15 @@ func ExtractSuggestion(output string) string {
 	lines := strings.Split(output, "\n")
 
 	// Scan bottom 20 lines for the prompt line with ❯
-	start := len(lines) - 20
-	if start < 0 {
-		start = 0
-	}
+	start := max(len(lines)-20, 0)
 
 	for i := start; i < len(lines); i++ {
 		line := lines[i]
 		// Find the prompt character ❯ (U+276F)
-		idx := strings.Index(line, "❯")
-		if idx == -1 {
+		_, after, ok := strings.Cut(line, "❯")
+		if !ok {
 			continue
 		}
-
-		// Get text after ❯
-		after := line[idx+len("❯"):]
 
 		// Skip NBSP (U+00A0) or regular space after prompt char
 		after = strings.TrimLeft(after, "\u00a0 ")
@@ -65,8 +56,8 @@ func ExtractSuggestion(output string) string {
 
 		// Extract text between \x1b[2m and the next ANSI escape
 		after = after[len("\x1b[2m"):]
-		if endIdx := strings.Index(after, "\x1b["); endIdx >= 0 {
-			return strings.TrimSpace(after[:endIdx])
+		if before, _, ok := strings.Cut(after, "\x1b["); ok {
+			return strings.TrimSpace(before)
 		}
 		return strings.TrimSpace(after)
 	}
@@ -80,19 +71,15 @@ func ExtractSuggestion(output string) string {
 func ExtractInputText(output string) string {
 	lines := strings.Split(output, "\n")
 
-	start := len(lines) - 20
-	if start < 0 {
-		start = 0
-	}
+	start := max(len(lines)-20, 0)
 
 	for i := start; i < len(lines); i++ {
 		line := lines[i]
-		idx := strings.Index(line, "❯")
-		if idx == -1 {
+		_, after, ok := strings.Cut(line, "❯")
+		if !ok {
 			continue
 		}
 
-		after := line[idx+len("❯"):]
 		after = strings.TrimLeft(after, "\u00a0 ")
 
 		// Dim text = suggestion, not user input
@@ -111,10 +98,7 @@ func ExtractInputText(output string) string {
 func ExtractStatusLine(output string) string {
 	lines := strings.Split(output, "\n")
 
-	start := len(lines) - 20
-	if start < 0 {
-		start = 0
-	}
+	start := max(len(lines)-20, 0)
 
 	// Find the LAST horizontal separator
 	lastSeparatorIdx := -1

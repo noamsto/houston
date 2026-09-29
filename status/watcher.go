@@ -74,7 +74,7 @@ func parseStatus(s string) Status {
 }
 
 func readStatusFile(path string) (SessionStatus, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // path is a directory entry under the watched status dir
 	if err != nil {
 		return SessionStatus{}, err
 	}

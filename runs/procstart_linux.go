@@ -17,7 +17,7 @@ const userHZ = 100
 // procStartIn resolves pid's unix start time from root (normally /proc),
 // combining its ticks-since-boot starttime with the kernel's boot time.
 func procStartIn(root string, pid int) int64 {
-	stat, err := os.ReadFile(root + "/" + strconv.Itoa(pid) + "/stat")
+	stat, err := os.ReadFile(root + "/" + strconv.Itoa(pid) + "/stat") //nolint:gosec // procfs path built from an integer pid
 	if err != nil {
 		// ENOENT means the process has exited, a legitimate outcome; any
 		// other error (e.g. EACCES under hidepid) means the probe itself is
@@ -33,7 +33,7 @@ func procStartIn(root string, pid int) int64 {
 		return 0
 	}
 
-	sysStat, err := os.ReadFile(root + "/stat")
+	sysStat, err := os.ReadFile(root + "/stat") //nolint:gosec // procfs path
 	if err != nil {
 		warnProbeBroken(err)
 		return 0
@@ -56,7 +56,7 @@ func foregroundStartIn(root string, panePID int) int64 {
 	if panePID <= 0 {
 		return 0
 	}
-	stat, err := os.ReadFile(root + "/" + strconv.Itoa(panePID) + "/stat")
+	stat, err := os.ReadFile(root + "/" + strconv.Itoa(panePID) + "/stat") //nolint:gosec // procfs path built from an integer pid
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
 			warnProbeBroken(err)

@@ -100,14 +100,14 @@ func NewClient() *Client {
 func (c *Client) output(args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), cmdTimeout)
 	defer cancel()
-	return exec.CommandContext(ctx, c.tmuxPath, args...).Output()
+	return exec.CommandContext(ctx, c.tmuxPath, args...).Output() //nolint:gosec // tmuxPath is the resolved tmux binary; args are built by callers
 }
 
 // run runs a tmux command with a timeout, discarding output.
 func (c *Client) run(args ...string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), cmdTimeout)
 	defer cancel()
-	return exec.CommandContext(ctx, c.tmuxPath, args...).Run()
+	return exec.CommandContext(ctx, c.tmuxPath, args...).Run() //nolint:gosec // tmuxPath is the resolved tmux binary; args are built by callers
 }
 
 func parseSessionLine(line string) (Session, error) {
@@ -524,15 +524,15 @@ func GetWorktrees(path string) (map[string]string, error) {
 	out, err := cmd.Output()
 	if err != nil {
 		// Not a git repo or no worktrees
-		return nil, nil
+		return nil, nil //nolint:nilerr // absence of worktrees is not an error for callers
 	}
 
 	result := make(map[string]string)
 	var currentPath string
 
 	for _, line := range strings.Split(string(out), "\n") {
-		if strings.HasPrefix(line, "worktree ") {
-			currentPath = strings.TrimPrefix(line, "worktree ")
+		if after, ok := strings.CutPrefix(line, "worktree "); ok {
+			currentPath = after
 		} else if strings.HasPrefix(line, "branch ") {
 			branch := strings.TrimPrefix(line, "branch refs/heads/")
 			if currentPath != "" {

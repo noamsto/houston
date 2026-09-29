@@ -77,12 +77,12 @@ func ParseControlLine(line string) ControlEvent {
 func parseOutput(line string) ControlEvent {
 	// "%output %42 hello\015\012"
 	rest := line[len("%output "):]
-	spaceIdx := strings.IndexByte(rest, ' ')
-	if spaceIdx < 0 {
+	before, after, ok := strings.Cut(rest, " ")
+	if !ok {
 		return ControlEvent{Type: EventOutput, PaneID: rest}
 	}
-	paneID := rest[:spaceIdx]
-	data := UnescapeOctal(rest[spaceIdx+1:])
+	paneID := before
+	data := UnescapeOctal(after)
 	return ControlEvent{Type: EventOutput, PaneID: paneID, Data: data}
 }
 
@@ -99,11 +99,11 @@ func parseBlock(line string, eventType ControlEventType) ControlEvent {
 func parseWindowRenamed(line string) ControlEvent {
 	// "%window-renamed @1 vim"
 	rest := line[len("%window-renamed "):]
-	spaceIdx := strings.IndexByte(rest, ' ')
-	if spaceIdx < 0 {
+	before, after, ok := strings.Cut(rest, " ")
+	if !ok {
 		return ControlEvent{Type: EventWindowRenamed, WindowID: rest}
 	}
-	return ControlEvent{Type: EventWindowRenamed, WindowID: rest[:spaceIdx], Data: rest[spaceIdx+1:]}
+	return ControlEvent{Type: EventWindowRenamed, WindowID: before, Data: after}
 }
 
 func parseWindowEvent(line string, eventType ControlEventType) ControlEvent {

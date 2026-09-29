@@ -30,3 +30,12 @@ func TestDetectFromCommand(t *testing.T) {
 		})
 	}
 }
+
+func TestGetAgentPanicsOnEmptyRegistry(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("GetAgent on an empty registry did not panic")
+		}
+	}()
+	NewRegistry().GetAgent(AgentGeneric)
+}

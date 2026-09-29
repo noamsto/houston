@@ -150,7 +150,7 @@ func Install(settingsPath, binary string, dryRun bool) ([]byte, error) {
 	if dryRun {
 		return buf, nil
 	}
-	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil { //nolint:gosec // ~/.claude is conventionally 0755
 		return nil, err
 	}
 	if err := atomicWrite(settingsPath, buf); err != nil {
@@ -168,7 +168,7 @@ type claudeSettings struct {
 }
 
 func loadSettings(path string) (*claudeSettings, error) {
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(path) //nolint:gosec // path comes from houston's own state/transcript dirs, not from a request
 	if os.IsNotExist(err) {
 		return &claudeSettings{Hooks: map[string][]hookEntry{}}, nil
 	}

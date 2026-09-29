@@ -126,7 +126,7 @@ func FindLatestSession(projectDir string) (string, error) {
 
 // ReadLastMessages reads the last N messages from a session file.
 func ReadLastMessages(path string, n int) ([]Message, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:gosec // transcript path is agent-supplied via hook state (not a request); reading it is the feature
 	if err != nil {
 		return nil, fmt.Errorf("opening session file: %w", err)
 	}

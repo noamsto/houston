@@ -49,11 +49,11 @@ type Part struct {
 	Text string `json:"text,omitempty"`
 
 	// For tool parts
-	ToolName string      `json:"toolName,omitempty"`
-	ToolID   string      `json:"toolId,omitempty"`
-	Args     interface{} `json:"args,omitempty"`
-	State    string      `json:"state,omitempty"` // "pending", "running", "complete", "error"
-	Result   interface{} `json:"result,omitempty"`
+	ToolName string `json:"toolName,omitempty"`
+	ToolID   string `json:"toolId,omitempty"`
+	Args     any    `json:"args,omitempty"`
+	State    string `json:"state,omitempty"` // "pending", "running", "complete", "error"
+	Result   any    `json:"result,omitempty"`
 }
 
 // Todo represents a todo item in a session.
@@ -100,8 +100,8 @@ type HealthResponse struct {
 
 // Event represents an SSE event from the OpenCode server.
 type Event struct {
-	Type       string                 `json:"type"`
-	Properties map[string]interface{} `json:"properties,omitempty"`
+	Type       string         `json:"type"`
+	Properties map[string]any `json:"properties,omitempty"`
 }
 
 // EventType constants for SSE events.

@@ -150,7 +150,7 @@ func NewWithOptions(stateDir string, opts Options, log *slog.Logger) *Hub {
 // updates to subscribers. Pre-existing state files are loaded on startup.
 func (h *Hub) Run(ctx context.Context) error {
 	claudeDir := filepath.Join(h.stateDir, "claude")
-	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil { //nolint:gosec // state dir under the user's home; 0755 matches the sibling state files
 		return err
 	}
 	h.pruneEnded(claudeDir)
@@ -357,7 +357,7 @@ func (h *Hub) pruneEnded(dir string) {
 			}
 			continue
 		}
-		if !os.SameFile(before, after) || !after.ModTime().Equal(before.ModTime()) {
+		if after == nil || !os.SameFile(before, after) || !after.ModTime().Equal(before.ModTime()) {
 			continue
 		}
 
@@ -410,7 +410,7 @@ func (h *Hub) loadStateFile(path string) {
 	// so keying on it wiped the trail on every tool completion (#100).
 	if s.Turn > sess.lastTurn {
 		sess.lastTurn = s.Turn
-		sess.trail = sess.trail[:0]
+		sess.trail = []TrailChip{}
 	}
 	sess.transcriptPath = s.TranscriptPath
 	if sess.chat != nil {

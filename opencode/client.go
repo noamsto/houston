@@ -242,7 +242,7 @@ func (c *Client) SubscribeEvents(ctx context.Context) (<-chan Event, error) {
 
 	// Use a client without timeout for SSE
 	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := client.Do(req) //nolint:bodyclose // closed by the stream goroutine below and on the non-200 path
 	if err != nil {
 		return nil, fmt.Errorf("connect to event stream: %w", err)
 	}
@@ -357,5 +357,8 @@ func IsAvailable(ctx context.Context, baseURL string) bool {
 	defer cancel()
 
 	health, err := client.Health(ctx)
-	return err == nil && health.Healthy
+	if err != nil {
+		return false
+	}
+	return health.Healthy
 }
