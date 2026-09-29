@@ -150,6 +150,33 @@ func TestScanFindsBusFromInsideAWorktree(t *testing.T) {
 	}
 }
 
+func TestScanRootsSeesAppendAfterCachedParse(t *testing.T) {
+	busDir := t.TempDir()
+	path := filepath.Join(busDir, "events.jsonl")
+	working := `{"ts":1000,"crew_id":"c1","from":"worker:feat/x#s1","kind":"status","body":{"state":"working"}}` + "\n"
+	if err := os.WriteFile(path, []byte(working), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := &CrewSource{crewDirs: map[string]string{"root": busDir}}
+	if got := s.scanRoots([]string{"root"})[busDir]["feat/x"].State; got != StateRunning {
+		t.Fatalf("first scan State = %q, want running", got)
+	}
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocked := `{"ts":1100,"crew_id":"c1","from":"worker:feat/x#s1","kind":"status","body":{"state":"blocked","detail":"Keep the alias?"}}` + "\n"
+	if _, err := f.WriteString(blocked); err != nil {
+		t.Fatal(err)
+	}
+	_ = f.Close()
+
+	if got := s.scanRoots([]string{"root"})[busDir]["feat/x"].State; got != StateBlocked {
+		t.Fatalf("after append State = %q, want blocked — the cached parse went stale", got)
+	}
+}
+
 func TestTickCrewDeltasEvictsFinishedRunsAfterGrace(t *testing.T) {
 	now := time.Now()
 	const key = "crew/" + testBus + "/fix/412"

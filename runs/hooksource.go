@@ -182,7 +182,7 @@ func (s *HookSource) Run(ctx context.Context, out chan<- Delta) error {
 		return byKey
 	}
 
-	seen := map[string]string{} // key -> signature of the last emitted layer
+	seen := map[string]signature{} // key -> signature of the last emitted layer
 	emit := func(key string, r Run) error {
 		seen[key] = runSignature(r)
 		select {

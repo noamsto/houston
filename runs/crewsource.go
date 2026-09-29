@@ -32,13 +32,25 @@ type CrewSource struct {
 	// procStart is the terminal join's identity probe (resolvePane's
 	// procStart parameter) — a field so tests stay hermetic.
 	procStart procStartFunc
+
+	// logs caches each bus log's parse keyed by path, reused while the file's
+	// size and mtime are unchanged — most logs are idle between ticks, and
+	// re-parsing them all dominated this source's cost. Same single-goroutine
+	// rule as crewDirs. Callers only read the cached Runs' pointer fields.
+	logs map[string]crewLog
+}
+
+type crewLog struct {
+	size int64
+	mod  time.Time
+	runs map[string]crewBranch
 }
 
 func NewCrewSource(c lister, every time.Duration) *CrewSource {
 	if every <= 0 {
 		every = 3 * time.Second
 	}
-	return &CrewSource{client: c, every: every, crewDirs: map[string]string{}, procStart: foregroundStart}
+	return &CrewSource{client: c, every: every, crewDirs: map[string]string{}, logs: map[string]crewLog{}, procStart: foregroundStart}
 }
 
 func (s *CrewSource) Name() string { return "crew" }
@@ -177,6 +189,7 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 // scan() so the root list can be injected in tests without going through tmux.
 func (s *CrewSource) scanRoots(roots []string) map[string]map[string]crewBranch {
 	merged := map[string]map[string]crewBranch{}
+	live := map[string]crewLog{}
 	for _, repo := range roots {
 		dir := s.crewDir(repo)
 		if dir == "" {
@@ -187,21 +200,41 @@ func (s *CrewSource) scanRoots(roots []string) map[string]map[string]crewBranch 
 			continue
 		}
 		for _, path := range logs {
-			f, err := os.Open(path) //nolint:gosec // path comes from houston's own state/transcript dirs, not from a request
-			if err != nil {
-				slog.Debug("crew log", "path", path, "error", err)
+			cl, ok := s.readCrewLog(path)
+			if !ok {
 				continue
 			}
-			for branch, r := range deltasFromCrewLog(f) {
+			live[path] = cl
+			for branch, r := range cl.runs {
 				if merged[dir] == nil {
 					merged[dir] = map[string]crewBranch{}
 				}
 				merged[dir][branch] = r
 			}
-			_ = f.Close()
 		}
 	}
+	s.logs = live
 	return merged
+}
+
+// readCrewLog returns path's parsed runs, re-parsing only when the file's size
+// or mtime moved since the last scan.
+func (s *CrewSource) readCrewLog(path string) (crewLog, bool) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		slog.Debug("crew log", "path", path, "error", err)
+		return crewLog{}, false
+	}
+	if cl, ok := s.logs[path]; ok && cl.size == fi.Size() && cl.mod.Equal(fi.ModTime()) {
+		return cl, true
+	}
+	f, err := os.Open(path) //nolint:gosec // path comes from houston's own state/transcript dirs, not from a request
+	if err != nil {
+		slog.Debug("crew log", "path", path, "error", err)
+		return crewLog{}, false
+	}
+	defer func() { _ = f.Close() }()
+	return crewLog{size: fi.Size(), mod: fi.ModTime(), runs: deltasFromCrewLog(f)}, true
 }
 
 // crewDirTimeout bounds the git call below so a hung git cannot park this

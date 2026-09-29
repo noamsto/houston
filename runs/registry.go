@@ -46,7 +46,7 @@ type Registry struct {
 	mu         sync.RWMutex
 	layers     map[string]map[string]Run // key -> source -> layer
 	listedKeys map[string]bool           // key -> currently listed (an agent run)
-	lastSig    map[string]string         // key -> signature of the last broadcast update
+	lastSig    map[string]signature      // key -> signature of the last broadcast update
 	subs       map[chan Run]*sub
 }
 
@@ -59,7 +59,7 @@ func NewRegistry(order []string) *Registry {
 		order:      idx,
 		layers:     map[string]map[string]Run{},
 		listedKeys: map[string]bool{},
-		lastSig:    map[string]string{},
+		lastSig:    map[string]signature{},
 		subs:       map[chan Run]*sub{},
 	}
 }
@@ -103,7 +103,7 @@ func (r *Registry) Apply(d Delta) {
 	switch {
 	case listed:
 		sig := runSignature(composed)
-		if r.lastSig[d.Key] != sig {
+		if prev, ok := r.lastSig[d.Key]; !ok || prev != sig {
 			r.lastSig[d.Key] = sig
 			payload = composed
 			broadcast = true
@@ -221,58 +221,70 @@ func idFor(key string) string {
 // material changed since the last broadcast for this key, so a poller that
 // re-emits an unchanged layer every tick does not cost every subscriber an
 // SSE event every tick too.
-func runSignature(r Run) string {
-	var b strings.Builder
-	b.WriteString(r.Agent)
-	b.WriteByte('|')
-	b.WriteString(string(r.State))
-	b.WriteByte('|')
-	b.WriteString(r.Repo)
-	b.WriteByte('|')
-	b.WriteString(r.Project)
-	b.WriteByte('|')
-	b.WriteString(r.Role)
-	b.WriteByte('|')
-	b.WriteString(r.Branch)
-	b.WriteByte('|')
-	b.WriteString(r.Worktree)
-	b.WriteByte('|')
+//
+// A struct rather than a joined string: it compares with == and shares the
+// Run's strings instead of copying them, so a poll that changes nothing
+// allocates nothing.
+type signature struct {
+	agent, state, repo, project, role, branch, worktree string
+
+	issueID string
+
+	hasPR                                      bool
+	prNumber, prState, prCheck, prMerge, prURL string
+
+	hasCrew                                                bool
+	crewName, crewCodename, crewColor, crewTier, crewTitle string
+	crewModel, crewDetail                                  string
+
+	hasQuestion bool
+	qText, qVia string
+
+	actTool, actHint, actMessage, actTask, actPreview string
+
+	session string
+
+	stale, capTerminal, capReply, capKill, capChat bool
+}
+
+func runSignature(r Run) signature {
+	s := signature{
+		agent:       r.Agent,
+		state:       string(r.State),
+		repo:        r.Repo,
+		project:     r.Project,
+		role:        r.Role,
+		branch:      r.Branch,
+		worktree:    r.Worktree,
+		actTool:     r.Activity.Tool,
+		actHint:     r.Activity.Hint,
+		actMessage:  r.Activity.Message,
+		actTask:     r.Activity.Task,
+		actPreview:  r.Activity.Preview,
+		session:     r.Session,
+		stale:       r.Stale,
+		capTerminal: r.Caps.Terminal,
+		capReply:    r.Caps.Reply,
+		capKill:     r.Caps.Kill,
+		capChat:     r.Caps.Chat,
+	}
 	if r.Issue != nil {
-		b.WriteString(r.Issue.ID)
+		s.issueID = r.Issue.ID
 	}
-	b.WriteByte('|')
 	if r.PR != nil {
-		b.WriteString(r.PR.Number + "," + r.PR.State + "," + r.PR.CheckState + "," + r.PR.Mergeable + "," + r.PR.URL)
+		s.hasPR = true
+		s.prNumber, s.prState, s.prCheck, s.prMerge, s.prURL = r.PR.Number, r.PR.State, r.PR.CheckState, r.PR.Mergeable, r.PR.URL
 	}
-	b.WriteByte('|')
 	if r.Crew != nil {
-		b.WriteString(r.Crew.Name + "," + r.Crew.Codename + "," + r.Crew.Color + "," + r.Crew.Tier + "," + r.Crew.Title + "," + r.Crew.Model + "," + r.Crew.Detail)
+		s.hasCrew = true
+		s.crewName, s.crewCodename, s.crewColor, s.crewTier = r.Crew.Name, r.Crew.Codename, r.Crew.Color, r.Crew.Tier
+		s.crewTitle, s.crewModel, s.crewDetail = r.Crew.Title, r.Crew.Model, r.Crew.Detail
 	}
-	b.WriteByte('|')
 	if r.Question != nil {
-		b.WriteString(r.Question.Text + "," + r.Question.Via)
+		s.hasQuestion = true
+		s.qText, s.qVia = r.Question.Text, r.Question.Via
 	}
-	b.WriteByte('|')
-	b.WriteString(r.Activity.Tool + "," + r.Activity.Hint + "," + r.Activity.Message + "," + r.Activity.Task + "," + r.Activity.Preview)
-	b.WriteByte('|')
-	b.WriteString(r.Session)
-	b.WriteByte('|')
-	if r.Stale {
-		b.WriteByte('S')
-	}
-	if r.Caps.Terminal {
-		b.WriteByte('T')
-	}
-	if r.Caps.Reply {
-		b.WriteByte('R')
-	}
-	if r.Caps.Kill {
-		b.WriteByte('K')
-	}
-	if r.Caps.Chat {
-		b.WriteByte('C')
-	}
-	return b.String()
+	return s
 }
 
 // mergeInto copies every set field of src over dst. A zero field means "this
