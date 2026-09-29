@@ -43,7 +43,7 @@ export function RunStatusStrip({ run, now }: { run: Run; now: number }) {
   )
 }
 
-export function RunQuestion({ run }: { run: Run }) {
+export function RunQuestion({ run, onTerminal = false }: { run: Run; onTerminal?: boolean }) {
   if (!run.question) return null
   const blocked = run.state === 'blocked'
   const { via } = run.question
@@ -51,7 +51,7 @@ export function RunQuestion({ run }: { run: Run }) {
     <>
       <div className="run-detail-question">{run.question.text}</div>
       {blocked && via === 'crew' && <ReplyComposer runId={run.id} />}
-      {blocked && via === 'pane' && run.caps.terminal && (
+      {blocked && via === 'pane' && run.caps.terminal && !onTerminal && (
         <button
           type="button"
           className="run-detail-question-reply"

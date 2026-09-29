@@ -330,6 +330,18 @@ describe('RunDetail status card (no chat)', () => {
     expect(screen.getAllByText('Deploy to prod?')).toHaveLength(1)
   })
 
+  it('offers Reply in Terminal for a blocked pane question on the default tab', () => {
+    renderCard({ state: 'blocked', question: { text: 'ok?', via: 'pane' }, caps: { terminal: true, reply: true, kill: true } })
+    expect(screen.getByRole('button', { name: 'Reply in Terminal' })).toBeTruthy()
+  })
+
+  it('omits Reply in Terminal for the card above the terminal', () => {
+    const r = liveRun({ state: 'blocked', question: { text: 'ok?', via: 'pane' } })
+    render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
+    expect(screen.getByText('ok?')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Reply in Terminal' })).toBeNull()
+  })
+
   it('clamps the last message and expands it on tap', () => {
     renderCard({ activity: { message: 'a long assistant message' } })
     const message = screen.getByRole('button', { name: 'a long assistant message' })
@@ -379,6 +391,19 @@ describe('RunDetail chat tab', () => {
 
     const chatBtn = screen.getByRole('button', { name: 'Chat' })
     expect(chatBtn.getAttribute('aria-pressed')).toBe('true')
+    await waitFor(() => expect(screen.queryByText(/loading chat/i)).toBeNull())
+  })
+
+  it('the tabs row holds exactly Chat and Terminal', async () => {
+    stubChatFetch(emptyPage)
+    const r = chatRun()
+    const { container } = render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="chat" />)
+
+    const names = within(container.querySelector<HTMLElement>('.run-detail-tabs')!)
+      .getAllByRole('button')
+      .filter((b) => !b.classList.contains('run-detail-tabs-back'))
+      .map((b) => b.textContent)
+    expect(names).toEqual(['Chat', 'Terminal'])
     await waitFor(() => expect(screen.queryByText(/loading chat/i)).toBeNull())
   })
 

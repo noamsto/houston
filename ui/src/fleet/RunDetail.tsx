@@ -118,7 +118,7 @@ function RunDetailBody({ run, tab, streamConnected, now, onBack, backLabel }: { 
           chatOffered ? <ChatTab key={run.id} run={run} now={now} /> : <RunStatusCard key={run.id} run={run} now={now} />
         ) : (
           <>
-            {!chatOffered && <RunStatusCard run={run} now={now} />}
+            {!chatOffered && <RunStatusCard run={run} now={now} onTerminal />}
             {!run.tmux ? (
               <div className="run-detail-empty">Terminal — coming soon.</div>
             ) : lifecycle.state === 'ended' ? (
@@ -149,13 +149,13 @@ function RunDetailBody({ run, tab, streamConnected, now, onBack, backLabel }: { 
   )
 }
 
-function RunStatusCard({ run, now }: { run: Run; now: number }) {
+function RunStatusCard({ run, now, onTerminal = false }: { run: Run; now: number; onTerminal?: boolean }) {
   const [messageOpen, setMessageOpen] = useState(false)
   const message = run.activity.message
   return (
     <div className="run-status-card">
       <RunStatusStrip run={run} now={now} />
-      <RunQuestion run={run} />
+      <RunQuestion run={run} onTerminal={onTerminal} />
       {message && message !== run.question?.text && (
         <button
           type="button"
