@@ -337,7 +337,7 @@ func openChatStream(t *testing.T, ts *httptest.Server, path string, lastEventID 
 	if lastEventID != "" {
 		req.Header.Set("Last-Event-ID", lastEventID)
 	}
-	resp, err := ts.Client().Do(req)
+	resp, err := ts.Client().Do(req) //nolint:bodyclose // body is closed by the reader goroutine below
 	if err != nil {
 		cancel()
 		t.Fatalf("GET %s: %v", path, err)

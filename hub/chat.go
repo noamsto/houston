@@ -56,7 +56,7 @@ func (c *chatState) epoch(sessionID string) string {
 // firstLineHash hashes the file's first complete line, or returns "" while
 // it has none. It streams, so a huge first line costs no memory.
 func firstLineHash(path string) string {
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:gosec // transcript path comes from the agent's own hook state, not a request
 	if err != nil {
 		return ""
 	}
@@ -105,7 +105,7 @@ func (c *chatState) restart(path string) {
 	c.cursor = chat.Cursor{}
 	c.gen++
 	c.total = 0
-	c.ring = nil
+	c.ring = []chat.Update{}
 }
 
 // notify never blocks: each channel has room for one pending signal, and
@@ -146,8 +146,8 @@ func (c *chatState) page(sessionID string, from, to uint64) ChatPage {
 
 // pageFrom is the oldest seq of a limit-sized page ending before before.
 func pageFrom(before uint64, limit int) uint64 {
-	if before > uint64(limit) {
-		return before - uint64(limit)
+	if before > uint64(limit) { //nolint:gosec // ChatPage clamps limit to [1, 100]
+		return before - uint64(limit) //nolint:gosec // ChatPage clamps limit to [1, 100]
 	}
 	return 1
 }
@@ -255,6 +255,9 @@ func (h *Hub) ChatPage(sessionID string, before uint64, limit int) (ChatPage, er
 	all, _, _, err := reader.Read(path, chat.Cursor{})
 	if err != nil {
 		return ChatPage{}, err
+	}
+	if all == nil {
+		all = []chat.Update{}
 	}
 	// The reader is chunking-independent, so the first total updates of a
 	// full re-read are exactly those the ring numbered 1..total.

@@ -316,11 +316,11 @@ func dispatchHomeCrews(commonDir string, crews []string) []string {
 }
 
 func dispatchCrewUnixPrefix(id string) int64 {
-	i := strings.IndexByte(id, '-')
-	if i < 0 {
+	before, _, ok := strings.Cut(id, "-")
+	if !ok {
 		return 0
 	}
-	n, _ := strconv.ParseInt(id[:i], 10, 64)
+	n, _ := strconv.ParseInt(before, 10, 64)
 	return n
 }
 
@@ -397,13 +397,19 @@ func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	repoPath := filepath.Clean(valid.Repo)
-	repoIdx := slices.IndexFunc(repos, func(r dispatchRepo) bool { return r.Path == repoPath })
-	if repoIdx < 0 {
+	var repo dispatchRepo
+	found := false
+	for _, r := range repos {
+		if r.Path == repoPath {
+			repo, found = r, true
+			break
+		}
+	}
+	if !found {
 		dlog.status = http.StatusNotFound
 		writeDispatchJSON(w, http.StatusNotFound, dispatchResponse{Error: "repo is not a known repo"})
 		return
 	}
-	repo := repos[repoIdx]
 
 	// Everything below is validated (bounded, enum, or anchored-regex) and
 	// repo is now a known path, so it's safe to log in full.
@@ -434,12 +440,12 @@ func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 	if valid.Crew == dispatchNewCrew {
 		id := s.dispatchNewCrewID()
 		crewsDir := filepath.Join(repo.commonDir, "crew", "crews")
-		if err := os.MkdirAll(crewsDir, 0o755); err != nil {
+		if err := os.MkdirAll(crewsDir, 0o755); err != nil { //nolint:gosec // crew dir under the repo's .git; 0755 matches the crew CLI
 			dlog.status = http.StatusInternalServerError
 			writeDispatchJSON(w, http.StatusInternalServerError, dispatchResponse{Error: "could not create crew: " + err.Error()})
 			return
 		}
-		if err := os.Mkdir(filepath.Join(crewsDir, id), 0o755); err != nil {
+		if err := os.Mkdir(filepath.Join(crewsDir, id), 0o755); err != nil { //nolint:gosec // crew dir under the repo's .git; 0755 matches the crew CLI
 			if errors.Is(err, fs.ErrExist) {
 				dlog.status = http.StatusConflict
 				writeDispatchJSON(w, http.StatusConflict, dispatchResponse{Error: "a new crew was just started in this second — retry"})

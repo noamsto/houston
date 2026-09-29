@@ -75,3 +75,11 @@ test:
 # Run linter
 lint:
     exec golangci-lint run
+
+# Run nilaway over the module's own packages
+nilaway:
+    exec nilaway -include-pkgs=github.com/noamsto/houston ./...
+
+# Run tests with the race detector
+race:
+    exec go test -race ./...

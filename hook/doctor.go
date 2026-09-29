@@ -50,9 +50,9 @@ func Doctor(stateDir string) (*DoctorReport, error) {
 
 	// 2. State dir writable.
 	claudeDir := filepath.Join(stateDir, "claude")
-	if err := os.MkdirAll(claudeDir, 0o755); err == nil {
+	if err := os.MkdirAll(claudeDir, 0o755); err == nil { //nolint:gosec // state dir under the user's home; 0755 keeps it readable by the hook processes
 		probe := filepath.Join(claudeDir, ".houston-doctor-probe")
-		if err := os.WriteFile(probe, []byte("ok"), 0o644); err == nil {
+		if err := os.WriteFile(probe, []byte("ok"), 0o644); err == nil { //nolint:gosec // throwaway probe file, removed immediately
 			rep.StateDirOK = true
 			_ = os.Remove(probe)
 		}

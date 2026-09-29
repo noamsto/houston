@@ -2,6 +2,7 @@ package runs
 
 import (
 	"context"
+	"maps"
 	"sync"
 	"testing"
 	"time"
@@ -28,9 +29,7 @@ func newFakeConnStates() *fakeConnStates {
 func (f *fakeConnStates) SessionStates() map[string]bool {
 	f.mu.Lock()
 	out := make(map[string]bool, len(f.states))
-	for k, v := range f.states {
-		out[k] = v
-	}
+	maps.Copy(out, f.states)
 	f.mu.Unlock()
 	select {
 	case f.read <- struct{}{}:

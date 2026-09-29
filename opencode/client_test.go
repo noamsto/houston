@@ -62,7 +62,7 @@ func TestClient_ListSessions(t *testing.T) {
 	}
 
 	if len(sessions) != 2 {
-		t.Errorf("expected 2 sessions, got %d", len(sessions))
+		t.Fatalf("expected 2 sessions, got %d", len(sessions))
 	}
 	if sessions[0].ID != "sess-1" {
 		t.Errorf("expected session ID=sess-1, got %s", sessions[0].ID)

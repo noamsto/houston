@@ -96,7 +96,7 @@ type claudeToolUseResult struct {
 }
 
 func (c *claude) Read(path string, from Cursor) (updates []Update, next Cursor, reset bool, err error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:gosec // path comes from houston's own state/transcript dirs, not from a request
 	if err != nil {
 		return nil, from, false, err
 	}
@@ -339,7 +339,7 @@ func (c *claude) logOnce(kind string) {
 }
 
 func (c *claude) Tool(path, toolCallID string) (*Update, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // path comes from houston's own state/transcript dirs, not from a request
 	if err != nil {
 		return nil, err
 	}
@@ -584,7 +584,10 @@ func subagentFileExists(dir, sid, agentID string) bool {
 	}
 	p := filepath.Join(dir, sid, "subagents", "agent-"+agentID+".jsonl")
 	info, err := os.Stat(p)
-	return err == nil && !info.IsDir()
+	if err != nil {
+		return false
+	}
+	return !info.IsDir()
 }
 
 func parseClaudeTS(s string) int64 {

@@ -67,7 +67,7 @@ func execDispatch(ctx context.Context, x dispatchExec) dispatchResult {
 		env = append(env, "DISPATCH_SPEC="+path)
 	}
 
-	cmd := exec.CommandContext(ctx, x.Argv[0], x.Argv[1:]...)
+	cmd := exec.CommandContext(ctx, x.Argv[0], x.Argv[1:]...) //nolint:gosec // argv is built from enums, allowlisted models and anchored-regex values (see dispatch.go)
 	cmd.Dir = x.Dir
 	cmd.Env = env
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

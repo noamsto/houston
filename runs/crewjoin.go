@@ -135,8 +135,9 @@ func finishedPaneState(p tmux.PaneOptions) bool {
 		switch FromClaudeStatus(p.ClaudeStatus) {
 		case StateDone, StateIdle, StateFailed:
 			return true
+		default:
+			return false
 		}
-		return false
 	}
 	if p.AgentScreen != "" {
 		return AgentScreenState(p.AgentScreen) == "idle"

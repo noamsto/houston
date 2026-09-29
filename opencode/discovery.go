@@ -49,7 +49,7 @@ func ReadDiscoveryFiles() []DiscoveredServer {
 			continue
 		}
 
-		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		data, err := os.ReadFile(filepath.Join(dir, entry.Name())) //nolint:gosec // path comes from houston's own state/transcript dirs, not from a request
 		if err != nil {
 			continue
 		}

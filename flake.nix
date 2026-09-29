@@ -86,6 +86,7 @@
               gotools
               go-tools # staticcheck
               golangci-lint
+              nilaway
               air # hot reload
               just
               tmux

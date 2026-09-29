@@ -124,7 +124,8 @@ func Dispatch(event string, stateDir string, stdin io.Reader) error {
 	// read above, so pre's staleness verdict can be out of date.
 	prev, _ := Read(path)
 	now := time.Now().Unix()
-	next := prev
+	next := new(SessionState)
+	*next = prev
 	next.SessionID = ev.SessionID
 	if ev.TranscriptPath != "" {
 		next.TranscriptPath = ev.TranscriptPath
@@ -151,8 +152,8 @@ func Dispatch(event string, stateDir string, stdin io.Reader) error {
 		next.PID = os.Getppid()
 	}
 
-	apply(&next, event, ev, now)
-	return Write(path, next)
+	apply(next, event, ev, now)
+	return Write(path, *next)
 }
 
 // paneStale reports whether s's recorded tmux pane/server no longer matches
@@ -167,10 +168,10 @@ func paneStale(s SessionState, pane, server string) bool {
 // Read-apply-Write and drop one's update. One file for the whole dir, not one
 // per session, so nothing accumulates.
 func lockStateDir(dir string) (unlock func(), err error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // state dir under the user's home; 0755 matches the sibling state files
 		return nil, err
 	}
-	f, err := os.OpenFile(filepath.Join(dir, ".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	f, err := os.OpenFile(filepath.Join(dir, ".lock"), os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // lock file inside the state dir
 	if err != nil {
 		return nil, err
 	}

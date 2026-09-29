@@ -126,7 +126,7 @@ func FindLatestSession(projectDir string) (string, error) {
 
 // ReadLastMessages reads the last N messages from a session file.
 func ReadLastMessages(path string, n int) ([]Message, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:gosec // path comes from houston's own state/transcript dirs, not from a request
 	if err != nil {
 		return nil, fmt.Errorf("opening session file: %w", err)
 	}

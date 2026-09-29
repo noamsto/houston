@@ -49,15 +49,15 @@ type KittyController struct {
 func (k *KittyController) Name() string { return "kitty" }
 
 func (k *KittyController) Increase() error {
-	return exec.Command("kitty", "@", "--to", "unix:"+k.socket, "set-font-size", "--", "+1").Run()
+	return exec.Command("kitty", "@", "--to", "unix:"+k.socket, "set-font-size", "--", "+1").Run() //nolint:gosec // socket is the kitty controller's own env-derived socket; args are fixed literals
 }
 
 func (k *KittyController) Decrease() error {
-	return exec.Command("kitty", "@", "--to", "unix:"+k.socket, "set-font-size", "--", "-1").Run()
+	return exec.Command("kitty", "@", "--to", "unix:"+k.socket, "set-font-size", "--", "-1").Run() //nolint:gosec // socket is the kitty controller's own env-derived socket; args are fixed literals
 }
 
 func (k *KittyController) Reset() error {
-	return exec.Command("kitty", "@", "--to", "unix:"+k.socket, "set-font-size", "--", "0").Run()
+	return exec.Command("kitty", "@", "--to", "unix:"+k.socket, "set-font-size", "--", "0").Run() //nolint:gosec // socket is the kitty controller's own env-derived socket; args are fixed literals
 }
 
 func findKittySocket() string {
@@ -136,15 +136,15 @@ type CustomController struct {
 func (c *CustomController) Name() string { return "custom" }
 
 func (c *CustomController) Increase() error {
-	return exec.Command("sh", "-c", c.cmd+" +1").Run()
+	return exec.Command("sh", "-c", c.cmd+" +1").Run() //nolint:gosec // c.cmd is the operator-configured font command
 }
 
 func (c *CustomController) Decrease() error {
-	return exec.Command("sh", "-c", c.cmd+" -1").Run()
+	return exec.Command("sh", "-c", c.cmd+" -1").Run() //nolint:gosec // c.cmd is the operator-configured font command
 }
 
 func (c *CustomController) Reset() error {
-	return exec.Command("sh", "-c", c.cmd+" 0").Run()
+	return exec.Command("sh", "-c", c.cmd+" 0").Run() //nolint:gosec // c.cmd is the operator-configured font command
 }
 
 // NoopController does nothing (terminal not detected).

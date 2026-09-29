@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -24,7 +25,7 @@ const tokenFile = "token"
 func LoadOrCreateToken(stateDir string) (string, error) {
 	path := filepath.Join(stateDir, tokenFile)
 
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(path) //nolint:gosec // token file in houston's state dir
 	switch {
 	case err == nil:
 		tok := strings.TrimSpace(string(b))
@@ -42,7 +43,7 @@ func LoadOrCreateToken(stateDir string) (string, error) {
 	}
 	tok := hex.EncodeToString(raw)
 
-	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+	if err := os.MkdirAll(stateDir, 0o755); err != nil { //nolint:gosec // state dir; only the token file inside is secret (0600)
 		return "", fmt.Errorf("create state dir: %w", err)
 	}
 	if err := os.WriteFile(path, []byte(tok+"\n"), 0o600); err != nil {
@@ -67,7 +68,10 @@ func sameOrigin(r *http.Request) bool {
 		return false
 	}
 	u, err := url.Parse(origin)
-	return err == nil && u.Host == r.Host
+	if err != nil {
+		return false
+	}
+	return u.Host == r.Host
 }
 
 // originAllowed reports whether a request's Origin may talk to this server.
@@ -92,12 +96,7 @@ func originAllowed(r *http.Request, allowed []string) bool {
 	if err != nil || u.Host == "" {
 		return false // includes the literal "null" a sandboxed frame sends
 	}
-	for _, a := range allowed {
-		if a == origin {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(allowed, origin)
 }
 
 // authCookie is the httpOnly cookie the SPA is issued when it loads. Every UI

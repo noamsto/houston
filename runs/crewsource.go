@@ -187,7 +187,7 @@ func (s *CrewSource) scanRoots(roots []string) map[string]map[string]crewBranch 
 			continue
 		}
 		for _, path := range logs {
-			f, err := os.Open(path)
+			f, err := os.Open(path) //nolint:gosec // path comes from houston's own state/transcript dirs, not from a request
 			if err != nil {
 				slog.Debug("crew log", "path", path, "error", err)
 				continue

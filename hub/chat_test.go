@@ -116,7 +116,11 @@ func (f *chatFixture) epoch() string {
 func (f *chatFixture) ring() []chat.Update {
 	f.h.mu.RLock()
 	defer f.h.mu.RUnlock()
-	return append([]chat.Update(nil), f.h.sessions[f.state.SessionID].chat.ring...)
+	sess := f.h.sessions[f.state.SessionID]
+	if sess == nil || sess.chat == nil {
+		return nil
+	}
+	return append([]chat.Update(nil), sess.chat.ring...)
 }
 
 func humans(from, to int) string {
@@ -400,7 +404,7 @@ func TestChatTranscriptPathChangeResets(t *testing.T) {
 	waitUntil(t, "epoch change", func() bool { return f.epoch() != epoch })
 	f.waitNewest(1)
 	p, _ := f.h.ChatPage("chat-p", 0, 50)
-	if len(p.Updates) != 1 || p.Updates[0].Content[0].Content.Text != "other session" {
+	if len(p.Updates) != 1 || len(p.Updates[0].Content) == 0 || p.Updates[0].Content[0].Content.Text != "other session" {
 		t.Errorf("page after path change = %+v", p.Updates)
 	}
 	select {
@@ -543,6 +547,9 @@ func TestChatPartialLineExcludedUntilComplete(t *testing.T) {
 	f.appendAndPoke(last[10:])
 	f.waitNewest(3)
 	p, _ := f.h.ChatPage("chat-i", 0, 50)
+	if len(p.Updates) < 3 || len(p.Updates[2].Content) == 0 {
+		t.Fatalf("page = %+v, want 3 updates with content", p.Updates)
+	}
 	if got := p.Updates[2].Content[0].Content.Text; got != "third" {
 		t.Errorf("completed line text = %q, want third", got)
 	}

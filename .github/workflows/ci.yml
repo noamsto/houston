@@ -39,6 +39,8 @@ jobs:
 
       - run: nix develop -c golangci-lint run
 
+      - run: nix develop -c nilaway -include-pkgs=github.com/noamsto/houston ./...
+
       - name: Frontend lint
         run: nix develop -c bash -c 'cd ui && npx eslint .'
 

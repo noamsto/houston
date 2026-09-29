@@ -155,7 +155,7 @@ func (cc *ControlClient) dialTmux() (io.ReadCloser, io.Writer, func() error, err
 		return nil, nil, nil, fmt.Errorf("open pty: %w", err)
 	}
 
-	cmd := exec.Command("tmux", "-CC", "attach-session", "-t", cc.session)
+	cmd := exec.Command("tmux", "-CC", "attach-session", "-t", cc.session) //nolint:gosec // fixed argv; session is a tmux session name passed as one argument
 	cmd.Stdin = slave
 	cmd.Stdout = slave
 	cmd.Stderr = slave

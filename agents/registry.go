@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -94,7 +95,7 @@ func (r *Registry) getAgent(agentType AgentType) Agent {
 	if len(r.agents) > 0 {
 		return r.agents[len(r.agents)-1]
 	}
-	return nil
+	panic("agents: registry has no agents")
 }
 
 func (r *Registry) cacheResult(paneID, command string, agentType AgentType) {
@@ -124,10 +125,5 @@ func detectFromCommand(command string) AgentType {
 func isShellCommand(command string) bool {
 	cmd := strings.ToLower(command)
 	shells := []string{"fish", "bash", "zsh", "sh", "dash", "ksh", "tcsh", "csh"}
-	for _, shell := range shells {
-		if cmd == shell {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(shells, cmd)
 }

@@ -165,7 +165,7 @@ func TestEnvelopePiSequenceEndsWaitingOnAgentSettled(t *testing.T) {
 		t.Fatalf("after tool_result = %q, want thinking", got.State)
 	}
 
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		turnEnd := envelope(t, "pi", "turn_end", "turn_end", "s5", "", nil,
 			map[string]any{"cwd": "/w", "session_id": "s5", "turn_index": i})
 		if got := dispatchEnvelope(t, dir, "", "s5", turnEnd); got.State != StateThinking {

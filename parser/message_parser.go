@@ -514,10 +514,10 @@ func (p *MessageParser) extractToolCall(lineIdx int) *Message {
 
 	// Remove prefix (try ToolPrefix first, then AgentPrefix)
 	content := cleanLine
-	if strings.HasPrefix(cleanLine, p.config.ToolPrefix) {
-		content = strings.TrimSpace(strings.TrimPrefix(cleanLine, p.config.ToolPrefix))
-	} else if strings.HasPrefix(cleanLine, p.config.AgentPrefix) {
-		content = strings.TrimSpace(strings.TrimPrefix(cleanLine, p.config.AgentPrefix))
+	if after, ok := strings.CutPrefix(cleanLine, p.config.ToolPrefix); ok {
+		content = strings.TrimSpace(after)
+	} else if after, ok := strings.CutPrefix(cleanLine, p.config.AgentPrefix); ok {
+		content = strings.TrimSpace(after)
 	}
 
 	// Extract tool name (before opening paren)
@@ -552,8 +552,8 @@ func (p *MessageParser) extractToolOutput(lineIdx int) *Message {
 	// Remove tree prefix
 	content := cleanLine
 	for _, prefix := range p.config.ToolOutputPrefixes {
-		if strings.HasPrefix(content, prefix) {
-			content = strings.TrimSpace(strings.TrimPrefix(content, prefix))
+		if after, ok := strings.CutPrefix(content, prefix); ok {
+			content = strings.TrimSpace(after)
 			break
 		}
 	}

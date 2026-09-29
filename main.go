@@ -235,7 +235,7 @@ func runServer() {
 			filepath.Join(*statusDir, "token"))
 	}
 
-	httpSrv := &http.Server{Addr: *addr, Handler: srv.Handler()}
+	httpSrv := &http.Server{Addr: *addr, Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second}
 
 	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

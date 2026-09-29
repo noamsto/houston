@@ -98,7 +98,7 @@ func TestReadTranscriptResumesFromOffset(t *testing.T) {
 
 	third, _, _ := ReadTranscriptFrom(path, offset)
 	if len(third) != 1 {
-		t.Errorf("after append, read %d events, want 1", len(third))
+		t.Fatalf("after append, read %d events, want 1", len(third))
 	}
 	if third[0].Text != "new!" {
 		t.Errorf("third[0].Text = %q, want 'new!'", third[0].Text)

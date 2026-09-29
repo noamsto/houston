@@ -2,6 +2,7 @@ package opencode
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -240,6 +241,9 @@ func (m *Manager) GetSessionDetails(ctx context.Context, serverURL, sessionID st
 
 	if sessErr != nil {
 		return nil, sessErr
+	}
+	if session == nil {
+		return nil, fmt.Errorf("session %s: empty response", sessionID)
 	}
 
 	state := &SessionState{

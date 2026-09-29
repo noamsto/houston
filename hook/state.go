@@ -77,7 +77,7 @@ type SessionState struct {
 
 // Read loads a state document. If the file is missing, returns zero value with nil error.
 func Read(path string) (SessionState, error) {
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(path) //nolint:gosec // path comes from houston's own state/transcript dirs, not from a request
 	if errors.Is(err, fs.ErrNotExist) {
 		return SessionState{}, nil
 	}
@@ -97,7 +97,7 @@ func Write(path string, s SessionState) error {
 	if s.UpdatedAt == 0 {
 		s.UpdatedAt = time.Now().Unix()
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil { //nolint:gosec // state dir under the user's home; 0755 matches the sibling state files
 		return err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".state-*.tmp")

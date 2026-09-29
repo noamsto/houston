@@ -145,7 +145,7 @@ func findThreadForCwd(threadsDir, stateDir, cwd string) (*Thread, error) {
 
 // readLastThreadID reads the last-thread-id from state directory.
 func readLastThreadID(stateDir string) (string, error) {
-	data, err := os.ReadFile(filepath.Join(stateDir, "last-thread-id"))
+	data, err := os.ReadFile(filepath.Join(stateDir, "last-thread-id")) //nolint:gosec // path comes from houston's own state/transcript dirs, not from a request
 	if err != nil {
 		return "", err
 	}
@@ -160,7 +160,7 @@ func readThread(threadsDir, threadID string) (*Thread, error) {
 
 // readThreadFile reads and parses a thread JSON file.
 func readThreadFile(path string) (*Thread, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // path comes from houston's own state/transcript dirs, not from a request
 	if err != nil {
 		return nil, err
 	}

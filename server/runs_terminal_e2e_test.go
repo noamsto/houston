@@ -95,7 +95,11 @@ func TestRunsTerminalE2E(t *testing.T) {
 		Agent: "claude",
 		Tmux:  &runs.TmuxRef{PaneID: runPaneID},
 	}})
-	runID := reg.Snapshot()[0].ID
+	snap := reg.Snapshot()
+	if len(snap) == 0 {
+		t.Fatal("registry has no listed runs")
+	}
+	runID := snap[0].ID
 
 	srv := httptest.NewUnstartedServer(nil)
 	origin := "http://" + srv.Listener.Addr().String()
@@ -155,7 +159,7 @@ func TestRunsTerminalE2E(t *testing.T) {
 		header.Set("Origin", origin)
 		header.Set("Cookie", authCookie+"="+replyToken)
 		wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/runs/" + runID + "/terminal"
-		conn, res, err := websocket.DefaultDialer.Dial(wsURL, header)
+		conn, res, err := websocket.DefaultDialer.Dial(wsURL, header) //nolint:bodyclose // gorilla: a successful upgrade needs no body close
 		if err != nil {
 			status := 0
 			if res != nil {

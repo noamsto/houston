@@ -93,7 +93,7 @@ type usage struct {
 // ReadTranscriptFrom reads JSONL events from byteOffset and returns the new
 // offset so callers can resume.
 func ReadTranscriptFrom(path string, byteOffset int64) ([]TranscriptEvent, int64, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:gosec // path comes from houston's own state/transcript dirs, not from a request
 	if err != nil {
 		return nil, byteOffset, err
 	}

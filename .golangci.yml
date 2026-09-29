@@ -2,6 +2,25 @@
 # (dropped when this repo's config moved to v2 schema).
 version: "2"
 linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - unused
+    - ineffassign
+    - exhaustive
+    - errorlint
+    - nilerr
+    - bodyclose
+    - gosec
+    - modernize
+  settings:
+    exhaustive:
+      default-signifies-exhaustive: true
   exclusions:
     presets:
       - std-error-handling
+    rules:
+      - path: '_test\.go'
+        linters: [gosec]
