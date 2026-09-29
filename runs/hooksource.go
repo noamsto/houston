@@ -162,8 +162,7 @@ func (s *HookSource) Run(ctx context.Context, out chan<- Delta) error {
 			// A role-grid pane parks on the crew bus under role:<branch>:<role>,
 			// not worker:<branch>; the tmux and crew layers already skip it (#99),
 			// and a role pane whose Claude runs with hooks installed must not
-			// slip back in through the hooks layer (#111). The grid lead is the
-			// worker itself and is not in roles (#179). Gate on not-foreign
+			// slip back in through the hooks layer (#111). Gate on not-foreign
 			// for the same reason as the tmux verdict below.
 			if v.TmuxPane != "" && !paneForeign(v, panes) && panes.roles[v.TmuxPane] {
 				continue
@@ -270,8 +269,8 @@ type paneSet struct {
 	at          time.Time
 	server      string
 	serverStart int64
-	// roles marks role-grid panes (any @crew_role other than lead); status carries each
-	// pane's raw @claude_status. Both are keyed by pane id off the same listing
+	// roles marks role-grid panes (see tmux.PaneOptions.IsRolePane); status
+	// carries each pane's raw @claude_status. Both are keyed by pane id off the same listing
 	// as live, and both are only trusted for a session that can vouch for the
 	// pane (not foreign).
 	roles  map[string]bool

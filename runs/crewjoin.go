@@ -60,8 +60,7 @@ func resolvePane(bus, branch string, busState State, busUpdatedAt, busSession in
 		}
 		// A role-grid pane reports to the bus under role:<branch>:<role>,
 		// not worker:<branch> — it must not count as a second agent pane and
-		// make the join ambiguous. The grid lead (@crew_role=lead) is the
-		// worker itself and is the candidate.
+		// make the join ambiguous.
 		if p.IsRolePane() {
 			continue
 		}
