@@ -399,9 +399,9 @@ func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 	repoPath := filepath.Clean(valid.Repo)
 	var repo dispatchRepo
 	found := false
-	for _, r := range repos {
-		if r.Path == repoPath {
-			repo, found = r, true
+	for _, cand := range repos {
+		if cand.Path == repoPath {
+			repo, found = cand, true
 			break
 		}
 	}

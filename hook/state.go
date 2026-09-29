@@ -77,7 +77,7 @@ type SessionState struct {
 
 // Read loads a state document. If the file is missing, returns zero value with nil error.
 func Read(path string) (SessionState, error) {
-	b, err := os.ReadFile(path) //nolint:gosec // path comes from houston's own state/transcript dirs, not from a request
+	b, err := os.ReadFile(path) //nolint:gosec // path is built from the local hook payload's session_id (not sanitized) and the state dir; not reachable from a request
 	if errors.Is(err, fs.ErrNotExist) {
 		return SessionState{}, nil
 	}

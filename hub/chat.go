@@ -56,7 +56,7 @@ func (c *chatState) epoch(sessionID string) string {
 // firstLineHash hashes the file's first complete line, or returns "" while
 // it has none. It streams, so a huge first line costs no memory.
 func firstLineHash(path string) string {
-	f, err := os.Open(path) //nolint:gosec // transcript path comes from the agent's own hook state, not a request
+	f, err := os.Open(path) //nolint:gosec // transcript path is agent-supplied via hook state (not a request); reading it is the feature
 	if err != nil {
 		return ""
 	}
