@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 
-export type DetailTab = 'chat' | 'activity' | 'terminal'
+export type DetailTab = 'chat' | 'terminal'
 
 export interface DetailRoute {
   id: string
@@ -10,7 +10,9 @@ export interface DetailRoute {
 export function parseDetailRoute(hash: string): DetailRoute | null {
   const m = hash.match(/^#\/fleet\/([^/]+)(?:\/([^/]*))?$/)
   if (!m) return null
-  if (m[2] === 'chat' || m[2] === 'activity' || m[2] === 'terminal') return { id: m[1], tab: m[2] }
+  if (m[2] === 'chat' || m[2] === 'terminal') return { id: m[1], tab: m[2] }
+  // The activity tab was folded into chat; old bookmarks and history still name it.
+  if (m[2] === 'activity') return { id: m[1], tab: 'chat' }
   return { id: m[1] }
 }
 

@@ -284,6 +284,39 @@
 
 .run-detail-body { padding: 4px 14px 24px; flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .run-detail-body.terminal { padding: 4px 0 0; }
+.run-status {
+  flex: none; display: flex; flex-direction: column; gap: 2px; font-size: 12.5px;
+}
+.run-status-line {
+  display: flex; align-items: baseline; gap: 8px; min-width: 0; white-space: nowrap;
+}
+.run-status-state { flex: none; font-weight: 600; }
+.run-status-state.needs-you {
+  background: color-mix(in srgb, var(--state-blocked) 22%, transparent);
+  padding: 0 6px; border-radius: 999px;
+}
+.run-status-state.needs-you.muted { background: color-mix(in srgb, var(--state-blocked) 12%, transparent); }
+.run-status-tool {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  font-family: var(--font-mono); color: var(--text-strong);
+}
+.run-status-meta {
+  flex: none; margin-left: auto; display: flex; gap: 8px;
+  color: var(--text-faint); font-size: 12px;
+}
+.run-status-crew { color: var(--text-dim); font-size: 12px; }
+.run-status-codename { font-weight: 600; color: var(--text-strong); }
+.run-status-detail { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.run-detail-question {
+  flex: none; padding: 10px 12px; border-radius: 8px;
+  border: 1px solid var(--accent); border-left: 4px solid var(--state-blocked);
+  background: var(--bg-sunken); color: var(--text-strong);
+  font-size: 14px; line-height: 1.45; max-height: 30dvh; overflow-y: auto; overflow-wrap: anywhere;
+}
+.run-detail-question-reply {
+  flex: none; min-height: var(--tap); margin-top: 8px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--bg-raised); color: var(--text-dim); font: inherit; font-size: 12px; cursor: pointer;
+}
 .activity { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; padding-top: 8px; }
 .activity-glance {
   flex: none; display: flex; align-items: center; gap: 8px; min-height: 28px;
@@ -378,6 +411,7 @@
 .activity-preview-toggle:focus-visible,
 .activity-message:focus-visible,
 .activity-question-reply:focus-visible,
+.run-detail-question-reply:focus-visible,
 .activity-latest:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
