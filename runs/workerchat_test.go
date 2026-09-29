@@ -92,6 +92,7 @@ func TestCrewWorkerRunOffersChat(t *testing.T) {
 				TranscriptPath: filepath.Join(t.TempDir(), sid+".jsonl"),
 				UpdatedAt:      now,
 			}, nil)
+			reg.Apply(waitDelta(t, out, "the lead's hook run", func(d Delta) bool { return d.Key == lead }))
 			drainHookDeltas(out, reg)
 
 			var workers []Run

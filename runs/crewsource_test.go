@@ -537,8 +537,8 @@ func TestResolvePane(t *testing.T) {
 		},
 		{
 			// A role grid puts the lead and its critic panes in the same
-			// window; only the lead (no @crew_role) counts as a join
-			// candidate, so the bus run still joins unambiguously.
+			// window; the lead here carries no @crew_role (the dispatcher's
+			// real @crew_role=lead shape is TestResolvePaneJoinsTheGridLead).
 			name: "role-grid panes don't make the join ambiguous",
 			wins: []tmux.WindowOptions{win(1, "fix/412", "/wt/a")},
 			panes: []tmux.PaneOptions{
