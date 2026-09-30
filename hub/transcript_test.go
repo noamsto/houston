@@ -137,3 +137,35 @@ func TestReadTranscriptToleratesMalformedLine(t *testing.T) {
 		t.Errorf("got %d events, want 1 (malformed line skipped)", len(evts))
 	}
 }
+
+func TestReadTranscriptAfterTruncation(t *testing.T) {
+	path := writeJSONL(t, sampleJSONL)
+	_, offset, err := ReadTranscriptFrom(path, 0)
+	if err != nil {
+		t.Fatalf("first read: %v", err)
+	}
+
+	short := `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"short"}]}}` + "\n"
+	if err := os.WriteFile(path, []byte(short), 0o644); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	events, got, err := ReadTranscriptFrom(path, offset)
+	if err != nil || len(events) != 0 || got != offset {
+		t.Fatalf("shrunk below offset: events=%d offset=%d err=%v, want 0 events, offset %d unchanged", len(events), got, err, offset)
+	}
+
+	regrown := sampleJSONL + `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"past offset"}]}}` + "\n"
+	if err := os.WriteFile(path, []byte(regrown), 0o644); err != nil {
+		t.Fatalf("regrow: %v", err)
+	}
+	events, got, err = ReadTranscriptFrom(path, offset)
+	if err != nil {
+		t.Fatalf("regrown read: %v", err)
+	}
+	if len(events) != 1 || events[0].Text != "past offset" {
+		t.Fatalf("regrown past offset: got %+v, want the one line past the old offset", events)
+	}
+	if got != int64(len(regrown)) {
+		t.Errorf("offset = %d, want %d", got, len(regrown))
+	}
+}

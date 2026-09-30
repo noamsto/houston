@@ -256,6 +256,21 @@ func TestSignatureCoversCrewColor(t *testing.T) {
 	}
 }
 
+func TestSignatureCoversSessionAndChat(t *testing.T) {
+	base := Run{Agent: "claude"}
+	for _, tt := range []struct {
+		name  string
+		after Run
+	}{
+		{"Session", Run{Agent: "claude", Session: "s"}},
+		{"Caps.Chat", Run{Agent: "claude", Caps: Caps{Chat: true}}},
+	} {
+		if runSignature(base) == runSignature(tt.after) {
+			t.Errorf("signature ignores %s — a change to it would never reach a subscriber", tt.name)
+		}
+	}
+}
+
 func TestSignatureCoversProjectAndRole(t *testing.T) {
 	for _, tt := range []struct {
 		name string

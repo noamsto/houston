@@ -93,6 +93,15 @@ type usage struct {
 // ReadTranscriptFrom reads JSONL events from byteOffset and returns the new
 // offset so callers can resume.
 func ReadTranscriptFrom(path string, byteOffset int64) ([]TranscriptEvent, int64, error) {
+	// Polled every tick for every session; most haven't grown.
+	fi, err := os.Stat(path)
+	if err != nil {
+		return nil, byteOffset, err
+	}
+	if fi.Size() <= byteOffset {
+		return nil, byteOffset, nil
+	}
+
 	f, err := os.Open(path) //nolint:gosec // transcript path is agent-supplied via hook state (not a request); reading it is the feature
 	if err != nil {
 		return nil, byteOffset, err
