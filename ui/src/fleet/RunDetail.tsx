@@ -1,16 +1,14 @@
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import type { Run } from '../api/runs'
-import { collapseTrail } from './activityTimeline'
-import { agoLabel, nameLabel, subtitle } from './format'
+import { agoLabel, nameLabel } from './format'
 import { projectOf } from './fleetList'
 import { TerminalPane } from '../components/TerminalPane'
 import { useTerminalLifecycle } from './useTerminalLifecycle'
-import { useStickyScroll } from '../hooks/useStickyScroll'
-import { ReplyComposer } from './ReplyComposer'
 import { ChatTab } from './ChatTab'
+import { RunQuestion, RunStatusStrip } from './RunStatusStrip'
+import { runHash } from './routes'
+import type { DetailTab } from './routes'
 import './fleet.css'
-
-type Tab = 'chat' | 'activity' | 'terminal'
 
 interface RunDetailProps {
   runs: Run[]
@@ -18,7 +16,7 @@ interface RunDetailProps {
   streamConnected: boolean
   now: number
   id: string
-  tab?: Tab
+  tab?: DetailTab
   onBack?: () => void
   backLabel?: string
 }
@@ -27,8 +25,8 @@ function goToFleet(): void {
   window.location.hash = '#/fleet'
 }
 
-function goToTab(id: string, tab: Tab): void {
-  window.location.hash = `#/fleet/${id}/${tab}`
+function goToTab(id: string, tab: DetailTab): void {
+  window.location.hash = runHash(id, tab)
 }
 
 /**
@@ -74,25 +72,19 @@ export function RunDetail({ runs, hasSnapshot, streamConnected, now, id, tab, on
   )
 }
 
-function RunDetailBody({ run, tab, streamConnected, now, onBack, backLabel }: { run: Run; tab?: Tab; streamConnected: boolean; now: number; onBack: () => void; backLabel: string }) {
+function RunDetailBody({ run, tab, streamConnected, now, onBack, backLabel }: { run: Run; tab?: DetailTab; streamConnected: boolean; now: number; onBack: () => void; backLabel: string }) {
   const capable = run.caps.terminal && Boolean(run.tmux)
   const lifecycle = useTerminalLifecycle(run.id, capable, tab === 'terminal', streamConnected)
   const chatOffered = Boolean(run.caps.chat)
 
   // A deep link to `.../terminal` for a run that has never actually gone live
   // (never had, or already lost, terminal capability before the view ever
-  // mounted it) isn't an error — it degrades to Activity, the same as if the
-  // Terminal tab were never offered. Once it *has* gone live, a later
-  // capability loss is shown explicitly instead (see the terminal branch
-  // below) rather than silently falling back here. An undefined or 'chat'
-  // route tab resolves to Chat when offered, else Activity; an explicit
-  // 'activity' always wins even when Chat is offered.
-  const effectiveTab: Tab =
-    tab === 'terminal'
-      ? !run.caps.terminal && !lifecycle.everLive ? 'activity' : 'terminal'
-      : tab === 'activity'
-        ? 'activity'
-        : chatOffered ? 'chat' : 'activity'
+  // mounted it) isn't an error — it degrades to Chat (or the status card when
+  // Chat isn't offered), the same as if the Terminal tab were never offered.
+  // Once it *has* gone live, a later capability loss is shown explicitly
+  // instead (see the terminal branch below) rather than silently falling back
+  // here.
+  const effectiveTab: DetailTab = tab === 'terminal' && (run.caps.terminal || lifecycle.everLive) ? 'terminal' : 'chat'
 
   return (
     <>
@@ -110,14 +102,6 @@ function RunDetailBody({ run, tab, streamConnected, now, onBack, backLabel }: { 
             Chat
           </button>
         )}
-        <button
-          type="button"
-          className={effectiveTab === 'activity' ? 'on' : ''}
-          aria-pressed={effectiveTab === 'activity'}
-          onClick={() => goToTab(run.id, 'activity')}
-        >
-          Activity
-        </button>
         {run.caps.terminal && (
           <button
             type="button"
@@ -131,30 +115,33 @@ function RunDetailBody({ run, tab, streamConnected, now, onBack, backLabel }: { 
       </nav>
       <div className={`run-detail-body${effectiveTab === 'terminal' ? ' terminal' : ''}`}>
         {effectiveTab === 'chat' ? (
-          <ChatTab key={run.id} run={run} now={now} />
-        ) : effectiveTab === 'activity' ? (
-          <ActivityTab key={run.id} run={run} now={now} />
-        ) : !run.tmux ? (
-          <div className="run-detail-empty">Terminal — coming soon.</div>
-        ) : lifecycle.state === 'ended' ? (
-          <div className="run-detail-empty">
-            <p>Terminal session ended.</p>
-            {lifecycle.endedReason && <p>{lifecycle.endedReason}</p>}
-            <button type="button" className="run-detail-back-cta" onClick={lifecycle.reconnect}>Reconnect</button>
-          </div>
+          chatOffered ? <ChatTab key={run.id} run={run} now={now} /> : <RunStatusCard key={run.id} run={run} now={now} />
         ) : (
           <>
-            {lifecycle.reconnecting && <div className="run-detail-reconnecting" role="status">Reconnecting…</div>}
-            <TerminalPane
-              key={`${run.id}-${lifecycle.attempt}`}
-              address={{ kind: 'run', id: run.id }}
-              isFocused
-              hideHeader
-              onFocus={() => {}}
-              onClose={onBack}
-              onConnectionChange={lifecycle.onConnectionChange}
-              onEnded={lifecycle.end}
-            />
+            {!chatOffered && <RunStatusCard run={run} now={now} onTerminal />}
+            {!run.tmux ? (
+              <div className="run-detail-empty">Terminal — coming soon.</div>
+            ) : lifecycle.state === 'ended' ? (
+              <div className="run-detail-empty">
+                <p>Terminal session ended.</p>
+                {lifecycle.endedReason && <p>{lifecycle.endedReason}</p>}
+                <button type="button" className="run-detail-back-cta" onClick={lifecycle.reconnect}>Reconnect</button>
+              </div>
+            ) : (
+              <>
+                {lifecycle.reconnecting && <div className="run-detail-reconnecting" role="status">Reconnecting…</div>}
+                <TerminalPane
+                  key={`${run.id}-${lifecycle.attempt}`}
+                  address={{ kind: 'run', id: run.id }}
+                  isFocused
+                  hideHeader
+                  onFocus={() => {}}
+                  onClose={onBack}
+                  onConnectionChange={lifecycle.onConnectionChange}
+                  onEnded={lifecycle.end}
+                />
+              </>
+            )}
           </>
         )}
       </div>
@@ -162,95 +149,21 @@ function RunDetailBody({ run, tab, streamConnected, now, onBack, backLabel }: { 
   )
 }
 
-const TRAIL_WINDOW = 10
-
-function ActivityTab({ run, now }: { run: Run; now: number }) {
-  const a = run.activity
-  const rows = useMemo(() => collapseTrail(a.trail), [a.trail])
-  const [visible, setVisible] = useState(TRAIL_WINDOW)
+function RunStatusCard({ run, now, onTerminal = false }: { run: Run; now: number; onTerminal?: boolean }) {
   const [messageOpen, setMessageOpen] = useState(false)
-  const [previewOpen, setPreviewOpen] = useState(false)
-  const { ref: scroller, stuck, onScroll, preserveAnchor, scrollToLatest } = useStickyScroll<HTMLDivElement>(
-    [rows, a.message, messageOpen, previewOpen, visible, run.question],
-    visible,
-  )
-
-  const showEarlier = () => {
-    preserveAnchor()
-    setVisible((v) => v + TRAIL_WINDOW)
-  }
-
-  const shown = rows.slice(-visible)
-  const hidden = rows.length - shown.length
-
+  const message = run.activity.message
   return (
-    <div className="activity">
-      <div className="activity-glance">
-        <span className="run-dot" style={{ background: `var(--state-${run.state}, var(--text-faint))` }} />
-        {!(run.question && subtitle(run) === run.question.text) && (
-          <span className="activity-status">{subtitle(run)}</span>
-        )}
-        {typeof a.turn === 'number' && <span className="activity-meta">Turn {a.turn}</span>}
-        <span className="activity-meta">{agoLabel(run.updated_at, now)}</span>
-      </div>
-
-      <div className="activity-timeline-wrap">
-        <div className="activity-timeline" ref={scroller} onScroll={onScroll}>
-          {hidden > 0 && (
-            <button type="button" className="activity-earlier" onClick={showEarlier}>
-              Show earlier ({hidden})
-            </button>
-          )}
-
-          {shown.map((row, i) => (
-            <div
-              key={`${row.tool}-${hidden + i}`}
-              className={`activity-row${row.done ? ' done' : ''}${row.error ? ' error' : ''}`}
-            >
-              <span className="activity-tool">{row.tool}</span>
-              {row.hint && <span className="activity-hint">{row.hint}</span>}
-              {row.count > 1 && <span className="activity-count">×{row.count}</span>}
-            </div>
-          ))}
-
-          {a.message && !(run.question && a.message === run.question.text) && (
-            <button
-              type="button"
-              className={`activity-message${messageOpen ? ' open' : ''}`}
-              aria-expanded={messageOpen}
-              onClick={() => setMessageOpen((o) => !o)}
-            >
-              <span className="activity-message-text">{a.message}</span>
-            </button>
-          )}
-
-          {a.preview && (
-            <>
-              <button
-                type="button"
-                className="activity-preview-toggle"
-                aria-expanded={previewOpen}
-                onClick={() => setPreviewOpen((o) => !o)}
-              >
-                Terminal excerpt {previewOpen ? '▾' : '▸'}
-              </button>
-              {previewOpen && <pre className="activity-preview">{a.preview}</pre>}
-            </>
-          )}
-        </div>
-
-        {!stuck && (
-          <button type="button" className="activity-latest" onClick={scrollToLatest}>
-            ↓ Latest
-          </button>
-        )}
-      </div>
-
-      {run.question && <div className="activity-question">{run.question.text}</div>}
-      {run.question && run.state === 'blocked' && run.question.via === 'crew' && <ReplyComposer runId={run.id} />}
-      {run.question && run.state === 'blocked' && run.question.via === 'pane' && run.caps.terminal && (
-        <button type="button" className="activity-question-reply" onClick={() => goToTab(run.id, 'terminal')}>
-          Reply in Terminal
+    <div className="run-status-card">
+      <RunStatusStrip run={run} now={now} />
+      <RunQuestion run={run} onTerminal={onTerminal} />
+      {message && message !== run.question?.text && (
+        <button
+          type="button"
+          className={`run-status-message${messageOpen ? ' open' : ''}`}
+          aria-expanded={messageOpen}
+          onClick={() => setMessageOpen((o) => !o)}
+        >
+          <span className="run-status-message-text">{message}</span>
         </button>
       )}
     </div>

@@ -15,7 +15,7 @@ describe('parseDetailRoute', () => {
     ['#/fleet/', null],
     ['#/fleet/pane-1', { id: 'pane-1' }],
     ['#/fleet/pane-1/chat', { id: 'pane-1', tab: 'chat' }],
-    ['#/fleet/pane-1/activity', { id: 'pane-1', tab: 'activity' }],
+    ['#/fleet/pane-1/activity', { id: 'pane-1', tab: 'chat' }],
     ['#/fleet/pane-1/terminal', { id: 'pane-1', tab: 'terminal' }],
     ['#/fleet/pane-1/bogus', { id: 'pane-1' }],
     ['#/fleet/pane-1/', { id: 'pane-1' }],

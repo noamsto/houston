@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { waitFor } from '@testing-library/react'
 import { RunDetail } from './RunDetail'
+import { parseDetailRoute } from './routes'
 import type { Run } from '../api/runs'
 import type { Terminal } from '@xterm/xterm'
 import { installFakeEventSource } from '../testing/fakeEventSource'
@@ -80,22 +81,24 @@ afterEach(async () => {
 
 describe('RunDetail', () => {
   it('shows a loading state before the first snapshot arrives, even for an id not yet known', () => {
-    render(<RunDetail runs={[]} hasSnapshot={false} streamConnected now={now} id="pane-1" tab="activity" />)
+    render(<RunDetail runs={[]} hasSnapshot={false} streamConnected now={now} id="pane-1" tab="chat" />)
     expect(screen.getByText(/loading run/i)).toBeTruthy()
     expect(screen.queryByText(/no longer available/i)).toBeNull()
   })
 
   it('shows "not found" once a snapshot has arrived and the id is not in it', () => {
-    render(<RunDetail runs={[]} hasSnapshot streamConnected now={now} id="pane-1" tab="activity" />)
+    render(<RunDetail runs={[]} hasSnapshot streamConnected now={now} id="pane-1" tab="chat" />)
     expect(screen.getByText(/no longer available/i)).toBeTruthy()
   })
 
-  it('falls back to the Activity tab when the deep-linked run has no terminal capability', () => {
+  it('falls back to the status card when the deep-linked run has no terminal capability', () => {
     const r = run({ caps: { terminal: false, reply: true, kill: true }, activity: { tool: 'edit', hint: 'RunDetail.tsx' } })
     render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
 
-    // Activity content renders...
-    expect(screen.getByText('edit · RunDetail.tsx')).toBeTruthy()
+    // The status card renders...
+    const card = document.querySelector<HTMLElement>('.run-status-card')!
+    expect(within(card).getByText('edit')).toBeTruthy()
+    expect(within(card).getByText(/RunDetail\.tsx/)).toBeTruthy()
     // ...and no Terminal tab/placeholder is offered.
     expect(screen.queryByText(/terminal/i)).toBeNull()
   })
@@ -109,7 +112,7 @@ describe('RunDetail', () => {
 
   it('shows project and branch separately in the header, not the worktree-dir repo slug twice', () => {
     const r = run({ project: 'houston', repo: 'feat-97-dogfood-houston-as-a-phone-user-and-file', branch: 'feat/97-dogfood-houston-as-a-phone-user-and-file' })
-    render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="activity" />)
+    render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="chat" />)
     expect(screen.getByText('houston')).toBeTruthy()
     expect(screen.getByText('feat/97-dogfood-houston-as-a-phone-user-and-file')).toBeTruthy()
     expect(screen.queryByText(/feat-97-dogfood-houston-as-a-phone-user-and-file\/feat/)).toBeNull()
@@ -117,7 +120,7 @@ describe('RunDetail', () => {
 
   it('shows the agent chip in the header', () => {
     const r = run({ agent: 'pi' })
-    render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="activity" />)
+    render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="chat" />)
     expect(screen.getByText('pi')).toBeTruthy()
   })
 })
@@ -136,7 +139,7 @@ describe('RunDetail terminal lifecycle', () => {
     expect(lastSocketPath).toBe(`/api/runs/${r.id}/terminal`)
   })
 
-  it('case 1: shows "session ended" (not a silent Activity fallback) when caps.terminal drops after going live, and unmounts the terminal', () => {
+  it('case 1: shows "session ended" when caps.terminal drops after going live, and unmounts the terminal', () => {
     const r = liveRun()
     const { rerender } = render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
     expect(screen.queryByText(/session ended/i)).toBeNull()
@@ -146,7 +149,7 @@ describe('RunDetail terminal lifecycle', () => {
 
     expect(screen.getByText(/session ended/i)).toBeTruthy()
     expect(screen.getByRole('button', { name: /reconnect/i })).toBeTruthy()
-    // Not a silent fallback to Activity: the run's own activity content isn't shown here.
+    expect(document.querySelector('.xterm')).toBeNull()
     expect(screen.queryByText(/no longer available/i)).toBeNull()
   })
 
@@ -230,9 +233,9 @@ describe('RunDetail terminal lifecycle', () => {
     const { rerender } = render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
     expect(screen.queryByText(/coming soon/i)).toBeNull()
 
-    rerender(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="activity" />)
-    // Activity content is shown in place of the terminal.
-    expect(screen.getByText(new RegExp(r.state))).toBeTruthy()
+    rerender(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="chat" />)
+    expect(document.querySelector('.run-status-card')).toBeTruthy()
+    expect(document.querySelector('.xterm')).toBeNull()
 
     // Switching back doesn't read as "ended" — the tab switch alone must not
     // have flagged the pane as dead.
@@ -300,89 +303,14 @@ describe('RunDetail terminal lifecycle', () => {
   })
 })
 
-describe('RunDetail activity timeline', () => {
-  const chips = (n: number) => Array.from({ length: n }, (_, i) => ({ tool: `tool${i}`, hint: `hint${i}`, done: true }))
-  const renderActivity = (p: Partial<Run>) => {
+describe('RunDetail status card (no chat)', () => {
+  const renderCard = (p: Partial<Run>) => {
     const r = run(p)
-    return render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="activity" />)
+    return render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="chat" />)
   }
-  const rowTools = (c: HTMLElement) => Array.from(c.querySelectorAll('.activity-tool')).map((e) => e.textContent)
-
-  it('renders the trail oldest first with the newest last', () => {
-    const { container } = renderActivity({ activity: { trail: chips(3) } })
-    expect(rowTools(container)).toEqual(['tool0', 'tool1', 'tool2'])
-  })
-
-  it('shows the last 10 rows and reveals earlier ones on demand', () => {
-    const { container } = renderActivity({ activity: { trail: chips(15) } })
-    expect(rowTools(container)).toEqual(chips(15).slice(5).map((t) => t.tool))
-
-    fireEvent.click(screen.getByRole('button', { name: /show earlier \(5\)/i }))
-    expect(rowTools(container)).toHaveLength(15)
-    expect(screen.queryByRole('button', { name: /show earlier/i })).toBeNull()
-  })
-
-  it('collapses consecutive repeats of a tool into one row with a count', () => {
-    const { container } = renderActivity({
-      activity: { trail: [
-        { tool: 'read', hint: 'a', done: true },
-        { tool: 'read', hint: 'b', done: true },
-        { tool: 'read', hint: 'c', done: true },
-        { tool: 'edit', hint: 'd', done: true },
-      ] },
-    })
-    expect(rowTools(container)).toEqual(['read', 'edit'])
-    expect(screen.getByText('×3')).toBeTruthy()
-    expect(screen.getByText('c')).toBeTruthy()
-    expect(screen.queryByText('a')).toBeNull()
-  })
-
-  it('highlights an error row and does not merge it into its neighbours', () => {
-    const { container } = renderActivity({
-      activity: { trail: [
-        { tool: 'bash', hint: 'ok', done: true },
-        { tool: 'bash', hint: 'boom', done: true, error: true },
-        { tool: 'bash', hint: 'ok2', done: true },
-      ] },
-    })
-    const rows = container.querySelectorAll('.activity-row')
-    expect(rows).toHaveLength(3)
-    expect(rows[1].classList.contains('error')).toBe(true)
-    expect(rows[0].classList.contains('error')).toBe(false)
-  })
-
-  it('pins the question after the timeline, outside the scroller', () => {
-    const { container } = renderActivity({
-      activity: { trail: chips(2) },
-      question: { text: 'Deploy to prod?', via: 'pane' },
-    })
-    const question = screen.getByText('Deploy to prod?')
-    const timeline = container.querySelector('.activity-timeline') as HTMLElement
-    expect(timeline.contains(question)).toBe(false)
-    expect(timeline.compareDocumentPosition(question) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-  })
-
-  it('clicking Reply in Terminal navigates to the terminal tab for a pane-sourced question', () => {
-    renderActivity({
-      state: 'blocked',
-      activity: { message: 'Deploy to prod?' },
-      question: { text: 'Deploy to prod?', via: 'pane' },
-    })
-    fireEvent.click(screen.getByRole('button', { name: 'Reply in Terminal' }))
-    expect(window.location.hash).toBe('#/fleet/pane-1/terminal')
-  })
-
-  it('shows the crew reply composer for a crew-sourced question', () => {
-    renderActivity({
-      state: 'blocked',
-      activity: { message: 'Deploy to prod?' },
-      question: { text: 'Deploy to prod?', via: 'crew' },
-    })
-    expect(screen.getByLabelText('Reply to the crew')).toBeTruthy()
-  })
 
   it('shows no reply affordance for a watchdog-sourced question', () => {
-    renderActivity({
+    renderCard({
       state: 'blocked',
       activity: { message: 'Checking in — no reply needed.' },
       question: { text: 'Checking in — no reply needed.', via: 'watchdog' },
@@ -392,105 +320,35 @@ describe('RunDetail activity timeline', () => {
     expect(screen.queryByLabelText('Reply to the crew')).toBeNull()
   })
 
-  it('renders a duplicated blocked message exactly once in the Activity tab', () => {
-    const { container } = renderActivity({
+  it('renders a duplicated blocked message exactly once', () => {
+    const { container } = renderCard({
       state: 'blocked',
       activity: { message: 'Deploy to prod?' },
       question: { text: 'Deploy to prod?', via: 'pane' },
     })
-    expect(container.querySelector('.activity-message')).toBeNull()
+    expect(container.querySelector('.run-status-message')).toBeNull()
     expect(screen.getAllByText('Deploy to prod?')).toHaveLength(1)
   })
 
-  it('keeps the terminal excerpt collapsed until toggled', () => {
-    renderActivity({ activity: { preview: 'raw terminal text' } })
-    expect(screen.queryByText('raw terminal text')).toBeNull()
-
-    const toggle = screen.getByRole('button', { name: /terminal excerpt/i })
-    expect(toggle.getAttribute('aria-expanded')).toBe('false')
-    fireEvent.click(toggle)
-    expect(screen.getByText('raw terminal text')).toBeTruthy()
-    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+  it('offers Reply in Terminal for a blocked pane question on the default tab', () => {
+    renderCard({ state: 'blocked', question: { text: 'ok?', via: 'pane' }, caps: { terminal: true, reply: true, kill: true } })
+    expect(screen.getByRole('button', { name: 'Reply in Terminal' })).toBeTruthy()
   })
 
-  it('omits the terminal excerpt toggle when there is no preview', () => {
-    renderActivity({ activity: { message: 'hi' } })
-    expect(screen.queryByRole('button', { name: /terminal excerpt/i })).toBeNull()
+  it('omits Reply in Terminal for the card above the terminal', () => {
+    const r = liveRun({ state: 'blocked', question: { text: 'ok?', via: 'pane' } })
+    render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
+    expect(screen.getByText('ok?')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Reply in Terminal' })).toBeNull()
   })
 
   it('clamps the last message and expands it on tap', () => {
-    renderActivity({ activity: { message: 'a long assistant message' } })
+    renderCard({ activity: { message: 'a long assistant message' } })
     const message = screen.getByRole('button', { name: 'a long assistant message' })
     expect(message.getAttribute('aria-expanded')).toBe('false')
     fireEvent.click(message)
     expect(message.getAttribute('aria-expanded')).toBe('true')
     expect(message.classList.contains('open')).toBe(true)
-  })
-
-  it('shows the turn and age in the glance row', () => {
-    renderActivity({ activity: { turn: 7 }, updated_at: Math.floor(now / 1000) - 120 })
-    expect(screen.getByText('Turn 7')).toBeTruthy()
-    const glance = document.querySelector('.activity-glance') as HTMLElement
-    expect(glance.textContent).toContain('2m')
-  })
-
-  describe('latest pill', () => {
-    const proto = HTMLElement.prototype
-    const saved = {
-      scrollHeight: Object.getOwnPropertyDescriptor(proto, 'scrollHeight'),
-      clientHeight: Object.getOwnPropertyDescriptor(proto, 'clientHeight'),
-    }
-    beforeEach(() => {
-      Object.defineProperty(proto, 'scrollHeight', { configurable: true, get: () => 1000 })
-      Object.defineProperty(proto, 'clientHeight', { configurable: true, get: () => 200 })
-    })
-    afterEach(() => {
-      for (const key of ['scrollHeight', 'clientHeight'] as const) {
-        const d = saved[key]
-        if (d) Object.defineProperty(proto, key, d)
-        else delete (proto as unknown as Record<string, unknown>)[key]
-      }
-    })
-
-    it('appears after scrolling up and scrolls back to the bottom on tap', () => {
-      const { container } = renderActivity({ activity: { trail: chips(3) } })
-      const timeline = container.querySelector('.activity-timeline') as HTMLElement
-      expect(screen.queryByRole('button', { name: /latest/i })).toBeNull()
-
-      timeline.scrollTop = 100
-      fireEvent.scroll(timeline)
-      const pill = screen.getByRole('button', { name: /latest/i })
-      expect(timeline.contains(pill)).toBe(false)
-
-      fireEvent.click(pill)
-      expect(timeline.scrollTop).toBe(1000)
-      expect(screen.queryByRole('button', { name: /latest/i })).toBeNull()
-    })
-
-    it('does not yank the view down on new events once the user scrolled up', () => {
-      const r = run({ activity: { trail: chips(3) } })
-      const { container, rerender } = render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="activity" />)
-      const timeline = container.querySelector('.activity-timeline') as HTMLElement
-      timeline.scrollTop = 100
-      fireEvent.scroll(timeline)
-
-      const next = run({ activity: { trail: chips(4) } })
-      rerender(<RunDetail runs={[next]} hasSnapshot streamConnected now={now} id={next.id} tab="activity" />)
-      expect(timeline.scrollTop).toBe(100)
-    })
-
-    it('resets to the bottom when the shown run changes', () => {
-      const a = run({ id: 'a', activity: { trail: chips(3) } })
-      const b = run({ id: 'b', activity: { trail: chips(3) } })
-      const { container, rerender } = render(<RunDetail runs={[a, b]} hasSnapshot streamConnected now={now} id="a" tab="activity" />)
-      const timeline = container.querySelector('.activity-timeline') as HTMLElement
-      timeline.scrollTop = 100
-      fireEvent.scroll(timeline)
-      expect(screen.getByRole('button', { name: /latest/i })).toBeTruthy()
-
-      rerender(<RunDetail runs={[a, b]} hasSnapshot streamConnected now={now} id="b" tab="activity" />)
-      expect(screen.queryByRole('button', { name: /latest/i })).toBeNull()
-    })
   })
 })
 
@@ -536,22 +394,81 @@ describe('RunDetail chat tab', () => {
     await waitFor(() => expect(screen.queryByText(/loading chat/i)).toBeNull())
   })
 
-  it('an explicit tab="activity" wins over an offered Chat tab', async () => {
+  it('the tabs row holds exactly Chat and Terminal', async () => {
     stubChatFetch(emptyPage)
     const r = chatRun()
-    render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="activity" />)
+    const { container } = render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="chat" />)
 
-    expect(screen.getByRole('button', { name: 'Activity' }).getAttribute('aria-pressed')).toBe('true')
-    expect(screen.getByRole('button', { name: 'Chat' }).getAttribute('aria-pressed')).toBe('false')
-    expect(vi.mocked(fetch).mock.calls.some((c) => String(c[0]).includes('/chat'))).toBe(false)
+    const names = within(container.querySelector<HTMLElement>('.run-detail-tabs')!)
+      .getAllByRole('button')
+      .filter((b) => !b.classList.contains('run-detail-tabs-back'))
+      .map((b) => b.textContent)
+    expect(names).toEqual(['Chat', 'Terminal'])
+    await waitFor(() => expect(screen.queryByText(/loading chat/i)).toBeNull())
   })
 
-  it('offers no Chat tab and defaults to Activity exactly as before when caps.chat is absent', () => {
-    const r = run()
-    render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} />)
+  it('a legacy #/fleet/<id>/activity deep link opens Chat', async () => {
+    stubChatFetch(emptyPage)
+    const r = chatRun()
+    render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab={parseDetailRoute('#/fleet/pane-1/activity')!.tab} />)
 
+    expect(screen.getByRole('button', { name: 'Chat' }).getAttribute('aria-pressed')).toBe('true')
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some((c) => String(c[0]).includes('/chat'))).toBe(true))
+  })
+
+  it('a legacy #/fleet/<id>/activity deep link shows the status card for a no-chat run', () => {
+    const r = run()
+    render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab={parseDetailRoute('#/fleet/pane-1/activity')!.tab} />)
+
+    expect(document.querySelector('.run-status-card')).toBeTruthy()
+  })
+
+  it('without caps.chat shows the status card with question and last message', () => {
+    const r = run({
+      state: 'blocked',
+      activity: { message: 'Still working on the migration' },
+      question: { text: 'Deploy to prod?', via: 'pane' },
+    })
+    const { container } = render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} />)
+
+    const card = container.querySelector<HTMLElement>('.run-status-card')!
+    expect(card.querySelector('.run-status')).toBeTruthy()
+    expect(within(card).getByText('Deploy to prod?')).toBeTruthy()
+    expect(within(card).getByText('Still working on the migration')).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Chat' })).toBeNull()
-    expect(screen.getByRole('button', { name: 'Activity' }).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.queryByRole('button', { name: 'Activity' })).toBeNull()
+  })
+
+  it('offers no Activity tab for any run', () => {
+    stubChatFetch(emptyPage)
+    const chat = chatRun()
+    const { unmount } = render(<RunDetail runs={[chat]} hasSnapshot streamConnected now={now} id={chat.id} />)
+    expect(screen.queryByRole('button', { name: 'Activity' })).toBeNull()
+    unmount()
+
+    const plain = run()
+    render(<RunDetail runs={[plain]} hasSnapshot streamConnected now={now} id={plain.id} />)
+    expect(screen.queryByRole('button', { name: 'Activity' })).toBeNull()
+  })
+
+  it('a no-chat run with no terminal renders the card as the body', () => {
+    const r = run({ caps: { terminal: false, reply: true, kill: true }, activity: { message: 'hello there' } })
+    const { container } = render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} />)
+
+    const body = container.querySelector<HTMLElement>('.run-detail-body')!
+    expect(body.querySelector('.run-status-card')).toBeTruthy()
+    expect(within(body).getByText('hello there')).toBeTruthy()
+  })
+
+  it('a no-chat run on the terminal tab shows the card above the terminal', () => {
+    const r = liveRun()
+    const { container } = render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
+
+    const card = container.querySelector<HTMLElement>('.run-status-card')!
+    const terminal = container.querySelector<HTMLElement>('.xterm')!
+    expect(card).toBeTruthy()
+    expect(terminal).toBeTruthy()
+    expect(card.compareDocumentPosition(terminal) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('shows the Chat tab once a rerender flips caps.chat to true', () => {
@@ -565,12 +482,12 @@ describe('RunDetail chat tab', () => {
     expect(screen.getByRole('button', { name: 'Chat' })).toBeTruthy()
   })
 
-  it('a deep link to tab="chat" without caps.chat degrades to Activity', () => {
+  it('a deep link to tab="chat" without caps.chat degrades to the status card', () => {
     const r = run()
     render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="chat" />)
 
     expect(screen.queryByRole('button', { name: 'Chat' })).toBeNull()
-    expect(screen.getByRole('button', { name: 'Activity' }).getAttribute('aria-pressed')).toBe('true')
+    expect(document.querySelector('.run-status-card')).toBeTruthy()
     expect(vi.mocked(fetch).mock.calls.some((c) => String(c[0]).includes('/chat'))).toBe(false)
   })
 
