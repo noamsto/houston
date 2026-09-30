@@ -89,7 +89,7 @@ func TestParsePaneOptions(t *testing.T) {
 		t.Errorf("got command=%q index=%d active=%v, want node/0/true", got[0].Command, got[0].Index, got[0].Active)
 	}
 	if got[0].CrewRole != "" {
-		t.Errorf("lead pane CrewRole = %q, want empty", got[0].CrewRole)
+		t.Errorf("non-grid pane CrewRole = %q, want empty", got[0].CrewRole)
 	}
 	if got[0].ServerPID != "1966" || got[0].ServerStart != 1790086864 {
 		t.Errorf("ServerPID = %q ServerStart = %d, want 1966/1790086864", got[0].ServerPID, got[0].ServerStart)
@@ -174,5 +174,23 @@ func TestPaneOptionsFormatCarriesTheServerIdentity(t *testing.T) {
 func TestPaneOptionsFormatCarriesAgentScreen(t *testing.T) {
 	if !strings.Contains(paneOptionsFormat, "#{@agent_screen}") {
 		t.Error("format lost #{@agent_screen}: pi/codex/cursor panes would never join a crew record")
+	}
+}
+
+func TestIsRolePane(t *testing.T) {
+	for _, tc := range []struct {
+		role string
+		want bool
+	}{
+		{"", false},
+		{CrewRoleLead, false},
+		{"spec-critic", true},
+		{"plan-critic", true},
+		{"reviewer", true},
+		{"refuter", true},
+	} {
+		if got := (PaneOptions{CrewRole: tc.role}).IsRolePane(); got != tc.want {
+			t.Errorf("IsRolePane(%q) = %v, want %v", tc.role, got, tc.want)
+		}
 	}
 }

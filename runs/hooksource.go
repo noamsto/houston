@@ -269,8 +269,8 @@ type paneSet struct {
 	at          time.Time
 	server      string
 	serverStart int64
-	// roles marks panes carrying a non-empty @crew_role; status carries each
-	// pane's raw @claude_status. Both are keyed by pane id off the same listing
+	// roles marks role-grid panes (see tmux.PaneOptions.IsRolePane); status
+	// carries each pane's raw @claude_status. Both are keyed by pane id off the same listing
 	// as live, and both are only trusted for a session that can vouch for the
 	// pane (not foreign).
 	roles  map[string]bool
@@ -293,7 +293,7 @@ func listPanes(l paneLister) (paneSet, bool) {
 	status := make(map[string]string, len(panes))
 	for _, p := range panes {
 		live[p.PaneID] = true
-		if p.CrewRole != "" {
+		if p.IsRolePane() {
 			roles[p.PaneID] = true
 		}
 		if p.ClaudeStatus != "" {

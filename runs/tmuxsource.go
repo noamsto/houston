@@ -94,7 +94,7 @@ func deltasFromTmux(wins []tmux.WindowOptions, panes []tmux.PaneOptions, project
 	for _, p := range panes {
 		// A role-grid pane parks on the crew bus under role:<branch>:<role>,
 		// not worker:<branch> — it must never surface as its own run.
-		if p.CrewRole != "" {
+		if p.IsRolePane() {
 			continue
 		}
 		w, ok := byTarget[p.Target]

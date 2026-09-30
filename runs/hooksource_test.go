@@ -888,6 +888,16 @@ func TestHookSourceSkipsRoleGridPanes(t *testing.T) {
 	expectNoDelta(t, out, "a role-grid pane surfaced as its own run", func(d Delta) bool { return true })
 }
 
+// TestHookSourceKeepsTheGridLeadPane is #179: a role grid's lead pane carries
+// @crew_role=lead and is the worker itself, so the hooks layer must keep it.
+func TestHookSourceKeepsTheGridLeadPane(t *testing.T) {
+	panes := &fakePanes{}
+	panes.setPanes(tmux.PaneOptions{PaneID: "%9", CrewRole: "lead"})
+
+	out := startHookSource(t, panes)
+	waitDelta(t, out, "the grid lead's run", func(d Delta) bool { return d.Key == "%9" })
+}
+
 // waitingMsg is hub's LastMessage for a turn-end waiting state.
 const waitingMsg = "Claude is waiting for your input"
 

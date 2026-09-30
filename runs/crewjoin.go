@@ -58,10 +58,10 @@ func resolvePane(bus, branch string, busState State, busUpdatedAt, busSession in
 		if p.ClaudeStatus == "" && p.AgentScreen == "" {
 			continue
 		}
-		// A role-grid pane (@crew_role set) reports to the bus under
-		// role:<branch>:<role>, not worker:<branch> — it must not count as a
-		// second agent pane and make the join ambiguous.
-		if p.CrewRole != "" {
+		// A role-grid pane reports to the bus under role:<branch>:<role>,
+		// not worker:<branch> — it must not count as a second agent pane and
+		// make the join ambiguous.
+		if p.IsRolePane() {
 			continue
 		}
 		w, ok := byTarget[p.Target]

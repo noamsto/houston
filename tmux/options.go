@@ -60,7 +60,7 @@ type PaneOptions struct {
 	Command     string // #{pane_current_command}
 	Index       int    // #{pane_index}
 	Active      bool   // #{pane_active}
-	CrewRole    string // #{@crew_role}: non-empty on a role-grid pane, empty on the lead
+	CrewRole    string // #{@crew_role}: a role name on a role-grid pane, "lead" on a grid lead (the worker itself), empty outside a grid
 	// ServerPID and ServerStart identify the tmux server that produced this
 	// listing. Pane ids (e.g. %307) are unique only within one server
 	// incarnation, so these are what a caller needs to tell a live pane from
@@ -68,6 +68,16 @@ type PaneOptions struct {
 	ServerPID   string
 	ServerStart int64
 	PanePID     int // #{pane_pid}: the pane's first process — usually the login shell; 0 when unparseable
+}
+
+// CrewRoleLead is the @crew_role the dispatcher's grid contract stamps on the
+// worker's own pane.
+const CrewRoleLead = "lead"
+
+// IsRolePane reports whether the pane is a role-grid pane (a critic or
+// reviewer), as opposed to the worker itself or a pane outside a grid.
+func (p PaneOptions) IsRolePane() bool {
+	return p.CrewRole != "" && p.CrewRole != CrewRoleLead
 }
 
 func (c *Client) ListWindowOptions() ([]WindowOptions, error) {

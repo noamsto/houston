@@ -537,8 +537,8 @@ func TestResolvePane(t *testing.T) {
 		},
 		{
 			// A role grid puts the lead and its critic panes in the same
-			// window; only the lead (no @crew_role) counts as a join
-			// candidate, so the bus run still joins unambiguously.
+			// window; the lead here carries no @crew_role (the dispatcher's
+			// real @crew_role=lead shape is TestResolvePaneJoinsTheGridLead).
 			name: "role-grid panes don't make the join ambiguous",
 			wins: []tmux.WindowOptions{win(1, "fix/412", "/wt/a")},
 			panes: []tmux.PaneOptions{
@@ -568,6 +568,32 @@ func TestResolvePane(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestResolvePaneJoinsTheGridLead(t *testing.T) {
+	// A role grid's lead pane carries @crew_role=lead: it is the worker, so it
+	// joins, while the critic panes in the same window still don't count.
+	win := tmux.WindowOptions{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"}
+	lead := func(status string) tmux.PaneOptions {
+		return tmux.PaneOptions{PaneID: "%40", Target: "h:1", ClaudeStatus: status, CrewRole: "lead"}
+	}
+	critics := []tmux.PaneOptions{rolePane("%41", "h:1", "spec-critic"), rolePane("%42", "h:1", "plan-critic")}
+
+	t.Run("non-terminal", func(t *testing.T) {
+		panes := append([]tmux.PaneOptions{lead("processing 1 ")}, critics...)
+		pane, n := resolvePane(testBus, "fix/412", StateRunning, 0, 0, []tmux.WindowOptions{win}, panes, testBusOf, noProbe(t))
+		if n != 1 || pane != "%40" {
+			t.Errorf("got (%q, %d), want (%%40, 1)", pane, n)
+		}
+	})
+
+	t.Run("terminal", func(t *testing.T) {
+		panes := append([]tmux.PaneOptions{lead("done 113 1")}, critics...)
+		pane, n := resolvePane(testBus, "fix/412", StateDone, 100, 50, []tmux.WindowOptions{win}, panes, testBusOf, startAt(52))
+		if n != 1 || pane != "%40" {
+			t.Errorf("got (%q, %d), want (%%40, 1)", pane, n)
+		}
+	})
 }
 
 func TestResolvePaneKeepsTwoBusesApart(t *testing.T) {
