@@ -31,14 +31,14 @@ const mkSession = (name: string, paneId: string, server: string) =>
 
 const sessions: SessionsData = {
   needs_attention: [],
-  active: [mkSession('a', '%1', '11'), mkSession('b', '%2', '22')],
+  active: [mkSession('a', '%1', '11'), mkSession('b', '%2', '22'), mkSession('c', '%3', '33')],
   idle: [],
 }
 
-function setup() {
+function setup(focused: { target: string; paneId: string; server: string }) {
   const dispatch = vi.fn()
   const layout = {
-    panes: [{ id: 'pane-1', target: 'a:0.0', paneId: '%1', server: '11' }],
+    panes: [{ id: 'pane-1', ...focused }],
     layout: { type: 'single', paneId: 'pane-1' },
     focusedPaneId: 'pane-1',
     dispatch,
@@ -47,22 +47,26 @@ function setup() {
   return dispatch
 }
 
+const a = { target: 'a:0.0', paneId: '%1', server: '11' }
+const b = { target: 'b:0.0', paneId: '%2', server: '22' }
+const c = { target: 'c:0.0', paneId: '%3', server: '33' }
+
 describe('TerminalArea mobile nav', () => {
-  it('next opens the next entry with its pane identity', () => {
-    const dispatch = setup()
+  it('next opens the following entry with its pane identity', () => {
+    const dispatch = setup(b)
     fireEvent.click(screen.getByLabelText('Next session'))
-    expect(dispatch).toHaveBeenCalledWith({
-      type: 'OPEN_PANE',
-      pane: { target: 'b:0.0', paneId: '%2', server: '22' },
-    })
+    expect(dispatch).toHaveBeenCalledWith({ type: 'OPEN_PANE', pane: c })
   })
 
-  it('prev wraps to the last entry with its pane identity', () => {
-    const dispatch = setup()
+  it('prev opens the preceding entry with its pane identity', () => {
+    const dispatch = setup(b)
     fireEvent.click(screen.getByLabelText('Previous session'))
-    expect(dispatch).toHaveBeenCalledWith({
-      type: 'OPEN_PANE',
-      pane: { target: 'b:0.0', paneId: '%2', server: '22' },
-    })
+    expect(dispatch).toHaveBeenCalledWith({ type: 'OPEN_PANE', pane: a })
+  })
+
+  it('prev wraps from the first entry to the last', () => {
+    const dispatch = setup(a)
+    fireEvent.click(screen.getByLabelText('Previous session'))
+    expect(dispatch).toHaveBeenCalledWith({ type: 'OPEN_PANE', pane: c })
   })
 })
