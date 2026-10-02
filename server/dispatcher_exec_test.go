@@ -222,7 +222,7 @@ func TestDispatcherLaunchWithRealTmuxRunner(t *testing.T) {
 	installFakeTmux(t, out, `case "$1" in
 has-session) echo "can't find session: proj" >&2; exit 1 ;;
 show-environment) echo "PATH=$PATH" ;;
-new-session) mkdir -p '`+f.crewDir+`' && : > '`+f.crewDir+`/pid'; printf 'proj\t@3\t%%7\n' ;;
+new-session) mkdir -p '`+f.crewDir+`' && : > '`+f.crewDir+`/pid'; printf 'proj:@3:%%7\n' ;;
 esac
 `)
 	f.s.tmuxRun = execTmux
@@ -257,8 +257,14 @@ func usePrivateTmux(t *testing.T, session string) string {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
 
+	// Force the condition the Nix build sandbox has: a non-UTF-8 locale,
+	// under which tmux rewrites control characters in -P -F output. tmux
+	// forces UTF-8 whenever $TMUX is set, so the wrapper drops it too —
+	// otherwise these tests would not exercise the locale path from inside
+	// a tmux pane.
+	t.Setenv("LC_ALL", "C")
 	bin := t.TempDir()
-	wrapper := "#!" + bash + "\nexec '" + realTmux + "' -S '" + sockDir + "/s' -f /dev/null \"$@\"\n"
+	wrapper := "#!" + bash + "\nunset TMUX\nexec '" + realTmux + "' -S '" + sockDir + "/s' -f /dev/null \"$@\"\n"
 	if err := os.WriteFile(filepath.Join(bin, "tmux"), []byte(wrapper), 0o755); err != nil {
 		t.Fatal(err)
 	}
