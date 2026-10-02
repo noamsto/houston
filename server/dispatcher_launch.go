@@ -75,7 +75,6 @@ type dispatcherLaunchFile struct {
 // tmux's stderr.
 type tmuxRunner func(ctx context.Context, args []string, env ...string) (string, error)
 
-// errNoServerPath: the tmux server's global environment has no usable PATH.
 var errNoServerPath = errors.New("the tmux server has no global PATH")
 
 // normalizeTask turns every run of whitespace (newlines included) into one
@@ -603,7 +602,6 @@ func paneTmux(pane string, args ...string) {
 	_ = exec.CommandContext(ctx, "tmux", args...).Run() //nolint:gosec // fixed argv; pane is tmux's own $TMUX_PANE
 }
 
-// launchEnv is environ minus launchStrippedEnv, plus the minted CREW_ID.
 func launchEnv(environ []string, crewID string) []string {
 	env := make([]string, 0, len(environ)+1)
 	for _, kv := range environ {

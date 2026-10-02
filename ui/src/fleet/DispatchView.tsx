@@ -146,11 +146,8 @@ export function DispatchView({ runs }: { runs: Run[] }) {
     repoRef.current = repo
   }, [repo])
 
-  // Refetches without touching the draft; the picker's edits and a launched
-  // dispatcher's crew are what the form must pick up. Only the latest refresh
-  // may apply, and it reads the repo as of its response, not its request. An
-  // added repo outlives the refresh that carried it: an overtaking refresh
-  // applies it, and a failed one leaves it for the next.
+  // Only the latest refresh applies, reading the repo at response time; an
+  // added repo waits in pendingAdded for whichever refresh wins.
   function refreshOptions(added?: string): void {
     if (added) pendingAdded.current = added
     const seq = ++refreshSeq.current
