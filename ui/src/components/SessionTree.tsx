@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import type { PaneRef } from '../hooks/useLayout'
 import type { ResultType, SessionsData, SessionWithWindows, WindowWithStatus } from '../api/types'
 
 // Strip Private Use Area Unicode characters (Nerd Font glyphs) that won't render on mobile.
@@ -11,8 +12,8 @@ function stripPUA(s: string): string {
 interface WindowRowProps {
   w: WindowWithStatus
   sessionName: string
-  onSelect: (target: string) => void
-  onSplit: (target: string) => void
+  onSelect: (pane: PaneRef) => void
+  onSplit: (pane: PaneRef) => void
 }
 
 function statusColor(type: ResultType, needsAttention: boolean): string {
@@ -63,7 +64,11 @@ function dirName(w: WindowWithStatus): string {
 }
 
 function WindowRow({ w, sessionName, onSelect, onSplit }: WindowRowProps) {
-  const target = `${sessionName}:${w.window.index}.${w.pane.index}`
+  const ref: PaneRef = {
+    target: `${sessionName}:${w.window.index}.${w.pane.index}`,
+    paneId: w.pane_id,
+    server: w.tmux_server,
+  }
   const color = statusColor(w.parse_result.type, w.needs_attention)
   const pill = pillStyle(w.parse_result.type, w.needs_attention)
   const label = statusLabel(w)
@@ -86,9 +91,9 @@ function WindowRow({ w, sessionName, onSelect, onSplit }: WindowRowProps) {
       }}
       onClick={(e) => {
         if (e.ctrlKey || e.metaKey) {
-          onSplit(target)
+          onSplit(ref)
         } else {
-          onSelect(target)
+          onSelect(ref)
         }
       }}
     >
@@ -146,8 +151,8 @@ function WindowRow({ w, sessionName, onSelect, onSplit }: WindowRowProps) {
 
 interface SessionRowProps {
   s: SessionWithWindows
-  onSelect: (target: string) => void
-  onSplit: (target: string) => void
+  onSelect: (pane: PaneRef) => void
+  onSplit: (pane: PaneRef) => void
 }
 
 function SessionRow({ s, onSelect, onSplit }: SessionRowProps) {
@@ -221,8 +226,8 @@ function SessionRow({ s, onSelect, onSplit }: SessionRowProps) {
 interface GroupProps {
   label: string
   items: SessionWithWindows[]
-  onSelect: (target: string) => void
-  onSplit: (target: string) => void
+  onSelect: (pane: PaneRef) => void
+  onSplit: (pane: PaneRef) => void
 }
 
 function Group({ label, items, onSelect, onSplit }: GroupProps) {
@@ -248,8 +253,8 @@ function Group({ label, items, onSelect, onSplit }: GroupProps) {
 
 interface Props {
   sessions: SessionsData
-  onSelect: (target: string) => void
-  onSplit: (target: string) => void
+  onSelect: (pane: PaneRef) => void
+  onSplit: (pane: PaneRef) => void
 }
 
 export function SessionTree({ sessions, onSelect, onSplit }: Props) {

@@ -28,6 +28,8 @@ function statusColor(status: ResultType | undefined): string {
 
 interface TargetEntry {
   target: string
+  paneId?: string
+  server?: string
   session: string
   agent: AgentType
   status: ResultType
@@ -40,6 +42,8 @@ function buildTargetList(sessions: SessionsData): TargetEntry[] {
       for (const w of s.windows) {
         list.push({
           target: `${s.session.name}:${w.window.index}.${w.pane.index}`,
+          paneId: w.pane_id,
+          server: w.tmux_server,
           session: s.session.name,
           agent: w.agent_type,
           status: w.parse_result.type,
@@ -68,16 +72,19 @@ export function TerminalArea({ layout, sessions, onMenuClick, isDesktop }: Props
   const currentIdx = currentTarget ? targetList.findIndex(t => t.target === currentTarget) : -1
   const currentEntry = currentIdx >= 0 ? targetList[currentIdx] : null
 
+  const openEntry = ({ target, paneId, server }: TargetEntry) =>
+    layout.dispatch({ type: 'OPEN_PANE', pane: { target, paneId, server } })
+
   const handlePrev = () => {
     if (targetList.length === 0) return
     const idx = currentIdx <= 0 ? targetList.length - 1 : currentIdx - 1
-    layout.dispatch({ type: 'OPEN_PANE', target: targetList[idx].target })
+    openEntry(targetList[idx])
   }
 
   const handleNext = () => {
     if (targetList.length === 0) return
     const idx = currentIdx < 0 || currentIdx >= targetList.length - 1 ? 0 : currentIdx + 1
-    layout.dispatch({ type: 'OPEN_PANE', target: targetList[idx].target })
+    openEntry(targetList[idx])
   }
 
   const navBtn: React.CSSProperties = {

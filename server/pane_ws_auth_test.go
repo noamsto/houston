@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
@@ -26,16 +27,30 @@ func newAuthTestServer(token string) *Server {
 		tmux:       tmux.NewClient(),
 		controlMgr: tmux.NewControlManager(),
 		registry:   agents.NewRegistry(generic.New()),
+		runPanes:   absentPane{},
 	}
 }
 
-// testPaneTarget returns a pane WS path that can't collide with a real tmux
-// session on the machine running these tests. parsePaneTarget doesn't treat
-// "/" as part of a session name, hence the ReplaceAll on t.Name() (which
-// contains one for subtests).
+// absentPane resolves every pane id to an id and session no real tmux server
+// has, so an upgraded socket can't attach to a live pane: servePane fails to
+// look it up and closes, as these tests expect.
+type absentPane struct{}
+
+func (absentPane) ResolvePane(string) (tmux.Pane, error) {
+	return tmux.Pane{ID: "%999999999", Session: "houston-auth-test-" + strconv.FormatUint(rand.Uint64(), 36)}, nil
+}
+
+func (absentPane) SendKeys(tmux.Pane, string, bool) error { return errors.New("absentPane: no pane") }
+
+func (absentPane) SendSpecialKey(tmux.Pane, string) error { return errors.New("absentPane: no pane") }
+
+// testPaneTarget returns a pane WS path carrying the identity the route
+// requires. The coordinate is only routing; absentPane decides what it
+// resolves to. A "/" in the name would add a path segment,
+// hence the ReplaceAll on t.Name() (which contains one for subtests).
 func testPaneTarget(t *testing.T) string {
 	name := strings.ReplaceAll(t.Name(), "/", "-")
-	return "/api/pane/" + name + "-" + strconv.FormatUint(rand.Uint64(), 36) + ":0.0/ws"
+	return "/api/pane/" + name + "-" + strconv.FormatUint(rand.Uint64(), 36) + ":0.0/ws?pane_id=%25999999999&server=1"
 }
 
 func setWSUpgradeHeaders(req *http.Request) {
@@ -66,7 +81,7 @@ func TestPaneWSUpgradeSucceedsWithQueryToken(t *testing.T) {
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
 
-	wsURL := "ws://" + strings.TrimPrefix(srv.URL, "http://") + testPaneTarget(t) + "?token=secret"
+	wsURL := "ws://" + strings.TrimPrefix(srv.URL, "http://") + testPaneTarget(t) + "&token=secret"
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil) //nolint:bodyclose // gorilla: a successful upgrade needs no body close
 	if err != nil {
 		t.Fatalf("dial: %v", err)
@@ -77,7 +92,7 @@ func TestPaneWSUpgradeSucceedsWithQueryToken(t *testing.T) {
 func TestPaneWSQueryTokenRejectedOnPlainRequest(t *testing.T) {
 	s := newAuthTestServer("secret")
 
-	req := httptest.NewRequest("GET", "http://127.0.0.1:9090"+testPaneTarget(t)+"?token=secret", nil)
+	req := httptest.NewRequest("GET", "http://127.0.0.1:9090"+testPaneTarget(t)+"&token=secret", nil)
 	req.Host = "127.0.0.1:9090"
 
 	rec := httptest.NewRecorder()

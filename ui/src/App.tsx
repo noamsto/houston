@@ -4,7 +4,7 @@ import { TerminalArea } from './components/TerminalArea'
 import { AgentsView } from './components/agents/AgentsView'
 import { Shell } from './fleet/Shell'
 import { useIsDesktop } from './hooks/useMediaQuery'
-import { useLayout } from './hooks/useLayout'
+import { useLayout, type PaneRef } from './hooks/useLayout'
 import { useSessionsStream } from './hooks/useSessionsStream'
 import { useAttentionNotifications } from './hooks/useAttentionNotifications'
 import { type View, viewForHash } from './view'
@@ -128,13 +128,13 @@ function PanesApp() {
     return () => vv.removeEventListener('resize', update)
   }, [isDesktop])
 
-  const handleSelectWindow = (target: string) => {
-    layout.dispatch({ type: 'OPEN_PANE', target })
+  const handleSelectWindow = (pane: PaneRef) => {
+    layout.dispatch({ type: 'OPEN_PANE', pane })
     if (!isDesktop) setSidebarOpen(false)
   }
 
-  const handleSplitWindow = (target: string) => {
-    layout.dispatch({ type: 'SPLIT_PANE', target, direction: 'horizontal' })
+  const handleSplitWindow = (pane: PaneRef) => {
+    layout.dispatch({ type: 'SPLIT_PANE', pane, direction: 'horizontal' })
     if (!isDesktop) setSidebarOpen(false)
   }
 

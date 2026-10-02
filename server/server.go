@@ -573,6 +573,10 @@ func (s *Server) buildSessionsData() SessionsData {
 				Process:        process,
 				AgentType:      agent.Type(),
 			}
+			if activePaneInfo != nil {
+				windowStatus.PaneID = activePaneInfo.ID
+				windowStatus.TmuxServer = activePaneInfo.Server
+			}
 
 			sessionData.Windows = append(sessionData.Windows, windowStatus)
 
@@ -623,97 +627,6 @@ func (s *Server) buildSessionsData() SessionsData {
 	}
 
 	return data
-}
-
-// buildAgentStripItems returns strip items for all agent windows across all sessions,
-// for the desktop pane page navigation strip.
-func (s *Server) buildAgentStripItems(activeSession string, activeWindow, activePane int) []AgentStripItem {
-	sessions, err := s.tmux.ListSessions()
-	if err != nil {
-		slog.Warn("list sessions failed", "error", err)
-	}
-	var items []AgentStripItem
-
-	for _, sess := range sessions {
-		windows, err := s.tmux.ListWindows(sess.Name)
-		if err != nil || len(windows) == 0 {
-			continue
-		}
-
-		// Load worktrees once per session
-		var worktrees map[string]string
-		var worktreesLoaded bool
-
-		for _, win := range windows {
-			panes, err := s.tmux.ListPanes(sess.Name, win.Index)
-			if err != nil {
-				slog.Warn("list panes failed", "session", sess.Name, "window", win.Index, "error", err)
-			}
-			if len(panes) == 0 {
-				continue
-			}
-
-			bestPane := s.findBestPane(sess.Name, win.Index, panes)
-			activePaneInfo := bestPane.info
-			paneIdx := bestPane.index
-
-			if !worktreesLoaded && activePaneInfo != nil && activePaneInfo.Path != "" {
-				worktrees, _ = tmux.GetWorktrees(activePaneInfo.Path)
-				worktreesLoaded = true
-			}
-
-			// Use cached agent from findBestPane; skip non-agent windows
-			agent := bestPane.agent
-			if agent == nil {
-				continue
-			}
-			if agent.Type() == agents.AgentGeneric {
-				continue
-			}
-
-			parseResult := bestPane.parseResult
-
-			var branch string
-			if activePaneInfo != nil {
-				branch = tmux.GetBranchForPath(activePaneInfo.Path, worktrees)
-			}
-
-			indicator := "idle"
-			switch parseResult.Type {
-			case parser.TypeError, parser.TypeChoice, parser.TypeQuestion:
-				indicator = "attention"
-			case parser.TypeWorking:
-				indicator = "working"
-			case parser.TypeDone:
-				indicator = "done"
-			case parser.TypeIdle:
-			}
-
-			var paneCommand string
-			if activePaneInfo != nil {
-				paneCommand = activePaneInfo.Command
-			}
-
-			displayName := branch
-			if displayName == "" {
-				displayName = paneCommand
-			}
-			if displayName == "" {
-				displayName = win.Name
-			}
-
-			items = append(items, AgentStripItem{
-				Session:   sess.Name,
-				Window:    win.Index,
-				Pane:      paneIdx,
-				Name:      displayName,
-				Indicator: indicator,
-				AgentType: agent.Type(),
-				Active:    sess.Name == activeSession && win.Index == activeWindow && paneIdx == activePane,
-			})
-		}
-	}
-	return items
 }
 
 // getPreviewLines extracts the last n non-empty lines from output, using agent-specific filtering
@@ -857,43 +770,6 @@ func isAllSeparator(line string) bool {
 	return len(line) > 3 // Must be at least a few chars to be a separator
 }
 
-func parsePaneTarget(path string) (tmux.Pane, error) {
-	path = strings.TrimPrefix(path, "/pane/")
-
-	// Strip known action suffixes from the end
-	if lastSlash := strings.LastIndex(path, "/"); lastSlash >= 0 {
-		suffix := path[lastSlash+1:]
-		switch suffix {
-		case "ws", "send", "send-with-images", "send-with-image", "kill", "respawn", "kill-window", "zoom", "resize":
-			path = path[:lastSlash]
-		}
-	}
-
-	// URL-decode the path (handles %2F -> / in session names)
-	decoded, err := url.PathUnescape(path)
-	if err == nil {
-		path = decoded
-	}
-
-	// Parse session:window.pane
-	var window, pane int
-
-	session, rest, ok := strings.Cut(path, ":")
-	if !ok {
-		return tmux.Pane{Session: path, Window: 0, Index: 0}, nil
-	}
-
-	winStr, paneStr, ok := strings.Cut(rest, ".")
-	if !ok {
-		_, _ = fmt.Sscanf(rest, "%d", &window)
-	} else {
-		_, _ = fmt.Sscanf(winStr, "%d", &window)
-		_, _ = fmt.Sscanf(paneStr, "%d", &pane)
-	}
-
-	return tmux.Pane{Session: session, Window: window, Index: pane}, nil
-}
-
 func (s *Server) handlePaneSend(w http.ResponseWriter, r *http.Request, pane tmux.Pane) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -909,9 +785,9 @@ func (s *Server) handlePaneSend(w http.ResponseWriter, r *http.Request, pane tmu
 
 	var err error
 	if special {
-		err = s.tmux.SendSpecialKey(pane, input)
+		err = s.runPanes.SendSpecialKey(pane, input)
 	} else {
-		err = s.tmux.SendKeys(pane, input, !noEnter)
+		err = s.runPanes.SendKeys(pane, input, !noEnter)
 	}
 
 	if err != nil {
@@ -1026,84 +902,13 @@ func (s *Server) handlePaneSendWithImages(w http.ResponseWriter, r *http.Request
 
 	slog.Info("send images with text", "pane", pane.Target(), "count", len(tmpFiles), "text", req.Text)
 
-	if err := s.tmux.SendKeys(pane, message, true); err != nil {
+	if err := s.runPanes.SendKeys(pane, message, true); err != nil {
 		slog.Error("failed to send images", "error", err)
 		http.Error(w, "failed to send: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	slog.Debug("send images success", "count", len(tmpFiles))
-	w.WriteHeader(http.StatusOK)
-}
-
-func (s *Server) handlePaneKill(w http.ResponseWriter, r *http.Request, pane tmux.Pane) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	slog.Info("kill pane", "pane", pane.Target())
-
-	if err := s.tmux.KillPane(pane); err != nil {
-		slog.Error("kill pane failed", "error", err)
-		http.Error(w, "failed to kill pane: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// Redirect back to session or home
-	http.Redirect(w, r, "/", http.StatusSeeOther)
-}
-
-func (s *Server) handlePaneRespawn(w http.ResponseWriter, r *http.Request, pane tmux.Pane) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	slog.Info("respawn pane", "pane", pane.Target())
-
-	if err := s.tmux.RespawnPane(pane); err != nil {
-		slog.Error("respawn pane failed", "error", err)
-		http.Error(w, "failed to respawn pane: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	slog.Debug("respawn pane success")
-	w.WriteHeader(http.StatusOK)
-}
-
-func (s *Server) handleWindowKill(w http.ResponseWriter, r *http.Request, pane tmux.Pane) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	slog.Info("kill window", "session", pane.Session, "window", pane.Window)
-
-	if err := s.tmux.KillWindow(pane.Session, pane.Window); err != nil {
-		slog.Error("kill window failed", "error", err)
-		http.Error(w, "failed to kill window: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// Redirect back to home
-	http.Redirect(w, r, "/", http.StatusSeeOther)
-}
-
-func (s *Server) handlePaneZoom(w http.ResponseWriter, r *http.Request, pane tmux.Pane) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	slog.Info("zoom pane", "pane", pane.Target())
-
-	if err := s.tmux.ZoomPane(pane); err != nil {
-		slog.Error("zoom pane failed", "error", err)
-		http.Error(w, "failed to zoom pane: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
 	w.WriteHeader(http.StatusOK)
 }
 

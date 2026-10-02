@@ -64,6 +64,8 @@ type Pane struct {
 type PaneInfo struct {
 	Index   int    `json:"index"`
 	Active  bool   `json:"active"`
+	ID      string `json:"-"` // pane_id, e.g. %307
+	Server  string `json:"-"` // pid of the tmux server that listed the pane
 	Command string `json:"command"`
 	Path    string `json:"path"`  // pane_current_path
 	Title   string `json:"title"` // pane_title (can be set with nerd fonts)
@@ -212,40 +214,43 @@ func (c *Client) ListWindows(session string) ([]Window, error) {
 func (c *Client) ListPanes(session string, window int) ([]PaneInfo, error) {
 	target := fmt.Sprintf("%s:%d", session, window)
 	out, err := c.output("list-panes", "-t", target, "-F",
-		"#{pane_index}|#{pane_active}|#{pane_current_command}|#{pane_current_path}|#{pane_title}")
+		"#{pane_index}|#{pane_active}|#{pane_id}|#{pid}|#{pane_current_command}|#{pane_current_path}|#{pane_title}")
 	if err != nil {
 		return nil, err
 	}
 
 	var panes []PaneInfo
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if line == "" {
-			continue
+		if p, ok := parsePaneInfoLine(line); ok {
+			panes = append(panes, p)
 		}
-		parts := strings.Split(line, "|")
-		if len(parts) < 3 {
-			continue
-		}
-		idx, _ := strconv.Atoi(parts[0])
-		active := parts[1] == "1"
-		path := ""
-		if len(parts) >= 4 {
-			path = parts[3]
-		}
-		title := ""
-		if len(parts) >= 5 {
-			title = parts[4]
-		}
-		panes = append(panes, PaneInfo{
-			Index:   idx,
-			Active:  active,
-			Command: parts[2],
-			Path:    path,
-			Title:   StripTmuxEscapes(title),
-		})
 	}
 
 	return panes, nil
+}
+
+// parsePaneInfoLine parses one ListPanes line. The title goes last and keeps
+// any "|" it contains.
+func parsePaneInfoLine(line string) (PaneInfo, bool) {
+	parts := strings.SplitN(line, "|", 7)
+	if len(parts) < 5 {
+		return PaneInfo{}, false
+	}
+	idx, _ := strconv.Atoi(parts[0])
+	p := PaneInfo{
+		Index:   idx,
+		Active:  parts[1] == "1",
+		ID:      parts[2],
+		Server:  parts[3],
+		Command: parts[4],
+	}
+	if len(parts) >= 6 {
+		p.Path = parts[5]
+	}
+	if len(parts) >= 7 {
+		p.Title = StripTmuxEscapes(parts[6])
+	}
+	return p, true
 }
 
 // CaptureResult holds the captured pane output and detected mode
@@ -429,22 +434,6 @@ func (c *Client) GetPaneLocation(session string, paneID int) (int, int, error) {
 	}
 
 	return 0, 0, fmt.Errorf("pane %%%d not found", paneID)
-}
-
-// KillPane closes a pane
-func (c *Client) KillPane(p Pane) error {
-	return c.run("kill-pane", "-t", p.Target())
-}
-
-// RespawnPane kills the current process and respawns the pane
-func (c *Client) RespawnPane(p Pane) error {
-	return c.run("respawn-pane", "-k", "-t", p.Target())
-}
-
-// KillWindow closes a window
-func (c *Client) KillWindow(session string, window int) error {
-	target := fmt.Sprintf("%s:%d", session, window)
-	return c.run("kill-window", "-t", target)
 }
 
 // ResizePane resizes a pane by the given adjustment in lines/columns.

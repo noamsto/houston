@@ -30,6 +30,34 @@ func TestParseSessionLine(t *testing.T) {
 	}
 }
 
+func TestParsePaneInfoLine(t *testing.T) {
+	cases := []struct {
+		name   string
+		line   string
+		want   PaneInfo
+		wantOK bool
+	}{
+		{"full", "1|1|%307|1966|claude|/home/u/repo|my title",
+			PaneInfo{Index: 1, Active: true, ID: "%307", Server: "1966", Command: "claude", Path: "/home/u/repo", Title: "my title"}, true},
+		{"inactive, no title", "0|0|%3|42|fish|/tmp|",
+			PaneInfo{Index: 0, ID: "%3", Server: "42", Command: "fish", Path: "/tmp"}, true},
+		{"title keeps pipes", "2|0|%9|42|vim|/tmp|a|b",
+			PaneInfo{Index: 2, ID: "%9", Server: "42", Command: "vim", Path: "/tmp", Title: "a|b"}, true},
+		{"no path", "0|1|%1|7|bash",
+			PaneInfo{Index: 0, Active: true, ID: "%1", Server: "7", Command: "bash"}, true},
+		{"too short", "0|1|%1|7", PaneInfo{}, false},
+		{"empty", "", PaneInfo{}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := parsePaneInfoLine(tc.line)
+			if ok != tc.wantOK || got != tc.want {
+				t.Errorf("parsePaneInfoLine(%q) = %+v, %v; want %+v, %v", tc.line, got, ok, tc.want, tc.wantOK)
+			}
+		})
+	}
+}
+
 func TestCapturePaneOutput(t *testing.T) {
 	// This tests the output structure, actual capture requires tmux
 	output := `$ echo hello

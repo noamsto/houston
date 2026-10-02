@@ -1,8 +1,13 @@
 import { useEffect, useReducer, useState } from 'react'
 
-export interface PaneInstance {
-  id: string
+export interface PaneRef {
   target: string // "session:window.pane"
+  paneId?: string
+  server?: string
+}
+
+export interface PaneInstance extends PaneRef {
+  id: string
 }
 
 export type SplitLayout =
@@ -16,15 +21,15 @@ export type SplitLayout =
       second: SplitLayout
     }
 
-interface LayoutState {
+export interface LayoutState {
   panes: PaneInstance[]
   layout: SplitLayout
   focusedPaneId: string | null
 }
 
 type LayoutAction =
-  | { type: 'OPEN_PANE'; target: string }
-  | { type: 'SPLIT_PANE'; target: string; direction: 'horizontal' | 'vertical' }
+  | { type: 'OPEN_PANE'; pane: PaneRef }
+  | { type: 'SPLIT_PANE'; pane: PaneRef; direction: 'horizontal' | 'vertical' }
   | { type: 'CLOSE_PANE'; paneId: string }
   | { type: 'FOCUS_PANE'; paneId: string }
 
@@ -45,11 +50,11 @@ function syncNextId(panes: PaneInstance[]) {
   }
 }
 
-function layoutReducer(state: LayoutState, action: LayoutAction): LayoutState {
+export function layoutReducer(state: LayoutState, action: LayoutAction): LayoutState {
   switch (action.type) {
     case 'OPEN_PANE': {
       const id = genId()
-      const pane: PaneInstance = { id, target: action.target }
+      const pane: PaneInstance = { id, ...action.pane }
 
       if (state.layout.type === 'empty') {
         return { panes: [pane], layout: { type: 'single', paneId: id }, focusedPaneId: id }
@@ -58,7 +63,7 @@ function layoutReducer(state: LayoutState, action: LayoutAction): LayoutState {
       // Replace focused pane's target in-place rather than opening a new one
       if (state.focusedPaneId) {
         const updated = state.panes.map((p) =>
-          p.id === state.focusedPaneId ? { ...p, target: action.target } : p,
+          p.id === state.focusedPaneId ? { id: p.id, ...action.pane } : p,
         )
         return { ...state, panes: updated }
       }
@@ -68,7 +73,7 @@ function layoutReducer(state: LayoutState, action: LayoutAction): LayoutState {
 
     case 'SPLIT_PANE': {
       const id = genId()
-      const pane: PaneInstance = { id, target: action.target }
+      const pane: PaneInstance = { id, ...action.pane }
 
       if (state.layout.type === 'empty') {
         return { panes: [pane], layout: { type: 'single', paneId: id }, focusedPaneId: id }
