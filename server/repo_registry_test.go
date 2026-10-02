@@ -188,12 +188,16 @@ func TestRepoRegistryAddRefusals(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// A real main checkout, so only the control rune can refuse it.
+	control := gitInit(t, filepath.Join(f.root, "ctl\tproj"))
+
 	cases := []struct {
 		name, path string
 		code       int
 	}{
 		{"empty", "", http.StatusBadRequest},
 		{"relative", "root/proj", http.StatusBadRequest},
+		{"control character", control, http.StatusBadRequest},
 		{"outside root", outside, http.StatusUnprocessableEntity},
 		{"symlink escape", escape, http.StatusUnprocessableEntity},
 		{"dotdot escape", f.root + "/../outside", http.StatusUnprocessableEntity},

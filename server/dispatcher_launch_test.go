@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -183,8 +184,6 @@ type launchFixture struct {
 	crewDir string
 }
 
-const testLauncher = "/opt/bin/dispatcher"
-
 // newLaunchFixture serves one fake main checkout named "proj" with no tmux
 // windows; by default tmux reports no session, starts the window as pane %7,
 // and the pane stays alive without registering (still starting).
@@ -205,7 +204,6 @@ func newLaunchFixture(t *testing.T) launchFixture {
 	s.wsTmux = &fakeWorkspaceLister{}
 	s.launchCommonDir = func(root string) (string, error) { return filepath.Join(root, ".git"), nil }
 	s.tmuxRun = ft.run
-	s.dispatcherBin = func() (string, error) { return testLauncher, nil }
 	s.houstonExe = "/opt/houston"
 	s.launchDir = filepath.Join(realTempDir(t), "launch")
 	s.launchSlot = make(chan struct{}, 1)
@@ -306,7 +304,7 @@ func TestDispatcherLaunchNewSessionSuccess(t *testing.T) {
 		t.Fatalf("launch files = %q, want 1", files)
 	}
 	wantArgv := []string{
-		"new-session", "-d", "-P", "-F", launchFormat, "-s", "proj", "-n", "dispatcher",
+		"new-session", "-d", "-E", "-P", "-F", launchFormat, "-s", "proj", "-n", "dispatcher",
 		"-c", f.repo.Path, "--", "/opt/houston", "launch-dispatcher", files[0],
 	}
 	if got := f.tmux.find("new-session"); !slices.Equal(got, wantArgv) {
@@ -345,13 +343,20 @@ func TestDispatcherLaunchFileContents(t *testing.T) {
 		t.Errorf("launch dir mode = %v, want 0700", dinfo.Mode().Perm())
 	}
 
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(readFile(t, files[0])), &raw); err != nil {
+		t.Fatal(err)
+	}
+	if keys := slices.Sorted(maps.Keys(raw)); !slices.Equal(keys, []string{"args", "crew_id"}) {
+		t.Errorf("launch file keys = %q, want [args crew_id]", keys)
+	}
 	var lf dispatcherLaunchFile
 	if err := json.Unmarshal([]byte(readFile(t, files[0])), &lf); err != nil {
 		t.Fatal(err)
 	}
 	prompt := "2 tasks: (1) fix the $(flaky) test; now (2) write docs"
-	want := dispatcherLaunchFile{Launcher: testLauncher, Args: []string{"--agent", "claude", "--model", "opus", prompt}, CrewID: dispatchTestNewCrewID}
-	if lf.Launcher != want.Launcher || lf.CrewID != want.CrewID || !slices.Equal(lf.Args, want.Args) {
+	want := dispatcherLaunchFile{Args: []string{"--agent", "claude", "--model", "opus", prompt}, CrewID: dispatchTestNewCrewID}
+	if lf.CrewID != want.CrewID || !slices.Equal(lf.Args, want.Args) {
 		t.Errorf("launch file = %+v, want %+v", lf, want)
 	}
 	for _, call := range f.tmux.all() {
@@ -491,16 +496,93 @@ func TestDispatcherLaunchDeadPaneInCreatedSession(t *testing.T) {
 }
 
 func TestDispatcherLaunchPaneGone(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		out  string
+		err  error
+	}{
+		{"pane not found", "", errors.New("tmux display-message: exit status 1: can't find pane: %7")},
+		{"server gone", "", errors.New("tmux display-message: exit status 1: no server running on /tmp/tmux-1000/default")},
+		// A live server that no longer knows the pane exits 0 with every
+		// pane field blank.
+		{"blank fields", "", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newLaunchFixture(t)
+			f.tmux.set("display-message", func([]string) (string, error) { return tc.out, tc.err })
+
+			rec, resp := f.post(t, f.request())
+			wantStatus(t, rec, http.StatusUnprocessableEntity)
+			if resp.Error != "dispatcher exited immediately" {
+				t.Errorf("error = %q", resp.Error)
+			}
+			if exists(f.crewDir) {
+				t.Error("empty crew dir kept after the pane vanished")
+			}
+			if files := launchFiles(t, f.s.launchDir); len(files) != 0 {
+				t.Errorf("launch files left behind: %q", files)
+			}
+		})
+	}
+}
+
+// Only a tmux answer that the pane or server is gone means the launcher died;
+// any other failure to check leaves the window, crew and launch file alone.
+func TestDispatcherLaunchPaneCheckFailed(t *testing.T) {
 	f := newLaunchFixture(t)
-	f.tmux.set("display-message", func([]string) (string, error) { return "", errors.New("can't find pane: %7") })
+	f.tmux.set("display-message", func([]string) (string, error) {
+		return "", errors.New("tmux display-message: exit status 1: protocol version mismatch (client 8, server 7)")
+	})
 
 	rec, resp := f.post(t, f.request())
-	wantStatus(t, rec, http.StatusUnprocessableEntity)
-	if resp.Error != "dispatcher exited immediately" {
+	wantStatus(t, rec, http.StatusBadGateway)
+	if !strings.HasPrefix(resp.Error, "could not check the dispatcher pane: ") || !strings.Contains(resp.Error, "protocol version mismatch") {
 		t.Errorf("error = %q", resp.Error)
 	}
-	if exists(f.crewDir) {
-		t.Error("empty crew dir kept after the pane vanished")
+	want := dispatcherResponse{Error: resp.Error, Crew: dispatchTestNewCrewID, Session: "proj", Window: "@3", Pane: "%7"}
+	if resp != want {
+		t.Errorf("response = %+v, want %+v", resp, want)
+	}
+	if !exists(f.crewDir) {
+		t.Error("crew dir removed although the pane was never confirmed gone")
+	}
+	if files := launchFiles(t, f.s.launchDir); len(files) != 1 {
+		t.Errorf("launch files = %q, want the one still unread", files)
+	}
+	if f.tmux.find("kill-window") != nil || f.tmux.find("kill-session") != nil {
+		t.Error("houston killed a window it could not check")
+	}
+}
+
+// has-session failing for any reason other than a missing session means tmux
+// can't be asked; new-session must not run in the dark.
+func TestDispatcherLaunchSessionLookupFailed(t *testing.T) {
+	for _, msg := range []string{
+		"tmux has-session: exit status 1: no server running on /tmp/tmux-1000/default",
+		"tmux has-session: signal: killed",
+	} {
+		t.Run(msg, func(t *testing.T) {
+			f := newLaunchFixture(t)
+			f.tmux.set("has-session", func([]string) (string, error) { return "", errors.New(msg) })
+
+			rec, resp := f.post(t, f.request())
+			wantStatus(t, rec, http.StatusServiceUnavailable)
+			if !strings.HasPrefix(resp.Error, "tmux unavailable") {
+				t.Errorf("error = %q", resp.Error)
+			}
+			if resp.Crew != "" {
+				t.Errorf("crew = %q, want none", resp.Crew)
+			}
+			if f.tmux.find("new-session") != nil || f.tmux.find("new-window") != nil {
+				t.Error("tmux was asked to create a window")
+			}
+			if files := launchFiles(t, f.s.launchDir); len(files) != 0 {
+				t.Errorf("launch files left behind: %q", files)
+			}
+			if exists(f.crewDir) {
+				t.Error("crew dir kept after tmux was unavailable")
+			}
+		})
 	}
 }
 
@@ -553,11 +635,6 @@ func TestDispatcherLaunchRefusalsBeforeTmux(t *testing.T) {
 			f.s.dispatchRepos = stubDispatchRepos([]dispatchRepo{{Path: path, Name: "a#b", commonDir: filepath.Join(path, ".git")}}, nil)
 			req.Repo = path
 		}, http.StatusUnprocessableEntity},
-		{"launcher not found", func(f *launchFixture, _ *dispatcherRequest) {
-			f.s.dispatcherBin = func() (string, error) {
-				return "", errors.New(`exec: "dispatcher": executable file not found in $PATH`)
-			}
-		}, http.StatusBadGateway},
 		{"engines lookup failed", func(f *launchFixture, _ *dispatcherRequest) {
 			f.s.dispatchEngines = func(context.Context) ([]string, error) { return nil, errors.New("dispatch not found") }
 		}, http.StatusBadGateway},

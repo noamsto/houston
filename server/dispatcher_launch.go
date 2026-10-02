@@ -19,6 +19,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/noamsto/houston/runs"
+	"github.com/noamsto/houston/tmux"
 )
 
 const (
@@ -29,8 +30,8 @@ const (
 	dispatcherLaunchDirName = "launch"
 	launchFileMaxAge        = 10 * time.Minute
 
-	tmuxTimeout       = 10 * time.Second
-	remainOnExitDelay = 2 * time.Second
+	tmuxTimeout     = 10 * time.Second
+	paneTmuxTimeout = 2 * time.Second
 
 	// launchFormat is what new-window/new-session print with -P, so the
 	// handler learns where the dispatcher landed without a second lookup.
@@ -38,9 +39,9 @@ const (
 )
 
 // launchStrippedEnv are keys the wrapper drops before exec: the minted crew
-// always wins over a tmux-global CREW_ID, and no worker identity or spec
-// leaks into a dispatcher.
-var launchStrippedEnv = []string{"CREW_ID", "CREW_WORKER_ID", "DISPATCH_SPEC"}
+// always wins over a tmux-global CREW_ID, and no worker or role identity or
+// spec leaks into a dispatcher.
+var launchStrippedEnv = []string{"CREW_ID", "CREW_WORKER_ID", "DISPATCH_SPEC", "CREW_ROLE_ID"}
 
 // dispatcherRequest is the POST /api/dispatch/dispatcher body.
 type dispatcherRequest struct {
@@ -65,9 +66,8 @@ type dispatcherResponse struct {
 // file the wrapper reads, never through tmux argv, where a trailing ";"
 // starts a new tmux command and "#" is format-expanded.
 type dispatcherLaunchFile struct {
-	Launcher string   `json:"launcher"`
-	Args     []string `json:"args"`
-	CrewID   string   `json:"crew_id"`
+	Args   []string `json:"args"`
+	CrewID string   `json:"crew_id"`
 }
 
 // tmuxRunner runs one tmux command with no shell. Stdout comes back trimmed;
@@ -197,14 +197,6 @@ func execTmux(ctx context.Context, args []string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-func lookupDispatcherLauncher() (string, error) {
-	path, err := exec.LookPath("dispatcher")
-	if err != nil {
-		return "", err
-	}
-	return filepath.Abs(path)
-}
-
 func writeLaunchFile(dir string, lf dispatcherLaunchFile) (string, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
@@ -251,12 +243,14 @@ const (
 	launchStarting
 	launchDead
 	launchGone
+	launchUnchecked
 )
 
 // awaitDispatcher polls until the launcher registers (crew register writes
 // <crew dir>/pid), its pane dies, or launchCheck passes. A dead pane lingers
-// only because the wrapper sets remain-on-exit failed.
-func (s *Server) awaitDispatcher(ctx context.Context, crewDir, pane string) (launchState, string) {
+// only because the wrapper sets remain-on-exit failed. detail is a dead
+// pane's exit status, or why the pane could not be checked.
+func (s *Server) awaitDispatcher(ctx context.Context, crewDir, pane string) (state launchState, detail string) {
 	deadline := time.Now().Add(s.launchCheck)
 	for {
 		if _, err := os.Stat(filepath.Join(crewDir, "pid")); err == nil {
@@ -264,9 +258,18 @@ func (s *Server) awaitDispatcher(ctx context.Context, crewDir, pane string) (lau
 		}
 		out, err := s.tmuxRun(ctx, []string{"display-message", "-p", "-t", pane, "#{pane_dead} #{pane_dead_status}"})
 		if err != nil {
-			return launchGone, ""
+			if tmux.IsGoneMessage(err.Error()) {
+				return launchGone, ""
+			}
+			return launchUnchecked, err.Error()
 		}
-		if dead, status, _ := strings.Cut(out, " "); dead == "1" {
+		// A live server that no longer knows the pane exits 0 with every
+		// pane field blank.
+		dead, status, _ := strings.Cut(out, " ")
+		switch dead {
+		case "":
+			return launchGone, ""
+		case "1":
 			return launchDead, status
 		}
 		if time.Now().After(deadline) {
@@ -278,8 +281,9 @@ func (s *Server) awaitDispatcher(ctx context.Context, crewDir, pane string) (lau
 
 // launchSession picks where the dispatcher window goes: the session holding
 // the most windows of this repo (ties by name), else an existing session
-// named after the repo. exists is false when tmux must create it.
-func (s *Server) launchSession(ctx context.Context, repo dispatchRepo) (session string, exists bool) {
+// named after the repo. exists is false when tmux must create it; err means
+// tmux couldn't say whether it exists.
+func (s *Server) launchSession(ctx context.Context, repo dispatchRepo) (session string, exists bool, err error) {
 	wins, err := s.wsTmux.ListWindowOptions()
 	if err != nil {
 		slog.Warn("dispatcher launch: list windows failed", "error", err)
@@ -308,20 +312,26 @@ func (s *Server) launchSession(ctx context.Context, repo dispatchRepo) (session 
 		}
 	}
 	if best != "" {
-		return best, true
+		return best, true, nil
 	}
 
 	name := sanitizeSessionName(filepath.Base(repo.Path))
 	_, err = s.tmuxRun(ctx, []string{"has-session", "-t", "=" + name})
-	return name, err == nil
+	switch {
+	case err == nil:
+		return name, true, nil
+	case strings.Contains(err.Error(), "can't find session"):
+		return name, false, nil
+	}
+	return "", false, err
 }
 
 // handleDispatcherLaunch starts a dispatcher in a new tmux window.
 //
 //	POST /api/dispatch/dispatcher {"repo","tasks","engine","model","effort"}
 //
-// tmux runs `houston launch-dispatcher <file>`; the launcher, its flags and
-// the task text travel in that file, so nothing user-typed reaches tmux argv.
+// tmux runs `houston launch-dispatcher <file>`; the launcher's flags and the
+// task text travel in that file, so nothing user-typed reaches tmux argv.
 func (s *Server) handleDispatcherLaunch(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	llog := &launchLog{}
@@ -381,11 +391,6 @@ func (s *Server) handleDispatcherLaunch(w http.ResponseWriter, r *http.Request) 
 		reply(http.StatusUnprocessableEntity, dispatcherResponse{Error: "repo path contains characters tmux would interpret"})
 		return
 	}
-	launcher, err := s.dispatcherBin()
-	if err != nil {
-		reply(http.StatusBadGateway, dispatcherResponse{Error: "dispatcher launcher not found: " + err.Error()})
-		return
-	}
 	if s.houstonExe == "" || !tmuxSafeArg(s.houstonExe) || !tmuxSafeArg(s.launchDir) {
 		reply(http.StatusInternalServerError, dispatcherResponse{Error: "houston's own executable or state path cannot be passed to tmux"})
 		return
@@ -407,7 +412,7 @@ func (s *Server) handleDispatcherLaunch(w http.ResponseWriter, r *http.Request) 
 	}
 	llog.crew = id
 
-	file, err := writeLaunchFile(s.launchDir, dispatcherLaunchFile{Launcher: launcher, Args: dispatcherArgs(valid), CrewID: id})
+	file, err := writeLaunchFile(s.launchDir, dispatcherLaunchFile{Args: dispatcherArgs(valid), CrewID: id})
 	if err != nil {
 		_ = os.Remove(crewDir)
 		reply(http.StatusInternalServerError, dispatcherResponse{Error: "could not write launch file: " + err.Error()})
@@ -418,13 +423,23 @@ func (s *Server) handleDispatcherLaunch(w http.ResponseWriter, r *http.Request) 
 	// half-made window or skip the cleanup below.
 	ctx := context.WithoutCancel(r.Context())
 
-	session, exists := s.launchSession(ctx, repo)
-	argv := []string{"new-session", "-d", "-P", "-F", launchFormat, "-s", session}
+	session, exists, err := s.launchSession(ctx, repo)
+	if err != nil {
+		_ = os.Remove(file)
+		_ = os.Remove(crewDir)
+		reply(http.StatusServiceUnavailable, dispatcherResponse{Error: "tmux unavailable: " + err.Error()})
+		return
+	}
+	// -E: tmux would otherwise copy houston's (service) values of every
+	// update-environment variable into the new session, or mark the absent
+	// ones removed, shadowing the server's global SSH_AUTH_SOCK, DISPLAY etc.
+	argv := []string{"new-session", "-d", "-E", "-P", "-F", launchFormat, "-s", session}
 	if exists {
-		// No -d: the launcher's untargeted `tmux set-window-option` resolves to
-		// the session's current window, so the new window must be current or
-		// its @crew_name stamp lands on another window. A client viewing this
-		// session switches to the new window.
+		// No -d: the launcher's untargeted `tmux set-window-option` stamps
+		// resolve to the session's current window, so the new window must be
+		// current or they land on another window; a client viewing this
+		// session switches to it. The root fix is `-t "$TMUX_PANE"` in the
+		// launcher.
 		argv = []string{"new-window", "-P", "-F", launchFormat, "-t", "=" + session + ":"}
 	}
 	argv = append(argv, "-n", "dispatcher", "-c", repo.Path, "--", s.houstonExe, "launch-dispatcher", file)
@@ -444,7 +459,7 @@ func (s *Server) handleDispatcherLaunch(w http.ResponseWriter, r *http.Request) 
 	created, window, pane := parts[0], parts[1], parts[2]
 	llog.pane = pane
 
-	state, exitStatus := s.awaitDispatcher(ctx, crewDir, pane)
+	state, detail := s.awaitDispatcher(ctx, crewDir, pane)
 	switch state {
 	case launchDead:
 		output, err := s.tmuxRun(ctx, []string{"capture-pane", "-p", "-J", "-t", pane, "-S", "-40"})
@@ -459,12 +474,16 @@ func (s *Server) handleDispatcherLaunch(w http.ResponseWriter, r *http.Request) 
 			slog.Warn("dispatcher launch: cleanup failed", "pane", pane, "error", err)
 		}
 		msg := "dispatcher exited"
-		if exitStatus != "" {
-			msg += " with status " + exitStatus
+		if detail != "" {
+			msg += " with status " + detail
 		}
 		reply(http.StatusUnprocessableEntity, dispatcherResponse{Error: msg, Output: output, Crew: removeLaunchLeftovers(file, crewDir, id)})
 	case launchGone:
 		reply(http.StatusUnprocessableEntity, dispatcherResponse{Error: "dispatcher exited immediately", Crew: removeLaunchLeftovers(file, crewDir, id)})
+	case launchUnchecked:
+		// The window may still be running the launcher, which may not have
+		// read its file yet: keep both, and the crew.
+		reply(http.StatusBadGateway, dispatcherResponse{Error: "could not check the dispatcher pane: " + detail, Crew: id, Session: created, Window: window, Pane: pane})
 	default:
 		if _, err := s.repoReg.Add(repo.Path); err != nil {
 			slog.Debug("dispatcher launch: repo not remembered", "repo", repo.Path, "reason", err)
@@ -515,16 +534,13 @@ func (l *launchLog) emit(start time.Time) {
 }
 
 // ExecDispatcherLaunch is `houston launch-dispatcher <file>`, run by tmux in
-// the new pane with the tmux server's environment. It replaces itself with
-// the launcher, so it returns only on failure.
+// the new pane with the tmux server's environment. It resolves `dispatcher`
+// on that PATH and replaces itself with it, so it returns only on failure.
 func ExecDispatcherLaunch(file string) error {
-	if pane := os.Getenv("TMUX_PANE"); pane != "" {
-		// Keep a failed launcher's pane (and its error) for houston's
-		// startup check and the user; a clean exit still closes it.
-		ctx, cancel := context.WithTimeout(context.Background(), remainOnExitDelay)
-		_ = exec.CommandContext(ctx, "tmux", "set-option", "-w", "-t", pane, "remain-on-exit", "failed").Run() //nolint:gosec // fixed argv; pane is tmux's own $TMUX_PANE
-		cancel()
-	}
+	pane := os.Getenv("TMUX_PANE")
+	// Keep a failed launch's pane (and its error) for houston's startup check
+	// and the user; a clean exit still closes it.
+	paneTmux(pane, "set-option", "-w", "-t", pane, "remain-on-exit", "failed")
 
 	b, err := os.ReadFile(file) //nolint:gosec // the path houston itself passed in tmux argv
 	if err != nil {
@@ -537,18 +553,40 @@ func ExecDispatcherLaunch(file string) error {
 	if err := json.Unmarshal(b, &lf); err != nil {
 		return fmt.Errorf("parse %s: %w", file, err)
 	}
-	if !filepath.IsAbs(lf.Launcher) {
-		return fmt.Errorf("launcher %q is not an absolute path", lf.Launcher)
+	launcher, err := exec.LookPath("dispatcher")
+	if err != nil {
+		return fmt.Errorf("dispatcher launcher not found on the tmux server's PATH: %w", err)
 	}
 
-	env := make([]string, 0, len(os.Environ())+1)
-	for _, kv := range os.Environ() {
+	// The launcher stamps these too, but untargeted, so they land on whichever
+	// window is current when it gets there: stamp by pane id first, and make
+	// this window current right before handing over.
+	paneTmux(pane, "set-option", "-w", "-t", pane, "@crew_name", "dispatcher")
+	paneTmux(pane, "set-option", "-w", "-t", pane, "@crew_color", "colour99")
+	paneTmux(pane, "select-window", "-t", pane)
+
+	return syscall.Exec(launcher, append([]string{launcher}, lf.Args...), launchEnv(os.Environ(), lf.CrewID)) //nolint:gosec // the launcher on the tmux server's own PATH
+}
+
+// paneTmux runs one best-effort tmux command about the wrapper's own pane; it
+// does nothing outside tmux.
+func paneTmux(pane string, args ...string) {
+	if pane == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), paneTmuxTimeout)
+	defer cancel()
+	_ = exec.CommandContext(ctx, "tmux", args...).Run() //nolint:gosec // fixed argv; pane is tmux's own $TMUX_PANE
+}
+
+// launchEnv is environ minus launchStrippedEnv, plus the minted CREW_ID.
+func launchEnv(environ []string, crewID string) []string {
+	env := make([]string, 0, len(environ)+1)
+	for _, kv := range environ {
 		key, _, _ := strings.Cut(kv, "=")
 		if !slices.Contains(launchStrippedEnv, key) {
 			env = append(env, kv)
 		}
 	}
-	env = append(env, "CREW_ID="+lf.CrewID)
-
-	return syscall.Exec(lf.Launcher, append([]string{lf.Launcher}, lf.Args...), env) //nolint:gosec // launcher is the absolute path houston resolved
+	return append(env, "CREW_ID="+crewID)
 }

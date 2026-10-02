@@ -118,6 +118,9 @@ func (r *repoRegistry) Add(path string) (string, error) {
 	if !filepath.IsAbs(path) {
 		return "", &repoError{http.StatusBadRequest, "path must be absolute"}
 	}
+	if dispatchHasControlRune(path) {
+		return "", &repoError{http.StatusBadRequest, "path must not contain control characters"}
+	}
 	if len(r.roots) == 0 {
 		return "", &repoError{http.StatusUnprocessableEntity, "no repo roots configured"}
 	}

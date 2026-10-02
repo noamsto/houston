@@ -212,8 +212,11 @@ func runServer() {
 		*statusDir = resolveStateDir()
 	}
 	if len(repoRoots) == 0 {
-		home, _ := os.UserHomeDir()
-		repoRoots = stringList{filepath.Join(home, "git")}
+		if home, err := os.UserHomeDir(); err != nil {
+			slog.Warn("no default repo root", "error", err)
+		} else {
+			repoRoots = stringList{filepath.Join(home, "git")}
+		}
 	}
 
 	// Auto-detect terminal for font size control

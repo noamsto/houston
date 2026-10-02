@@ -74,11 +74,12 @@ func TestDispatcherLaunchHelper(t *testing.T) {
 }
 
 type wrapperFixture struct {
-	out, file, launcher string
+	out, file string
 }
 
-// newWrapperFixture writes a fake launcher that records its argv, cwd and
-// the crew variables, plus a launch file pointing at it.
+// newWrapperFixture puts a fake `dispatcher` first on PATH that records its
+// argv, cwd and the crew variables, and appends "launcher" to <out>/calls;
+// plus a launch file for it.
 func newWrapperFixture(t *testing.T, args []string) wrapperFixture {
 	t.Helper()
 	bash, err := exec.LookPath("bash")
@@ -86,15 +87,22 @@ func newWrapperFixture(t *testing.T, args []string) wrapperFixture {
 		t.Skip("bash not found")
 	}
 	out := t.TempDir()
-	launcher := filepath.Join(t.TempDir(), "dispatcher")
+	bin := t.TempDir()
 	script := "#!" + bash + "\nout='" + out + "'\n" + `printf '%s\n' "$@" > "$out/argv"
 pwd -P > "$out/cwd"
-printf 'CREW_ID=%s\nCREW_WORKER_ID=%s\nDISPATCH_SPEC=%s\n' "${CREW_ID-<unset>}" "${CREW_WORKER_ID-<unset>}" "${DISPATCH_SPEC-<unset>}" > "$out/env"
+printf 'CREW_ID=%s\nCREW_WORKER_ID=%s\nDISPATCH_SPEC=%s\nCREW_ROLE_ID=%s\n' "${CREW_ID-<unset>}" "${CREW_WORKER_ID-<unset>}" "${DISPATCH_SPEC-<unset>}" "${CREW_ROLE_ID-<unset>}" > "$out/env"
+echo launcher >> "$out/calls"
 `
-	if err := os.WriteFile(launcher, []byte(script), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(bin, "dispatcher"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	b, err := json.Marshal(dispatcherLaunchFile{Launcher: launcher, Args: args, CrewID: dispatchTestNewCrewID})
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return wrapperFixture{out: out, file: writeTestLaunchFile(t, dispatcherLaunchFile{Args: args, CrewID: dispatchTestNewCrewID})}
+}
+
+func writeTestLaunchFile(t *testing.T, lf dispatcherLaunchFile) string {
+	t.Helper()
+	b, err := json.Marshal(lf)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +110,7 @@ printf 'CREW_ID=%s\nCREW_WORKER_ID=%s\nDISPATCH_SPEC=%s\n' "${CREW_ID-<unset>}" 
 	if err := os.WriteFile(file, b, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return wrapperFixture{out: out, file: file, launcher: launcher}
+	return file
 }
 
 // runWrapper runs ExecDispatcherLaunch(file) in a child test binary from dir,
@@ -116,7 +124,7 @@ func runWrapper(t *testing.T, file, dir string, extraEnv ...string) ([]byte, err
 		}
 	}
 	env = append(env, "HOUSTON_LAUNCH_HELPER=1", "HOUSTON_LAUNCH_FILE="+file,
-		"CREW_ID=leaked", "CREW_WORKER_ID=w", "DISPATCH_SPEC=x")
+		"CREW_ID=leaked", "CREW_WORKER_ID=w", "DISPATCH_SPEC=x", "CREW_ROLE_ID=r")
 	env = append(env, extraEnv...)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -143,7 +151,7 @@ func TestDispatcherLaunchWrapperExecsLauncher(t *testing.T) {
 	if got := strings.TrimSpace(readFile(t, filepath.Join(f.out, "cwd"))); got != cwd {
 		t.Errorf("launcher cwd = %q, want %q", got, cwd)
 	}
-	wantEnv := "CREW_ID=" + dispatchTestNewCrewID + "\nCREW_WORKER_ID=<unset>\nDISPATCH_SPEC=<unset>\n"
+	wantEnv := "CREW_ID=" + dispatchTestNewCrewID + "\nCREW_WORKER_ID=<unset>\nDISPATCH_SPEC=<unset>\nCREW_ROLE_ID=<unset>\n"
 	if got := readFile(t, filepath.Join(f.out, "env")); got != wantEnv {
 		t.Errorf("launcher crew env = %q, want %q", got, wantEnv)
 	}
@@ -152,17 +160,24 @@ func TestDispatcherLaunchWrapperExecsLauncher(t *testing.T) {
 	}
 }
 
-func TestDispatcherLaunchWrapperSetsRemainOnExit(t *testing.T) {
+// The wrapper stamps its own window by pane id, then makes it current right
+// before the launcher's untargeted stamps run.
+func TestDispatcherLaunchWrapperStampsWindow(t *testing.T) {
 	f := newWrapperFixture(t, []string{"--agent", "pi"})
-	tmuxOut := t.TempDir()
-	installFakeTmux(t, tmuxOut, "")
+	installFakeTmux(t, t.TempDir(), `printf '%s\n' "$*" >> '`+f.out+`/calls'`+"\n")
 
 	if out, err := runWrapper(t, f.file, t.TempDir(), "TMUX_PANE=%5"); err != nil {
 		t.Fatalf("wrapper failed: %v\n%s", err, out)
 	}
-	want := []string{"set-option", "-w", "-t", "%5", "remain-on-exit", "failed"}
-	if got := readFile(t, filepath.Join(tmuxOut, "tmux-argv")); got != strings.Join(want, "\n")+"\n" {
-		t.Errorf("tmux argv = %q, want %q", got, want)
+	want := strings.Join([]string{
+		"set-option -w -t %5 remain-on-exit failed",
+		"set-option -w -t %5 @crew_name dispatcher",
+		"set-option -w -t %5 @crew_color colour99",
+		"select-window -t %5",
+		"launcher",
+	}, "\n") + "\n"
+	if got := readFile(t, filepath.Join(f.out, "calls")); got != want {
+		t.Errorf("calls =\n%s\nwant\n%s", got, want)
 	}
 	if got := readFile(t, filepath.Join(f.out, "argv")); got != "--agent\npi\n" {
 		t.Errorf("launcher argv = %q", got)
@@ -170,18 +185,16 @@ func TestDispatcherLaunchWrapperSetsRemainOnExit(t *testing.T) {
 }
 
 func TestDispatcherLaunchWrapperFailures(t *testing.T) {
-	relative := filepath.Join(t.TempDir(), "relative.json")
-	if err := os.WriteFile(relative, []byte(`{"launcher":"dispatcher","args":[],"crew_id":"1-2"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	noLauncher := writeTestLaunchFile(t, dispatcherLaunchFile{Args: []string{"--agent", "pi"}, CrewID: dispatchTestNewCrewID})
 	for _, tc := range []struct {
 		name, file, want string
+		env              []string
 	}{
-		{"missing file", filepath.Join(t.TempDir(), "gone.json"), "no such file"},
-		{"relative launcher", relative, "not an absolute path"},
+		{"missing file", filepath.Join(t.TempDir(), "gone.json"), "no such file", nil},
+		{"launcher not on PATH", noLauncher, "dispatcher launcher not found", []string{"PATH=" + t.TempDir()}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			out, err := runWrapper(t, tc.file, t.TempDir())
+			out, err := runWrapper(t, tc.file, t.TempDir(), tc.env...)
 			if err == nil {
 				t.Fatalf("wrapper succeeded, want a non-zero exit\n%s", out)
 			}
@@ -190,8 +203,17 @@ func TestDispatcherLaunchWrapperFailures(t *testing.T) {
 			}
 		})
 	}
-	if _, err := os.Stat(relative); !os.IsNotExist(err) {
+	if _, err := os.Stat(noLauncher); !os.IsNotExist(err) {
 		t.Error("a launch file the wrapper read was not removed")
+	}
+}
+
+func TestLaunchEnvSingleCrewID(t *testing.T) {
+	in := []string{"PATH=/bin", "CREW_ID=leaked", "HOME=/h", "CREW_WORKER_ID=w", "DISPATCH_SPEC=/tmp/spec", "CREW_ROLE_ID=r", "CREW_ID=again"}
+	got := launchEnv(in, "1700000000-42")
+	want := []string{"PATH=/bin", "HOME=/h", "CREW_ID=1700000000-42"}
+	if !slices.Equal(got, want) {
+		t.Errorf("launchEnv = %q, want %q", got, want)
 	}
 }
 
@@ -199,7 +221,7 @@ func TestDispatcherLaunchWithRealTmuxRunner(t *testing.T) {
 	out := t.TempDir()
 	f := newLaunchFixture(t)
 	installFakeTmux(t, out, `case "$1" in
-has-session) exit 1 ;;
+has-session) echo "can't find session: proj" >&2; exit 1 ;;
 new-session) mkdir -p '`+f.crewDir+`' && : > '`+f.crewDir+`/pid'; printf 'proj\t@3\t%%7\n' ;;
 esac
 `)
@@ -211,7 +233,65 @@ esac
 		t.Errorf("response = %+v", resp)
 	}
 	argv := strings.Split(strings.TrimSuffix(readFile(t, filepath.Join(out, "tmux-argv")), "\n"), "\n")
-	if !slices.Equal(argv[:7], []string{"new-session", "-d", "-P", "-F", launchFormat, "-s", "proj"}) {
+	if !slices.Equal(argv[:8], []string{"new-session", "-d", "-E", "-P", "-F", launchFormat, "-s", "proj"}) {
 		t.Errorf("tmux argv = %q", argv)
+	}
+}
+
+// TestDispatcherLaunchNewSessionKeepsServerEnv runs the launch against a
+// private tmux server: a session houston creates must see the server's global
+// SSH_AUTH_SOCK, not houston's lack of one.
+func TestDispatcherLaunchNewSessionKeepsServerEnv(t *testing.T) {
+	realTmux, err := exec.LookPath("tmux")
+	if err != nil {
+		t.Skip("tmux not found")
+	}
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not found")
+	}
+	// A socket path is capped near 100 bytes, too short for t.TempDir().
+	sockDir, err := os.MkdirTemp("/tmp", "ht")
+	if err != nil {
+		t.Skip("no short temp dir for a tmux socket")
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
+
+	bin := t.TempDir()
+	wrapper := "#!" + bash + "\nexec '" + realTmux + "' -S '" + sockDir + "/s' -f /dev/null \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "tmux"), []byte(wrapper), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	ctx := context.Background()
+	if _, err := execTmux(ctx, []string{"new-session", "-d", "-s", "base"}); err != nil {
+		t.Fatalf("start private tmux: %v", err)
+	}
+	t.Cleanup(func() { _, _ = execTmux(ctx, []string{"kill-server"}) })
+	if _, err := execTmux(ctx, []string{"set-environment", "-g", "SSH_AUTH_SOCK", "/fake/agent"}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SSH_AUTH_SOCK", "")
+	if err := os.Unsetenv("SSH_AUTH_SOCK"); err != nil {
+		t.Fatal(err)
+	}
+
+	f := newLaunchFixture(t)
+	f.s.tmuxRun = execTmux
+	out := filepath.Join(t.TempDir(), "agent")
+	f.s.houstonExe = filepath.Join(t.TempDir(), "houston")
+	script := "#!" + bash + "\nprintf '%s' \"${SSH_AUTH_SOCK-unset}\" > '" + out + "'\n: > '" + f.crewDir + "/pid'\nsleep 30\n"
+	if err := os.WriteFile(f.s.houstonExe, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f.s.launchCheck = 5 * time.Second
+
+	rec, resp := f.post(t, f.request())
+	wantStatus(t, rec, 200)
+	if resp.Session != "proj" {
+		t.Errorf("session = %q, want a new one named proj", resp.Session)
+	}
+	if got := readFile(t, out); got != "/fake/agent" {
+		t.Errorf("SSH_AUTH_SOCK in the new session = %q, want the server's global /fake/agent", got)
 	}
 }

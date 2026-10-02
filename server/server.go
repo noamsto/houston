@@ -138,10 +138,9 @@ type Server struct {
 	// "new" crew request. A field so a test can force a same-second collision.
 	dispatchNewCrewID func() string
 
-	// tmuxRun, dispatcherBin and launchCommonDir are the dispatcher
-	// launch's outside world, fields so tests run it without tmux or git.
+	// tmuxRun and launchCommonDir are the dispatcher launch's outside
+	// world, fields so tests run it without tmux or git.
 	tmuxRun         tmuxRunner
-	dispatcherBin   func() (string, error)
 	launchCommonDir func(root string) (string, error)
 	// houstonExe is what tmux runs as the wrapper; launchDir holds the
 	// launch files it reads.
@@ -255,7 +254,6 @@ func New(cfg Config) (*Server, error) {
 			return strconv.FormatInt(time.Now().Unix(), 10) + "-" + strconv.Itoa(os.Getpid())
 		},
 		tmuxRun:         execTmux,
-		dispatcherBin:   lookupDispatcherLauncher,
 		launchCommonDir: gitCommonDir,
 		houstonExe:      houstonExe,
 		launchDir:       launchDir,
