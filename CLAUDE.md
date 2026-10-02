@@ -617,9 +617,11 @@ unknown fields 400, body over 256 KiB 413.
   `new-window` is `-d`: the window never becomes the session's current one, so
   a client viewing that session is not switched to the new dispatcher window.
   The launcher stamps its own window by pane id (`-t "$TMUX_PANE"`, dispatcher
-  #655), and the wrapper pre-stamps `@crew_name`/`@crew_color` the same way
-  (covering a launcher that predates #655), so the new window carries its tags
-  without being current.
+  #655 — houston and #655 ship in the same nix-config bump, because a launcher
+  predating it stamps untargeted and would relabel the client's current
+  window). The wrapper also pre-stamps `@crew_name`/`@crew_color` by pane id
+  (belt-and-braces, so the new window carries its tags even if the launcher's
+  own stamp is missed), and the new window carries them without being current.
 - **Server PATH** (`tmuxServerPath`): tmux hands a pane created by a
   session-less client — houston — that client's `PATH`, over the global
   environment and even over `-e PATH`. So houston first reads

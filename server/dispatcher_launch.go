@@ -580,9 +580,12 @@ func ExecDispatcherLaunch(file string) error {
 		return fmt.Errorf("dispatcher launcher not found on the tmux server's PATH: %w", err)
 	}
 
-	// Stamp by pane id: the window is not made current (houston creates it
-	// with -d), so the launcher's untargeted stamps would otherwise land on
-	// whichever window is current when it gets there.
+	// Stamp by pane id: houston creates the window with -d, so it is not the
+	// session's current window, and an untargeted stamp would land on the
+	// client's. The launcher targets its own window too (dispatcher#655); a
+	// launcher predating #655 stamps untargeted and would relabel whichever
+	// window is current, so houston and #655 ship in the same bump. This
+	// pre-stamp is the belt-and-braces that keeps the new window tagged.
 	paneTmux(pane, "set-option", "-w", "-t", pane, "@crew_name", "dispatcher")
 	paneTmux(pane, "set-option", "-w", "-t", pane, "@crew_color", "colour99")
 
