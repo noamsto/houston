@@ -389,6 +389,12 @@ func TestIdForIsURLPathSafe(t *testing.T) {
 	}
 }
 
+func TestPaneRunID(t *testing.T) {
+	if got := PaneRunID("%42"); got != "pane-42" {
+		t.Errorf("PaneRunID(%%42) = %q, want pane-42", got)
+	}
+}
+
 func TestApplyDoesNotRaceSubscribeClose(t *testing.T) {
 	// A send on a closed channel panics, and select/default does not protect
 	// against it — that only guards a full buffer, not a closed one. Spinning

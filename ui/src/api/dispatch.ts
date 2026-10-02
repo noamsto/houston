@@ -4,6 +4,7 @@ export interface DispatchRepo {
   name: string
   crews: string[] // newest first, never empty-vs-missing ambiguity: always an array
   home?: string[] // subset of crews whose dispatcher pane lives in this repo — see server/dispatch.go's dispatchHomeCrews
+  registered?: boolean
 }
 
 export interface DispatchOptions {
@@ -14,6 +15,9 @@ export interface DispatchOptions {
   engines: Record<string, string[]>
   engine_order: string[] // display order; engines is a map and has none of its own
   tier_models: Record<string, Record<string, string>> // default model per engine+tier
+  repo_roots?: string[]
+  dispatcher_engines?: string[]
+  dispatcher_engines_error?: string
 }
 
 export const NEW_CREW = 'new'
@@ -84,6 +88,61 @@ export async function submitDispatch(req: DispatchRequest): Promise<DispatchOutc
   try {
     const body = JSON.parse(text) as DispatchErrorBody
     return { kind: 'failed', status: res.status, error: body.error, output: body.output, workerId: body.worker_id, crew: body.crew }
+  } catch {
+    return { kind: 'failed', status: res.status, error: text.trim() }
+  }
+}
+
+export interface DispatcherRequest {
+  repo: string
+  tasks: string[]
+  engine: string
+  model?: string
+  effort?: string
+}
+
+export type DispatcherOutcome =
+  | { kind: 'started'; crew: string; session: string; window: string; pane: string; runId: string }
+  | { kind: 'failed'; status: number; error: string; output?: string }
+
+interface DispatcherSuccessBody {
+  crew: string
+  session: string
+  window: string
+  pane: string
+  run_id: string
+}
+
+export async function submitDispatcher(req: DispatcherRequest): Promise<DispatcherOutcome> {
+  let res: Response
+  try {
+    res = await fetch('/api/dispatch/dispatcher', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    })
+  } catch {
+    return { kind: 'failed', status: 0, error: 'network error' }
+  }
+  const text = await res.text()
+  if (res.ok) {
+    try {
+      const body = JSON.parse(text) as DispatcherSuccessBody
+      return {
+        kind: 'started',
+        crew: body.crew,
+        session: body.session,
+        window: body.window,
+        pane: body.pane,
+        runId: body.run_id,
+      }
+    } catch {
+      return { kind: 'failed', status: res.status, error: 'malformed response: ' + text.trim() }
+    }
+  }
+  try {
+    const body = JSON.parse(text) as DispatchErrorBody
+    return { kind: 'failed', status: res.status, error: body.error, output: body.output }
   } catch {
     return { kind: 'failed', status: res.status, error: text.trim() }
   }
