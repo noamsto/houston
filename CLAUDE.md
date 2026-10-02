@@ -566,8 +566,12 @@ unknown fields 400, body over 256 KiB 413.
   tmux-global `CREW_ID` can't win.
 - **Session:** the session with the most windows whose `@git_root` resolves to the
   repo (tie → name order); else an existing session named after the sanitized
-  repo basename (`[^A-Za-z0-9_-]` → `_`); else `new-session`. `-d`, so an attached
-  client isn't switched.
+  repo basename (`[^A-Za-z0-9_-]` → `_`); else `new-session`. `new-session` is
+  `-d` (houston has no terminal to attach; its only window is current anyway);
+  `new-window` is deliberately not `-d`: the launcher's untargeted
+  `tmux set-window-option @crew_name` resolves to the session's *current*
+  window, so the new window must be current or the stamp lands elsewhere. A
+  client viewing that session switches to the new window.
 - **Startup check** (≤ 3 s, 200 ms poll): success as soon as `<crew>/pid`
   exists (the launcher passed its own gates and registered). A dead pane →
   422 `dispatcher exited with status N` with the captured `output`, the window

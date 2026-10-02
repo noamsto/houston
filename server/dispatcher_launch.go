@@ -421,7 +421,11 @@ func (s *Server) handleDispatcherLaunch(w http.ResponseWriter, r *http.Request) 
 	session, exists := s.launchSession(ctx, repo)
 	argv := []string{"new-session", "-d", "-P", "-F", launchFormat, "-s", session}
 	if exists {
-		argv = []string{"new-window", "-d", "-P", "-F", launchFormat, "-t", "=" + session + ":"}
+		// No -d: the launcher's untargeted `tmux set-window-option` resolves to
+		// the session's current window, so the new window must be current or
+		// its @crew_name stamp lands on another window. A client viewing this
+		// session switches to the new window.
+		argv = []string{"new-window", "-P", "-F", launchFormat, "-t", "=" + session + ":"}
 	}
 	argv = append(argv, "-n", "dispatcher", "-c", repo.Path, "--", s.houstonExe, "launch-dispatcher", file)
 
