@@ -380,6 +380,7 @@ func endRun(r Run) Run {
 	r.State = StateDone
 	r.Question = nil
 	r.Activity.Tool, r.Activity.Hint, r.Activity.Message = "", "", ""
+	r.Background = nil
 	return r
 }
 
@@ -412,6 +413,12 @@ func runFromSessionView(v hub.SessionView, project string) (string, Run) {
 		r.Activity.Trail = append(r.Activity.Trail, TrailChip{
 			Tool: c.Tool, Hint: c.Hint, Done: c.Done, IsError: c.IsError,
 		})
+	}
+
+	if v.Agent == hook.AgentClaude && r.State != StateDone {
+		for _, t := range v.Background {
+			r.Background = append(r.Background, BackgroundTask(t))
+		}
 	}
 
 	key := sessionKey(v)

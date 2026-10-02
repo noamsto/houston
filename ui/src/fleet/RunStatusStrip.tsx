@@ -32,6 +32,17 @@ export function RunStatusStrip({ run, now }: { run: Run; now: number }) {
           <span>{agoLabel(run.updated_at, now)}</span>
         </span>
       </div>
+      {!!run.background?.length && (
+        <ul className="run-status-bg" aria-label="Background tasks">
+          {run.background.map((t) => (
+            <li key={t.id} className="run-status-bg-task">
+              <span className="run-status-bg-kind">{t.kind}</span>
+              <span className="run-status-bg-hint">{t.hint || t.id}</span>
+              {!!t.since && <span className="run-status-bg-age">{agoLabel(t.since, now)}</span>}
+            </li>
+          ))}
+        </ul>
+      )}
       {crew && (
         <div className="run-status-line run-status-crew">
           {crew.codename && run.role !== 'dispatcher' && <span className="run-status-codename">{crew.codename}</span>}

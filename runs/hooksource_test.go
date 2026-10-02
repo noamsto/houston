@@ -944,3 +944,31 @@ func TestHookSourceDemotesTurnEndWaitingAgainstTmux(t *testing.T) {
 		})
 	}
 }
+
+func TestRunFromSessionViewCarriesBackgroundForClaudeOnly(t *testing.T) {
+	bg := []hub.BackgroundTask{{ID: "b1", Kind: "shell", Hint: "sleep 300", Since: 100}}
+
+	_, r := runFromSessionView(hub.SessionView{SessionID: "s", Agent: "claude", State: hook.StateWaiting, Background: bg}, "")
+	if len(r.Background) != 1 || r.Background[0] != (BackgroundTask{ID: "b1", Kind: "shell", Hint: "sleep 300", Since: 100}) {
+		t.Fatalf("Background = %+v", r.Background)
+	}
+	if r.State != FromHookState(hook.StateWaiting) {
+		t.Errorf("a background task must not change State, got %q", r.State)
+	}
+
+	_, r = runFromSessionView(hub.SessionView{SessionID: "s", Agent: "pi", State: hook.StateWaiting, Background: bg}, "")
+	if len(r.Background) != 0 {
+		t.Errorf("pi run Background = %+v, want none", r.Background)
+	}
+
+	_, r = runFromSessionView(hub.SessionView{SessionID: "s", Agent: "claude", State: hook.StateEnded, Background: bg}, "")
+	if len(r.Background) != 0 {
+		t.Errorf("ended run Background = %+v, want none", r.Background)
+	}
+}
+
+func TestEndRunClearsBackground(t *testing.T) {
+	if r := endRun(Run{Background: []BackgroundTask{{ID: "b1"}}}); r.Background != nil {
+		t.Errorf("Background = %+v, want cleared", r.Background)
+	}
+}

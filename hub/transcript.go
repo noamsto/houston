@@ -14,6 +14,7 @@ package hub
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"io"
 	"os"
@@ -49,6 +50,14 @@ type TranscriptEvent struct {
 	OutputTokens     int
 	CacheReadTokens  int
 	CacheWriteTokens int
+
+	// Background is the kind ("shell" or "monitor") of a tool_use that starts
+	// a background task; StopTask is the task id a TaskStop tool_use targets.
+	Background     string
+	BackgroundHint string
+	// BackgroundTimeout is a non-persistent Monitor's lifetime, else zero.
+	BackgroundTimeout time.Duration
+	StopTask          string
 }
 
 // jsonlRecord is the on-disk envelope. Unmarshalled loosely — the schema
@@ -63,6 +72,10 @@ type jsonlRecord struct {
 	ToolInput json.RawMessage `json:"tool_input,omitempty"`
 	ToolUseID string          `json:"tool_use_id,omitempty"`
 	IsError   bool            `json:"is_error,omitempty"`
+
+	// queue-operation records carry the queued text as a bare string.
+	Operation string          `json:"operation,omitempty"`
+	Content   json.RawMessage `json:"content,omitempty"`
 }
 
 type anthropicMsg struct {
@@ -119,6 +132,11 @@ func ReadTranscriptFrom(path string, byteOffset int64) ([]TranscriptEvent, int64
 	)
 	for {
 		line, err := r.ReadBytes('\n')
+		if err == io.EOF && !bytes.HasSuffix(line, []byte{'\n'}) && !json.Valid(bytes.TrimSpace(line)) {
+			// A line Claude is still writing: leave it for the next poll,
+			// or a start/end record the background tracker needs is lost.
+			break
+		}
 		n := int64(len(line))
 		trimmed := strings.TrimSpace(string(line))
 		if trimmed != "" {
@@ -149,6 +167,14 @@ func parseLine(line string, offset int64) []TranscriptEvent {
 		base.ToolUseID = rec.ToolUseID
 		base.IsError = rec.IsError
 		base.Text = hook.ToolHint(rec.ToolName, rec.ToolInput)
+		return []TranscriptEvent{base}
+	}
+
+	if rec.Type == "queue-operation" && rec.Operation == "enqueue" && len(rec.Content) > 0 && rec.Content[0] == '"' {
+		var s string
+		if err := json.Unmarshal(rec.Content, &s); err == nil && strings.Contains(s, "<task-notification>") {
+			base.Type, base.Role, base.Text = EventTypeText, "user", s
+		}
 		return []TranscriptEvent{base}
 	}
 
@@ -183,6 +209,12 @@ func parseLine(line string, offset int64) []TranscriptEvent {
 			ev.ToolName = blk.Name
 			ev.ToolUseID = blk.ID
 			ev.Text = hook.ToolHint(blk.Name, blk.Input)
+			if ev.Background, ev.StopTask = backgroundStart(blk.Name, blk.Input); ev.Background != "" {
+				ev.BackgroundHint = backgroundHint(blk.Input)
+				if ev.Background == BackgroundMonitor {
+					ev.BackgroundTimeout = monitorTimeout(blk.Input)
+				}
+			}
 		case EventTypeToolResult:
 			ev.Type = EventTypeToolResult
 			ev.ToolUseID = blk.ToolUseID

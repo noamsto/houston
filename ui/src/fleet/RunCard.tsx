@@ -70,6 +70,11 @@ export function RunCard({ run, now, onOpen, selected, crewLine }: RunCardProps) 
         {run.crew?.codename && run.role !== 'dispatcher' && <span className="run-chip codename">{run.crew.codename}</span>}
         {run.crew?.tier && <span className="run-chip tier">{run.crew.tier}</span>}
         {run.crew?.model && <span className="run-chip model">{run.crew.model}</span>}
+        {!!run.background?.length && (
+          <span className="run-chip bg" title={run.background.map((t) => t.hint || t.kind).join('\n')}>
+            {run.background.length} bg
+          </span>
+        )}
         {connStale && <span className="run-chip stale">stale</span>}
       </div>
     </button>

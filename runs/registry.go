@@ -235,6 +235,9 @@ type signature struct {
 
 	session string
 
+	// background encodes the task list as a string; the struct must stay comparable.
+	background string
+
 	stale, capTerminal, capReply, capKill, capChat bool
 }
 
@@ -263,6 +266,9 @@ func runSignature(r Run) signature {
 		capReply:    r.Caps.Reply,
 		capKill:     r.Caps.Kill,
 		capChat:     r.Caps.Chat,
+	}
+	for _, t := range r.Background {
+		s.background += t.ID + "\x00"
 	}
 	if r.Issue != nil {
 		s.issueID = r.Issue.ID
@@ -433,6 +439,11 @@ func mergeInto(dst *Run, src Run) {
 	}
 	if src.Activity.Turn != 0 {
 		dst.Activity.Turn = src.Activity.Turn
+	}
+	// Only the hooks layer sets Background, so "no opinion" is safe to treat
+	// as "keep the lower layer's list" like Trail above.
+	if len(src.Background) > 0 {
+		dst.Background = append([]BackgroundTask(nil), src.Background...)
 	}
 	if src.Tokens.Input != 0 {
 		dst.Tokens.Input = src.Tokens.Input

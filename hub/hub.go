@@ -46,6 +46,8 @@ type SessionView struct {
 	OutputTokens   int         `json:"output_tokens"`
 	TranscriptPath string      `json:"transcript_path,omitempty"`
 	Agent          string      `json:"agent"`
+
+	Background []BackgroundTask `json:"background,omitempty"`
 }
 
 // DefaultPruneTTL is how long an ended hook state file is kept after its
@@ -105,6 +107,8 @@ type Session struct {
 
 	lastTurn         int    // last turn whose trail was cleared (UserPromptSubmit bumps Turn)
 	lastBroadcastSig string // last broadcast view signature; skip duplicates
+
+	bg bgTracker
 
 	chat *chatState // nil until first use, and for agents without a chat.Reader
 }
@@ -439,8 +443,8 @@ func (h *Hub) refreshAllTranscripts() {
 }
 
 func (h *Hub) refreshTranscript(sessionID string) {
-	// Ahead of the trail read's early return: that reader consumes partial
-	// lines, so it can be caught up while the chat reader is not.
+	// Ahead of the trail read's early return: the trail reader can be caught
+	// up while the chat reader is not.
 	h.refreshChat(sessionID)
 
 	h.mu.Lock()
@@ -461,6 +465,7 @@ func (h *Hub) refreshTranscript(sessionID string) {
 		return
 	}
 	if len(events) == 0 && newOffset == offset {
+		h.expireBackground(sess)
 		return
 	}
 
@@ -471,9 +476,25 @@ func (h *Hub) refreshTranscript(sessionID string) {
 	}
 	sess.view.Trail = append([]TrailChip(nil), sess.trail...)
 	sess.view.Preview = strings.Join(sess.preview, "\n")
+	sess.view.Background = sess.bg.list(time.Now())
 	view := sess.view
 	h.mu.Unlock()
 
+	h.broadcastIfChanged(sess, view)
+}
+
+// expireBackground drops monitors whose timeout has passed. Nothing is written
+// to the transcript when one does, so no new event will ever say so.
+func (h *Hub) expireBackground(sess *Session) {
+	h.mu.Lock()
+	cur := sess.bg.list(time.Now())
+	if backgroundSignature(cur) == backgroundSignature(sess.view.Background) {
+		h.mu.Unlock()
+		return
+	}
+	sess.view.Background = cur
+	view := sess.view
+	h.mu.Unlock()
 	h.broadcastIfChanged(sess, view)
 }
 
@@ -526,6 +547,8 @@ func viewSignature(v SessionView) string {
 	b.WriteString(strconv.Itoa(len(v.Preview)))
 	b.WriteByte('|')
 	b.WriteString(v.Agent)
+	b.WriteByte('|')
+	b.WriteString(backgroundSignature(v.Background))
 	return b.String()
 }
 
@@ -561,6 +584,7 @@ func mergeStateIntoView(v *SessionView, s hook.SessionState) {
 // applyTranscriptEvent updates trail/preview/telemetry on sess from one event.
 // Called under h.mu.
 func applyTranscriptEvent(s *Session, ev TranscriptEvent) {
+	s.bg.apply(ev)
 	const maxTrail = 8
 	const maxPreview = 40
 

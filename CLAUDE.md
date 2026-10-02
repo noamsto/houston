@@ -322,6 +322,17 @@ but no trail/tokens.
 `SessionState.PID` is the hook's parent process — under hookyard that is the
 router, not the agent — and isn't read anywhere in houston.
 
+## Background tasks
+
+A Claude Code run's outstanding background shells and monitors ride on `Run.Background` (`[{id, kind: "shell"|"monitor", hint, since}]`), shown as a `N bg` chip on the Fleet card and a list in the Chat status strip (`RunStatusStrip`). They are informational: they never change `State`. A turn that ended with a shell still running keeps its hook/tmux verdict (`idle`/`blocked`), because `State` describes the agent's turn, `blocked` is reserved for a human being required, and `running` would claim the agent is working.
+
+- **Source is the transcript**, folded by `hub/background.go`'s `bgTracker` inside the hub's existing 2 s tail. It starts at byte 0 on every houston start, so it is restart-safe with no persisted state, and needs no tmux capture. Hooks were rejected (no event fires on completion or on a UI/timeout kill, and the hookyard manifest would need new subscriptions); the pane's `N shell still running` text was rejected (a capture per poll, no per-task detail, nothing for monitors).
+- **Start**: a `Bash` tool_use with `run_in_background: true`, or a `Monitor` tool_use, whose non-error tool_result names the task id (`with ID: <id>` / `(task <id>,`). A failed launch is never tracked.
+- **End**: a `<task-notification>` carrying a `<status>` (completed/failed/killed/stopped), matched by every `<task-id>` and `<tool-use-id>` in it (a resume's orphan summary lists many ids), read from either the `user` record or the `queue-operation` enqueue copy; or a non-error `TaskStop` result. A notification with no `<status>` is a monitor's per-event line and ends nothing.
+- A non-persistent `Monitor` times out (`timeout_ms`) with no transcript marker, so the tracker expires it itself (`list(now)`; the hub re-checks on every 2 s tick even when the file did not grow). Shells have no such lifetime.
+- `ReadTranscriptFrom` stops at the last complete line: consuming a half-written start/end record would lose it for good.
+- Claude only (`agent == claude`); dropped when the run is `done`/ended. Not covered: background `Agent`/Task subagents, and anything started inside a subagent's own transcript. A session whose Claude was killed without a notification or `SessionEnd` (while its pane stays open) can show a stale chip until the run ends; shells that outlive a `/clear` belong to the new session id and go uncounted.
+
 ## Project and role (Fleet)
 
 Every run can carry `project` and `role` (`runs/project.go`, `runs/tmuxsource.go`, `runs/crewsource.go`).
