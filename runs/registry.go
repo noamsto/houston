@@ -67,6 +67,19 @@ func NewRegistry(order []string) *Registry {
 // Apply records a source's layer and broadcasts the recomposed run.
 func (r *Registry) Apply(d Delta) {
 	r.mu.Lock()
+	keys := []string{d.Key}
+	// A layer that names a session can shadow that session's history card, so
+	// its old and new Session/CrewSession both need re-settling.
+	named := func(l Run) {
+		for _, sid := range []string{l.CrewSession, l.Session} {
+			if sid != "" {
+				keys = append(keys, sessionKeyFor(sid))
+			}
+		}
+	}
+	if old, ok := r.layers[d.Key][d.Source]; ok {
+		named(old)
+	}
 	if d.Gone {
 		if bySource, ok := r.layers[d.Key]; ok {
 			delete(bySource, d.Source)
@@ -79,43 +92,18 @@ func (r *Registry) Apply(d Delta) {
 			r.layers[d.Key] = map[string]Run{}
 		}
 		r.layers[d.Key][d.Source] = d.Run
-	}
-	composed, live := r.composeLocked(d.Key)
-
-	// A key is listed only while some layer describes it AND the composed run
-	// has an agent. Removal fires on the listed -> not-listed edge, which
-	// covers both "last layer gone" and "agent lost", and means a plain shell
-	// emits nothing ever. The edge is load-bearing: without it, a hooks layer
-	// going Gone while the tmux layer survives leaves the key live with no
-	// agent, so the update is suppressed and nothing tells the subscriber.
-	listed := live && composed.listed()
-	was := r.listedKeys[d.Key]
-	switch {
-	case listed:
-		r.listedKeys[d.Key] = true
-	case was:
-		delete(r.listedKeys, d.Key)
+		named(d.Run)
 	}
 
-	var payload Run
-	broadcast := false
-
-	switch {
-	case listed:
-		sig := runSignature(composed)
-		if prev, ok := r.lastSig[d.Key]; !ok || prev != sig {
-			r.lastSig[d.Key] = sig
-			payload = composed
-			broadcast = true
+	var payloads []Run
+	for _, key := range keys {
+		if p, ok := r.settleLocked(key); ok {
+			payloads = append(payloads, p)
 		}
-	case was:
-		delete(r.lastSig, d.Key)
-		payload = Run{ID: idFor(d.Key), Removed: true}
-		broadcast = true
 	}
 	r.mu.Unlock()
 
-	if !broadcast {
+	if len(payloads) == 0 {
 		return
 	}
 
@@ -124,13 +112,75 @@ func (r *Registry) Apply(d Delta) {
 	// what stops a send racing a close and panicking.
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	for _, sb := range r.subs {
-		select {
-		case sb.ch <- payload:
-		default: // a slow subscriber drops updates; flag it, never block the source
-			sb.dropped.Store(true)
+	for _, payload := range payloads {
+		for _, sb := range r.subs {
+			select {
+			case sb.ch <- payload:
+			default: // a slow subscriber drops updates; flag it, never block the source
+				sb.dropped.Store(true)
+			}
 		}
 	}
+}
+
+// settleLocked recomposes one key and returns the update to broadcast, if any.
+// Caller holds mu.
+func (r *Registry) settleLocked(key string) (Run, bool) {
+	composed, live := r.composeLocked(key)
+
+	// A key is listed only while some layer describes it AND the composed run
+	// has an agent. Removal fires on the listed -> not-listed edge, which
+	// covers both "last layer gone" and "agent lost", and means a plain shell
+	// emits nothing ever. The edge is load-bearing: without it, a hooks layer
+	// going Gone while the tmux layer survives leaves the key live with no
+	// agent, so the update is suppressed and nothing tells the subscriber.
+	listed := live && composed.listed() && !r.shadowedLocked(key)
+	was := r.listedKeys[key]
+	switch {
+	case listed:
+		r.listedKeys[key] = true
+	case was:
+		delete(r.listedKeys, key)
+	}
+
+	switch {
+	case listed:
+		sig := runSignature(composed)
+		if prev, ok := r.lastSig[key]; !ok || prev != sig {
+			r.lastSig[key] = sig
+			return composed, true
+		}
+	case was:
+		delete(r.lastSig, key)
+		return Run{ID: idFor(key), Removed: true}, true
+	}
+	return Run{}, false
+}
+
+// sessionKeyFor is the key the hooks layer files a session under when it has
+// no pane to trust (see sessionKey in hooksource.go).
+func sessionKeyFor(sid string) string { return "claude/" + sid }
+
+// shadowedLocked reports whether key is a session-keyed history card whose
+// session another key's worker card already carries: that key's crew layer
+// names it, the bus engine has a chat reader, and the card's hooks layer (if
+// any) shows the same session rather than a newer one after /clear. Caller
+// holds mu.
+func (r *Registry) shadowedLocked(key string) bool {
+	sid, ok := strings.CutPrefix(key, "claude/")
+	if !ok || sid == "" {
+		return false
+	}
+	for other, bySource := range r.layers {
+		crew := bySource["crew"]
+		if other == key || crew.CrewSession != sid || chat.For(crew.Agent) == nil {
+			continue
+		}
+		if hs := bySource["hooks"].Session; hs == "" || hs == sid {
+			return true
+		}
+	}
+	return false
 }
 
 // composeLocked merges one key's layers in precedence order. Caller holds mu.
@@ -160,6 +210,9 @@ func (r *Registry) composeLocked(key string) (Run, bool) {
 		mergeInto(&out, bySource[name])
 	}
 	out.ID = idFor(key)
+	if crew := bySource["crew"]; out.Session == "" && chat.For(crew.Agent) != nil {
+		out.Session = crew.CrewSession
+	}
 	out.Caps = deriveCaps(bySource)
 	// run.go documents "non-nil Question implies State == StateBlocked", and
 	// composition is where that invariant must actually hold: hooksource.go
@@ -183,16 +236,19 @@ func (r *Registry) composeLocked(key string) (Run, bool) {
 // (hooksource.go's cached ref) alongside Caps.Terminal == false — that's
 // intended: Caps is the affordance signal, not Tmux != nil. Chat is likewise
 // derived from the hooks layer's own Session and Agent, not the composed
-// run's — a lower layer's Agent must never grant it.
+// run's — a lower layer's Agent must never grant it. The one other grant is a
+// crew-named session (the bus's engine_session) whose engine, from that same
+// bus record, has a reader.
 func deriveCaps(bySource map[string]Run) Caps {
 	_, hasTmux := bySource["tmux"]
-	_, hasCrew := bySource["crew"]
+	crew, hasCrew := bySource["crew"]
 	hooks, hasHooks := bySource["hooks"]
 	return Caps{
 		Terminal: hasTmux,
 		Kill:     hasTmux,
 		Reply:    hasTmux || hasCrew,
-		Chat:     hasHooks && hooks.Session != "" && chat.For(hooks.Agent) != nil,
+		Chat: hasHooks && hooks.Session != "" && chat.For(hooks.Agent) != nil ||
+			hasCrew && crew.CrewSession != "" && chat.For(crew.Agent) != nil,
 	}
 }
 
@@ -478,7 +534,7 @@ func (r *Registry) Snapshot() []Run {
 
 	out := make([]Run, 0, len(keys))
 	for _, k := range keys {
-		if run, ok := r.composeLocked(k); ok && run.listed() {
+		if run, ok := r.composeLocked(k); ok && run.listed() && !r.shadowedLocked(k) {
 			out = append(out, run)
 		}
 	}

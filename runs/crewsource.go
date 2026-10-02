@@ -278,6 +278,9 @@ type crewRecord struct {
 	Tier   string `json:"tier"`
 	Engine string `json:"engine"`
 	Model  string `json:"model"`
+	// EngineSession is the engine's own session id on a dispatch or resume row;
+	// null for codex/cursor and absent on rows from an older dispatcher.
+	EngineSession string `json:"engine_session"`
 	// Session is a tmux session name, present on the dispatch record. It is
 	// useful for the later branch->pane join but is not used yet.
 	Session string `json:"session"`
@@ -402,6 +405,11 @@ func deltasFromCrewLog(rd io.Reader) map[string]crewBranch {
 		// it — this source exists specifically to surface blocked questions.
 		if rec.Engine != "" {
 			r.Agent = rec.Engine
+		}
+		// The newest dispatch/resume row is authoritative: a --fresh resume mints
+		// a new session id.
+		if rec.Kind == "dispatch" || rec.Kind == "resume" {
+			r.CrewSession = rec.EngineSession
 		}
 		if rec.Kind == "msg" && strings.HasPrefix(rec.From, "dispatcher:") && rec.TS > dispatcherReplyTS[branch] {
 			dispatcherReplyTS[branch] = rec.TS

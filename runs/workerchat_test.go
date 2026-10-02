@@ -40,6 +40,10 @@ func TestCrewWorkerRunOffersChat(t *testing.T) {
 		busState   string
 		paneStatus string
 		hookState  hook.State
+		// engineSession puts the bus's engine_session on the dispatch row;
+		// wantRuns is how many cards Fleet lists for the branch (0 means 1).
+		engineSession bool
+		wantRuns      int
 	}{
 		{name: "plain worker", busState: "working", paneStatus: "processing 1790707000 ", hookState: hook.StateThinking},
 		{name: "grid lead", leadRole: "lead", roles: roles, busState: "working", paneStatus: "processing 1790707000 ", hookState: hook.StateThinking},
@@ -47,6 +51,10 @@ func TestCrewWorkerRunOffersChat(t *testing.T) {
 		{name: "grid lead pr_open", leadRole: "lead", roles: roles, busState: "pr_open", paneStatus: "processing 1790707000 ", hookState: hook.StateThinking},
 		{name: "plain worker done", busState: "done", paneStatus: "done 1790707000 1", hookState: hook.StateWaiting},
 		{name: "grid lead done", leadRole: "lead", roles: roles, busState: "done", paneStatus: "done 1790707000 1", hookState: hook.StateWaiting},
+		{name: "ended session, engine_session", busState: "done", paneStatus: "done 1790707000 1", hookState: hook.StateEnded, engineSession: true},
+		{name: "grid lead ended session, engine_session", leadRole: "lead", roles: roles, busState: "done", paneStatus: "done 1790707000 1", hookState: hook.StateEnded, engineSession: true},
+		// An older dispatcher's row has no engine_session: the #120 split stays.
+		{name: "ended session, no engine_session", busState: "done", paneStatus: "done 1790707000 1", hookState: hook.StateEnded, wantRuns: 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			wins := []tmux.WindowOptions{{Session: "h", Window: 3, Branch: branch, GitRoot: root, CrewName: "iris"}}
@@ -57,9 +65,13 @@ func TestCrewWorkerRunOffersChat(t *testing.T) {
 				panes[i].ServerPID, panes[i].ServerStart = server, now-3600
 			}
 
+			engineSession := ""
+			if tc.engineSession {
+				engineSession = fmt.Sprintf(`,"engine_session":%q`, sid)
+			}
 			bus := t.TempDir()
 			worker := fmt.Sprintf("worker:%s#s%d-3430430", branch, session)
-			records := fmt.Sprintf(`{"ts":%d529,"crew_id":"c1","kind":"dispatch","branch":%q,"session":"s%d-3430430","worker_id":%q,"engine":"claude","model":"opus","tier":"deep","title":"Show the Chat tab","name":"iris"}`+"\n", session, branch, session, worker) +
+			records := fmt.Sprintf(`{"ts":%d529,"crew_id":"c1","kind":"dispatch","branch":%q,"session":"s%d-3430430","worker_id":%q,"engine":"claude","model":"opus","tier":"deep","title":"Show the Chat tab","name":"iris"%s}`+"\n", session, branch, session, worker, engineSession) +
 				fmt.Sprintf(`{"ts":%d348,"crew_id":"c1","from":%q,"to":"dispatcher:c1","kind":"status","body":{"state":%q}}`+"\n", record, worker, tc.busState)
 			if err := os.WriteFile(filepath.Join(bus, "events.jsonl"), []byte(records), 0o644); err != nil {
 				t.Fatal(err)
@@ -92,7 +104,11 @@ func TestCrewWorkerRunOffersChat(t *testing.T) {
 				TranscriptPath: filepath.Join(t.TempDir(), sid+".jsonl"),
 				UpdatedAt:      now,
 			}, nil)
-			reg.Apply(waitDelta(t, out, "the lead's hook run", func(d Delta) bool { return d.Key == lead }))
+			hookKey := lead
+			if tc.hookState == hook.StateEnded {
+				hookKey = "claude/" + sid // #120: an ended session is keyed by id, not pane
+			}
+			reg.Apply(waitDelta(t, out, "the session's hook run", func(d Delta) bool { return d.Key == hookKey }))
 			drainHookDeltas(out, reg)
 
 			var workers []Run
@@ -102,8 +118,14 @@ func TestCrewWorkerRunOffersChat(t *testing.T) {
 					t.Logf("listed %s: state=%s role=%q chat=%v term=%v session=%q crew=%v", r.ID, r.State, r.Role, r.Caps.Chat, r.Caps.Terminal, r.Session, r.Crew != nil)
 				}
 			}
-			if len(workers) != 1 {
-				t.Fatalf("Fleet lists %d runs for the worker, want 1", len(workers))
+			if tc.wantRuns == 0 {
+				tc.wantRuns = 1
+			}
+			if len(workers) != tc.wantRuns {
+				t.Fatalf("Fleet lists %d runs for the worker, want %d", len(workers), tc.wantRuns)
+			}
+			if tc.wantRuns != 1 {
+				return
 			}
 			w := workers[0]
 			if !w.Caps.Chat || w.Session != sid {
