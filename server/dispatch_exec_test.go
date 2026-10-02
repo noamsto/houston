@@ -274,3 +274,46 @@ func TestHandleDispatchWithRealRunner(t *testing.T) {
 		t.Errorf("branch = %q", body.Branch)
 	}
 }
+
+func TestDispatchEnvServerPath(t *testing.T) {
+	t.Setenv("PATH", "/houston/bin")
+	t.Setenv("CREW_ID", "inherited-crew")
+	for _, tc := range []struct{ server, want string }{
+		{"/srv/bin:/srv/sbin", "PATH=/srv/bin:/srv/sbin:/houston/bin"},
+		{"", "PATH=/houston/bin"},
+	} {
+		var paths []string
+		for _, kv := range dispatchEnv(tc.server) {
+			if strings.HasPrefix(kv, "PATH=") {
+				paths = append(paths, kv)
+			}
+			if strings.HasPrefix(kv, "CREW_ID=") {
+				t.Errorf("dispatchEnv(%q) kept %s", tc.server, kv)
+			}
+		}
+		if !slices.Equal(paths, []string{tc.want}) {
+			t.Errorf("dispatchEnv(%q) PATH = %q, want %q", tc.server, paths, tc.want)
+		}
+	}
+}
+
+// TestExecDispatchEnginesSeesServerPath: dispatch --engines finds an agent
+// CLI that is only on the tmux server's PATH.
+func TestExecDispatchEnginesSeesServerPath(t *testing.T) {
+	installFakeDispatch(t, "command -v fakeagent >/dev/null && echo claude\n")
+	srv := t.TempDir()
+	if err := os.WriteFile(filepath.Join(srv, "fakeagent"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := execDispatchEngines(context.Background(), srv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got, []string{"claude"}) {
+		t.Errorf("engines = %q, want [claude] via the server PATH", got)
+	}
+	if got, _ := execDispatchEngines(context.Background(), ""); len(got) != 0 {
+		t.Errorf("engines = %q without the server PATH, want none", got)
+	}
+}

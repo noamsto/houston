@@ -82,6 +82,18 @@ func newDispatchTestRepo(t *testing.T, crewIDs ...string) dispatchRepo {
 	return dispatchRepo{Path: "/repo", Name: "repo", Crews: crewIDs, commonDir: dir}
 }
 
+// testServerPath is the global PATH the test tmux servers report.
+const testServerPath = "/srv/bin"
+
+// serverPathTmux answers only show-environment, as a tmux server whose
+// global PATH is testServerPath.
+func serverPathTmux(_ context.Context, args []string, _ ...string) (string, error) {
+	if args[0] == "show-environment" {
+		return "PATH=" + testServerPath, nil
+	}
+	return "", errors.New("unexpected tmux " + args[0])
+}
+
 // newDispatchServer wires the real gates the way New does, without touching
 // disk or spawning tmux.
 func newDispatchServer(t *testing.T, runner dispatchRunner, repos func() ([]dispatchRepo, error)) *Server {
@@ -90,6 +102,9 @@ func newDispatchServer(t *testing.T, runner dispatchRunner, repos func() ([]disp
 	return &Server{
 		auth:              &authGate{token: dispatchToken, enabled: true, allowedOrigins: allowed},
 		hosts:             deriveHosts(nil, allowed),
+		repoReg:           newRepoRegistry(filepath.Join(t.TempDir(), "repos.json"), nil, gitCommonDir),
+		dispatchEngines:   func(context.Context, string) ([]string, error) { return []string{"claude"}, nil },
+		tmuxRun:           serverPathTmux,
 		dispatchRunner:    runner,
 		dispatchRepos:     repos,
 		dispatchSlot:      make(chan struct{}, 1),
@@ -656,7 +671,7 @@ func TestListDispatchRepos(t *testing.T) {
 		return "", errors.New("not a repo")
 	}
 
-	repos, err := listDispatchRepos(lister, lookup)
+	repos, err := listDispatchRepos(lister, lookup, nil)
 	if err != nil {
 		t.Fatalf("listDispatchRepos: %v", err)
 	}
@@ -690,7 +705,7 @@ func TestListDispatchReposMissingCrewsDirIsEmptyNotNil(t *testing.T) {
 	lister := &fakeWorkspaceLister{wins: []tmux.WindowOptions{{GitRoot: root}}}
 	lookup := func(string) (string, error) { return commonDir, nil }
 
-	repos, err := listDispatchRepos(lister, lookup)
+	repos, err := listDispatchRepos(lister, lookup, nil)
 	if err != nil {
 		t.Fatalf("listDispatchRepos: %v", err)
 	}
@@ -716,7 +731,7 @@ func TestListDispatchReposHomeEmptyNotNil(t *testing.T) {
 	lister := &fakeWorkspaceLister{wins: []tmux.WindowOptions{{GitRoot: root}}}
 	lookup := func(string) (string, error) { return commonDir, nil }
 
-	repos, err := listDispatchRepos(lister, lookup)
+	repos, err := listDispatchRepos(lister, lookup, nil)
 	if err != nil {
 		t.Fatalf("listDispatchRepos: %v", err)
 	}
@@ -730,8 +745,259 @@ func TestListDispatchReposHomeEmptyNotNil(t *testing.T) {
 
 func TestListDispatchReposListerError(t *testing.T) {
 	lister := &fakeWorkspaceLister{winErr: errors.New("tmux unreachable")}
-	_, err := listDispatchRepos(lister, gitCommonDir)
+	_, err := listDispatchRepos(lister, gitCommonDir, nil)
 	if err == nil {
 		t.Fatal("expected an error when the lister fails")
+	}
+}
+
+func TestListDispatchReposUnionsRegistry(t *testing.T) {
+	tmp := realTempDir(t)
+	tmuxRepo := fakeRepo(t, filepath.Join(tmp, "tmux-repo"))
+	regRepo := fakeRepo(t, filepath.Join(tmp, "reg-repo"))
+	lister := &fakeWorkspaceLister{wins: []tmux.WindowOptions{{GitRoot: tmuxRepo}}}
+	lookup := func(root string) (string, error) { return filepath.Join(root, ".git"), nil }
+
+	repos, err := listDispatchRepos(lister, lookup, []string{regRepo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repos) != 2 {
+		t.Fatalf("repos = %+v, want 2", repos)
+	}
+	// sorted by name: reg-repo, tmux-repo
+	if repos[0].Path != regRepo || !repos[0].Registered {
+		t.Errorf("repos[0] = %+v, want registered %s", repos[0], regRepo)
+	}
+	if repos[1].Path != tmuxRepo || repos[1].Registered {
+		t.Errorf("repos[1] = %+v, want unregistered %s", repos[1], tmuxRepo)
+	}
+}
+
+func TestListDispatchReposDedupesSymlinkedTmuxRoot(t *testing.T) {
+	tmp := realTempDir(t)
+	realRepo := fakeRepo(t, filepath.Join(tmp, "real", "repo"))
+	symlink(t, filepath.Join(tmp, "real"), filepath.Join(tmp, "link"))
+	viaLink := filepath.Join(tmp, "link", "repo")
+	lister := &fakeWorkspaceLister{wins: []tmux.WindowOptions{{GitRoot: viaLink}}}
+	lookup := func(root string) (string, error) { return filepath.Join(root, ".git"), nil }
+
+	repos, err := listDispatchRepos(lister, lookup, []string{realRepo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repos) != 1 {
+		t.Fatalf("repos = %+v, want 1", repos)
+	}
+	if repos[0].Path != realRepo || !repos[0].Registered {
+		t.Errorf("repo = %+v, want registered %s", repos[0], realRepo)
+	}
+}
+
+func TestListDispatchReposSkipsUnresolvableTmuxRepo(t *testing.T) {
+	gone := filepath.Join(realTempDir(t), "gone")
+	lister := &fakeWorkspaceLister{wins: []tmux.WindowOptions{{GitRoot: gone}}}
+	lookup := func(root string) (string, error) { return filepath.Join(root, ".git"), nil }
+
+	repos, err := listDispatchRepos(lister, lookup, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repos) != 0 {
+		t.Errorf("repos = %+v, want none", repos)
+	}
+}
+
+func TestListDispatchReposRegistryOnlyRepoCarriesCrewsAndHome(t *testing.T) {
+	repo := fakeRepo(t, filepath.Join(realTempDir(t), "reg-repo"))
+	crewsDir := filepath.Join(repo, ".git", "crew", "crews")
+	mkdirAll(t, filepath.Join(crewsDir, "1700000002-1"))
+	mkdirAll(t, filepath.Join(crewsDir, "1700000001-1"))
+	if err := os.WriteFile(filepath.Join(crewsDir, "1700000001-1", "pane"), []byte("%1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lookup := func(root string) (string, error) { return filepath.Join(root, ".git"), nil }
+
+	repos, err := listDispatchRepos(&fakeWorkspaceLister{}, lookup, []string{repo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repos) != 1 {
+		t.Fatalf("repos = %+v, want 1", repos)
+	}
+	if want := []string{"1700000002-1", "1700000001-1"}; !slices.Equal(repos[0].Crews, want) {
+		t.Errorf("crews = %q, want %q", repos[0].Crews, want)
+	}
+	if want := []string{"1700000001-1"}; !slices.Equal(repos[0].Home, want) {
+		t.Errorf("home = %q, want %q", repos[0].Home, want)
+	}
+	if repos[0].commonDir != filepath.Join(repo, ".git") {
+		t.Errorf("commonDir = %q", repos[0].commonDir)
+	}
+}
+
+// Registry paths are already resolved main checkouts: the options GET must
+// not spawn a git per registry entry.
+func TestListDispatchReposSkipsCommonDirForRegistry(t *testing.T) {
+	tmp := realTempDir(t)
+	tmuxRepo := fakeRepo(t, filepath.Join(tmp, "tmux-repo"))
+	regRepo := fakeRepo(t, filepath.Join(tmp, "reg-repo"))
+	lister := &fakeWorkspaceLister{wins: []tmux.WindowOptions{{GitRoot: tmuxRepo}}}
+	var looked []string
+	lookup := func(root string) (string, error) {
+		looked = append(looked, root)
+		return filepath.Join(root, ".git"), nil
+	}
+
+	repos, err := listDispatchRepos(lister, lookup, []string{regRepo, tmuxRepo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(looked, []string{tmuxRepo}) {
+		t.Errorf("commonDir called for %q, want only the tmux root", looked)
+	}
+	if len(repos) != 2 || !repos[0].Registered || !repos[1].Registered {
+		t.Fatalf("repos = %+v, want both registered", repos)
+	}
+	if repos[0].commonDir != filepath.Join(regRepo, ".git") {
+		t.Errorf("registry commonDir = %q", repos[0].commonDir)
+	}
+}
+
+func getDispatchOptions(t *testing.T, s *Server) dispatchOptions {
+	t.Helper()
+	req := httptest.NewRequest("GET", "http://"+dispatchHost+"/api/dispatch/options", nil)
+	req.Host = dispatchHost
+	req.AddCookie(&http.Cookie{Name: authCookie, Value: dispatchToken})
+	rec := doDispatch(t, s, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	var opts dispatchOptions
+	if err := json.Unmarshal(rec.Body.Bytes(), &opts); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	return opts
+}
+
+func TestHandleDispatchOptionsRepoRootsAndEngines(t *testing.T) {
+	root := realTempDir(t)
+	s := newDispatchServer(t, nil, stubDispatchRepos(nil, nil))
+	s.repoReg = newRepoRegistry(filepath.Join(realTempDir(t), "repos.json"), []string{root}, gitCommonDir)
+	s.dispatchEngines = func(_ context.Context, serverPath string) ([]string, error) {
+		if serverPath != testServerPath {
+			t.Errorf("engines lookup got server PATH %q, want %q", serverPath, testServerPath)
+		}
+		return []string{"pi", "claude", "bogus"}, nil
+	}
+
+	opts := getDispatchOptions(t, s)
+	if !slices.Equal(opts.RepoRoots, []string{root}) {
+		t.Errorf("repo_roots = %q, want [%s]", opts.RepoRoots, root)
+	}
+	if want := []string{"claude", "pi"}; !slices.Equal(opts.DispatcherEngines, want) {
+		t.Errorf("dispatcher_engines = %q, want %q", opts.DispatcherEngines, want)
+	}
+	if opts.DispatcherEnginesError != "" {
+		t.Errorf("dispatcher_engines_error = %q, want empty", opts.DispatcherEnginesError)
+	}
+}
+
+func TestHandleDispatchOptionsEnginesErrorAndEmptyArraysNeverNull(t *testing.T) {
+	s := newDispatchServer(t, nil, stubDispatchRepos(nil, nil))
+	s.dispatchEngines = func(context.Context, string) ([]string, error) { return nil, errors.New("dispatch not found") }
+
+	req := httptest.NewRequest("GET", "http://"+dispatchHost+"/api/dispatch/options", nil)
+	req.Host = dispatchHost
+	req.AddCookie(&http.Cookie{Name: authCookie, Value: dispatchToken})
+	rec := doDispatch(t, s, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(raw["dispatcher_engines"]); got != "[]" {
+		t.Errorf("dispatcher_engines = %s, want []", got)
+	}
+	if got := string(raw["repo_roots"]); got != "[]" {
+		t.Errorf("repo_roots = %s, want []", got)
+	}
+	if got := string(raw["dispatcher_engines_error"]); got != `"dispatch not found"` {
+		t.Errorf("dispatcher_engines_error = %s", got)
+	}
+}
+
+// newRememberFixture dispatches against a real main checkout under a registry
+// root, since Add only accepts those.
+func newRememberFixture(t *testing.T, runner dispatchRunner) (*Server, dispatchRepo, dispatchRequest) {
+	t.Helper()
+	requireGit(t)
+	root := realTempDir(t)
+	path := gitInit(t, filepath.Join(root, "proj"))
+	repo := newDispatchTestRepo(t, "1700000000-123")
+	repo.Path = path
+	s := newDispatchServer(t, runner, stubDispatchRepos([]dispatchRepo{repo}, nil))
+	s.repoReg = newRepoRegistry(filepath.Join(realTempDir(t), "repos.json"), []string{root}, gitCommonDir)
+	return s, repo, validDispatchRequest(repo, repo.Crews[0])
+}
+
+func TestDispatchRemembersRepoOnSuccess(t *testing.T) {
+	stub := &stubDispatchRunner{result: dispatchResult{Stdout: "worker_id: worker:feat/1-x#s1\n"}}
+	s, repo, req := newRememberFixture(t, stub.run)
+
+	rec := doDispatch(t, s, dispatchHTTPRequest("POST", dispatchRequestJSON(t, req)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if !s.repoReg.Has(repo.Path) {
+		t.Errorf("registry does not hold %s after a successful dispatch", repo.Path)
+	}
+}
+
+func TestDispatchDoesNotRememberRepoOnFailure(t *testing.T) {
+	stub := &stubDispatchRunner{result: dispatchResult{ExitCode: 1, Stderr: "budget exceeded"}}
+	s, repo, req := newRememberFixture(t, stub.run)
+
+	rec := doDispatch(t, s, dispatchHTTPRequest("POST", dispatchRequestJSON(t, req)))
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status %d, want 422 (body %s)", rec.Code, rec.Body.String())
+	}
+	if s.repoReg.Has(repo.Path) {
+		t.Errorf("registry holds %s after a failed dispatch", repo.Path)
+	}
+}
+
+// TestDispatchServerPathFallsBackWithWarning: the worker and options
+// endpoints keep houston's PATH when tmux can't name its own, but say so.
+func TestDispatchServerPathFallsBackWithWarning(t *testing.T) {
+	logs := captureServerLogs(t)
+	var got []string
+	runner := func(_ context.Context, x dispatchExec) dispatchResult {
+		got = append(got, x.ServerPath)
+		return dispatchResult{Stdout: "worker_id: worker:feat/1-x#s1"}
+	}
+	repo := newDispatchTestRepo(t, "1700000000-123")
+	s := newDispatchServer(t, runner, stubDispatchRepos([]dispatchRepo{repo}, nil))
+	if rec := doDispatch(t, s, dispatchHTTPRequest("POST", dispatchRequestJSON(t, validDispatchRequest(repo, "1700000000-123")))); rec.Code != http.StatusOK {
+		t.Fatalf("status %d (body %s)", rec.Code, rec.Body.String())
+	}
+
+	s.tmuxRun = func(context.Context, []string, ...string) (string, error) { return "-PATH", nil }
+	s.dispatchEngines = func(_ context.Context, serverPath string) ([]string, error) {
+		got = append(got, serverPath)
+		return []string{"claude"}, nil
+	}
+	getDispatchOptions(t, s)
+	if rec := doDispatch(t, s, dispatchHTTPRequest("POST", dispatchRequestJSON(t, validDispatchRequest(repo, "1700000000-123")))); rec.Code != http.StatusOK {
+		t.Fatalf("status %d (body %s)", rec.Code, rec.Body.String())
+	}
+
+	if want := []string{testServerPath, "", ""}; !slices.Equal(got, want) {
+		t.Errorf("server PATHs = %q, want %q", got, want)
+	}
+	if n := strings.Count(logs.String(), "tmux server PATH unavailable"); n != 2 {
+		t.Errorf("%d fallback warnings, want one per request (2):\n%s", n, logs)
 	}
 }

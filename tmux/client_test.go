@@ -154,6 +154,26 @@ func TestResolvePaneExitOneClassification(t *testing.T) {
 	}
 }
 
+func TestIsGoneMessage(t *testing.T) {
+	for _, tc := range []struct {
+		msg  string
+		want bool
+	}{
+		{"can't find pane: %9", true},
+		{"tmux display-message: exit status 1: can't find session: =proj", true},
+		{"error connecting to /tmp/x (No such file or directory)", true},
+		{"no server running on /tmp/x/default", true},
+		{"protocol version mismatch (client 8, server 7)", false},
+		{"error connecting to /tmp/x (Permission denied)", false},
+		{"tmux display-message: signal: killed", false},
+		{"", false},
+	} {
+		if got := IsGoneMessage(tc.msg); got != tc.want {
+			t.Errorf("IsGoneMessage(%q) = %v, want %v", tc.msg, got, tc.want)
+		}
+	}
+}
+
 // fakeTmuxOK writes a script that prints stdout to stdout and exits 0,
 // standing in for a live tmux server's successful display-message reply.
 func fakeTmuxOK(t *testing.T, stdout string) *Client {

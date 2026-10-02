@@ -326,10 +326,22 @@ func (c *Client) GetPaneID(p Pane) (string, error) {
 // "No such file or directory" (the socket path itself is absent), and
 // "no server running" (the socket file survives but its server has exited,
 // e.g. last session ended, kill-server, or a crash).
-var goneServerStderrMarkers = [][]byte{
-	[]byte("can't find"),
-	[]byte("No such file or directory"),
-	[]byte("no server running"),
+var goneServerStderrMarkers = []string{
+	"can't find",
+	"No such file or directory",
+	"no server running",
+}
+
+// IsGoneMessage reports whether msg — tmux's stderr, or an error carrying it
+// — says the pane, window, session or server it was asked about no longer
+// exists, as opposed to tmux being unreachable or failing some other way.
+func IsGoneMessage(msg string) bool {
+	for _, marker := range goneServerStderrMarkers {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // ResolvePane looks up a pane id's current session, window, index and the
@@ -345,10 +357,8 @@ func (c *Client) ResolvePane(paneID string) (Pane, error) {
 	if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
-			for _, marker := range goneServerStderrMarkers {
-				if bytes.Contains(exitErr.Stderr, marker) {
-					return Pane{}, fmt.Errorf("%w: %s", ErrPaneNotFound, paneID)
-				}
+			if IsGoneMessage(string(exitErr.Stderr)) {
+				return Pane{}, fmt.Errorf("%w: %s", ErrPaneNotFound, paneID)
 			}
 			return Pane{}, fmt.Errorf("tmux display-message: %w: %s", err, bytes.TrimSpace(exitErr.Stderr))
 		}

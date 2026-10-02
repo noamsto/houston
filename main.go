@@ -32,6 +32,8 @@ func main() {
 			os.Exit(cmdHooks(os.Args[2:]))
 		case "doctor":
 			os.Exit(cmdDoctor(os.Args[2:]))
+		case "launch-dispatcher":
+			os.Exit(cmdLaunchDispatcher(os.Args[2:]))
 		case "-h", "--help", "help":
 			printUsage(os.Stderr)
 			return
@@ -49,6 +51,7 @@ Usage:
   houston hooks install        install houston's hooks into ~/.claude/settings.json
   houston hooks check          report which hooks are installed
   houston doctor               full environment check
+  houston launch-dispatcher <file>   (internal) exec a dispatcher launch houston prepared
 
 Run "houston -h" for server flags.
 `)
@@ -161,6 +164,20 @@ func cmdDoctor(_ []string) int {
 	return 0
 }
 
+// ---------- subcommand: launch-dispatcher ----------
+
+// cmdLaunchDispatcher runs inside the tmux pane houston opened for a new
+// dispatcher; on success it never returns.
+func cmdLaunchDispatcher(args []string) int {
+	if len(args) != 1 {
+		fmt.Fprintln(os.Stderr, "usage: houston launch-dispatcher <file>")
+		return 1
+	}
+	err := server.ExecDispatcherLaunch(args[0])
+	fmt.Fprintf(os.Stderr, "houston launch-dispatcher: %v\n", err)
+	return 1
+}
+
 // ---------- default: web server ----------
 
 func runServer() {
@@ -177,6 +194,9 @@ func runServer() {
 	var hostnames stringList
 	flag.Var(&hostnames, "hostname", "additional Host value to accept (repeatable; for reverse proxies or custom DNS)")
 
+	var repoRoots stringList
+	flag.Var(&repoRoots, "repo-root", "directory the repo registry and picker are confined to (repeatable; default $HOME/git)")
+
 	flag.Parse()
 
 	// Configure slog
@@ -190,6 +210,13 @@ func runServer() {
 
 	if *statusDir == "" {
 		*statusDir = resolveStateDir()
+	}
+	if len(repoRoots) == 0 {
+		if home, err := os.UserHomeDir(); err != nil {
+			slog.Warn("no default repo root", "error", err)
+		} else {
+			repoRoots = stringList{filepath.Join(home, "git")}
+		}
 	}
 
 	// Auto-detect terminal for font size control
@@ -223,6 +250,7 @@ func runServer() {
 		AuthEnabled:     !*noAuth,
 		AllowedOrigins:  allowedOrigins,
 		AllowedHosts:    hostnames,
+		RepoRoots:       repoRoots,
 	})
 	if err != nil {
 		log.Fatalf("failed to create server: %v", err)

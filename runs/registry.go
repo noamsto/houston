@@ -196,6 +196,10 @@ func deriveCaps(bySource map[string]Run) Caps {
 	}
 }
 
+// PaneRunID is the Run.ID Fleet gives a tmux pane, so callers outside this
+// package never re-derive idFor's encoding.
+func PaneRunID(paneID string) string { return idFor(paneID) }
+
 // idFor derives a URL-path-safe Run.ID from a source's correlation key. The
 // key itself keeps flowing internally unchanged — it is load-bearing for layer
 // bookkeeping — only the externally visible ID differs. Without this, "%307"

@@ -4,6 +4,7 @@ import type { Run } from '../api/runs'
 import { agoLabel } from './format'
 
 export interface DispatchPrefs {
+  mode?: 'worker' | 'dispatcher'
   repo?: string
   engine?: string
   model?: string
