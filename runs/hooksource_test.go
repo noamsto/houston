@@ -532,6 +532,56 @@ func TestPaneForeign(t *testing.T) {
 	}
 }
 
+func TestPaneHookSessionsFiltersUntrustworthySessions(t *testing.T) {
+	// The crew join's pane→session map is a trust boundary: a session the
+	// hooks layer would not vouch for must not be offered to the terminal
+	// join (#120), and a pane carrying two sessions must pick one
+	// deterministically. Each filter is exercised directly — a caller test
+	// that seeds a single trusted view would stay green if a predicate were
+	// dropped.
+	ps := paneSetFrom([]tmux.PaneOptions{
+		{PaneID: "%1", ServerPID: "2001", ServerStart: 100},
+		{PaneID: "%2", CrewRole: "spec-critic", ServerPID: "2001", ServerStart: 100},
+	}, time.Now())
+
+	trusted := hub.SessionView{SessionID: "s1", TmuxPane: "%1", TmuxServer: "2001", UpdatedAt: 150, State: hook.StateThinking}
+	foreign := hub.SessionView{SessionID: "s2", TmuxPane: "%1", TmuxServer: "1966", UpdatedAt: 150, State: hook.StateThinking}
+	stale := hub.SessionView{SessionID: "s3", TmuxPane: "%1", UpdatedAt: 99, State: hook.StateThinking}
+	ended := hub.SessionView{SessionID: "s4", TmuxPane: "%1", TmuxServer: "2001", UpdatedAt: 150, State: hook.StateEnded}
+	role := hub.SessionView{SessionID: "s5", TmuxPane: "%2", TmuxServer: "2001", UpdatedAt: 150, State: hook.StateThinking}
+	older := hub.SessionView{SessionID: "s6", TmuxPane: "%1", TmuxServer: "2001", UpdatedAt: 140, State: hook.StateThinking}
+	// Equal UpdatedAt: SessionID breaks the tie, larger wins (newerSession).
+	tieA := hub.SessionView{SessionID: "sA", TmuxPane: "%1", TmuxServer: "2001", UpdatedAt: 150, State: hook.StateThinking}
+	tieB := hub.SessionView{SessionID: "sB", TmuxPane: "%1", TmuxServer: "2001", UpdatedAt: 150, State: hook.StateThinking}
+
+	tests := []struct {
+		name string
+		snap []hub.SessionView
+		want map[string]string
+	}{
+		{"trusted session maps", []hub.SessionView{trusted}, map[string]string{"%1": "s1"}},
+		{"foreign server dropped", []hub.SessionView{foreign}, map[string]string{}},
+		{"session predating the server dropped", []hub.SessionView{stale}, map[string]string{}},
+		{"ended session dropped", []hub.SessionView{ended}, map[string]string{}},
+		{"role pane dropped", []hub.SessionView{role}, map[string]string{}},
+		{"newest session wins", []hub.SessionView{older, trusted}, map[string]string{"%1": "s1"}},
+		{"equal UpdatedAt tie breaks by session id", []hub.SessionView{tieB, tieA}, map[string]string{"%1": "sB"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := paneHookSessions(tt.snap, ps)
+			if len(got) != len(tt.want) {
+				t.Fatalf("paneHookSessions = %v, want %v", got, tt.want)
+			}
+			for k, v := range tt.want {
+				if got[k] != v {
+					t.Errorf("paneHookSessions[%s] = %q, want %q", k, got[k], v)
+				}
+			}
+		})
+	}
+}
+
 func TestListPanesTakesIdentityFromTheListing(t *testing.T) {
 	panes := &fakePanes{}
 	panes.setIdentity("2001", 1790086864)
