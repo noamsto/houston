@@ -709,6 +709,10 @@ a.crews-pr::after { content: ''; position: absolute; inset: -10px -8px -13px; }
 .chat-md .chat-md-lang + .chat-md-pre { padding-top: 18px; }
 .chat-md .chat-md-pre code { padding: 0; border-radius: 0; background: none; font-size: inherit; }
 .chat-md .chat-md-table { max-width: 100%; overflow-x: auto; }
+.chat-md .chat-md-pre, .chat-md .chat-md-table { scrollbar-width: thin; scrollbar-color: var(--text-muted) transparent; }
+.chat-md .chat-md-pre::-webkit-scrollbar, .chat-md .chat-md-table::-webkit-scrollbar { height: 6px; }
+.chat-md .chat-md-pre::-webkit-scrollbar-track, .chat-md .chat-md-table::-webkit-scrollbar-track { background: transparent; }
+.chat-md .chat-md-pre::-webkit-scrollbar-thumb, .chat-md .chat-md-table::-webkit-scrollbar-thumb { background: var(--text-muted); border-radius: 3px; }
 .chat-md table { border-collapse: collapse; font-size: 0.9em; }
 .chat-md th, .chat-md td {
   min-width: 4em; padding: 4px 8px; border: 1px solid var(--line);
