@@ -305,7 +305,10 @@ func tmuxEnv() (pane, server string) {
 
 // tmuxDisplay is overridden in tests to stub tmux's output and count calls.
 var tmuxDisplay = func(pane string) ([]byte, error) {
-	return exec.Command("tmux", "display-message", "-p", "-t", pane, "#S\t#I").Output()
+	// -u forces the client to treat its output as UTF-8: outside a UTF-8
+	// locale tmux rewrites control characters in format output to '_', which
+	// collapses the tab separator below and mis-parses the coordinates.
+	return exec.Command("tmux", "-u", "display-message", "-p", "-t", pane, "#S\t#I").Output()
 }
 
 // beforeLock is overridden in tests to land a write between the unlocked
