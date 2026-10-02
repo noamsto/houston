@@ -46,6 +46,10 @@ type SessionView struct {
 	OutputTokens   int         `json:"output_tokens"`
 	TranscriptPath string      `json:"transcript_path,omitempty"`
 	Agent          string      `json:"agent"`
+
+	// Background lists the background shells and monitors the transcript
+	// shows started and not yet finished.
+	Background []BackgroundTask `json:"background,omitempty"`
 }
 
 // DefaultPruneTTL is how long an ended hook state file is kept after its
@@ -105,6 +109,8 @@ type Session struct {
 
 	lastTurn         int    // last turn whose trail was cleared (UserPromptSubmit bumps Turn)
 	lastBroadcastSig string // last broadcast view signature; skip duplicates
+
+	bg bgTracker
 
 	chat *chatState // nil until first use, and for agents without a chat.Reader
 }
@@ -471,6 +477,7 @@ func (h *Hub) refreshTranscript(sessionID string) {
 	}
 	sess.view.Trail = append([]TrailChip(nil), sess.trail...)
 	sess.view.Preview = strings.Join(sess.preview, "\n")
+	sess.view.Background = sess.bg.list()
 	view := sess.view
 	h.mu.Unlock()
 
@@ -526,6 +533,8 @@ func viewSignature(v SessionView) string {
 	b.WriteString(strconv.Itoa(len(v.Preview)))
 	b.WriteByte('|')
 	b.WriteString(v.Agent)
+	b.WriteByte('|')
+	b.WriteString(backgroundSignature(v.Background))
 	return b.String()
 }
 
@@ -561,6 +570,7 @@ func mergeStateIntoView(v *SessionView, s hook.SessionState) {
 // applyTranscriptEvent updates trail/preview/telemetry on sess from one event.
 // Called under h.mu.
 func applyTranscriptEvent(s *Session, ev TranscriptEvent) {
+	s.bg.apply(ev)
 	const maxTrail = 8
 	const maxPreview = 40
 

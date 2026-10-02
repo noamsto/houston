@@ -60,6 +60,13 @@ export interface Activity {
   turn?: number
 }
 
+export interface BackgroundTask {
+  id: string
+  kind: 'shell' | 'monitor' | string
+  hint?: string
+  since?: number // unix seconds
+}
+
 export interface Question {
   text: string
   via: string // "pane" | "crew" (legacy "watchdog" is no longer produced)
@@ -99,6 +106,7 @@ export interface Run {
   activity: Activity
   question?: Question
   tokens: Tokens
+  background?: BackgroundTask[] // outstanding background shells/monitors (Claude only)
   since?: number
   updated_at: number
   stale?: boolean

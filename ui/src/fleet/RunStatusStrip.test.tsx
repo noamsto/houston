@@ -115,3 +115,26 @@ describe('RunQuestion', () => {
     expect(screen.queryByRole('textbox')).toBeNull()
   })
 })
+
+describe('RunStatusStrip background tasks', () => {
+  it('lists each task with its hint and age', () => {
+    const since = Math.floor(now / 1000) - 180
+    render(
+      <RunStatusStrip
+        run={run({ background: [{ id: 'a', kind: 'shell', hint: 'Sleep five minutes', since }, { id: 'b', kind: 'monitor', hint: 'CI checks' }] })}
+        now={now}
+      />,
+    )
+    const items = screen.getByLabelText('Background tasks').querySelectorAll('li')
+    expect(items).toHaveLength(2)
+    expect(items[0].textContent).toContain('shell')
+    expect(items[0].textContent).toContain('Sleep five minutes')
+    expect(items[0].textContent).toContain(agoLabel(since, now))
+    expect(items[1].textContent).toContain('CI checks')
+  })
+
+  it('renders no list without background tasks', () => {
+    render(<RunStatusStrip run={run()} now={now} />)
+    expect(screen.queryByLabelText('Background tasks')).toBeNull()
+  })
+})

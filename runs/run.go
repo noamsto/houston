@@ -30,6 +30,11 @@ type Run struct {
 	Question *Question `json:"question,omitempty"`
 	Tokens   Tokens    `json:"tokens"`
 
+	// Background lists the background shells and monitors a Claude Code run
+	// has started and not yet seen finish. Informational: it never changes
+	// State.
+	Background []BackgroundTask `json:"background,omitempty"`
+
 	Since     int64 `json:"since,omitempty"`
 	UpdatedAt int64 `json:"updated_at"`
 
@@ -112,6 +117,15 @@ type TrailChip struct {
 	Hint    string `json:"hint,omitempty"`
 	Done    bool   `json:"done"`
 	IsError bool   `json:"error,omitempty"`
+}
+
+// BackgroundTask mirrors hub.BackgroundTask. Kind is "shell" or "monitor";
+// Since is unix seconds.
+type BackgroundTask struct {
+	ID    string `json:"id"`
+	Kind  string `json:"kind"`
+	Hint  string `json:"hint,omitempty"`
+	Since int64  `json:"since,omitempty"`
 }
 
 // Question is the thing a human answers. Non-nil implies State == StateBlocked.

@@ -216,3 +216,17 @@ describe('RunCard project and role', () => {
     expect(container.querySelector('.run-chip.codename')?.textContent).toBe('blush')
   })
 })
+
+describe('RunCard background chip', () => {
+  it('shows a count chip when background tasks are outstanding', () => {
+    const { container } = render(
+      <RunCard run={run({ state: 'idle', background: [{ id: 'a', kind: 'shell' }, { id: 'b', kind: 'monitor' }] })} now={now} />,
+    )
+    expect(container.querySelector('.run-chip.bg')?.textContent).toBe('2 bg')
+  })
+
+  it('omits the chip when there are none', () => {
+    const { container } = render(<RunCard run={run({ background: [] })} now={now} />)
+    expect(container.querySelector('.run-chip.bg')).toBeNull()
+  })
+})
