@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func bgStartLine(id, tool, input, ts string) string {
@@ -56,7 +57,7 @@ func trackerFor(t *testing.T, transcript string) []BackgroundTask {
 	for _, ev := range evs {
 		tr.apply(ev)
 	}
-	return tr.list()
+	return tr.list(time.Time{})
 }
 
 func TestBackgroundStartIsOutstanding(t *testing.T) {
@@ -156,7 +157,7 @@ func TestBackgroundReplayEqualsIncremental(t *testing.T) {
 			tr.apply(ev)
 		}
 	}
-	inc := tr.list()
+	inc := tr.list(time.Time{})
 	if len(full) != 1 || full[0].ID != "bsh2" || len(inc) != 1 || inc[0] != full[0] {
 		t.Fatalf("replay %+v incremental %+v, want only bsh2", full, inc)
 	}
@@ -218,5 +219,25 @@ func TestBackgroundMissingTimestampLeavesSinceUnset(t *testing.T) {
 			bgResultLine("tu1", fmt.Sprintf(shellResult, "bsh1"), false))
 	if len(got) != 1 || got[0].Since != 0 {
 		t.Fatalf("got %+v, want one task with Since 0", got)
+	}
+}
+
+func TestBackgroundMonitorExpiresAtItsTimeout(t *testing.T) {
+	path := writeJSONL(t,
+		bgStartLine("tu1", "Monitor", `{"command":"x","description":"a","timeout_ms":60000}`, "2026-01-01T00:00:00Z")+
+			bgResultLine("tu1", "Monitor started (task bmon, timeout 60000ms)", false)+
+			bgStartLine("tu2", "Monitor", `{"command":"y","description":"b","timeout_ms":60000,"persistent":true}`, "2026-01-01T00:00:00Z")+
+			bgResultLine("tu2", "Monitor started (task bper, timeout 60000ms)", false))
+	evs, _, _ := ReadTranscriptFrom(path, 0)
+	var tr bgTracker
+	for _, ev := range evs {
+		tr.apply(ev)
+	}
+	start := time.Unix(1767225600, 0)
+	if got := tr.list(start.Add(30 * time.Second)); len(got) != 2 {
+		t.Fatalf("before timeout: %+v, want 2", got)
+	}
+	if got := tr.list(start.Add(61 * time.Second)); len(got) != 1 || got[0].ID != "bper" {
+		t.Fatalf("after timeout: %+v, want only the persistent monitor", got)
 	}
 }

@@ -55,7 +55,9 @@ type TranscriptEvent struct {
 	// a background task; StopTask is the task id a TaskStop tool_use targets.
 	Background     string
 	BackgroundHint string
-	StopTask       string
+	// BackgroundTimeout is a non-persistent Monitor's lifetime, else zero.
+	BackgroundTimeout time.Duration
+	StopTask          string
 }
 
 // jsonlRecord is the on-disk envelope. Unmarshalled loosely — the schema
@@ -209,6 +211,9 @@ func parseLine(line string, offset int64) []TranscriptEvent {
 			ev.Text = hook.ToolHint(blk.Name, blk.Input)
 			if ev.Background, ev.StopTask = backgroundStart(blk.Name, blk.Input); ev.Background != "" {
 				ev.BackgroundHint = backgroundHint(blk.Input)
+				if ev.Background == BackgroundMonitor {
+					ev.BackgroundTimeout = monitorTimeout(blk.Input)
+				}
 			}
 		case EventTypeToolResult:
 			ev.Type = EventTypeToolResult

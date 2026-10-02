@@ -467,6 +467,7 @@ func (h *Hub) refreshTranscript(sessionID string) {
 		return
 	}
 	if len(events) == 0 && newOffset == offset {
+		h.expireBackground(sess)
 		return
 	}
 
@@ -477,10 +478,25 @@ func (h *Hub) refreshTranscript(sessionID string) {
 	}
 	sess.view.Trail = append([]TrailChip(nil), sess.trail...)
 	sess.view.Preview = strings.Join(sess.preview, "\n")
-	sess.view.Background = sess.bg.list()
+	sess.view.Background = sess.bg.list(time.Now())
 	view := sess.view
 	h.mu.Unlock()
 
+	h.broadcastIfChanged(sess, view)
+}
+
+// expireBackground drops monitors whose timeout has passed. Nothing is written
+// to the transcript when one does, so no new event will ever say so.
+func (h *Hub) expireBackground(sess *Session) {
+	h.mu.Lock()
+	cur := sess.bg.list(time.Now())
+	if backgroundSignature(cur) == backgroundSignature(sess.view.Background) {
+		h.mu.Unlock()
+		return
+	}
+	sess.view.Background = cur
+	view := sess.view
+	h.mu.Unlock()
 	h.broadcastIfChanged(sess, view)
 }
 

@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Background task kinds.
@@ -58,6 +59,19 @@ func backgroundStart(name string, input json.RawMessage) (kind, stopTask string)
 	return "", ""
 }
 
+// monitorTimeout is the lifetime of a non-persistent Monitor. When it runs
+// out the CLI writes no transcript marker, so the tracker must expire it.
+func monitorTimeout(input json.RawMessage) time.Duration {
+	var in struct {
+		TimeoutMS  int64 `json:"timeout_ms"`
+		Persistent bool  `json:"persistent"`
+	}
+	if json.Unmarshal(input, &in) != nil || in.Persistent || in.TimeoutMS <= 0 {
+		return 0
+	}
+	return time.Duration(in.TimeoutMS) * time.Millisecond
+}
+
 // backgroundHint prefers the call's own description over its command.
 func backgroundHint(input json.RawMessage) string {
 	var in struct {
@@ -74,7 +88,8 @@ func backgroundHint(input json.RawMessage) string {
 
 type bgEntry struct {
 	task    BackgroundTask
-	started bool // its tool_result confirmed the launch and named a task id
+	expires int64 // unix seconds a non-persistent monitor times out at; 0 = never
+	started bool  // its tool_result confirmed the launch and named a task id
 }
 
 // bgTracker derives a session's outstanding background tasks from its
@@ -96,6 +111,9 @@ func (t *bgTracker) apply(ev TranscriptEvent) {
 			e := &bgEntry{task: BackgroundTask{Kind: ev.Background, Hint: ev.BackgroundHint}}
 			if !ev.Timestamp.IsZero() {
 				e.task.Since = ev.Timestamp.Unix()
+				if ev.BackgroundTimeout > 0 {
+					e.expires = e.task.Since + int64(ev.BackgroundTimeout/time.Second)
+				}
 			}
 			t.byToolUse[ev.ToolUseID] = e
 		case ev.StopTask != "":
@@ -151,11 +169,11 @@ func (t *bgTracker) finish(taskID, toolUseID string) {
 	}
 }
 
-// list returns the outstanding tasks, oldest first.
-func (t *bgTracker) list() []BackgroundTask {
+// list returns the tasks outstanding at now, oldest first.
+func (t *bgTracker) list(now time.Time) []BackgroundTask {
 	var out []BackgroundTask
 	for _, e := range t.byToolUse {
-		if e.started {
+		if e.started && (e.expires == 0 || e.expires > now.Unix()) {
 			out = append(out, e.task)
 		}
 	}
