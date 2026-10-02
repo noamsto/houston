@@ -213,5 +213,6 @@ func (s *Server) sendAPIOpenCodeEvent(ctx context.Context, w http.ResponseWriter
 func (s *Server) handleAPIOpenCodeSession(w http.ResponseWriter, r *http.Request) {
 	// Rewrite path: strip /api prefix so handleOpenCodeSession (which expects /opencode/session/...) works
 	r.URL.Path = strings.TrimPrefix(r.URL.Path, "/api")
+	r.URL.RawPath = strings.TrimPrefix(r.URL.RawPath, "/api")
 	s.handleOpenCodeSession(w, r)
 }

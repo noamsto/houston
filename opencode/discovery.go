@@ -3,11 +3,15 @@ package opencode
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 )
@@ -244,6 +248,56 @@ func (d *Discovery) GetServer(url string) *Server {
 	d.serversMu.RLock()
 	defer d.serversMu.RUnlock()
 	return d.servers[url]
+}
+
+// ErrUnknownServer is returned when a caller names a server URL that discovery
+// has not found.
+var ErrUnknownServer = errors.New("opencode: server not discovered")
+
+// normalizeServerURL reduces a bare http(s) origin to scheme://host:port with
+// a lowercased host, and refuses anything else (userinfo, path, query,
+// fragment, other schemes).
+func normalizeServerURL(raw string) (string, bool) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", false
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", false
+	}
+	if u.Opaque != "" || u.User != nil || u.Host == "" || u.Hostname() == "" {
+		return "", false
+	}
+	if u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return "", false
+	}
+	if (u.Path != "" && u.Path != "/") || u.RawPath != "" {
+		return "", false
+	}
+	port := u.Port()
+	if port == "" {
+		port = "80"
+		if u.Scheme == "https" {
+			port = "443"
+		}
+	}
+	return u.Scheme + "://" + net.JoinHostPort(strings.ToLower(u.Hostname()), port), true
+}
+
+// Lookup returns the discovered server whose URL is the same origin as raw.
+func (d *Discovery) Lookup(raw string) (*Server, bool) {
+	want, ok := normalizeServerURL(raw)
+	if !ok {
+		return nil, false
+	}
+	d.serversMu.RLock()
+	defer d.serversMu.RUnlock()
+	for _, srv := range d.servers {
+		if got, ok := normalizeServerURL(srv.URL); ok && got == want {
+			return srv, true
+		}
+	}
+	return nil, false
 }
 
 // StartBackgroundScan starts periodic scanning for servers. The returned

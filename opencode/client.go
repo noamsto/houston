@@ -4,12 +4,31 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
+
+// ErrInvalidSessionID is returned for a session ID that cannot be placed in a
+// URL path segment safely.
+var ErrInvalidSessionID = errors.New("opencode: invalid session ID")
+
+// ValidSessionID reports whether id can be used as one path segment. url.PathEscape
+// leaves "." and ".." intact, and those would let the request climb out of /session/.
+func ValidSessionID(id string) bool {
+	return id != "" && id != "." && id != ".."
+}
+
+func sessionPath(id string) (string, error) {
+	if !ValidSessionID(id) {
+		return "", ErrInvalidSessionID
+	}
+	return "/session/" + url.PathEscape(id), nil
+}
 
 // Client is an HTTP client for the OpenCode server API.
 type Client struct {
@@ -59,7 +78,11 @@ func (c *Client) ListSessions(ctx context.Context) ([]Session, error) {
 
 // GetSession returns a single session by ID.
 func (c *Client) GetSession(ctx context.Context, id string) (*Session, error) {
-	resp, err := c.get(ctx, "/session/"+id)
+	path, err := sessionPath(id)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.get(ctx, path)
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +112,11 @@ func (c *Client) GetSessionStatus(ctx context.Context) (map[string]SessionStatus
 
 // GetMessages returns messages for a session.
 func (c *Client) GetMessages(ctx context.Context, sessionID string, limit int) ([]MessageWithParts, error) {
-	path := fmt.Sprintf("/session/%s/message", sessionID)
+	path, err := sessionPath(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	path += "/message"
 	if limit > 0 {
 		path = fmt.Sprintf("%s?limit=%d", path, limit)
 	}
@@ -109,7 +136,11 @@ func (c *Client) GetMessages(ctx context.Context, sessionID string, limit int) (
 
 // GetTodos returns the todo list for a session.
 func (c *Client) GetTodos(ctx context.Context, sessionID string) ([]Todo, error) {
-	resp, err := c.get(ctx, fmt.Sprintf("/session/%s/todo", sessionID))
+	path, err := sessionPath(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.get(ctx, path+"/todo")
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +155,11 @@ func (c *Client) GetTodos(ctx context.Context, sessionID string) ([]Todo, error)
 
 // SendPrompt sends a prompt to a session and waits for the response.
 func (c *Client) SendPrompt(ctx context.Context, sessionID string, req PromptRequest) (*MessageWithParts, error) {
-	resp, err := c.post(ctx, fmt.Sprintf("/session/%s/message", sessionID), req)
+	path, err := sessionPath(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.post(ctx, path+"/message", req)
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +174,11 @@ func (c *Client) SendPrompt(ctx context.Context, sessionID string, req PromptReq
 
 // SendPromptAsync sends a prompt without waiting for a response.
 func (c *Client) SendPromptAsync(ctx context.Context, sessionID string, req PromptRequest) error {
-	resp, err := c.post(ctx, fmt.Sprintf("/session/%s/prompt_async", sessionID), req)
+	path, err := sessionPath(sessionID)
+	if err != nil {
+		return err
+	}
+	resp, err := c.post(ctx, path+"/prompt_async", req)
 	if err != nil {
 		return err
 	}
@@ -149,7 +188,11 @@ func (c *Client) SendPromptAsync(ctx context.Context, sessionID string, req Prom
 
 // AbortSession aborts a running session.
 func (c *Client) AbortSession(ctx context.Context, sessionID string) error {
-	resp, err := c.post(ctx, fmt.Sprintf("/session/%s/abort", sessionID), nil)
+	path, err := sessionPath(sessionID)
+	if err != nil {
+		return err
+	}
+	resp, err := c.post(ctx, path+"/abort", nil)
 	if err != nil {
 		return err
 	}
@@ -182,7 +225,11 @@ func (c *Client) CreateSession(ctx context.Context, title string, parentID *stri
 
 // DeleteSession deletes a session.
 func (c *Client) DeleteSession(ctx context.Context, sessionID string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.baseURL+"/session/"+sessionID, nil)
+	path, err := sessionPath(sessionID)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.baseURL+path, nil)
 	if err != nil {
 		return err
 	}

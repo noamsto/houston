@@ -211,7 +211,11 @@ func firstLineBreak(s string) int {
 
 // GetSessionDetails fetches full details for a session.
 func (m *Manager) GetSessionDetails(ctx context.Context, serverURL, sessionID string) (*SessionState, error) {
-	client := NewClient(serverURL)
+	srv, ok := m.discovery.Lookup(serverURL)
+	if !ok {
+		return nil, ErrUnknownServer
+	}
+	client := NewClient(srv.URL)
 
 	// Fetch session, messages, and todos in parallel
 	var session *Session
@@ -249,7 +253,7 @@ func (m *Manager) GetSessionDetails(ctx context.Context, serverURL, sessionID st
 	state := &SessionState{
 		Session:   *session,
 		Status:    "idle",
-		ServerURL: serverURL,
+		ServerURL: srv.URL,
 	}
 
 	if msgErr == nil && len(messages) > 0 {
@@ -287,7 +291,11 @@ func (m *Manager) GetSessionDetails(ctx context.Context, serverURL, sessionID st
 
 // SendPrompt sends a text prompt to a session.
 func (m *Manager) SendPrompt(ctx context.Context, serverURL, sessionID, text string) error {
-	client := NewClient(serverURL)
+	srv, ok := m.discovery.Lookup(serverURL)
+	if !ok {
+		return ErrUnknownServer
+	}
+	client := NewClient(srv.URL)
 
 	req := PromptRequest{
 		Parts: []PromptPart{
@@ -301,7 +309,11 @@ func (m *Manager) SendPrompt(ctx context.Context, serverURL, sessionID, text str
 
 // AbortSession aborts a running session.
 func (m *Manager) AbortSession(ctx context.Context, serverURL, sessionID string) error {
-	client := NewClient(serverURL)
+	srv, ok := m.discovery.Lookup(serverURL)
+	if !ok {
+		return ErrUnknownServer
+	}
+	client := NewClient(srv.URL)
 	return client.AbortSession(ctx, sessionID)
 }
 

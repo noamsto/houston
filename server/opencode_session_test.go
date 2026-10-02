@@ -1,0 +1,271 @@
+package server
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+
+	"github.com/noamsto/houston/opencode"
+)
+
+func fakeOpenCode(t *testing.T, hits *atomic.Int32) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/global/health", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"healthy":true,"version":"t"}`))
+	})
+	mux.HandleFunc("/project/current", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{}`))
+	})
+	mux.HandleFunc("/session/status", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{}`))
+	})
+	mux.HandleFunc("/session/s1", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"id":"s1","title":"t"}`))
+	})
+	mux.HandleFunc("/session/s1/message", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[]`))
+	})
+	mux.HandleFunc("/session/s1/todo", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[]`))
+	})
+	mux.HandleFunc("/session/s1/abort", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`true`))
+	})
+	mux.HandleFunc("/session/s1/prompt_async", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if hits != nil {
+			hits.Add(1)
+		}
+		mux.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestOpenCodeSessionOnlyReachesDiscoveredServers(t *testing.T) {
+	var decoyHits atomic.Int32
+	decoy := fakeOpenCode(t, &decoyHits)
+	fake := fakeOpenCode(t, nil)
+
+	disc := opencode.NewDiscovery(opencode.WithStaticURL(fake.URL))
+	disc.Scan(context.Background())
+	if len(disc.GetServers()) != 1 {
+		t.Fatalf("fake server not discovered")
+	}
+
+	allowed := []string{replyOrigin}
+	s := &Server{
+		auth:        &authGate{token: replyToken, enabled: true, allowedOrigins: allowed},
+		hosts:       deriveHosts(nil, allowed),
+		ocDiscovery: disc,
+		ocManager:   opencode.NewManager(disc),
+	}
+
+	fakeURL, err := url.Parse(fake.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoyURL, err := url.Parse(decoy.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fakePort := fakeURL.Port()
+	otherPort := "1"
+	if fakePort == "1" {
+		otherPort = "2"
+	}
+
+	do := func(method, server, action string) int {
+		p := "/api/opencode/session/" + url.PathEscape(server) + "/s1"
+		var body string
+		if action != "" {
+			p += "/" + action
+		}
+		if action == "send" {
+			body = "input=hi"
+		}
+		req := replyRequest(method, p, body)
+		if body != "" {
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		}
+		return doReply(t, s, req).Code
+	}
+
+	accepted := []struct{ name, method, action string }{
+		{"details", http.MethodGet, ""},
+		{"abort", http.MethodPost, "abort"},
+		{"send", http.MethodPost, "send"},
+	}
+	for _, tc := range accepted {
+		t.Run("discovered "+tc.name, func(t *testing.T) {
+			if code := do(tc.method, fake.URL, tc.action); code != http.StatusOK {
+				t.Fatalf("status %d, want 200", code)
+			}
+		})
+	}
+
+	refused := map[string]string{
+		"decoy":              decoy.URL,
+		"different port":     "http://" + fakeURL.Hostname() + ":" + otherPort,
+		"userinfo":           "http://user@" + fakeURL.Host,
+		"userinfo swap":      "http://" + fakeURL.Host + "@" + decoyURL.Host,
+		"path":               fake.URL + "/%2e%2e/x",
+		"file":               "file:///etc/passwd",
+		"gopher":             "gopher://" + decoyURL.Host,
+		"decoy with path":    decoy.URL + "/x",
+		"decoy fragment @":   "http://" + decoyURL.Host + "#@" + fakeURL.Host,
+		"discovered no host": strings.Replace(fake.URL, fakeURL.Host, "", 1),
+	}
+	for name, server := range refused {
+		for _, tc := range accepted {
+			t.Run("refused "+name+" "+tc.name, func(t *testing.T) {
+				if code := do(tc.method, server, tc.action); code != http.StatusNotFound {
+					t.Fatalf("status %d, want 404", code)
+				}
+			})
+		}
+	}
+	if n := decoyHits.Load(); n != 0 {
+		t.Fatalf("decoy received %d requests, want 0", n)
+	}
+}
+
+func TestOpenCodeSessionIDStaysOneSegment(t *testing.T) {
+	var mu sync.Mutex
+	var seen []string
+	inner := fakeOpenCode(t, nil)
+	rec := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.URL.EscapedPath()+"?"+r.URL.RawQuery)
+		mu.Unlock()
+		inner.Config.Handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(rec.Close)
+
+	disc := opencode.NewDiscovery(opencode.WithStaticURL(rec.URL))
+	disc.Scan(context.Background())
+	if len(disc.GetServers()) != 1 {
+		t.Fatalf("fake server not discovered")
+	}
+	allowed := []string{replyOrigin}
+	s := &Server{
+		auth:        &authGate{token: replyToken, enabled: true, allowedOrigins: allowed},
+		hosts:       deriveHosts(nil, allowed),
+		ocDiscovery: disc,
+		ocManager:   opencode.NewManager(disc),
+	}
+
+	id := "../../config?x=#"
+	escID := url.PathEscape(id)
+	for _, action := range []string{"", "abort", "send"} {
+		p := "/api/opencode/session/" + url.PathEscape(rec.URL) + "/" + escID
+		var body string
+		if action != "" {
+			p += "/" + action
+		}
+		if action == "send" {
+			body = "input=hi"
+		}
+		req := replyRequest(http.MethodPost, p, body)
+		if action == "" {
+			req = replyRequest(http.MethodGet, p, "")
+		}
+		if body != "" {
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		}
+		doReply(t, s, req)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	prefix := "/session/" + escID
+	sawID := false
+	for _, got := range seen {
+		path, query, _ := strings.Cut(got, "?")
+		if query != "" && query != "limit=10" {
+			t.Errorf("request %q carries a query", got)
+		}
+		switch {
+		case path == "/session/status", path == "/project/current", path == "/global/health":
+		case path == prefix, strings.HasPrefix(path, prefix+"/"):
+			sawID = true
+		default:
+			t.Errorf("request %q escaped the session segment", got)
+		}
+	}
+	if !sawID {
+		t.Fatalf("no request carried the escaped session id; saw %q", seen)
+	}
+}
+
+func TestOpenCodeSessionRefusesDotIDs(t *testing.T) {
+	var mu sync.Mutex
+	var seen []string
+	inner := fakeOpenCode(t, nil)
+	rec := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.URL.EscapedPath())
+		mu.Unlock()
+		inner.Config.Handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(rec.Close)
+
+	disc := opencode.NewDiscovery(opencode.WithStaticURL(rec.URL))
+	disc.Scan(context.Background())
+	allowed := []string{replyOrigin}
+	s := &Server{
+		auth:        &authGate{token: replyToken, enabled: true, allowedOrigins: allowed},
+		hosts:       deriveHosts(nil, allowed),
+		ocDiscovery: disc,
+		ocManager:   opencode.NewManager(disc),
+	}
+	mu.Lock()
+	baseline := len(seen)
+	mu.Unlock()
+
+	do := func(id, action string) *httptest.ResponseRecorder {
+		p := "/api/opencode/session/" + url.PathEscape(rec.URL) + "/" + id
+		method, body := http.MethodGet, ""
+		if action != "" {
+			p += "/" + action
+			method = http.MethodPost
+		}
+		if action == "send" {
+			body = "input=hi"
+		}
+		req := replyRequest(method, p, body)
+		if body != "" {
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		}
+		return doReply(t, s, req)
+	}
+
+	for _, id := range []string{"%2E", "%2E%2E", ".%2e", "%2e", "%2e%2E"} {
+		for _, action := range []string{"", "abort", "send"} {
+			if code := do(id, action).Code; code != http.StatusBadRequest {
+				t.Errorf("id %q action %q: status %d, want 400", id, action, code)
+			}
+		}
+	}
+	for _, id := range []string{".", ".."} {
+		for _, action := range []string{"", "abort", "send"} {
+			if code := do(id, action).Code; code == http.StatusOK {
+				t.Errorf("literal id %q action %q: status 200, want refusal", id, action)
+			}
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != baseline {
+		t.Fatalf("upstream received requests for dot ids: %q", seen[baseline:])
+	}
+}
