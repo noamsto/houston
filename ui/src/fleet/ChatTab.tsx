@@ -209,7 +209,8 @@ function Composer({ run, onSend }: { run: Run; onSend: (text: string) => Promise
   // starts, and a success never clears another action's error.
   const sendingRef = useRef(false)
 
-  const attempt = async (send: () => Promise<string | null>, isSend: boolean) => {
+  const attempt = async (send: () => Promise<string | null>, sent: string | null) => {
+    const isSend = sent !== null
     if (isSend) {
       if (sendingRef.current) return
       sendingRef.current = true
@@ -225,22 +226,33 @@ function Composer({ run, onSend }: { run: Run; onSend: (text: string) => Promise
       setError(err)
       return
     }
-    if (isSend) setText('')
+    if (isSend) setText((cur) => (cur.trim() === sent ? '' : cur))
   }
 
   const handleSend = () => {
     const trimmed = text.trim()
     if (!trimmed) return
-    void attempt(() => onSend(trimmed), true)
+    void attempt(() => onSend(trimmed), trimmed)
   }
 
-  const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     e.target.value = ''
-    if (!file || sendingRef.current) return
+    if (!file) return
+    if (sendingRef.current) {
+      setError('busy — pick the file again')
+      return
+    }
     const sent = text.trim()
-    const data = await readBase64(file)
-    void attempt(() => sendImage(address, sent, { name: file.name, type: file.type, data }), true)
+    void attempt(async () => {
+      let data: string
+      try {
+        data = await readBase64(file)
+      } catch {
+        return 'could not read file'
+      }
+      return sendImage(address, sent, { name: file.name, type: file.type, data })
+    }, sent)
   }
 
   return (
@@ -248,7 +260,7 @@ function Composer({ run, onSend }: { run: Run; onSend: (text: string) => Promise
       {disabled && <div className="chat-composer-reason">No live terminal for this run</div>}
       {error && <div className="chat-composer-error" role="alert">{error}</div>}
       <div className="chat-composer-row">
-        <button type="button" className="chat-composer-esc" disabled={disabled} onClick={() => void attempt(() => sendKey(address, 'Escape'), false)}>
+        <button type="button" className="chat-composer-esc" disabled={disabled} onClick={() => void attempt(() => sendKey(address, 'Escape'), null)}>
           Esc
         </button>
         <textarea
@@ -265,7 +277,7 @@ function Composer({ run, onSend }: { run: Run; onSend: (text: string) => Promise
           placeholder="Message…"
           rows={1}
         />
-        <input ref={fileInputRef} type="file" style={{ display: 'none' }} onChange={(e) => void handleFile(e)} />
+        <input ref={fileInputRef} type="file" style={{ display: 'none' }} onChange={handleFile} />
         <button type="button" className="chat-composer-attach" aria-label="Attach image" disabled={disabled || sending} onClick={() => fileInputRef.current?.click()}>
           <span aria-hidden="true">⊕</span>
         </button>

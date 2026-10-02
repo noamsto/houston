@@ -331,8 +331,45 @@ describe('ChatTab', () => {
     })
 
     it('does not block Esc while a Send is in flight', async () => {
-      await startSendThenEsc()
+      const d = await startSendThenEsc()
       expect((screen.getByRole('button', { name: 'Esc' }) as HTMLButtonElement).disabled).toBe(false)
+      await act(async () => d.pending.forEach((p) => p.resolve(okResponse())))
+    })
+
+    it('two synchronous Sends post only once', async () => {
+      const { fetchMock } = await renderReady({}, { page: page('e1', []) })
+      const d = deferredInput()
+      fetchMock.mockImplementation(d.impl)
+      fireEvent.change(screen.getByPlaceholderText('Message…'), { target: { value: 'hello' } })
+      fireEvent.click(sendBtn())
+      fireEvent.click(sendBtn())
+      await waitFor(() => expect(d.pending).toHaveLength(1))
+      await act(async () => d.pending[0].resolve(okResponse()))
+      expect(d.pending).toHaveLength(1)
+    })
+
+    it('an image attach holds the gate while the file is read, so a Send cannot overlap or drop it', async () => {
+      const { fetchMock } = await renderReady({}, { page: page('e1', []) })
+      const d = deferredInput()
+      fetchMock.mockImplementation(d.impl)
+      let finishRead: () => void = () => {}
+      const readAsDataURL = vi.spyOn(FileReader.prototype, 'readAsDataURL').mockImplementation(function (this: FileReader) {
+        finishRead = () => {
+          Object.defineProperty(this, 'result', { value: 'data:image/png;base64,AAAA' })
+          this.onload?.(new ProgressEvent('load') as ProgressEvent<FileReader>)
+        }
+      })
+      fireEvent.change(screen.getByPlaceholderText('Message…'), { target: { value: 'hello' } })
+      const input = document.querySelector('input[type=file]') as HTMLInputElement
+      fireEvent.change(input, { target: { files: [new File(['x'], 'a.png', { type: 'image/png' })] } })
+      await waitFor(() => expect(sendBtn().disabled).toBe(true))
+      fireEvent.click(sendBtn())
+      expect(d.pending).toHaveLength(0)
+      await act(async () => finishRead())
+      await waitFor(() => expect(d.pending).toHaveLength(1))
+      expect(d.pending[0].body.type).toBe('image')
+      await act(async () => d.pending[0].resolve(okResponse()))
+      readAsDataURL.mockRestore()
     })
 
     it('a later successful settle does not clear an earlier-settling failure', async () => {
