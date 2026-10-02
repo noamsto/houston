@@ -53,8 +53,7 @@ export function RunStatusStrip({ run, now }: { run: Run; now: number }) {
   const needsClass = needsYou(run, now) ? ' needs-you' : blocked && !isFresh(run, now) ? ' needs-you muted' : ''
   const { tool, hint, turn } = run.activity
   const crew = run.crew
-  const crewParts = crew ? [crew.tier, crew.model].filter(Boolean) : []
-  const crewInfo = crewParts.length ? [crew?.tier, run.agent, crew?.model].filter(Boolean).join(' · ') : ''
+  const crewInfo = crew && (crew.tier || crew.model) ? [crew.tier, run.agent, crew.model].filter(Boolean).join(' · ') : ''
   const detail = crew?.detail && crew.detail !== run.question?.text ? crew.detail : null
 
   return (
