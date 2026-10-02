@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it } from 'vitest'
-import { cleanup, render } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, fireEvent, render } from '@testing-library/react'
 import { ChatMarkdown } from './chatMarkdown'
 
 afterEach(() => {
@@ -184,5 +184,89 @@ describe('ChatMarkdown', () => {
     const { container } = render(<ChatMarkdown text={'hi <img src=x onerror="alert(1)"> there'} />)
     expect(container.querySelector('img')).toBeNull()
     expect(container.textContent).toBe('hi <img src=x onerror="alert(1)"> there')
+  })
+})
+
+describe('ChatMarkdown footnotes', () => {
+  const originalScroll = Element.prototype.scrollIntoView
+  let scroll: ReturnType<typeof vi.fn<() => void>>
+  const md = 'see[^1]\n\n[^1]: note'
+
+  beforeEach(() => {
+    scroll = vi.fn<() => void>()
+    Element.prototype.scrollIntoView = scroll
+    window.location.hash = '#/fleet/x'
+  })
+
+  afterEach(() => {
+    Element.prototype.scrollIntoView = originalScroll
+    window.location.hash = ''
+  })
+
+  it('renders the reference and back-reference as same-document anchors', () => {
+    const { container } = render(<ChatMarkdown text={md} />)
+    const ref = container.querySelector('a[data-footnote-ref]')
+    expect(ref?.getAttribute('href')).toBe('#user-content-fn-1')
+    expect(ref?.getAttribute('id')).toBe('user-content-fnref-1')
+    expect(ref?.hasAttribute('target')).toBe(false)
+    expect(ref?.hasAttribute('rel')).toBe(false)
+    const back = container.querySelector('a[data-footnote-backref]')
+    expect(back?.getAttribute('href')).toBe('#user-content-fnref-1')
+    expect(back?.hasAttribute('target')).toBe(false)
+    expect(back?.hasAttribute('rel')).toBe(false)
+  })
+
+  it('scrolls to the footnote on reference click without touching the hash', () => {
+    const { container } = render(<ChatMarkdown text={md} />)
+    const ref = container.querySelector('a[data-footnote-ref]')!
+    expect(fireEvent.click(ref)).toBe(false)
+    expect(scroll).toHaveBeenCalledTimes(1)
+    expect(scroll.mock.contexts[0]).toBe(container.querySelector('li#user-content-fn-1'))
+    expect(window.location.hash).toBe('#/fleet/x')
+  })
+
+  it('scrolls back to the reference on back-reference click', () => {
+    const { container } = render(<ChatMarkdown text={md} />)
+    expect(fireEvent.click(container.querySelector('a[data-footnote-backref]')!)).toBe(false)
+    expect(scroll).toHaveBeenCalledTimes(1)
+    expect(scroll.mock.contexts[0]).toBe(container.querySelector('a#user-content-fnref-1'))
+    expect(window.location.hash).toBe('#/fleet/x')
+  })
+
+  it('gives a repeated reference its own id and back-reference', () => {
+    const { container } = render(<ChatMarkdown text={'see[^1] again[^1]\n\n[^1]: note'} />)
+    const second = container.querySelector('a#user-content-fnref-1-2')
+    expect(second).not.toBeNull()
+    expect(container.querySelector('a[href="#user-content-fnref-1-2"]')).not.toBeNull()
+  })
+
+  it('resolves the target inside the clicked message, not the first match', () => {
+    const { container } = render(
+      <>
+        <ChatMarkdown text={md} />
+        <ChatMarkdown text={md} />
+      </>,
+    )
+    const roots = container.querySelectorAll('.chat-md')
+    fireEvent.click(roots[1].querySelector('a[data-footnote-ref]')!)
+    expect(scroll).toHaveBeenCalledTimes(1)
+    expect(scroll.mock.contexts[0]).toBe(roots[1].querySelector('li#user-content-fn-1'))
+  })
+
+  it.each([
+    '[a](#anything)',
+    '[b](#user-content-)',
+    '[c](<#user-content-fn.1>)',
+    '[d](#user-content-fn-1/x)',
+    '[e](javascript:alert(1))',
+    '[f](data:text/html,x)',
+    '[g](//evil.com)',
+    '[h](&#106;avascript:alert(1))',
+    '[i](%23user-content-fn-1)',
+    '[j](#%75ser-content-fn-1)',
+  ])('renders %s as plain text', (text) => {
+    const { container } = render(<ChatMarkdown text={text} />)
+    expect(container.querySelector('a')).toBeNull()
+    expect(container.textContent).toBe(text[1])
   })
 })
