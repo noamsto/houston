@@ -197,8 +197,8 @@ func newLaunchFixture(t *testing.T) launchFixture {
 	ft := &scriptedTmux{reply: map[string]func([]string) (string, error){
 		"has-session":      func([]string) (string, error) { return "", errors.New("can't find session: proj") },
 		"show-environment": func([]string) (string, error) { return "PATH=" + testServerPath, nil },
-		"new-window":       func([]string) (string, error) { return "proj\t@3\t%7", nil },
-		"new-session":      func([]string) (string, error) { return "proj\t@3\t%7", nil },
+		"new-window":       func([]string) (string, error) { return "proj:@3:%7", nil },
+		"new-session":      func([]string) (string, error) { return "proj:@3:%7", nil },
 		"display-message":  func([]string) (string, error) { return "0 ", nil },
 		"capture-pane":     func([]string) (string, error) { return "dispatcher: engine claude is not enabled", nil },
 	}}
@@ -229,7 +229,7 @@ func (f launchFixture) registerOnStart(t *testing.T, cmd string) {
 		if err := os.WriteFile(filepath.Join(f.crewDir, "pid"), []byte("123"), 0o644); err != nil {
 			t.Error(err)
 		}
-		return "proj\t@3\t%7", nil
+		return "proj:@3:%7", nil
 	})
 }
 

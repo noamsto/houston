@@ -35,7 +35,10 @@ const (
 
 	// launchFormat is what new-window/new-session print with -P, so the
 	// handler learns where the dispatcher landed without a second lookup.
-	launchFormat = "#{session_name}\t#{window_id}\t#{pane_id}"
+	// ':' not a tab: outside a UTF-8 locale tmux rewrites control
+	// characters in -F output to '_'. tmux strips ':' and '.' from session
+	// names, so ':' cannot appear in a field and is safe to split on.
+	launchFormat = "#{session_name}:#{window_id}:#{pane_id}"
 )
 
 // launchStrippedEnv are keys the wrapper drops before exec: the minted crew
@@ -473,7 +476,7 @@ func (s *Server) handleDispatcherLaunch(w http.ResponseWriter, r *http.Request) 
 		reply(http.StatusBadGateway, dispatcherResponse{Error: "tmux could not start the dispatcher window: " + err.Error()})
 		return
 	}
-	parts := strings.Split(out, "\t")
+	parts := strings.Split(out, ":")
 	if len(parts) != 3 {
 		reply(http.StatusBadGateway, dispatcherResponse{Error: "tmux started a window but printed no pane for it", Output: out, Crew: id})
 		return
