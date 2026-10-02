@@ -53,6 +53,7 @@ export function DispatchView({ runs }: { runs: Run[] }) {
   const [outcomeWasNewCrew, setOutcomeWasNewCrew] = useState(false)
   const resultRef = useRef<HTMLDivElement>(null)
   const refreshSeq = useRef(0)
+  const pendingAdded = useRef<string | null>(null)
   const repoRef = useRef(repo)
   const taskRef = useRef<HTMLTextAreaElement>(null)
   const now = useNow()
@@ -147,8 +148,11 @@ export function DispatchView({ runs }: { runs: Run[] }) {
 
   // Refetches without touching the draft; the picker's edits and a launched
   // dispatcher's crew are what the form must pick up. Only the latest refresh
-  // may apply, and it reads the repo as of its response, not its request.
+  // may apply, and it reads the repo as of its response, not its request. An
+  // added repo outlives the refresh that carried it: an overtaking refresh
+  // applies it, and a failed one leaves it for the next.
   function refreshOptions(added?: string): void {
+    if (added) pendingAdded.current = added
     const seq = ++refreshSeq.current
     fetchDispatchOptions()
       .then((o) => {
@@ -157,7 +161,9 @@ export function DispatchView({ runs }: { runs: Run[] }) {
         setRefreshError(null)
         const current = repoRef.current
         const keep = o.repos.some((r) => r.path === current)
-        const next = added && o.repos.some((r) => r.path === added) ? added : keep ? current : (o.repos[0]?.path ?? '')
+        const wanted = pendingAdded.current
+        pendingAdded.current = null
+        const next = wanted && o.repos.some((r) => r.path === wanted) ? wanted : keep ? current : (o.repos[0]?.path ?? '')
         if (next !== current) chooseRepoIn(o, next)
       })
       .catch((e: unknown) => {

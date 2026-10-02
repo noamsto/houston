@@ -531,6 +531,31 @@ describe('DispatchView stale option refreshes', () => {
     expect(value('Repo')).toBe('/repo/c')
     expect(within(field('Repo')).getAllByRole('option')).toHaveLength(3)
   })
+
+  it('still selects an added repo when a newer refresh without it overtakes', async () => {
+    await renderLoaded()
+    const resolvers: ((o: DispatchOptions) => void)[] = []
+    fetchDispatchOptionsMock.mockImplementation(() => new Promise((r) => { resolvers.push(r) }))
+    addRepoMock.mockResolvedValue({ ok: true, path: '/repo/c' })
+    submitDispatcherMock.mockResolvedValue({ kind: 'started', crew: '1-2', session: 'proj', window: '@1', pane: '%7', runId: 'pane-7' })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Manage repos' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Add repo-c' }))
+    await waitFor(() => expect(resolvers).toHaveLength(1))
+
+    fireEvent.click(screen.getByRole('button', { name: 'New dispatcher' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Start dispatcher' }))
+    await waitFor(() => expect(resolvers).toHaveLength(2))
+
+    const withC = {
+      ...structuredClone(optionsFixture),
+      repos: [...optionsFixture.repos, { path: '/repo/c', name: 'repo-c', crews: [] }],
+    }
+    await act(async () => { resolvers[1](withC) })
+    await act(async () => { resolvers[0](withC) })
+
+    await waitFor(() => expect(value('Repo')).toBe('/repo/c'))
+  })
 })
 
 describe('DispatchView repo picker', () => {
