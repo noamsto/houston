@@ -513,6 +513,55 @@ func TestChatEmptySessionResetsOnceOnItsFirstLine(t *testing.T) {
 	}
 }
 
+// zeroUpdateReader yields no updates, letting a test isolate refreshChat's
+// head-change notify from the new-update path.
+type zeroUpdateReader struct{}
+
+func (zeroUpdateReader) Engine() string { return "zero" }
+
+func (zeroUpdateReader) Read(_ string, from chat.Cursor) ([]chat.Update, chat.Cursor, bool, error) {
+	return nil, from, false, nil
+}
+
+func (zeroUpdateReader) Tool(string, string) (*chat.Update, error) {
+	return nil, chat.ErrToolNotFound
+}
+
+// The first line makes the transcript's identity known, changing the epoch
+// even though the reader turns it into no update: refreshChat must still
+// notify subscribers, or they stay stale until the SSE handler's 2s check.
+func TestChatHeadChangeNotifiesWithoutUpdates(t *testing.T) {
+	f := newChatFixture(t, "chat-h1", "", "")
+	waitUntil(t, "chat state", func() bool { _, err := f.h.ChatEpoch("chat-h1"); return err == nil })
+	empty := f.epoch()
+
+	ch, unsub, err := f.h.ChatSubscribe("chat-h1")
+	if err != nil {
+		t.Fatalf("ChatSubscribe: %v", err)
+	}
+	defer unsub()
+
+	// Swap in the no-update reader while the file is still empty, so every
+	// later refresh consumes the first line without producing an update.
+	f.h.mu.Lock()
+	f.h.sessions["chat-h1"].chat.reader = zeroUpdateReader{}
+	f.h.mu.Unlock()
+
+	if err := os.WriteFile(f.transcript, []byte(`{"type":"summary"}`+"\n"), 0o644); err != nil {
+		t.Fatalf("write first line: %v", err)
+	}
+	f.h.refreshChat("chat-h1")
+
+	if known := f.epoch(); known == empty {
+		t.Fatalf("epoch %s unchanged once the first line became known", known)
+	}
+	select {
+	case <-ch:
+	case <-time.After(5 * time.Second):
+		t.Error("subscriber not notified of the head change with no updates")
+	}
+}
+
 func TestChatNoChat(t *testing.T) {
 	f := newChatFixture(t, "chat-pi", "pi", humans(1, 2))
 	for _, sid := range []string{"chat-pi", "no-such-session"} {
