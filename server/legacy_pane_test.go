@@ -91,6 +91,37 @@ func TestLegacyPaneActsOnResolvedPane(t *testing.T) {
 		}
 	})
 
+	t.Run("send-with-images", func(t *testing.T) {
+		panes := &fakeRunPanes{resolveServer: "1111"}
+		s := newRunTerminalServer(t, panes)
+
+		body := `{"text":"hi","images":[{"name":"a.png","type":"image/png","data":"aGk="}]}`
+		rec := doReply(t, s, replyRequest("POST", "/api/pane/other:3.1/send-with-images"+query, body))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status %d, want 200 (%q)", rec.Code, rec.Body.String())
+		}
+		_, sent := panes.calls()
+		if len(sent) != 1 || sent[0].pane != (tmux.Pane{ID: "%42", Session: "s", Server: "1111"}) || !sent[0].enter {
+			t.Fatalf("sent %+v, want one send with Enter to the resolved pane", sent)
+		}
+		if !strings.HasSuffix(sent[0].keys, " hi") {
+			t.Errorf("keys %q, want image path followed by the text", sent[0].keys)
+		}
+	})
+
+	t.Run("unknown resolved server is trusted", func(t *testing.T) {
+		panes := &fakeRunPanes{resolveServer: ""}
+		s := newRunTerminalServer(t, panes)
+
+		rec := doReply(t, s, legacySendRequest("/api/pane/other:3.1/send"+query))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status %d, want 200 (%q)", rec.Code, rec.Body.String())
+		}
+		if _, sent := panes.calls(); len(sent) != 1 {
+			t.Fatalf("sent %+v, want one send", sent)
+		}
+	})
+
 	t.Run("ws", func(t *testing.T) {
 		panes := &fakeRunPanes{resolveServer: "1111"}
 		s := newRunTerminalServer(t, panes)

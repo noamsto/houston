@@ -16,7 +16,7 @@ const paneQuery = (a: PaneAddress) =>
   `?pane_id=${encodeURIComponent(a.paneId ?? '')}&server=${encodeURIComponent(a.server ?? '')}`
 
 export function terminalKey(a: TerminalAddress): string {
-  return a.kind === 'run' ? `run:${a.id}` : `pane:${a.target}:${a.paneId ?? ''}`
+  return a.kind === 'run' ? `run:${a.id}` : `pane:${a.target}:${a.paneId ?? ''}:${a.server ?? ''}`
 }
 
 export function terminalSocketPath(a: TerminalAddress): string {

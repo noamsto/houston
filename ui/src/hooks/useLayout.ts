@@ -149,8 +149,11 @@ function loadState(): LayoutState {
     const saved = localStorage.getItem(STORAGE_KEY)
     if (saved) {
       const state = JSON.parse(saved) as LayoutState
-      syncNextId(state.panes)
-      return state
+      // Panes persisted before the legacy routes required identity would 400 forever.
+      if (state.panes.every((p) => p.paneId && p.server)) {
+        syncNextId(state.panes)
+        return state
+      }
     }
   } catch {
     // ignore

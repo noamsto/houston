@@ -24,11 +24,15 @@ describe('terminalKey', () => {
   })
 
   it('formats a pane address', () => {
-    expect(terminalKey(paneAddr)).toBe('pane:sess:0.0:%42')
+    expect(terminalKey(paneAddr)).toBe('pane:sess:0.0:%42:1111')
   })
 
   it('differs for the same target with a different pane id', () => {
     expect(terminalKey({ ...paneAddr, paneId: '%43' })).not.toBe(terminalKey(paneAddr))
+  })
+
+  it('differs for the same pane id on a different server', () => {
+    expect(terminalKey({ ...paneAddr, server: '2222' })).not.toBe(terminalKey(paneAddr))
   })
 })
 
