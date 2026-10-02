@@ -42,16 +42,25 @@ import "github.com/noamsto/houston/tmux"
 //     An unknown start (procStart returns 0) or an unknown session (a bare
 //     worker id) fails closed.
 //
-// Narrowed residual: `/clear` or `/resume` inside the SAME finished engine
-// process starts a new Claude session that the process identity can't see —
-// it still joins. It stays joined only while idle, though: its first prompt
-// flips the pane to processing and the state-word gate above rejects it.
+// Engine-session identity: when the bus record carries an engine_session and
+// the pane's current hook session is known, they must be equal for a terminal
+// join. A `/clear` or `/resume` inside the SAME finished engine process starts
+// a new session id that the process identity can't see, so the hook session no
+// longer matches and the stale record does not join; either side unknown keeps
+// the process rule above exactly. Residual: the bus row keeps the pre-clear
+// engine_session until a resume row replaces it, so a worker that cleared
+// mid-run and then finished no longer joins its own pane (it splits into a bus
+// fallback card plus the hooks card) instead of showing one card.
 //
 // A non-positive pane epoch (0 for unknown/missing, or a malformed negative
 // value) on a terminal record fails closed — don't join, since identity can't
 // be confirmed. A zero busState (dispatch-only branch with no status yet) is
 // not terminal and does not gate.
-func resolvePane(bus, branch string, busState State, busUpdatedAt, busSession int64, wins []tmux.WindowOptions, panes []tmux.PaneOptions, busOf func(gitRoot string) string, procStart procStartFunc) (paneID string, candidates int) {
+//
+// busEngineSession is the bus record's engine_session (Run.CrewSession) and
+// paneSessions the pane id → current hook session id map; both are research
+// inputs for the terminal join below.
+func resolvePane(bus, branch string, busState State, busUpdatedAt, busSession int64, busEngineSession string, paneSessions map[string]string, wins []tmux.WindowOptions, panes []tmux.PaneOptions, busOf func(gitRoot string) string, procStart procStartFunc) (paneID string, candidates int) {
 	terminal := busState == StateDone || busState == StateFailed
 	byTarget := windowsByTarget(wins)
 	for _, p := range panes {
@@ -75,6 +84,16 @@ func resolvePane(bus, branch string, busState State, busUpdatedAt, busSession in
 			epoch := paneActivityEpoch(p)
 			if epoch <= 0 || epoch > busUpdatedAt+terminalJoinGrace || !finishedPaneState(p) {
 				continue
+			}
+			// When both sides name a session, they must be the same one: a
+			// /clear or /resume starts a new session id inside the same engine
+			// process, so the process identity above cannot see it. Either side
+			// unknown (an older dispatcher row, codex/cursor null, no hook state
+			// for the pane) falls back to that process rule, unchanged.
+			if busEngineSession != "" {
+				if sid := paneSessions[p.PaneID]; sid != "" && sid != busEngineSession {
+					continue
+				}
 			}
 			if !sameSession(procStart(p.PanePID), busSession, busUpdatedAt) {
 				continue

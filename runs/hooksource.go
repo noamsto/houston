@@ -277,6 +277,37 @@ type paneSet struct {
 	status map[string]string
 }
 
+// hookSessions is the hooks layer's exposure the crew join reuses: the live
+// sessions, including each one's current pane. *hub.Hub satisfies it.
+type hookSessions interface {
+	Snapshot() []hub.SessionView
+}
+
+// paneHookSessions maps a pane id to the engine session id the hooks layer
+// currently vouches for on that pane. Only a session that can vouch for the
+// pane counts — not foreign (#120), not ended (#120), and not a role-grid pane
+// (the hooks, tmux and crew layers all skip those, #99/#111). Newest UpdatedAt
+// wins, SessionID breaking ties exactly as current() orders sessions, so a
+// pane carrying two sessions cannot flap the join nondeterministically.
+func paneHookSessions(snap []hub.SessionView, ps paneSet) map[string]string {
+	out := map[string]string{}
+	kept := map[string]hub.SessionView{}
+	for _, v := range snap {
+		if v.TmuxPane == "" || v.SessionID == "" {
+			continue
+		}
+		if ps.roles[v.TmuxPane] || paneForeign(v, ps) || v.State == hook.StateEnded {
+			continue
+		}
+		if w, ok := kept[v.TmuxPane]; ok && !newerSession(v, w) {
+			continue
+		}
+		kept[v.TmuxPane] = v
+		out[v.TmuxPane] = v.SessionID
+	}
+	return out
+}
+
 // listPanes lists the live panes along with the identity of the server that
 // produced this listing. The identity comes off the same list-panes exec as
 // the pane ids themselves, so the two can never disagree about which server
@@ -288,6 +319,13 @@ func listPanes(l paneLister) (paneSet, bool) {
 		slog.Debug("hooks: tmux pane list", "error", err)
 		return paneSet{}, false
 	}
+	return paneSetFrom(panes, at), true
+}
+
+// paneSetFrom builds the pane identity/role/status view off one listing, the
+// same construction the hooks layer uses, so the crew join's pane→session map
+// trusts exactly the panes the hooks layer trusts.
+func paneSetFrom(panes []tmux.PaneOptions, at time.Time) paneSet {
 	live := make(map[string]bool, len(panes))
 	roles := make(map[string]bool)
 	status := make(map[string]string, len(panes))
@@ -312,7 +350,7 @@ func listPanes(l paneLister) (paneSet, bool) {
 			slog.Warn("hooks: pane listing carries no server identity, foreign-pane guard disabled")
 		}
 	}
-	return paneSet{live: live, at: at, server: server, serverStart: serverStart, roles: roles, status: status}, true
+	return paneSet{live: live, at: at, server: server, serverStart: serverStart, roles: roles, status: status}
 }
 
 // pollPanes publishes each successful listing until ctx ends. A failed one is
