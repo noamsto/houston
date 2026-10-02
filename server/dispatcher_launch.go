@@ -35,10 +35,9 @@ const (
 
 	// launchFormat is what new-window/new-session print with -P, so the
 	// handler learns where the dispatcher landed without a second lookup.
-	// ':' is the separator, not a tab: outside a UTF-8 locale tmux rewrites
-	// control characters in -F output to '_' (the Nix build sandbox has no
-	// locale at all). tmux strips ':' and '.' from session names, so ':'
-	// cannot appear in a field and is safe to split on in every locale.
+	// ':' not a tab: outside a UTF-8 locale tmux rewrites control
+	// characters in -F output to '_'. tmux strips ':' and '.' from session
+	// names, so ':' cannot appear in a field and is safe to split on.
 	launchFormat = "#{session_name}:#{window_id}:#{pane_id}"
 )
 
