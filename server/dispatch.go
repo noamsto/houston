@@ -236,45 +236,30 @@ func dispatchHasASCIIAlnum(s string) bool {
 
 // listDispatchRepos computes the known-repo set fresh per request: every
 // distinct tmux @git_root (the same snapshot /api/workspace rolls up) plus the
-// registry's paths, each resolved to its git common dir so a repo's worktrees
-// collapse to one entry. Paths are symlink-resolved so a tmux window opened
-// through a symlink dedupes against the registry's resolved entry.
+// registry's paths. A tmux root is resolved to its git common dir so a repo's
+// worktrees collapse to one entry, and symlink-resolved so a window opened
+// through a symlink dedupes against the registry's resolved entry. Registry
+// paths are already resolved main checkouts, so they skip the git lookup.
 func listDispatchRepos(lister workspaceLister, commonDir func(root string) (string, error), registryPaths []string) ([]dispatchRepo, error) {
 	wins, err := lister.ListWindowOptions()
 	if err != nil {
 		return nil, err
 	}
 
-	roots := make([]string, 0, len(wins)+len(registryPaths))
-	for _, win := range wins {
-		roots = append(roots, win.GitRoot)
-	}
-	roots = append(roots, registryPaths...)
-
 	seenRoots := make(map[string]bool)
 	byPath := make(map[string]string) // repo path -> common dir
-	for _, root := range roots {
+	for _, win := range wins {
+		root := win.GitRoot
 		if root == "" || seenRoots[root] {
 			continue
 		}
 		seenRoots[root] = true
 
-		dir, err := commonDir(root)
-		if err != nil {
-			continue
+		if repo, ok := dispatchRepoPath(commonDir, root); ok {
+			byPath[repo] = filepath.Join(repo, ".git")
 		}
-		if filepath.Base(dir) != ".git" {
-			// Bare repos and anything else without a normal "<repo>/.git"
-			// layout have no directory dispatch could run against.
-			continue
-		}
-		repo, err := filepath.EvalSymlinks(filepath.Dir(dir))
-		if err != nil {
-			continue
-		}
-		if _, ok := byPath[repo]; ok {
-			continue
-		}
+	}
+	for _, repo := range registryPaths {
 		byPath[repo] = filepath.Join(repo, ".git")
 	}
 
@@ -297,6 +282,25 @@ func listDispatchRepos(lister workspaceLister, commonDir func(root string) (stri
 		return repos[i].Path < repos[j].Path
 	})
 	return repos, nil
+}
+
+// dispatchRepoPath resolves a tmux @git_root to the symlink-resolved main
+// checkout that owns it.
+func dispatchRepoPath(commonDir func(root string) (string, error), root string) (string, bool) {
+	dir, err := commonDir(root)
+	if err != nil {
+		return "", false
+	}
+	if filepath.Base(dir) != ".git" {
+		// Bare repos and anything else without a normal "<repo>/.git"
+		// layout have no directory dispatch could run against.
+		return "", false
+	}
+	repo, err := filepath.EvalSymlinks(filepath.Dir(dir))
+	if err != nil {
+		return "", false
+	}
+	return repo, true
 }
 
 // listDispatchCrews lists <commonDir>/crew/crews/*, newest first by the
@@ -477,23 +481,13 @@ func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 	var minted string
 	if valid.Crew == dispatchNewCrew {
 		id := s.dispatchNewCrewID()
-		crewsDir := filepath.Join(repo.commonDir, "crew", "crews")
-		if err := os.MkdirAll(crewsDir, 0o755); err != nil { //nolint:gosec // crew dir under the repo's .git; 0755 matches the crew CLI
-			dlog.status = http.StatusInternalServerError
-			writeDispatchJSON(w, http.StatusInternalServerError, dispatchResponse{Error: "could not create crew: " + err.Error()})
+		dir, merr := mintDispatchCrew(repo.commonDir, id)
+		if merr != nil {
+			dlog.status = merr.code
+			writeDispatchJSON(w, merr.code, dispatchResponse{Error: merr.msg})
 			return
 		}
-		if err := os.Mkdir(filepath.Join(crewsDir, id), 0o755); err != nil { //nolint:gosec // crew dir under the repo's .git; 0755 matches the crew CLI
-			if errors.Is(err, fs.ErrExist) {
-				dlog.status = http.StatusConflict
-				writeDispatchJSON(w, http.StatusConflict, dispatchResponse{Error: "a new crew was just started in this second — retry"})
-				return
-			}
-			dlog.status = http.StatusInternalServerError
-			writeDispatchJSON(w, http.StatusInternalServerError, dispatchResponse{Error: "could not create crew: " + err.Error()})
-			return
-		}
-		minted = filepath.Join(crewsDir, id)
+		minted = dir
 		valid.Crew = id
 		dlog.crew = id
 	}
@@ -563,6 +557,23 @@ func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 			Crew:     valid.Crew,
 		})
 	}
+}
+
+// mintDispatchCrew creates <commonDir>/crew/crews/<id> exclusively, so two
+// requests minting in the same second can't share a crew.
+func mintDispatchCrew(commonDir, id string) (string, *dispatchError) {
+	crewsDir := filepath.Join(commonDir, "crew", "crews")
+	if err := os.MkdirAll(crewsDir, 0o755); err != nil { //nolint:gosec // crew dir under the repo's .git; 0755 matches the crew CLI
+		return "", &dispatchError{"crew", http.StatusInternalServerError, "could not create crew: " + err.Error()}
+	}
+	dir := filepath.Join(crewsDir, id)
+	if err := os.Mkdir(dir, 0o755); err != nil { //nolint:gosec // crew dir under the repo's .git; 0755 matches the crew CLI
+		if errors.Is(err, fs.ErrExist) {
+			return "", &dispatchError{"crew", http.StatusConflict, "a new crew was just started in this second — retry"}
+		}
+		return "", &dispatchError{"crew", http.StatusInternalServerError, "could not create crew: " + err.Error()}
+	}
+	return dir, nil
 }
 
 // dispatchWorkerID returns the first stdout line matching `worker_id: …`,

@@ -823,6 +823,34 @@ func TestListDispatchReposRegistryOnlyRepoCarriesCrewsAndHome(t *testing.T) {
 	}
 }
 
+// Registry paths are already resolved main checkouts: the options GET must
+// not spawn a git per registry entry.
+func TestListDispatchReposSkipsCommonDirForRegistry(t *testing.T) {
+	tmp := realTempDir(t)
+	tmuxRepo := fakeRepo(t, filepath.Join(tmp, "tmux-repo"))
+	regRepo := fakeRepo(t, filepath.Join(tmp, "reg-repo"))
+	lister := &fakeWorkspaceLister{wins: []tmux.WindowOptions{{GitRoot: tmuxRepo}}}
+	var looked []string
+	lookup := func(root string) (string, error) {
+		looked = append(looked, root)
+		return filepath.Join(root, ".git"), nil
+	}
+
+	repos, err := listDispatchRepos(lister, lookup, []string{regRepo, tmuxRepo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(looked, []string{tmuxRepo}) {
+		t.Errorf("commonDir called for %q, want only the tmux root", looked)
+	}
+	if len(repos) != 2 || !repos[0].Registered || !repos[1].Registered {
+		t.Fatalf("repos = %+v, want both registered", repos)
+	}
+	if repos[0].commonDir != filepath.Join(regRepo, ".git") {
+		t.Errorf("registry commonDir = %q", repos[0].commonDir)
+	}
+}
+
 func getDispatchOptions(t *testing.T, s *Server) dispatchOptions {
 	t.Helper()
 	req := httptest.NewRequest("GET", "http://"+dispatchHost+"/api/dispatch/options", nil)

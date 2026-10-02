@@ -138,6 +138,21 @@ type Server struct {
 	// "new" crew request. A field so a test can force a same-second collision.
 	dispatchNewCrewID func() string
 
+	// tmuxRun, dispatcherBin and launchCommonDir are the dispatcher
+	// launch's outside world, fields so tests run it without tmux or git.
+	tmuxRun         tmuxRunner
+	dispatcherBin   func() (string, error)
+	launchCommonDir func(root string) (string, error)
+	// houstonExe is what tmux runs as the wrapper; launchDir holds the
+	// launch files it reads.
+	houstonExe string
+	launchDir  string
+	// launchSlot caps in-flight dispatcher launches at one, separately from
+	// dispatchSlot so a 120 s worker dispatch doesn't block a launch.
+	launchSlot  chan struct{}
+	launchCheck time.Duration
+	launchPoll  time.Duration
+
 	auth  *authGate
 	hosts *hostGate
 
@@ -207,6 +222,12 @@ func New(cfg Config) (*Server, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	tmuxClient := tmux.NewClient()
 	repoReg := newRepoRegistry(filepath.Join(cfg.StatusDir, "repos.json"), resolveRepoRoots(cfg.RepoRoots), gitCommonDir)
+	launchDir := filepath.Join(cfg.StatusDir, dispatcherLaunchDirName)
+	sweepLaunchDir(launchDir)
+	houstonExe, err := os.Executable()
+	if err != nil {
+		slog.Warn("dispatcher launch unavailable: cannot resolve houston's executable", "error", err)
+	}
 	s := &Server{
 		cancel:         cancel,
 		pumpDone:       make(chan struct{}),
@@ -233,6 +254,14 @@ func New(cfg Config) (*Server, error) {
 		dispatchNewCrewID: func() string {
 			return strconv.FormatInt(time.Now().Unix(), 10) + "-" + strconv.Itoa(os.Getpid())
 		},
+		tmuxRun:         execTmux,
+		dispatcherBin:   lookupDispatcherLauncher,
+		launchCommonDir: gitCommonDir,
+		houstonExe:      houstonExe,
+		launchDir:       launchDir,
+		launchSlot:      make(chan struct{}, 1),
+		launchCheck:     3 * time.Second,
+		launchPoll:      200 * time.Millisecond,
 	}
 	s.chat = s.hub
 
@@ -384,6 +413,7 @@ func (s *Server) Handler() http.Handler {
 	apiMux.HandleFunc("GET /api/workspace", s.handleWorkspace)
 	apiMux.HandleFunc("POST /api/dispatch", s.handleDispatch)
 	apiMux.HandleFunc("GET /api/dispatch/options", s.handleDispatchOptions)
+	apiMux.HandleFunc("POST /api/dispatch/dispatcher", s.handleDispatcherLaunch)
 	apiMux.HandleFunc("GET /api/repos", s.handleReposList)
 	apiMux.HandleFunc("POST /api/repos", s.handleReposAdd)
 	apiMux.HandleFunc("DELETE /api/repos", s.handleReposRemove)

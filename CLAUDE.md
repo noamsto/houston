@@ -74,6 +74,10 @@ Houston scans ports 4096-4100 by default. Use `--no-opencode` to disable.
 │  GET  /api/font/smaller      - Decrease terminal font │
 │  GET  /api/dispatch/options  - Dispatch form choices  │
 │  POST /api/dispatch          - Start a worker         │
+│  POST /api/dispatch/dispatcher - New dispatcher       │
+│  GET  /api/repos             - Repo registry          │
+│  POST|DELETE /api/repos      - Add/forget a repo      │
+│  GET  /api/repos/candidates  - Repo picker            │
 │  GET  /*                     - Serve React SPA        │
 │                                                       │
 │  React SPA embedded via go:embed at compile time      │
@@ -457,15 +461,20 @@ conversation. Design and measured per-engine mapping:
 ## Dispatch
 
 The Dispatch tab starts a worker by running the host's `dispatch` CLI
-(`server/dispatch.go`, `server/dispatch_exec.go`). This is remote command
+(`server/dispatch.go`, `server/dispatch_exec.go`), or a new dispatcher through
+the launcher described under "New dispatcher". This is remote command
 execution from an HTTP request, so the handler is closed by construction:
 
-- `GET /api/dispatch/options` — the repos houston knows (each distinct tmux
-  `@git_root` resolved to its main repo, with that repo's crews from
-  `<git-common-dir>/crew/crews/` and, per repo, `home` — the subset of `crews`
-  whose dispatcher pane lives in that repo), tiers, efforts, plans, the
-  per-engine model allowlist (`engines`, displayed in `engine_order`), and
-  `tier_models` (the default model per engine+tier).
+- `GET /api/dispatch/options` — the repos houston knows (tmux ∪ the repo
+  registry, deduplicated by resolved path; a tmux `@git_root` is resolved to its
+  main repo), each with `registered` (a registry member), that repo's crews from
+  `<git-common-dir>/crew/crews/` and `home` — the subset of `crews` whose
+  dispatcher pane lives in that repo. Also `repo_roots` (the configured roots),
+  tiers, efforts, plans, the per-engine model allowlist (`engines`, displayed in
+  `engine_order`), `tier_models` (the default model per engine+tier), and
+  `dispatcher_engines`: `dispatch --engines` intersected with
+  `dispatchEngineOrder`, or `[]` plus `dispatcher_engines_error` when that
+  command fails, so the worker form still loads.
 - `POST /api/dispatch` — `{repo, title, spec?, tier, engine, model, effort,
   plan?, crew, issue?}`. Every argv value is an enum, an allowlisted model, or
   an anchored-regex match; `repo` must be in the options set and `crew` must be
@@ -508,6 +517,116 @@ execution from an HTTP request, so the handler is closed by construction:
 - `#/dispatch?repo=<path>&crew=<id|new>` prefills the form (repo and crew
   only) from a link; after applying it the UI replaces the hash with
   `#/dispatch`.
+
+### New dispatcher
+
+`POST /api/dispatch/dispatcher` (`server/dispatcher_launch.go`) opens a tmux
+window in a repo running the host's `dispatcher` launcher, seeded with the
+tasks as its first prompt. Body `{repo, tasks[], engine, model?, effort?}`;
+unknown fields 400, body over 256 KiB 413.
+
+- **Validation** (`validateDispatcher`, before anything runs): `repo` must be in
+  the options set (404); `engine` must be in `dispatch --engines` ∩
+  `dispatchEngineOrder`, run fresh with a 10 s timeout (502 on failure); `model`
+  is empty or in `dispatchModels[engine]`; `effort` is empty or in
+  `dispatchEfforts`. Tasks (≤ 20, ≤ 2000 runes each) are normalized first —
+  every run of `unicode.IsSpace` becomes one space, then trimmed — so a
+  multi-line row or paste is accepted; empty ones are dropped. A normalized task
+  may not contain a `Cc` rune or start with `-` (the launcher parses
+  `--agent`/`--model`/`--effort` anywhere in argv). `Cf` is allowed (ZWJ emoji,
+  the bidi marks a Hebrew keyboard inserts): task text reaches only `execve`
+  argv, never a shell or tmux. A leading `@` or `/` is the operator's own
+  prompt. The UI's `normalizeTask` mirrors this; one shared set of vectors pins
+  both.
+- **Prompt:** 0 tasks → none (the launcher's own name); 1 → the task verbatim;
+  N → `N tasks: (1) a (2) b` on one line (claude/pi use the prompt as the
+  session `--name`, so no newlines). ≤ 8 KiB.
+- **Crew:** houston mints `<unix>-<pid>` with an exclusive `os.Mkdir` under
+  `<git-common-dir>/crew/crews/` (same mint as the worker's `crew: "new"`; a
+  same-second clash is 409) and forces it through the wrapper's `CREW_ID`, so the
+  id is known before launch and `crews` lists it at once.
+- **No user text in tmux argv.** tmux 3.x splits a command at any argv element
+  ending in `;`, format-expands `-c` (any `#`, so `#()` runs a command), and runs
+  a single-argument command through `sh -c`. So the window's command is always
+  `houston launch-dispatcher <file>` (three elements, never `sh -c`); the task
+  text, launcher path and args ride in a launch file, and `tmuxSafeArg` refuses
+  (422) a repo path containing `#`, a control rune or a trailing `;` before exec.
+  The file is `<status-dir>/launch/<random>.json`, 0600 in a 0700 dir; the wrapper
+  removes it on read, houston on a failed start, and `New` sweeps any older than
+  10 minutes (a wrapper that never ran must not leave task text behind).
+- **Wrapper** (`houston launch-dispatcher <file>`, `ExecDispatcherLaunch`): sets
+  `remain-on-exit failed` on its own pane (best effort, so a launcher that exits
+  non-zero keeps its error text for the startup check and the user; a clean exit
+  closes the window), reads and removes the file, then `syscall.Exec`s the
+  launcher — exec, not a child, so `crew register $$` sees an ordinary
+  hand-launched dispatcher. It runs in the **tmux server's** environment, not
+  houston's: `PATH` is the tmux server's and must reach `claude`/`pi`;
+  `HOUSTON_*` and service env don't leak; `CREW_ID`, `CREW_WORKER_ID` and
+  `DISPATCH_SPEC` are stripped and `CREW_ID` set to the minted id, so a
+  tmux-global `CREW_ID` can't win.
+- **Session:** the session with the most windows whose `@git_root` resolves to the
+  repo (tie → name order); else an existing session named after the sanitized
+  repo basename (`[^A-Za-z0-9_-]` → `_`); else `new-session`. `-d`, so an attached
+  client isn't switched.
+- **Startup check** (≤ 3 s, 200 ms poll): success as soon as `<crew>/pid`
+  exists (the launcher passed its own gates and registered). A dead pane →
+  422 `dispatcher exited with status N` with the captured `output`, the window
+  (or the session, when this request created it) killed and the crew dir
+  removed; a vanished pane → 422 `dispatcher exited immediately`; neither within
+  3 s → 200, still starting. 502 covers an engines lookup failure, a launcher
+  not on `PATH`, or tmux failing to start the window.
+- **Slot:** `launchSlot`, separate from the worker's `dispatchSlot` so a 120 s
+  worker dispatch doesn't block a launch; busy → 429.
+- **Response** 200: `{crew, session, window, pane, run_id}`; `run_id` is
+  `runs.PaneRunID(pane)`, so the UI never derives it. Errors use the
+  `dispatchResponse` shape. Task text is never logged.
+- Fleet's `project` for the new window comes from `@git_root`, which the tmux-og
+  `after-new-window` hook stamps — houston doesn't set it. Without that hook the
+  run still gets role `dispatcher` (the launcher's `@crew_name`) but no project
+  chip. The run enters Fleet only once its agent sets `@claude_status` or
+  `@agent_screen`.
+
+### Repo registry
+
+The set of repos beyond tmux's view (`server/repo_registry.go`,
+`server/repos_api.go`).
+
+- **Roots:** `-repo-root DIR` (repeatable) bounds what can be registered or
+  picked. Default `$HOME/git` — houston runs as a service and cannot infer more;
+  repos elsewhere stay reachable through the tmux set whenever a window is open
+  there, and become registrable by adding a `-repo-root` for their parent. Each
+  root is made absolute and symlink-resolved at startup; one that doesn't resolve
+  is dropped with a warning. No usable root → the picker is empty and adds are
+  422.
+- **File:** `<status-dir>/repos.json` `{"repos":[…]}`, 0600, temp file + rename,
+  capped at 500 (409). A corrupt file is logged and read as empty, and is not
+  overwritten until the next successful add/remove.
+- **Invariant:** every entry, after symlink resolution, lies inside a root and is
+  a git main checkout (`<real>/.git` is a directory and the git common dir is
+  `<real>/.git`). The stored value is the resolved path, so a symlink retargeted
+  outside the roots fails the next listing. Add runs the full check including
+  `git rev-parse` (400 relative or control characters, 422 outside the roots or
+  not a main checkout); listing runs the cheap one (`EvalSymlinks` inside a
+  root plus `Lstat(.git)` is a directory), so an options GET never spawns up to
+  500 gits. An entry failing it is dropped from `options.repos` but kept in the
+  file — a transient unmount must not delete it — and `GET /api/repos` shows it
+  `valid:false` so the picker can still remove it.
+- **Routes:** `GET /api/repos` → `{roots, repos:[{path,name,valid}]}`;
+  `POST /api/repos` `{path}` → 200 `{path,name}` (idempotent); `DELETE /api/repos`
+  `{path}` → 204, 404 when absent, never touching the repo itself.
+- **Picker:** `GET /api/repos/candidates?q=` → `{roots, candidates:[{path,name,
+  registered}], truncated}`. Depth ≤ 3 below each root, hidden directories
+  skipped, symlinks not followed, a directory with a `.git` directory is reported
+  and not descended into; 10 000 directories visited or 200 results →
+  `truncated`. `q` is a case-insensitive substring of the root-relative path,
+  ≤ 200 runes (400 on control characters). Registration re-validates fully.
+- **Remember-on-use:** a 200 from either dispatch endpoint adds the repo through
+  the same path; one outside the roots is silently not remembered, which keeps
+  one invariant (every entry is inside a root) instead of a second "tmux once
+  listed it" class.
+- **No auto-registration at startup:** a service's cwd is `/` or `$HOME`, so
+  "houston's own repo" is meaningless, and tmux plus remember-on-use already
+  cover every repo the user opens or dispatches into.
 
 ## Security
 
