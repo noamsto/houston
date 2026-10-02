@@ -18,8 +18,9 @@ set -euo pipefail
 STATUS_DIR="${HOUSTON_STATUS_DIR:-$HOME/.local/state/houston}"
 mkdir -p "$STATUS_DIR"
 
-# Get tmux session name (escape slashes for filename)
-TMUX_SESSION=$(tmux display-message -p '#S' 2>/dev/null || echo "unknown")
+# Get tmux session name (escape slashes for filename). -u keeps a non-UTF-8
+# client from rewriting non-ASCII session names to '_'.
+TMUX_SESSION=$(tmux -u display-message -p '#S' 2>/dev/null || echo "unknown")
 FILENAME=$(echo "$TMUX_SESSION" | tr '/' '%')
 
 # Read JSON from stdin

@@ -41,8 +41,8 @@ func TestExecTmuxPassesArgvVerbatim(t *testing.T) {
 	if got != "sess\t@1\t%2" {
 		t.Errorf("stdout = %q, want it trimmed", got)
 	}
-	if recorded := readFile(t, filepath.Join(out, "tmux-argv")); recorded != strings.Join(argv, "\n")+"\n" {
-		t.Errorf("argv = %q, want %q", recorded, argv)
+	if recorded := readFile(t, filepath.Join(out, "tmux-argv")); recorded != strings.Join(append([]string{"-u"}, argv...), "\n")+"\n" {
+		t.Errorf("argv = %q, want -u then %q verbatim", recorded, argv)
 	}
 	if _, err := os.Stat(filepath.Join(out, "PWNED")); err == nil {
 		t.Error("a shell expanded $(…)")
@@ -58,6 +58,22 @@ func TestExecTmuxErrorCarriesStderr(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "can't find session: =proj") {
 		t.Errorf("err = %v, want tmux's stderr in it", err)
+	}
+}
+
+// TestExecTmuxKeepsNonASCIIFormatOutput pins the -u flag on the launch's tmux
+// client: under a non-UTF-8 locale tmux rewrites non-ASCII characters in -F
+// output to '_', so the launch would report (and on a failure path try to
+// kill) a session name it never created.
+func TestExecTmuxKeepsNonASCIIFormatOutput(t *testing.T) {
+	usePrivateTmux(t, "héllo")
+
+	got, err := execTmux(context.Background(), []string{"new-window", "-d", "-P", "-F", launchFormat, "-t", "=héllo:"})
+	if err != nil {
+		t.Fatalf("new-window: %v", err)
+	}
+	if !strings.HasPrefix(got, "héllo:@") {
+		t.Errorf("launch format = %q, want a héllo:@… session name — a non-UTF-8 client rewrites it to h_llo", got)
 	}
 }
 
@@ -219,7 +235,8 @@ func TestLaunchEnvSingleCrewID(t *testing.T) {
 func TestDispatcherLaunchWithRealTmuxRunner(t *testing.T) {
 	out := t.TempDir()
 	f := newLaunchFixture(t)
-	installFakeTmux(t, out, `case "$1" in
+	installFakeTmux(t, out, `[ "$1" = "-u" ] && shift
+case "$1" in
 has-session) echo "can't find session: proj" >&2; exit 1 ;;
 show-environment) echo "PATH=$PATH" ;;
 new-session) mkdir -p '`+f.crewDir+`' && : > '`+f.crewDir+`/pid'; printf 'proj:@3:%%7\n' ;;
@@ -233,7 +250,7 @@ esac
 		t.Errorf("response = %+v", resp)
 	}
 	argv := strings.Split(strings.TrimSuffix(readFile(t, filepath.Join(out, "tmux-argv")), "\n"), "\n")
-	if !slices.Equal(argv[:8], []string{"new-session", "-d", "-E", "-P", "-F", launchFormat, "-s", "proj"}) {
+	if !slices.Equal(argv[:9], []string{"-u", "new-session", "-d", "-E", "-P", "-F", launchFormat, "-s", "proj"}) {
 		t.Errorf("tmux argv = %q", argv)
 	}
 }

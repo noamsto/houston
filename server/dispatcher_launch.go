@@ -192,7 +192,12 @@ func execTmux(ctx context.Context, args []string, env ...string) (string, error)
 	ctx, cancel := context.WithTimeout(ctx, tmuxTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "tmux", args...) //nolint:gosec // no shell; every element passed tmuxSafeArg or is a server constant
+	// -u forces the client to treat its output as UTF-8: outside a UTF-8
+	// locale tmux rewrites non-ASCII characters and control characters in -F
+	// output to '_', corrupting the launch format's session name and any
+	// captured pane text. Same boundary fix as tmux.Client.output (#205).
+	argv := append([]string{"-u"}, args...)
+	cmd := exec.CommandContext(ctx, "tmux", argv...) //nolint:gosec // no shell; every element passed tmuxSafeArg or is a server constant
 	if len(env) > 0 {
 		cmd.Env = append(os.Environ(), env...)
 	}
