@@ -204,28 +204,40 @@ function Composer({ run, onSend }: { run: Run; onSend: (text: string) => Promise
   const disabled = !run.caps.terminal
   const address: TerminalAddress = { kind: 'run', id: run.id }
 
-  const attempt = async (send: () => Promise<string | null>, clearsText: boolean) => {
+  // Esc is the user's stop-the-agent key, so it never takes the in-flight
+  // gate; only text/image sends do. A failure is shown until the next action
+  // starts, and a success never clears another action's error.
+  const sendingRef = useRef(false)
+
+  const attempt = async (send: () => Promise<string | null>, isSend: boolean) => {
+    if (isSend) {
+      if (sendingRef.current) return
+      sendingRef.current = true
+      setSending(true)
+    }
     setError(null)
-    setSending(true)
     const err = await send()
-    setSending(false)
+    if (isSend) {
+      sendingRef.current = false
+      setSending(false)
+    }
     if (err) {
       setError(err)
       return
     }
-    if (clearsText) setText('')
+    if (isSend) setText('')
   }
 
   const handleSend = () => {
     const trimmed = text.trim()
-    if (!trimmed || sending) return
+    if (!trimmed) return
     void attempt(() => onSend(trimmed), true)
   }
 
   const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     e.target.value = ''
-    if (!file) return
+    if (!file || sendingRef.current) return
     const sent = text.trim()
     const data = await readBase64(file)
     void attempt(() => sendImage(address, sent, { name: file.name, type: file.type, data }), true)
@@ -254,7 +266,7 @@ function Composer({ run, onSend }: { run: Run; onSend: (text: string) => Promise
           rows={1}
         />
         <input ref={fileInputRef} type="file" style={{ display: 'none' }} onChange={(e) => void handleFile(e)} />
-        <button type="button" className="chat-composer-attach" aria-label="Attach image" disabled={disabled} onClick={() => fileInputRef.current?.click()}>
+        <button type="button" className="chat-composer-attach" aria-label="Attach image" disabled={disabled || sending} onClick={() => fileInputRef.current?.click()}>
           <span aria-hidden="true">⊕</span>
         </button>
         <button type="button" className="chat-composer-send" disabled={disabled || sending} onClick={handleSend}>

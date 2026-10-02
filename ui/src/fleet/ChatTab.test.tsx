@@ -290,6 +290,67 @@ describe('ChatTab', () => {
     await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('session expired — reload'))
   })
 
+  describe('overlapping composer actions', () => {
+    function deferredInput() {
+      const pending: { body: { type: string }; resolve: (r: Response) => void }[] = []
+      return {
+        pending,
+        impl: (url: string, init?: RequestInit) => {
+          if (!url.includes('/input')) return Promise.resolve(jsonResponse(page('e1', [])))
+          return new Promise<Response>((resolve) => pending.push({ body: JSON.parse(String(init?.body)), resolve }))
+        },
+      }
+    }
+    const fail = (status: number) => ({ status, ok: false, json: async () => ({}), text: async () => '' }) as Response
+    const sendBtn = () => screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement
+    const attachBtn = () => screen.getByRole('button', { name: 'Attach image' }) as HTMLButtonElement
+
+    async function startSendThenEsc() {
+      const { fetchMock } = await renderReady({}, { page: page('e1', []) })
+      const d = deferredInput()
+      fetchMock.mockImplementation(d.impl)
+      fireEvent.change(screen.getByPlaceholderText('Message…'), { target: { value: 'hello' } })
+      fireEvent.click(sendBtn())
+      fireEvent.click(screen.getByRole('button', { name: 'Esc' }))
+      await waitFor(() => expect(d.pending).toHaveLength(2))
+      return d
+    }
+
+    it('keeps Send and Attach disabled when Esc settles before the Send does', async () => {
+      const d = await startSendThenEsc()
+      expect(sendBtn().disabled).toBe(true)
+      expect(attachBtn().disabled).toBe(true)
+
+      await act(async () => d.pending[1].resolve(okResponse()))
+      expect(sendBtn().disabled).toBe(true)
+      expect(attachBtn().disabled).toBe(true)
+
+      await act(async () => d.pending[0].resolve(okResponse()))
+      expect(sendBtn().disabled).toBe(false)
+      expect(attachBtn().disabled).toBe(false)
+    })
+
+    it('does not block Esc while a Send is in flight', async () => {
+      await startSendThenEsc()
+      expect((screen.getByRole('button', { name: 'Esc' }) as HTMLButtonElement).disabled).toBe(false)
+    })
+
+    it('a later successful settle does not clear an earlier-settling failure', async () => {
+      const d = await startSendThenEsc()
+      await act(async () => d.pending[1].resolve(fail(500)))
+      expect(screen.getByRole('alert').textContent).toBe('HTTP 500')
+      await act(async () => d.pending[0].resolve(okResponse()))
+      expect(screen.getByRole('alert').textContent).toBe('HTTP 500')
+    })
+
+    it('the last failure to settle wins', async () => {
+      const d = await startSendThenEsc()
+      await act(async () => d.pending[1].resolve(fail(500)))
+      await act(async () => d.pending[0].resolve(fail(401)))
+      expect(screen.getByRole('alert').textContent).toBe('session expired — reload')
+    })
+  })
+
   it('Esc chip sends the Escape key', async () => {
     const { fetchMock } = await renderReady({}, { page: page('e1', []) })
     fireEvent.click(screen.getByRole('button', { name: 'Esc' }))
