@@ -160,8 +160,8 @@ func TestDispatcherLaunchWrapperExecsLauncher(t *testing.T) {
 	}
 }
 
-// The wrapper stamps its own window by pane id, then makes it current right
-// before the launcher's untargeted stamps run.
+// The wrapper stamps its own window by pane id; houston never makes the
+// window current, so the stamps must not depend on that.
 func TestDispatcherLaunchWrapperStampsWindow(t *testing.T) {
 	f := newWrapperFixture(t, []string{"--agent", "pi"})
 	installFakeTmux(t, t.TempDir(), `printf '%s\n' "$*" >> '`+f.out+`/calls'`+"\n")
@@ -173,7 +173,6 @@ func TestDispatcherLaunchWrapperStampsWindow(t *testing.T) {
 		"set-option -w -t %5 remain-on-exit failed",
 		"set-option -w -t %5 @crew_name dispatcher",
 		"set-option -w -t %5 @crew_color colour99",
-		"select-window -t %5",
 		"launcher",
 	}, "\n") + "\n"
 	if got := readFile(t, filepath.Join(f.out, "calls")); got != want {
@@ -340,5 +339,62 @@ func TestDispatcherLaunchPaneGetsServerPath(t *testing.T) {
 				t.Errorf("pane PATH lacks the server's global entry %s: houston's PATH reached the pane", marker)
 			}
 		})
+	}
+}
+
+// TestDispatcherLaunchKeepsCurrentWindow runs a launch against a private tmux
+// server: the new window is created with -d, so the session's current window
+// — what a client viewing the session displays — is not switched away.
+func TestDispatcherLaunchKeepsCurrentWindow(t *testing.T) {
+	bash := usePrivateTmux(t, "proj")
+	if _, err := execTmux(context.Background(), []string{"set-environment", "-g", "PATH", os.Getenv("PATH")}); err != nil {
+		t.Fatal(err)
+	}
+	const base = "0"
+	if got := tmuxOut(t, "display-message", "-t", "proj", "-p", "#{window_index}"); got != base {
+		t.Fatalf("session current window = %q, want %q", got, base)
+	}
+
+	f := newLaunchFixture(t)
+	f.s.tmuxRun = execTmux
+	f.s.houstonExe = filepath.Join(t.TempDir(), "houston")
+	script := "#!" + bash + "\n: > '" + f.crewDir + "/pid'\nsleep 30\n"
+	if err := os.WriteFile(f.s.houstonExe, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f.s.launchCheck = 5 * time.Second
+
+	rec, resp := f.post(t, f.request())
+	wantStatus(t, rec, 200)
+	if resp.Session != "proj" || resp.Pane == "" {
+		t.Fatalf("response = %+v, want a new window in proj", resp)
+	}
+	if got := tmuxOut(t, "display-message", "-t", "proj", "-p", "#{window_index}"); got != base {
+		t.Errorf("session current window = %q, want %q: a launch must not switch a viewing client", got, base)
+	}
+	if got := tmuxOut(t, "list-windows", "-t", "proj", "-F", "#{window_index}"); got != base+"\n1" {
+		t.Errorf("windows = %q, want the new window beside the base one", got)
+	}
+}
+
+// TestDispatcherLaunchWrapperStampsNonCurrentWindow runs the real wrapper
+// against a private tmux server: on a window that is not current, the
+// wrapper's pre-stamp still lands by pane id, and it never selects the
+// window (which would switch a viewing client).
+func TestDispatcherLaunchWrapperStampsNonCurrentWindow(t *testing.T) {
+	usePrivateTmux(t, "proj")
+	pane := tmuxOut(t, "display-message", "-t", "proj", "-p", "#{pane_id}")
+	tmuxOut(t, "new-window", "-d", "-t", "proj:1", "--", "sleep", "600")
+	tmuxOut(t, "select-window", "-t", "proj:1")
+
+	f := newWrapperFixture(t, []string{"--agent", "pi"})
+	if out, err := runWrapper(t, f.file, t.TempDir(), "TMUX_PANE="+pane); err != nil {
+		t.Fatalf("wrapper failed: %v\n%s", err, out)
+	}
+	if got := tmuxOut(t, "display-message", "-t", "proj", "-p", "#{window_index}"); got != "1" {
+		t.Errorf("session current window = %q, want 1: the wrapper must not switch the client", got)
+	}
+	if got := tmuxOut(t, "show-options", "-w", "-t", pane, "@crew_name"); !strings.Contains(got, "dispatcher") {
+		t.Errorf("@crew_name = %q, want it stamped on the wrapper's own pane", got)
 	}
 }

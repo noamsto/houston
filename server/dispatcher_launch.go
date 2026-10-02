@@ -456,12 +456,11 @@ func (s *Server) handleDispatcherLaunch(w http.ResponseWriter, r *http.Request) 
 	// ones removed, shadowing the server's global SSH_AUTH_SOCK, DISPLAY etc.
 	argv := []string{"new-session", "-d", "-E", "-P", "-F", launchFormat, "-s", session}
 	if exists {
-		// No -d: the launcher's untargeted `tmux set-window-option` stamps
-		// resolve to the session's current window, so the new window must be
-		// current or they land on another window; a client viewing this
-		// session switches to it. The root fix is `-t "$TMUX_PANE"` in the
-		// launcher.
-		argv = []string{"new-window", "-P", "-F", launchFormat, "-t", "=" + session + ":"}
+		// -d: never switch the session's current window. The launcher stamps
+		// its own window by pane id (`-t "$TMUX_PANE"`), and houston pre-stamps
+		// the new window the same way, so the window carries its tags without
+		// becoming current and switching a client that is viewing the session.
+		argv = []string{"new-window", "-d", "-P", "-F", launchFormat, "-t", "=" + session + ":"}
 	}
 	argv = append(argv, "-n", "dispatcher", "-c", repo.Path, "--", s.houstonExe, "launch-dispatcher", file)
 
@@ -581,12 +580,14 @@ func ExecDispatcherLaunch(file string) error {
 		return fmt.Errorf("dispatcher launcher not found on the tmux server's PATH: %w", err)
 	}
 
-	// The launcher stamps these too, but untargeted, so they land on whichever
-	// window is current when it gets there: stamp by pane id first, and make
-	// this window current right before handing over.
+	// Stamp by pane id: houston creates the window with -d, so it is not the
+	// session's current window and an untargeted stamp lands on the client's.
+	// The launcher targets its own window too (dispatcher#655), but a launcher
+	// predating #655 would relabel whichever window is current, so houston and
+	// #655 ship in the same bump; this pre-stamp is belt-and-braces for a
+	// launcher without it.
 	paneTmux(pane, "set-option", "-w", "-t", pane, "@crew_name", "dispatcher")
 	paneTmux(pane, "set-option", "-w", "-t", pane, "@crew_color", "colour99")
-	paneTmux(pane, "select-window", "-t", pane)
 
 	return syscall.Exec(launcher, append([]string{launcher}, lf.Args...), launchEnv(os.Environ(), lf.CrewID)) //nolint:gosec // the launcher on the tmux server's own PATH
 }

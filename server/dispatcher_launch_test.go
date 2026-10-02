@@ -407,7 +407,7 @@ func TestDispatcherLaunchPicksSessionWithMostRepoWindows(t *testing.T) {
 		t.Errorf("session = %q", resp.Session)
 	}
 	got := f.tmux.find("new-window")
-	if len(got) < 6 || got[4] != "-t" || got[5] != "=work:" {
+	if len(got) < 7 || got[5] != "-t" || got[6] != "=work:" {
 		t.Errorf("new-window argv = %q, want -t =work:", got)
 	}
 	if f.tmux.find("has-session") != nil {
@@ -427,7 +427,7 @@ func TestDispatcherLaunchSessionTieBreaksByName(t *testing.T) {
 	wantStatus(t, rec, http.StatusOK)
 	files := launchFiles(t, f.s.launchDir)
 	wantArgv := []string{
-		"new-window", "-P", "-F", launchFormat, "-t", "=beta:", "-n", "dispatcher",
+		"new-window", "-d", "-P", "-F", launchFormat, "-t", "=beta:", "-n", "dispatcher",
 		"-c", f.repo.Path, "--", "/opt/houston", "launch-dispatcher", files[0],
 	}
 	if got := f.tmux.find("new-window"); !slices.Equal(got, wantArgv) {
@@ -443,7 +443,7 @@ func TestDispatcherLaunchExistingSessionByName(t *testing.T) {
 	rec, _ := f.post(t, f.request())
 	wantStatus(t, rec, http.StatusOK)
 	got := f.tmux.find("new-window")
-	if len(got) < 6 || got[5] != "=proj:" {
+	if len(got) < 7 || got[6] != "=proj:" {
 		t.Errorf("new-window argv = %q, want -t =proj:", got)
 	}
 	if f.tmux.find("new-session") != nil {

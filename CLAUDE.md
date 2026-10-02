@@ -594,7 +594,7 @@ unknown fields 400, body over 256 KiB 413.
   its error text for the startup check and the user; a clean exit closes the
   window), reads and removes the file, resolves `dispatcher` with
   `exec.LookPath`, stamps its window by pane id (`@crew_name dispatcher`,
-  `@crew_color colour99`), runs `select-window -t $TMUX_PANE`, then
+  `@crew_color colour99`), then
   `syscall.Exec`s the launcher — exec, not a child, so `crew register $$` sees
   an ordinary hand-launched dispatcher. Every tmux call is targeted at
   `$TMUX_PANE` with a 2 s timeout, best effort. It runs in the **tmux
@@ -614,13 +614,14 @@ unknown fields 400, body over 256 KiB 413.
   it tmux copies the creating client's — houston's service — values of every
   `update-environment` name (`SSH_AUTH_SOCK`, `DISPLAY`, …) into the session and
   marks the absent ones removed, shadowing the server's globals.
-  `new-window` is deliberately not `-d`: the launcher's own
-  `tmux set-window-option` stamps are untargeted and resolve to the session's
-  *current* window, so a client viewing that session switches to the new
-  window. The wrapper's targeted stamps and `select-window` narrow but don't
-  close the race: a window made current between `select-window` and the
-  launcher's stamps still gets them. The root fix is `-t "$TMUX_PANE"` in the
-  launcher.
+  `new-window` is `-d`: the window never becomes the session's current one, so
+  a client viewing that session is not switched to the new dispatcher window.
+  The launcher stamps its own window by pane id (`-t "$TMUX_PANE"`, dispatcher
+  #655 — houston and #655 ship in the same nix-config bump, because a launcher
+  predating it stamps untargeted and would relabel the client's current
+  window). The wrapper also pre-stamps `@crew_name`/`@crew_color` by pane id
+  (belt-and-braces, so the new window carries its tags even if the launcher's
+  own stamp is missed), and the new window carries them without being current.
 - **Server PATH** (`tmuxServerPath`): tmux hands a pane created by a
   session-less client — houston — that client's `PATH`, over the global
   environment and even over `-e PATH`. So houston first reads
