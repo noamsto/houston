@@ -33,6 +33,12 @@ type CrewSource struct {
 	// procStart parameter) — a field so tests stay hermetic.
 	procStart procStartFunc
 
+	// sessions is the hooks layer's live session-per-pane view, used to keep a
+	// terminal record from joining a different session inside the same engine
+	// process (/clear, /resume). nil disables the check — tests, and a build
+	// with no hub.
+	sessions hookSessions
+
 	// logs caches each bus log's parse by path, reused while size and mtime
 	// hold. Same single-goroutine rule as crewDirs. The cached Runs are shared
 	// across ticks, so nothing may write through their pointer fields.
@@ -45,11 +51,11 @@ type crewLog struct {
 	runs map[string]crewBranch
 }
 
-func NewCrewSource(c lister, every time.Duration) *CrewSource {
+func NewCrewSource(c lister, sessions hookSessions, every time.Duration) *CrewSource {
 	if every <= 0 {
 		every = 3 * time.Second
 	}
-	return &CrewSource{client: c, every: every, crewDirs: map[string]string{}, logs: map[string]crewLog{}, procStart: foregroundStart}
+	return &CrewSource{client: c, sessions: sessions, every: every, crewDirs: map[string]string{}, logs: map[string]crewLog{}, procStart: foregroundStart}
 }
 
 func (s *CrewSource) Name() string { return "crew" }
@@ -162,6 +168,14 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 		rootList = append(rootList, repo)
 	}
 
+	// The pane → hook session map the terminal join consults, built from the
+	// same listing and the hooks layer's own trust rules (paneSetFrom,
+	// paneHookSessions).
+	var paneSessions map[string]string
+	if s.sessions != nil {
+		paneSessions = paneHookSessions(s.sessions.Snapshot(), paneSetFrom(panes, time.Now()))
+	}
+
 	out := map[string]Run{}
 	for bus, branches := range s.scanRoots(rootList) {
 		project := ProjectFromCommonDir(filepath.Dir(bus))
@@ -169,7 +183,7 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 			r.Project = project
 			r.Role = RoleWorker
 			r.Worktree = worktreeFor(bus, branch, wins, s.crewDir)
-			paneID, candidates := resolvePane(bus, branch, r.State, r.UpdatedAt, r.session, wins, panes, s.crewDir, s.procStart)
+			paneID, candidates := resolvePane(bus, branch, r.State, r.UpdatedAt, r.session, r.CrewSession, paneSessions, wins, panes, s.crewDir, s.procStart)
 			key := paneID
 			if candidates != 1 {
 				key = "crew/" + bus + "/" + branch

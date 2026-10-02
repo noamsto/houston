@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/noamsto/houston/hook"
+	"github.com/noamsto/houston/hub"
 	"github.com/noamsto/houston/tmux"
 )
 
@@ -43,6 +44,10 @@ func TestCrewWorkerRunOffersChat(t *testing.T) {
 		// engineSession puts the bus's engine_session on the dispatch row;
 		// wantRuns is how many cards Fleet lists for the branch (0 means 1).
 		engineSession bool
+		// paneSessionID is the hook session the pane actually carries; empty
+		// means sid. A /clear row sets it to a different id while the bus's
+		// engine_session stays sid.
+		paneSessionID string
 		wantRuns      int
 	}{
 		{name: "plain worker", busState: "working", paneStatus: "processing 1790707000 ", hookState: hook.StateThinking},
@@ -55,6 +60,10 @@ func TestCrewWorkerRunOffersChat(t *testing.T) {
 		{name: "grid lead ended session, engine_session", leadRole: "lead", roles: roles, busState: "done", paneStatus: "done 1790707000 1", hookState: hook.StateEnded, engineSession: true},
 		// An older dispatcher's row has no engine_session: the #120 split stays.
 		{name: "ended session, no engine_session", busState: "done", paneStatus: "done 1790707000 1", hookState: hook.StateEnded, wantRuns: 2},
+		// #162: /clear restarted the session in the same engine process, so the
+		// pane's hook session no longer matches the bus engine_session and the
+		// finished worker's record must not reattach to it.
+		{name: "cleared session, engine_session", busState: "done", paneStatus: "done 1790707000 1", hookState: hook.StateWaiting, engineSession: true, paneSessionID: "sid-cleared", wantRuns: 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			wins := []tmux.WindowOptions{{Session: "h", Window: 3, Branch: branch, GitRoot: root, CrewName: "iris"}}
@@ -81,7 +90,13 @@ func TestCrewWorkerRunOffersChat(t *testing.T) {
 			for _, d := range deltasFromTmux(wins, panes, func(string) string { return "houston" }) {
 				reg.Apply(d)
 			}
-			cs := crewScanner(map[string]string{root: bus}, wins, panes)
+			paneSID := tc.paneSessionID
+			if paneSID == "" {
+				paneSID = sid
+			}
+			cs := crewScanner(map[string]string{root: bus}, wins, panes, fakeHookSessions{views: []hub.SessionView{{
+				SessionID: paneSID, TmuxPane: lead, TmuxServer: server, UpdatedAt: now, State: tc.hookState,
+			}}})
 			cs.procStart = startAt(session + 2)
 			crew, ok := cs.scan()
 			if !ok {
@@ -95,18 +110,18 @@ func TestCrewWorkerRunOffersChat(t *testing.T) {
 			hookPanes.setPanes(panes...)
 			hookPanes.setIdentity(server, now-3600)
 			out, _ := startHookSourceWith(t, hookPanes, hook.SessionState{
-				SessionID:      sid,
+				SessionID:      paneSID,
 				State:          tc.hookState,
 				CWD:            root,
 				GitBranch:      branch,
 				TmuxPane:       lead,
 				TmuxServer:     server,
-				TranscriptPath: filepath.Join(t.TempDir(), sid+".jsonl"),
+				TranscriptPath: filepath.Join(t.TempDir(), paneSID+".jsonl"),
 				UpdatedAt:      now,
 			}, nil)
 			hookKey := lead
 			if tc.hookState == hook.StateEnded {
-				hookKey = "claude/" + sid // #120: an ended session is keyed by id, not pane
+				hookKey = "claude/" + paneSID // #120: an ended session is keyed by id, not pane
 			}
 			reg.Apply(waitDelta(t, out, "the session's hook run", func(d Delta) bool { return d.Key == hookKey }))
 			drainHookDeltas(out, reg)
