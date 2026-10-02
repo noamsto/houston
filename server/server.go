@@ -1154,7 +1154,7 @@ func (s *Server) handleOpenCodeSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Parse path: /opencode/session/{serverURL}/{sessionID}/action
-	path := strings.TrimPrefix(r.URL.Path, "/opencode/session/")
+	path := strings.TrimPrefix(r.URL.EscapedPath(), "/opencode/session/")
 	parts := strings.SplitN(path, "/", 3)
 
 	if len(parts) < 2 {
@@ -1167,7 +1167,11 @@ func (s *Server) handleOpenCodeSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid server URL", http.StatusBadRequest)
 		return
 	}
-	sessionID := parts[1]
+	sessionID, err := url.PathUnescape(parts[1])
+	if err != nil {
+		http.Error(w, "invalid session ID", http.StatusBadRequest)
+		return
+	}
 
 	// Handle actions
 	if len(parts) == 3 {
@@ -1186,6 +1190,10 @@ func (s *Server) handleOpenCodeSession(w http.ResponseWriter, r *http.Request) {
 	// Get session details
 	state, err := s.ocManager.GetSessionDetails(r.Context(), serverURL, sessionID)
 	if err != nil {
+		if errors.Is(err, opencode.ErrUnknownServer) {
+			http.Error(w, "unknown OpenCode server", http.StatusNotFound)
+			return
+		}
 		slog.Error("failed to get OpenCode session", "error", err)
 		http.Error(w, "failed to get session: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -1213,6 +1221,10 @@ func (s *Server) handleOpenCodeSend(w http.ResponseWriter, r *http.Request, serv
 	slog.Info("send to OpenCode", "server", serverURL, "session", sessionID, "text", text)
 
 	if err := s.ocManager.SendPrompt(r.Context(), serverURL, sessionID, text); err != nil {
+		if errors.Is(err, opencode.ErrUnknownServer) {
+			http.Error(w, "unknown OpenCode server", http.StatusNotFound)
+			return
+		}
 		slog.Error("failed to send to OpenCode", "error", err)
 		http.Error(w, "failed to send: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -1230,6 +1242,10 @@ func (s *Server) handleOpenCodeAbort(w http.ResponseWriter, r *http.Request, ser
 	slog.Info("abort OpenCode session", "server", serverURL, "session", sessionID)
 
 	if err := s.ocManager.AbortSession(r.Context(), serverURL, sessionID); err != nil {
+		if errors.Is(err, opencode.ErrUnknownServer) {
+			http.Error(w, "unknown OpenCode server", http.StatusNotFound)
+			return
+		}
 		slog.Error("failed to abort OpenCode session", "error", err)
 		http.Error(w, "failed to abort: "+err.Error(), http.StatusInternalServerError)
 		return
