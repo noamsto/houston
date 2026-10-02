@@ -333,6 +333,162 @@ describe('ChatTab', () => {
     await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('session expired — reload'))
   })
 
+  describe('overlapping composer actions', () => {
+    function deferredInput() {
+      const pending: { body: { type: string }; resolve: (r: Response) => void }[] = []
+      return {
+        pending,
+        impl: (url: string, init?: RequestInit) => {
+          if (!url.includes('/input')) return Promise.resolve(jsonResponse(page('e1', [])))
+          return new Promise<Response>((resolve) => pending.push({ body: JSON.parse(String(init?.body)), resolve }))
+        },
+      }
+    }
+    const fail = (status: number) => ({ status, ok: false, json: async () => ({}), text: async () => '' }) as Response
+    const sendBtn = () => screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement
+    const attachBtn = () => screen.getByRole('button', { name: 'Attach image' }) as HTMLButtonElement
+
+    async function startSendThenEsc() {
+      const { fetchMock } = await renderReady({}, { page: page('e1', []) })
+      const d = deferredInput()
+      fetchMock.mockImplementation(d.impl)
+      fireEvent.change(screen.getByPlaceholderText('Message…'), { target: { value: 'hello' } })
+      fireEvent.click(sendBtn())
+      fireEvent.click(screen.getByRole('button', { name: 'Esc' }))
+      await waitFor(() => expect(d.pending).toHaveLength(2))
+      return d
+    }
+
+    it('keeps Send and Attach disabled when Esc settles before the Send does', async () => {
+      const d = await startSendThenEsc()
+      expect(sendBtn().disabled).toBe(true)
+      expect(attachBtn().disabled).toBe(true)
+
+      await act(async () => d.pending[1].resolve(okResponse()))
+      expect(sendBtn().disabled).toBe(true)
+      expect(attachBtn().disabled).toBe(true)
+
+      await act(async () => d.pending[0].resolve(okResponse()))
+      expect(sendBtn().disabled).toBe(false)
+      expect(attachBtn().disabled).toBe(false)
+    })
+
+    it('does not block Esc while a Send is in flight', async () => {
+      const d = await startSendThenEsc()
+      expect((screen.getByRole('button', { name: 'Esc' }) as HTMLButtonElement).disabled).toBe(false)
+      await act(async () => d.pending.forEach((p) => p.resolve(okResponse())))
+    })
+
+    it('two synchronous Sends post only once', async () => {
+      const { fetchMock } = await renderReady({}, { page: page('e1', []) })
+      const d = deferredInput()
+      fetchMock.mockImplementation(d.impl)
+      fireEvent.change(screen.getByPlaceholderText('Message…'), { target: { value: 'hello' } })
+      fireEvent.click(sendBtn())
+      fireEvent.keyDown(screen.getByPlaceholderText('Message…'), { key: 'Enter', ctrlKey: true })
+      fireEvent.keyDown(screen.getByPlaceholderText('Message…'), { key: 'Enter', ctrlKey: true })
+      await waitFor(() => expect(d.pending).toHaveLength(1))
+      await act(async () => d.pending[0].resolve(okResponse()))
+      expect(d.pending).toHaveLength(1)
+    })
+
+    function stubFileReader(mode: 'ok' | 'error') {
+      let finish: () => void = () => {}
+      const spy = vi.spyOn(FileReader.prototype, 'readAsDataURL').mockImplementation(function (this: FileReader) {
+        finish = () => {
+          if (mode === 'error') {
+            this.onerror?.(new ProgressEvent('error') as ProgressEvent<FileReader>)
+            return
+          }
+          Object.defineProperty(this, 'result', { value: 'data:image/png;base64,AAAA' })
+          this.onload?.(new ProgressEvent('load') as ProgressEvent<FileReader>)
+        }
+      })
+      return { finish: () => finish(), restore: () => spy.mockRestore() }
+    }
+    const pickFile = () => {
+      const input = document.querySelector('input[type=file]') as HTMLInputElement
+      fireEvent.change(input, { target: { files: [new File(['x'], 'a.png', { type: 'image/png' })] } })
+    }
+
+    it('an image attach holds the gate while the file is read, so a Send cannot overlap or drop it', async () => {
+      const { fetchMock } = await renderReady({}, { page: page('e1', []) })
+      const d = deferredInput()
+      fetchMock.mockImplementation(d.impl)
+      const reader = stubFileReader('ok')
+      try {
+        const textarea = screen.getByPlaceholderText('Message…') as HTMLTextAreaElement
+        fireEvent.change(textarea, { target: { value: 'hello' } })
+        pickFile()
+        await waitFor(() => expect(sendBtn().disabled).toBe(true))
+        fireEvent.keyDown(textarea, { key: 'Enter', ctrlKey: true })
+        expect(d.pending).toHaveLength(0)
+        await act(async () => reader.finish())
+        await waitFor(() => expect(d.pending).toHaveLength(1))
+        expect(d.pending[0].body).toMatchObject({ type: 'image', text: 'hello' })
+        await act(async () => d.pending[0].resolve(okResponse()))
+        expect(textarea.value).toBe('')
+      } finally {
+        reader.restore()
+      }
+    })
+
+    it('a failed file read shows an error and releases the gate', async () => {
+      await renderReady({}, { page: page('e1', []) })
+      const reader = stubFileReader('error')
+      try {
+        pickFile()
+        await waitFor(() => expect(sendBtn().disabled).toBe(true))
+        await act(async () => reader.finish())
+        expect(screen.getByRole('alert').textContent).toBe('could not read file')
+        expect(sendBtn().disabled).toBe(false)
+      } finally {
+        reader.restore()
+      }
+    })
+
+    it('keeps text typed while a Send was in flight', async () => {
+      const { fetchMock } = await renderReady({}, { page: page('e1', []) })
+      const d = deferredInput()
+      fetchMock.mockImplementation(d.impl)
+      const textarea = screen.getByPlaceholderText('Message…') as HTMLTextAreaElement
+      fireEvent.change(textarea, { target: { value: 'hello' } })
+      fireEvent.click(sendBtn())
+      await waitFor(() => expect(d.pending).toHaveLength(1))
+      fireEvent.change(textarea, { target: { value: 'hello again' } })
+      await act(async () => d.pending[0].resolve(okResponse()))
+      expect(textarea.value).toBe('hello again')
+    })
+
+    it('picking a file after a Send started (before the button disabled) reports busy', async () => {
+      const { fetchMock } = await renderReady({}, { page: page('e1', []) })
+      const d = deferredInput()
+      fetchMock.mockImplementation(d.impl)
+      fireEvent.change(screen.getByPlaceholderText('Message…'), { target: { value: 'hello' } })
+      fireEvent.click(sendBtn())
+      await waitFor(() => expect(d.pending).toHaveLength(1))
+      pickFile()
+      expect(screen.getByRole('alert').textContent).toBe('busy — pick the file again')
+      expect(d.pending).toHaveLength(1)
+      await act(async () => d.pending[0].resolve(okResponse()))
+    })
+
+    it('a later successful settle does not clear an earlier-settling failure', async () => {
+      const d = await startSendThenEsc()
+      await act(async () => d.pending[1].resolve(fail(500)))
+      expect(screen.getByRole('alert').textContent).toBe('HTTP 500')
+      await act(async () => d.pending[0].resolve(okResponse()))
+      expect(screen.getByRole('alert').textContent).toBe('HTTP 500')
+    })
+
+    it('the last failure to settle wins', async () => {
+      const d = await startSendThenEsc()
+      await act(async () => d.pending[1].resolve(fail(500)))
+      await act(async () => d.pending[0].resolve(fail(401)))
+      expect(screen.getByRole('alert').textContent).toBe('session expired — reload')
+    })
+  })
+
   it('Esc chip sends the Escape key', async () => {
     const { fetchMock } = await renderReady({}, { page: page('e1', []) })
     fireEvent.click(screen.getByRole('button', { name: 'Esc' }))

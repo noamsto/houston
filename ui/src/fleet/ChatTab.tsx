@@ -207,31 +207,59 @@ function Composer({ run, onSend }: { run: Run; onSend: (text: string) => Promise
   const disabled = !run.caps.terminal
   const address: TerminalAddress = { kind: 'run', id: run.id }
 
-  const attempt = async (send: () => Promise<string | null>, clearsText: boolean) => {
+  // Esc is the user's stop-the-agent key, so it never takes the in-flight
+  // gate; only text/image sends do. A failure is shown until the next action
+  // starts, and a success never clears another action's error.
+  const sendingRef = useRef(false)
+
+  const attempt = async (send: () => Promise<string | null>, sent: string | null) => {
+    const isSend = sent !== null
+    if (isSend) {
+      if (sendingRef.current) return
+      sendingRef.current = true
+      setSending(true)
+    }
     setError(null)
-    setSending(true)
-    const err = await send()
-    setSending(false)
+    let err: string | null
+    try {
+      err = await send()
+    } finally {
+      if (isSend) {
+        sendingRef.current = false
+        setSending(false)
+      }
+    }
     if (err) {
       setError(err)
       return
     }
-    if (clearsText) setText('')
+    if (isSend) setText((cur) => (cur.trim() === sent ? '' : cur))
   }
 
   const handleSend = () => {
     const trimmed = text.trim()
-    if (!trimmed || sending) return
-    void attempt(() => onSend(trimmed), true)
+    if (!trimmed) return
+    void attempt(() => onSend(trimmed), trimmed)
   }
 
-  const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     e.target.value = ''
     if (!file) return
+    if (sendingRef.current) {
+      setError('busy — pick the file again')
+      return
+    }
     const sent = text.trim()
-    const data = await readBase64(file)
-    void attempt(() => sendImage(address, sent, { name: file.name, type: file.type, data }), true)
+    void attempt(async () => {
+      let data: string
+      try {
+        data = await readBase64(file)
+      } catch {
+        return 'could not read file'
+      }
+      return sendImage(address, sent, { name: file.name, type: file.type, data })
+    }, sent)
   }
 
   return (
@@ -239,7 +267,7 @@ function Composer({ run, onSend }: { run: Run; onSend: (text: string) => Promise
       {disabled && <div className="chat-composer-reason">No live terminal for this run</div>}
       {error && <div className="chat-composer-error" role="alert">{error}</div>}
       <div className="chat-composer-row">
-        <button type="button" className="chat-composer-esc" disabled={disabled} onClick={() => void attempt(() => sendKey(address, 'Escape'), false)}>
+        <button type="button" className="chat-composer-esc" disabled={disabled} onClick={() => void attempt(() => sendKey(address, 'Escape'), null)}>
           Esc
         </button>
         <textarea
@@ -256,8 +284,8 @@ function Composer({ run, onSend }: { run: Run; onSend: (text: string) => Promise
           placeholder="Message…"
           rows={1}
         />
-        <input ref={fileInputRef} type="file" style={{ display: 'none' }} onChange={(e) => void handleFile(e)} />
-        <button type="button" className="chat-composer-attach" aria-label="Attach image" disabled={disabled} onClick={() => fileInputRef.current?.click()}>
+        <input ref={fileInputRef} type="file" style={{ display: 'none' }} onChange={handleFile} />
+        <button type="button" className="chat-composer-attach" aria-label="Attach image" disabled={disabled || sending} onClick={() => fileInputRef.current?.click()}>
           <span aria-hidden="true">⊕</span>
         </button>
         <button type="button" className="chat-composer-send" disabled={disabled || sending} onClick={handleSend}>
