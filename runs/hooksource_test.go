@@ -565,7 +565,11 @@ func TestPaneHookSessionsFiltersUntrustworthySessions(t *testing.T) {
 		{"ended session dropped", []hub.SessionView{ended}, map[string]string{}},
 		{"role pane dropped", []hub.SessionView{role}, map[string]string{}},
 		{"newest session wins", []hub.SessionView{older, trusted}, map[string]string{"%1": "s1"}},
-		{"equal UpdatedAt tie breaks by session id", []hub.SessionView{tieB, tieA}, map[string]string{"%1": "sB"}},
+		// Both orders are seeded deliberately: with the larger id first, a
+		// first-on-tie regression still passes; the reversed row forces the
+		// code to actively overwrite on an equal UpdatedAt.
+		{"equal UpdatedAt tie breaks by session id (larger first)", []hub.SessionView{tieB, tieA}, map[string]string{"%1": "sB"}},
+		{"equal UpdatedAt tie breaks by session id (smaller first)", []hub.SessionView{tieA, tieB}, map[string]string{"%1": "sB"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
