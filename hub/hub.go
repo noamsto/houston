@@ -445,8 +445,8 @@ func (h *Hub) refreshAllTranscripts() {
 }
 
 func (h *Hub) refreshTranscript(sessionID string) {
-	// Ahead of the trail read's early return: that reader consumes partial
-	// lines, so it can be caught up while the chat reader is not.
+	// Ahead of the trail read's early return: the trail reader can be caught
+	// up while the chat reader is not.
 	h.refreshChat(sessionID)
 
 	h.mu.Lock()

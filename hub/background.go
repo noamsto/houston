@@ -27,7 +27,7 @@ var (
 	bgResultID = regexp.MustCompile(`(?:with ID:|\(task) ([A-Za-z0-9_-]+)`)
 	notifID    = regexp.MustCompile(`<task-id>([^<]*)</task-id>`)
 	notifTool  = regexp.MustCompile(`<tool-use-id>([^<]*)</tool-use-id>`)
-	notifState = regexp.MustCompile(`<status>[^<]+</status>`)
+	notifState = regexp.MustCompile(`<status>(completed|failed|killed|stopped)</status>`)
 )
 
 // backgroundStart classifies a tool_use block: the kind of background task it
@@ -43,11 +43,15 @@ func backgroundStart(name string, input json.RawMessage) (kind, stopTask string)
 		if json.Unmarshal(input, &in) == nil && in.Background {
 			return BackgroundShell, ""
 		}
-	case "TaskStop":
+	case "TaskStop", "KillShell":
 		var in struct {
-			TaskID string `json:"task_id"`
+			TaskID  string `json:"task_id"`
+			ShellID string `json:"shell_id"`
 		}
 		if json.Unmarshal(input, &in) == nil {
+			if in.TaskID == "" {
+				in.TaskID = in.ShellID
+			}
 			return "", in.TaskID
 		}
 	}
@@ -89,9 +93,11 @@ func (t *bgTracker) apply(ev TranscriptEvent) {
 			if t.byToolUse == nil {
 				t.byToolUse = map[string]*bgEntry{}
 			}
-			t.byToolUse[ev.ToolUseID] = &bgEntry{task: BackgroundTask{
-				Kind: ev.Background, Hint: ev.BackgroundHint, Since: ev.Timestamp.Unix(),
-			}}
+			e := &bgEntry{task: BackgroundTask{Kind: ev.Background, Hint: ev.BackgroundHint}}
+			if !ev.Timestamp.IsZero() {
+				e.task.Since = ev.Timestamp.Unix()
+			}
+			t.byToolUse[ev.ToolUseID] = e
 		case ev.StopTask != "":
 			if t.stops == nil {
 				t.stops = map[string]string{}
@@ -114,15 +120,25 @@ func (t *bgTracker) apply(ev TranscriptEvent) {
 			}
 		}
 	case EventTypeText:
-		if ev.Role == "user" && strings.Contains(ev.Text, "<task-notification>") && notifState.MatchString(ev.Text) {
-			// Only a notification carrying a <status> is terminal; a
-			// monitor's per-event notifications are not.
-			for _, m := range notifID.FindAllStringSubmatch(ev.Text, -1) {
-				t.finish(m[1], "")
-			}
-			for _, m := range notifTool.FindAllStringSubmatch(ev.Text, -1) {
-				t.finish("", m[1])
-			}
+		if ev.Role != "user" || !strings.HasPrefix(strings.TrimSpace(ev.Text), "<task-notification>") {
+			break
+		}
+		// Only the header, before the summary or event body, is ours: a monitor's event
+		// notification embeds arbitrary output that may itself contain tags.
+		head := ev.Text
+		for _, tag := range []string{"<summary>", "<event>"} {
+			head, _, _ = strings.Cut(head, tag)
+		}
+		// Only a notification carrying a <status> is terminal; a monitor's
+		// per-event notifications are not.
+		if !notifState.MatchString(head) {
+			break
+		}
+		for _, m := range notifID.FindAllStringSubmatch(head, -1) {
+			t.finish(m[1], "")
+		}
+		for _, m := range notifTool.FindAllStringSubmatch(head, -1) {
+			t.finish("", m[1])
 		}
 	}
 }

@@ -62,7 +62,7 @@ export interface Activity {
 
 export interface BackgroundTask {
   id: string
-  kind: 'shell' | 'monitor' | string
+  kind: string // "shell" | "monitor"
   hint?: string
   since?: number // unix seconds
 }

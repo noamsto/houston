@@ -131,6 +131,7 @@ describe('RunStatusStrip background tasks', () => {
     expect(items[0].textContent).toContain('Sleep five minutes')
     expect(items[0].textContent).toContain(agoLabel(since, now))
     expect(items[1].textContent).toContain('CI checks')
+    expect(items[1].querySelector('.run-status-bg-age')).toBeNull()
   })
 
   it('renders no list without background tasks', () => {

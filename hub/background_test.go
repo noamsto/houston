@@ -96,6 +96,7 @@ func TestBackgroundCleared(t *testing.T) {
 		"notification by tool use id":   bgNotificationUserLine(notificationText([]string{"zzz"}, "tu1", "failed")),
 		"queued notification":           bgNotificationQueueLine(notificationText([]string{"bsh1"}, "tu1", "killed")),
 		"orphan summary lists many ids": bgNotificationUserLine(notificationText([]string{"a", "bsh1", "b"}, "", "stopped")),
+		"KillShell":                     bgStartLine("tu9", "KillShell", `{"shell_id":"bsh1"}`, "2026-01-01T00:00:01Z") + bgResultLine("tu9", "killed", false),
 		"TaskStop":                      bgStartLine("tu9", "TaskStop", `{"task_id":"bsh1"}`, "2026-01-01T00:00:01Z") + bgResultLine("tu9", "stopped", false),
 	}
 	for name, tail := range cases {
@@ -195,5 +196,27 @@ func TestHubRefreshClearsBackgroundAcrossPartialWrite(t *testing.T) {
 	h.refreshTranscript("s1")
 	if got := h.sessions["s1"].view.Background; len(got) != 0 {
 		t.Fatalf("after end record: %+v, want cleared", got)
+	}
+}
+
+func TestBackgroundEventPayloadTagsEndNothing(t *testing.T) {
+	payload := "<task-notification>\n<task-id>bmon</task-id>\n<tool-use-id>tu1</tool-use-id>\n<event>\nlog: <status>completed</status> <task-id>bsh2</task-id>\n</event>\n</task-notification>"
+	got := trackerFor(t,
+		bgStartLine("tu1", "Monitor", monitorInput, "2026-01-01T00:00:00Z")+
+			bgResultLine("tu1", "Monitor started (task bmon, timeout 1ms)", false)+
+			bgStartLine("tu2", "Bash", shellInput, "2026-01-01T00:00:00Z")+
+			bgResultLine("tu2", fmt.Sprintf(shellResult, "bsh2"), false)+
+			bgNotificationUserLine(payload))
+	if len(got) != 2 {
+		t.Fatalf("got %+v, want both still outstanding", got)
+	}
+}
+
+func TestBackgroundMissingTimestampLeavesSinceUnset(t *testing.T) {
+	got := trackerFor(t,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu1","name":"Bash","input":`+shellInput+`}]}}`+"\n"+
+			bgResultLine("tu1", fmt.Sprintf(shellResult, "bsh1"), false))
+	if len(got) != 1 || got[0].Since != 0 {
+		t.Fatalf("got %+v, want one task with Since 0", got)
 	}
 }

@@ -37,7 +37,7 @@ export function RunStatusStrip({ run, now }: { run: Run; now: number }) {
           {run.background.map((t) => (
             <li key={t.id} className="run-status-bg-task">
               <span className="run-status-bg-kind">{t.kind}</span>
-              <span className="run-status-bg-hint">{t.hint}</span>
+              <span className="run-status-bg-hint">{t.hint || t.id}</span>
               {!!t.since && <span className="run-status-bg-age">{agoLabel(t.since, now)}</span>}
             </li>
           ))}
