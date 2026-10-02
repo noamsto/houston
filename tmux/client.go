@@ -98,11 +98,16 @@ func NewClient() *Client {
 	return &Client{tmuxPath: "tmux"}
 }
 
-// output runs a tmux command with a timeout and returns its stdout.
+// output runs a tmux command with a timeout and returns its stdout. -u forces
+// the client to treat its output as UTF-8: outside a UTF-8 locale tmux rewrites
+// control characters in -F output to '_', corrupting the option separators. The
+// client's locale — not the server's — governs this, and -u needs no locale
+// database.
 func (c *Client) output(args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), cmdTimeout)
 	defer cancel()
-	return exec.CommandContext(ctx, c.tmuxPath, args...).Output() //nolint:gosec // tmuxPath is the resolved tmux binary; args are built by callers
+	argv := append([]string{"-u"}, args...)
+	return exec.CommandContext(ctx, c.tmuxPath, argv...).Output() //nolint:gosec // tmuxPath is the resolved tmux binary; args are built by callers
 }
 
 // run runs a tmux command with a timeout, discarding output.
