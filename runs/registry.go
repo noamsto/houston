@@ -68,8 +68,17 @@ func NewRegistry(order []string) *Registry {
 func (r *Registry) Apply(d Delta) {
 	r.mu.Lock()
 	keys := []string{d.Key}
-	if old, ok := r.layers[d.Key]["crew"]; ok && d.Source == "crew" && old.CrewSession != "" {
-		keys = append(keys, sessionKeyFor(old.CrewSession))
+	// A layer that names a session can shadow that session's history card, so
+	// its old and new Session/CrewSession both need re-settling.
+	named := func(l Run) {
+		for _, sid := range []string{l.CrewSession, l.Session} {
+			if sid != "" {
+				keys = append(keys, sessionKeyFor(sid))
+			}
+		}
+	}
+	if old, ok := r.layers[d.Key][d.Source]; ok {
+		named(old)
 	}
 	if d.Gone {
 		if bySource, ok := r.layers[d.Key]; ok {
@@ -83,9 +92,7 @@ func (r *Registry) Apply(d Delta) {
 			r.layers[d.Key] = map[string]Run{}
 		}
 		r.layers[d.Key][d.Source] = d.Run
-		if d.Source == "crew" && d.Run.CrewSession != "" {
-			keys = append(keys, sessionKeyFor(d.Run.CrewSession))
-		}
+		named(d.Run)
 	}
 
 	var payloads []Run
@@ -155,15 +162,21 @@ func (r *Registry) settleLocked(key string) (Run, bool) {
 func sessionKeyFor(sid string) string { return "claude/" + sid }
 
 // shadowedLocked reports whether key is a session-keyed history card whose
-// session another key's crew layer already names: that worker card carries
-// the conversation, so the duplicate stays out of the list. Caller holds mu.
+// session another key's worker card already carries: that key's crew layer
+// names it, the bus engine has a chat reader, and the card's hooks layer (if
+// any) shows the same session rather than a newer one after /clear. Caller
+// holds mu.
 func (r *Registry) shadowedLocked(key string) bool {
 	sid, ok := strings.CutPrefix(key, "claude/")
-	if !ok {
+	if !ok || sid == "" {
 		return false
 	}
 	for other, bySource := range r.layers {
-		if other != key && bySource["crew"].CrewSession == sid {
+		crew := bySource["crew"]
+		if other == key || crew.CrewSession != sid || chat.For(crew.Agent) == nil {
+			continue
+		}
+		if hs := bySource["hooks"].Session; hs == "" || hs == sid {
 			return true
 		}
 	}
@@ -197,8 +210,8 @@ func (r *Registry) composeLocked(key string) (Run, bool) {
 		mergeInto(&out, bySource[name])
 	}
 	out.ID = idFor(key)
-	if out.Session == "" {
-		out.Session = bySource["crew"].CrewSession
+	if crew := bySource["crew"]; out.Session == "" && chat.For(crew.Agent) != nil {
+		out.Session = crew.CrewSession
 	}
 	out.Caps = deriveCaps(bySource)
 	// run.go documents "non-nil Question implies State == StateBlocked", and

@@ -408,7 +408,7 @@ func deltasFromCrewLog(rd io.Reader) map[string]crewBranch {
 		}
 		// The newest dispatch/resume row is authoritative: a --fresh resume mints
 		// a new session id.
-		if (rec.Kind == "dispatch" || rec.Kind == "resume") && rec.EngineSession != "" {
+		if rec.Kind == "dispatch" || rec.Kind == "resume" {
 			r.CrewSession = rec.EngineSession
 		}
 		if rec.Kind == "msg" && strings.HasPrefix(rec.From, "dispatcher:") && rec.TS > dispatcherReplyTS[branch] {

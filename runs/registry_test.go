@@ -1076,3 +1076,34 @@ func TestCrewSessionNeedsAReaderForTheBusEngine(t *testing.T) {
 		t.Error("a codex bus record granted Chat")
 	}
 }
+
+func TestShadowFollowsTheSessionTheWorkerCardShows(t *testing.T) {
+	r := NewRegistry(DefaultOrder)
+	r.Apply(Delta{Source: "hooks", Key: "claude/s1", Run: Run{Agent: "claude", Session: "s1"}})
+	r.Apply(Delta{Source: "crew", Key: "%1", Run: Run{Agent: "claude", CrewSession: "s1"}})
+	if got := len(r.Snapshot()); got != 1 {
+		t.Fatalf("%d runs, want 1", got)
+	}
+
+	// /clear: the pane's hooks layer moves to s2, so s1 has no other card.
+	r.Apply(Delta{Source: "hooks", Key: "%1", Run: Run{Agent: "claude", Session: "s2"}})
+	ids := map[string]bool{}
+	for _, run := range r.Snapshot() {
+		ids[run.ID] = true
+	}
+	if !ids["sess-s1"] || !ids["pane-1"] || len(ids) != 2 {
+		t.Fatalf("after /clear: %v, want pane-1 and sess-s1", ids)
+	}
+
+	// --fresh resume: the crew layer names s3; s1 stays visible, s3 is hidden.
+	r.Apply(Delta{Source: "hooks", Key: "claude/s3", Run: Run{Agent: "claude", Session: "s3"}})
+	r.Apply(Delta{Source: "hooks", Key: "%1", Run: Run{Agent: "claude", Session: "s3"}})
+	r.Apply(Delta{Source: "crew", Key: "%1", Run: Run{Agent: "claude", CrewSession: "s3"}})
+	ids = map[string]bool{}
+	for _, run := range r.Snapshot() {
+		ids[run.ID] = true
+	}
+	if !ids["sess-s1"] || ids["sess-s3"] {
+		t.Fatalf("after fresh resume: %v, want sess-s1 shown and sess-s3 hidden", ids)
+	}
+}
