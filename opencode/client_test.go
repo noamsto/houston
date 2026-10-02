@@ -3,9 +3,11 @@ package opencode
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -165,5 +167,35 @@ func TestClient_SessionIDIsEscapedIntoOnePathSegment(t *testing.T) {
 	}
 	if rawQuery != "" {
 		t.Errorf("query = %q, want empty", rawQuery)
+	}
+}
+
+func TestClient_RejectsDotSessionIDs(t *testing.T) {
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+	}))
+	defer server.Close()
+	c := NewClient(server.URL)
+	ctx := context.Background()
+
+	for _, id := range []string{"", ".", ".."} {
+		calls := map[string]error{
+			"GetSession":      func() error { _, err := c.GetSession(ctx, id); return err }(),
+			"GetMessages":     func() error { _, err := c.GetMessages(ctx, id, 10); return err }(),
+			"GetTodos":        func() error { _, err := c.GetTodos(ctx, id); return err }(),
+			"SendPrompt":      func() error { _, err := c.SendPrompt(ctx, id, PromptRequest{}); return err }(),
+			"SendPromptAsync": c.SendPromptAsync(ctx, id, PromptRequest{}),
+			"AbortSession":    c.AbortSession(ctx, id),
+			"DeleteSession":   c.DeleteSession(ctx, id),
+		}
+		for name, err := range calls {
+			if !errors.Is(err, ErrInvalidSessionID) {
+				t.Errorf("%s(%q) err = %v, want ErrInvalidSessionID", name, id, err)
+			}
+		}
+	}
+	if n := hits.Load(); n != 0 {
+		t.Fatalf("server received %d requests, want 0", n)
 	}
 }

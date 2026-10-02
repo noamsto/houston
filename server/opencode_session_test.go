@@ -205,3 +205,67 @@ func TestOpenCodeSessionIDStaysOneSegment(t *testing.T) {
 		t.Fatalf("no request carried the escaped session id; saw %q", seen)
 	}
 }
+
+func TestOpenCodeSessionRefusesDotIDs(t *testing.T) {
+	var mu sync.Mutex
+	var seen []string
+	inner := fakeOpenCode(t, nil)
+	rec := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.URL.EscapedPath())
+		mu.Unlock()
+		inner.Config.Handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(rec.Close)
+
+	disc := opencode.NewDiscovery(opencode.WithStaticURL(rec.URL))
+	disc.Scan(context.Background())
+	allowed := []string{replyOrigin}
+	s := &Server{
+		auth:        &authGate{token: replyToken, enabled: true, allowedOrigins: allowed},
+		hosts:       deriveHosts(nil, allowed),
+		ocDiscovery: disc,
+		ocManager:   opencode.NewManager(disc),
+	}
+	mu.Lock()
+	baseline := len(seen)
+	mu.Unlock()
+
+	do := func(id, action string) *httptest.ResponseRecorder {
+		p := "/api/opencode/session/" + url.PathEscape(rec.URL) + "/" + id
+		method, body := http.MethodGet, ""
+		if action != "" {
+			p += "/" + action
+			method = http.MethodPost
+		}
+		if action == "send" {
+			body = "input=hi"
+		}
+		req := replyRequest(method, p, body)
+		if body != "" {
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		}
+		return doReply(t, s, req)
+	}
+
+	for _, id := range []string{"%2E", "%2E%2E", ".%2e", "%2e", "%2e%2E"} {
+		for _, action := range []string{"", "abort", "send"} {
+			if code := do(id, action).Code; code != http.StatusBadRequest {
+				t.Errorf("id %q action %q: status %d, want 400", id, action, code)
+			}
+		}
+	}
+	for _, id := range []string{".", ".."} {
+		for _, action := range []string{"", "abort", "send"} {
+			if code := do(id, action).Code; code == http.StatusOK {
+				t.Errorf("literal id %q action %q: status 200, want refusal", id, action)
+			}
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != baseline {
+		t.Fatalf("upstream received requests for dot ids: %q", seen[baseline:])
+	}
+}

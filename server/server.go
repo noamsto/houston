@@ -1172,6 +1172,10 @@ func (s *Server) handleOpenCodeSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid session ID", http.StatusBadRequest)
 		return
 	}
+	if !opencode.ValidSessionID(sessionID) {
+		http.Error(w, "invalid session ID", http.StatusBadRequest)
+		return
+	}
 
 	// Handle actions
 	if len(parts) == 3 {
