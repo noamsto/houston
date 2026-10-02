@@ -1298,3 +1298,18 @@ func TestDeltasFromCrewLogWatchdogAsksOnlyWhatTheHumanCanAnswer(t *testing.T) {
 		}
 	})
 }
+
+func TestCrewLogReadsEngineSessionNewestWins(t *testing.T) {
+	log := `{"ts":1,"kind":"dispatch","branch":"feat/a","engine":"claude","engine_session":"old"}
+{"ts":2,"from":"worker:feat/a#s1-2","kind":"status","body":{"state":"working"}}
+{"ts":3,"kind":"resume","branch":"feat/a","engine":"claude","engine_session":"new"}
+{"ts":4,"kind":"dispatch","branch":"feat/b","engine":"codex","engine_session":null}
+{"ts":5,"kind":"dispatch","branch":"feat/c","engine":"claude"}
+`
+	got := deltasFromCrewLog(strings.NewReader(log))
+	for branch, want := range map[string]string{"feat/a": "new", "feat/b": "", "feat/c": ""} {
+		if got[branch].CrewSession != want {
+			t.Errorf("%s: CrewSession = %q, want %q", branch, got[branch].CrewSession, want)
+		}
+	}
+}

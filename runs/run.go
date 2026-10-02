@@ -42,6 +42,11 @@ type Run struct {
 	// look up the run's chat transcript — and never on the wire.
 	Session string `json:"-"`
 
+	// CrewSession is the engine session id the crew bus's dispatch/resume row
+	// names for the worker. Internal; it never overrides a hooks-named Session
+	// and, unlike Session, is trusted without any pane identity.
+	CrewSession string `json:"-"`
+
 	// Stale means a source stopped reporting. The Run keeps its last known
 	// values and says so; it is never a State, because a stale run still has
 	// one.
