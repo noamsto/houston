@@ -92,6 +92,28 @@ describe('RepoPicker', () => {
     expect(onChanged).not.toHaveBeenCalled()
   })
 
+  it('clears the search error once a later search succeeds', async () => {
+    setup()
+    await screen.findByText('alpha')
+    fetchCandidatesMock.mockRejectedValueOnce(new Error('search blew up'))
+    fireEvent.change(screen.getByLabelText('Search repos'), { target: { value: 'be' } })
+    expect(await screen.findByRole('alert')).toBeTruthy()
+
+    fireEvent.change(screen.getByLabelText('Search repos'), { target: { value: 'bet' } })
+
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
+  })
+
+  it('keeps a failed repo-list error until the list loads again', async () => {
+    fetchReposMock.mockRejectedValueOnce(new Error('list blew up'))
+    fetchCandidatesMock.mockResolvedValue({ roots: [], candidates: [], truncated: false })
+    render(<RepoPicker onChanged={vi.fn()} onClose={vi.fn()} />)
+
+    expect(await screen.findByText('list blew up')).toBeTruthy()
+    await waitFor(() => expect(fetchCandidatesMock).toHaveBeenCalled())
+    expect(screen.getByRole('alert').textContent).toBe('list blew up')
+  })
+
   it('closes', async () => {
     const { onClose } = setup()
 

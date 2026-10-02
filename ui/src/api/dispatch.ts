@@ -103,7 +103,16 @@ export interface DispatcherRequest {
 
 export type DispatcherOutcome =
   | { kind: 'started'; crew: string; session: string; window: string; pane: string; runId: string }
-  | { kind: 'failed'; status: number; error: string; output?: string }
+  | {
+      kind: 'failed'
+      status: number
+      error: string
+      output?: string
+      crew?: string
+      session?: string
+      window?: string
+      pane?: string
+    }
 
 interface DispatcherSuccessBody {
   crew: string
@@ -111,6 +120,12 @@ interface DispatcherSuccessBody {
   window: string
   pane: string
   run_id: string
+}
+
+interface DispatcherErrorBody extends DispatchErrorBody {
+  session?: string
+  window?: string
+  pane?: string
 }
 
 export async function submitDispatcher(req: DispatcherRequest): Promise<DispatcherOutcome> {
@@ -141,8 +156,17 @@ export async function submitDispatcher(req: DispatcherRequest): Promise<Dispatch
     }
   }
   try {
-    const body = JSON.parse(text) as DispatchErrorBody
-    return { kind: 'failed', status: res.status, error: body.error, output: body.output }
+    const body = JSON.parse(text) as DispatcherErrorBody
+    return {
+      kind: 'failed',
+      status: res.status,
+      error: body.error,
+      output: body.output,
+      crew: body.crew,
+      session: body.session,
+      window: body.window,
+      pane: body.pane,
+    }
   } catch {
     return { kind: 'failed', status: res.status, error: text.trim() }
   }

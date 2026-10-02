@@ -148,6 +148,39 @@ describe('submitDispatcher', () => {
     })
   })
 
+  it('maps the crew left behind on a failure', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.resolve(jsonResponse(422, '{"error":"died at startup","crew":"1700000000-42"}'))),
+    )
+    expect(await submitDispatcher(dreq)).toEqual({
+      kind: 'failed',
+      status: 422,
+      error: 'died at startup',
+      crew: '1700000000-42',
+    })
+  })
+
+  it('maps session, window and pane on a could-not-check 502', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve(
+          jsonResponse(502, '{"error":"could not check the dispatcher pane","crew":"1-2","session":"repo","window":"@3","pane":"%7"}'),
+        ),
+      ),
+    )
+    expect(await submitDispatcher(dreq)).toEqual({
+      kind: 'failed',
+      status: 502,
+      error: 'could not check the dispatcher pane',
+      crew: '1-2',
+      session: 'repo',
+      window: '@3',
+      pane: '%7',
+    })
+  })
+
   it('non-200 non-JSON body is returned as the error text', async () => {
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(jsonResponse(502, 'bad gateway\n'))))
     expect(await submitDispatcher(dreq)).toEqual({ kind: 'failed', status: 502, error: 'bad gateway' })

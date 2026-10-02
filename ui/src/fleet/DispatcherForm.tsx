@@ -5,9 +5,25 @@ import type { Run } from '../api/runs'
 import { buildDispatcherRequest, MAX_TASKS, taskRowsProblem } from './dispatcherForm'
 import { runHash } from './routes'
 
-export function DispatcherForm({ options, repo, runs }: { options: DispatchOptions; repo: string; runs: Run[] }) {
+interface TaskRow {
+  id: number
+  text: string
+}
+
+export function DispatcherForm({
+  options,
+  repo,
+  runs,
+  onStarted,
+}: {
+  options: DispatchOptions
+  repo: string
+  runs: Run[]
+  onStarted: () => void
+}) {
   const engines = options.dispatcher_engines ?? []
-  const [rows, setRows] = useState<string[]>([''])
+  const nextRowId = useRef(1)
+  const [rows, setRows] = useState<TaskRow[]>([{ id: 0, text: '' }])
   const [chosenEngine, setChosenEngine] = useState('')
   const [model, setModel] = useState('')
   const [effort, setEffort] = useState('')
@@ -22,15 +38,21 @@ export function DispatcherForm({ options, repo, runs }: { options: DispatchOptio
 
   const engine = engines.includes(chosenEngine) ? chosenEngine : (engines[0] ?? '')
   const models = options.engines[engine] ?? []
-  const problem = taskRowsProblem(rows)
+  const problem = taskRowsProblem(rows.map((r) => r.text))
   const disabledReason =
-    engines.length === 0
-      ? (options.dispatcher_engines_error ?? 'No dispatcher engines available')
-      : problem
+    repo === ''
+      ? 'Add a repo first'
+      : engines.length === 0
+        ? (options.dispatcher_engines_error ?? 'No dispatcher engines available')
+        : problem
   const canSubmit = !submitting && !disabledReason
 
-  function setRow(i: number, text: string): void {
-    setRows((rs) => rs.map((r, j) => (j === i ? text : r)))
+  function newRow(): TaskRow {
+    return { id: nextRowId.current++, text: '' }
+  }
+
+  function setRow(id: number, text: string): void {
+    setRows((rs) => rs.map((r) => (r.id === id ? { ...r, text } : r)))
   }
 
   function chooseEngine(eng: string): void {
@@ -42,10 +64,14 @@ export function DispatcherForm({ options, repo, runs }: { options: DispatchOptio
     e.preventDefault()
     if (!canSubmit) return
     setSubmitting(true)
-    const result = await submitDispatcher(buildDispatcherRequest({ repo, rows, engine, model, effort }))
+    const result = await submitDispatcher(
+      buildDispatcherRequest({ repo, rows: rows.map((r) => r.text), engine, model, effort }),
+    )
     setSubmitting(false)
     setOutcome(result)
-    if (result.kind === 'started') setRows([''])
+    if (result.kind !== 'started') return
+    setRows([newRow()])
+    onStarted()
   }
 
   const startedRun = outcome?.kind === 'started' ? runs.find((r) => r.id === outcome.runId) : undefined
@@ -53,16 +79,16 @@ export function DispatcherForm({ options, repo, runs }: { options: DispatchOptio
   return (
     <>
       <form className="dispatch-form" onSubmit={(e) => { void handleSubmit(e) }}>
-        {rows.map((text, i) => (
-          <div key={i} className="dispatch-field dispatch-task-row">
-            <label htmlFor={`dispatcher-task-${i}`}>{`Task ${i + 1}`}</label>
+        {rows.map((row, i) => (
+          <div key={row.id} className="dispatch-field dispatch-task-row">
+            <label htmlFor={`dispatcher-task-${row.id}`}>{`Task ${i + 1}`}</label>
             <div className="dispatch-task-input">
               <textarea
-                id={`dispatcher-task-${i}`}
-                value={text}
+                id={`dispatcher-task-${row.id}`}
+                value={row.text}
                 disabled={submitting}
                 rows={3}
-                onChange={(e) => setRow(i, e.target.value)}
+                onChange={(e) => setRow(row.id, e.target.value)}
               />
               {rows.length > 1 && (
                 <button
@@ -70,7 +96,7 @@ export function DispatcherForm({ options, repo, runs }: { options: DispatchOptio
                   className="dispatch-task-remove"
                   aria-label={`Remove task ${i + 1}`}
                   disabled={submitting}
-                  onClick={() => setRows((rs) => rs.filter((_, j) => j !== i))}
+                  onClick={() => setRows((rs) => rs.filter((r) => r.id !== row.id))}
                 >
                   ×
                 </button>
@@ -82,7 +108,7 @@ export function DispatcherForm({ options, repo, runs }: { options: DispatchOptio
           type="button"
           className="dispatch-add-task"
           disabled={submitting || rows.length >= MAX_TASKS}
-          onClick={() => setRows((rs) => [...rs, ''])}
+          onClick={() => setRows((rs) => [...rs, newRow()])}
         >
           Add task
         </button>
@@ -139,6 +165,16 @@ export function DispatcherForm({ options, repo, runs }: { options: DispatchOptio
         {outcome?.kind === 'failed' && (
           <div className="dispatch-result failure">
             <pre>{outcome.error}</pre>
+            {outcome.crew && <p>Crew <code>{outcome.crew}</code> was left behind.</p>}
+            {(outcome.session || outcome.window || outcome.pane) && (
+              <p className="dispatch-hint">
+                {[
+                  outcome.session && `session ${outcome.session}`,
+                  outcome.window && `window ${outcome.window}`,
+                  outcome.pane && `pane ${outcome.pane}`,
+                ].filter(Boolean).join(', ')}
+              </p>
+            )}
             {outcome.output && (
               <details>
                 <summary>Output</summary>

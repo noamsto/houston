@@ -30,8 +30,8 @@ function run(p: Partial<Run> = {}): Run {
   } as Run
 }
 
-function setup(o: DispatchOptions = options, runs: Run[] = []) {
-  return render(<DispatcherForm options={o} repo="/repo/a" runs={runs} />)
+function setup(o: DispatchOptions = options, runs: Run[] = [], repo = '/repo/a', onStarted: () => void = () => {}) {
+  return render(<DispatcherForm options={o} repo={repo} runs={runs} onStarted={onStarted} />)
 }
 
 function change(label: string, v: string): void {
@@ -81,7 +81,45 @@ describe('DispatcherForm task rows', () => {
     change('Task 1', '-rf everything')
 
     expect(startButton().disabled).toBe(true)
-    expect(screen.getByText('A task cannot start with "-"')).toBeTruthy()
+    expect(screen.getByText('Task 1 cannot start with "-"')).toBeTruthy()
+  })
+})
+
+describe('DispatcherForm row identity', () => {
+  it('keeps the other rows\' text and renumbers labels when a middle row is removed', () => {
+    setup()
+    fireEvent.click(screen.getByRole('button', { name: 'Add task' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add task' }))
+    change('Task 1', 'one')
+    change('Task 2', 'two')
+    change('Task 3', 'three')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove task 2' }))
+
+    expect((screen.getByLabelText('Task 1') as HTMLTextAreaElement).value).toBe('one')
+    expect((screen.getByLabelText('Task 2') as HTMLTextAreaElement).value).toBe('three')
+    expect(screen.queryByLabelText('Task 3')).toBeNull()
+  })
+
+  it('keeps DOM nodes with their text when an earlier row is removed', () => {
+    setup()
+    fireEvent.click(screen.getByRole('button', { name: 'Add task' }))
+    change('Task 1', 'one')
+    change('Task 2', 'two')
+    const second = screen.getByLabelText('Task 2')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove task 1' }))
+
+    expect(screen.getByLabelText('Task 1')).toBe(second)
+  })
+})
+
+describe('DispatcherForm repo guard', () => {
+  it('disables submit and says to add a repo when none is selected', () => {
+    setup(options, [], '')
+
+    expect(startButton().disabled).toBe(true)
+    expect(screen.getByText('Add a repo first')).toBeTruthy()
   })
 })
 
@@ -153,6 +191,21 @@ describe('DispatcherForm submit', () => {
     await screen.findByText(/Waiting for it to appear in Fleet/)
   })
 
+  it('calls onStarted after a successful launch only', async () => {
+    const onStarted = vi.fn()
+    setup(options, [], '/repo/a', onStarted)
+    submitDispatcherMock.mockResolvedValueOnce({ kind: 'failed', status: 422, error: 'nope' })
+    fireEvent.click(startButton())
+    await screen.findByText('nope')
+    expect(onStarted).not.toHaveBeenCalled()
+
+    submitDispatcherMock.mockResolvedValueOnce({ kind: 'started', crew: '1-2', session: 's', window: '@1', pane: '%7', runId: 'pane-7' })
+    fireEvent.click(startButton())
+
+    await screen.findByText(/Waiting for it to appear in Fleet/)
+    expect(onStarted).toHaveBeenCalledTimes(1)
+  })
+
   it('sends one request from two rapid clicks', async () => {
     setup()
     let resolve!: (o: DispatcherOutcome) => void
@@ -189,7 +242,7 @@ describe('DispatcherForm result', () => {
     fireEvent.click(startButton())
     await screen.findByText(/Waiting for it to appear in Fleet/)
 
-    rerender(<DispatcherForm options={options} repo="/repo/a" runs={[run({ id: 'pane-7' })]} />)
+    rerender(<DispatcherForm options={options} repo="/repo/a" runs={[run({ id: 'pane-7' })]} onStarted={() => {}} />)
 
     const link = screen.getByRole('link', { name: 'Open run' }) as HTMLAnchorElement
     expect(link.getAttribute('href')).toBe('#/fleet/pane-7')
@@ -203,5 +256,40 @@ describe('DispatcherForm result', () => {
 
     expect(await screen.findByText('launcher died')).toBeTruthy()
     expect(screen.getByText('boom on line 3')).toBeTruthy()
+  })
+
+  it('names the crew left behind on a failure', async () => {
+    setup()
+    submitDispatcherMock.mockResolvedValue({ kind: 'failed', status: 422, error: 'launcher died', crew: '1700-42' })
+    fireEvent.click(startButton())
+
+    await screen.findByText('launcher died')
+    expect(screen.getByText('1700-42')).toBeTruthy()
+    expect(screen.getByText(/was left behind/)).toBeTruthy()
+  })
+
+  it('shows session, window and pane when the pane could not be checked', async () => {
+    setup()
+    submitDispatcherMock.mockResolvedValue({
+      kind: 'failed', status: 502, error: 'could not check the dispatcher pane',
+      crew: '1-2', session: 'proj', window: '@3', pane: '%7',
+    })
+    fireEvent.click(startButton())
+
+    await screen.findByText('could not check the dispatcher pane')
+    const detail = screen.getByText(/session/i, { selector: 'p' })
+    expect(detail.textContent).toMatch(/proj/)
+    expect(detail.textContent).toMatch(/@3/)
+    expect(detail.textContent).toMatch(/%7/)
+  })
+
+  it('shows neither extra line when the failure carries no crew or pane', async () => {
+    setup()
+    submitDispatcherMock.mockResolvedValue({ kind: 'failed', status: 400, error: 'bad' })
+    fireEvent.click(startButton())
+
+    await screen.findByText('bad')
+    expect(screen.queryByText(/was left behind/)).toBeNull()
+    expect(screen.queryByText(/session/i, { selector: 'p' })).toBeNull()
   })
 })

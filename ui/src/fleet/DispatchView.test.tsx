@@ -66,12 +66,24 @@ async function renderLoaded(runs: Run[] = []) {
   return utils
 }
 
+// The dispatcher form stays mounted (hidden) in worker mode, so a label can
+// match both forms; only the visible one is the field under test.
+function visibleFields(label: string): HTMLElement[] {
+  return screen.queryAllByLabelText(label).filter((el) => !el.closest('[hidden]'))
+}
+
+function field(label: string): HTMLElement {
+  const els = visibleFields(label)
+  expect(els, `visible fields labelled "${label}"`).toHaveLength(1)
+  return els[0]
+}
+
 function value(label: string): string {
-  return (screen.getByLabelText(label) as HTMLSelectElement | HTMLInputElement).value
+  return (field(label) as HTMLSelectElement | HTMLInputElement).value
 }
 
 function change(label: string, v: string): void {
-  fireEvent.change(screen.getByLabelText(label), { target: { value: v } })
+  fireEvent.change(field(label), { target: { value: v } })
 }
 
 async function submitTitle(t = 'go'): Promise<void> {
@@ -139,7 +151,7 @@ describe('DispatchView options', () => {
   it('labels existing crews with their age and always offers New crew', async () => {
     await renderLoaded()
 
-    const labels = within(screen.getByLabelText('Crew')).getAllByRole('option').map((o) => o.textContent)
+    const labels = within(field('Crew')).getAllByRole('option').map((o) => o.textContent)
     expect(labels[0]).toMatch(/^200-1 · \d+d ago$/)
     expect(labels[1]).toMatch(/^100-2 · \d+d ago$/)
     expect(labels[2]).toBe('New crew')
@@ -160,7 +172,7 @@ describe('DispatchView field resets', () => {
 
     change('Engine', 'codex')
 
-    const modelSelect = screen.getByLabelText('Model') as HTMLSelectElement
+    const modelSelect = field('Model') as HTMLSelectElement
     expect(modelSelect.value).toBe('gpt-5.6-terra')
     expect(within(modelSelect).getAllByRole('option').map((o) => (o as HTMLOptionElement).value)).toEqual([
       'gpt-5.6-sol', 'gpt-5.6-terra',
@@ -273,7 +285,7 @@ describe('DispatchView submit', () => {
 
     expect(await screen.findByText(/\(new crew\)/)).toBeTruthy()
     expect(value('Crew')).toBe('300-9')
-    const values = within(screen.getByLabelText('Crew')).getAllByRole('option').map((o) => (o as HTMLOptionElement).value)
+    const values = within(field('Crew')).getAllByRole('option').map((o) => (o as HTMLOptionElement).value)
     expect(values).toEqual(['300-9', 'new'])
     expect(screen.queryByText(/No crew yet/)).toBeNull()
   })
@@ -286,7 +298,7 @@ describe('DispatchView submit', () => {
 
     expect(await screen.findByText('dispatch timed out')).toBeTruthy()
     expect(value('Crew')).toBe('300-9')
-    const values = within(screen.getByLabelText('Crew')).getAllByRole('option').map((o) => (o as HTMLOptionElement).value)
+    const values = within(field('Crew')).getAllByRole('option').map((o) => (o as HTMLOptionElement).value)
     expect(values).toEqual(['300-9', 'new'])
   })
 
@@ -388,8 +400,8 @@ describe('DispatchView modes', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'New dispatcher' }))
 
-    expect(screen.getByLabelText('Task 1')).toBeTruthy()
-    expect(screen.queryByLabelText('Title')).toBeNull()
+    expect(field('Task 1')).toBeTruthy()
+    expect(visibleFields('Title')).toHaveLength(0)
     expect(value('Repo')).toBe('/repo/b')
     expect(screen.getByRole('button', { name: 'New dispatcher' }).getAttribute('aria-pressed')).toBe('true')
     expect(JSON.parse(localStorage.getItem(PREFS_KEY)!)).toEqual({ repo: '/repo/b', engine: 'codex', mode: 'dispatcher' })
@@ -399,7 +411,7 @@ describe('DispatchView modes', () => {
     localStorage.setItem(PREFS_KEY, JSON.stringify({ mode: 'dispatcher' }))
     await renderLoaded()
 
-    expect(screen.getByLabelText('Task 1')).toBeTruthy()
+    expect(field('Task 1')).toBeTruthy()
   })
 
   it('a #/dispatch link forces worker mode', async () => {
@@ -407,9 +419,9 @@ describe('DispatchView modes', () => {
     window.location.hash = '#/dispatch?repo=%2Frepo%2Fb&crew=new'
     await renderLoaded()
 
-    expect(await screen.findByLabelText('Title')).toBeTruthy()
+    await waitFor(() => expect(visibleFields('Title')).toHaveLength(1))
     expect(value('Repo')).toBe('/repo/b')
-    expect(screen.queryByLabelText('Task 1')).toBeNull()
+    expect(visibleFields('Task 1')).toHaveLength(0)
   })
 
   it('a worker dispatch keeps the remembered mode', async () => {
@@ -423,6 +435,101 @@ describe('DispatchView modes', () => {
     expect(JSON.parse(localStorage.getItem(PREFS_KEY)!)).toEqual({
       mode: 'worker', repo: '/repo/a', engine: 'claude', model: 'sonnet', tier: 'standard', effort: 'medium',
     })
+  })
+})
+
+describe('DispatchView dispatcher draft', () => {
+  const startedOutcome = { kind: 'started', crew: '1-2', session: 'proj', window: '@1', pane: '%7', runId: 'pane-7' }
+
+  it('keeps the dispatcher rows when toggling to Add worker and back', async () => {
+    await renderLoaded()
+    fireEvent.click(screen.getByRole('button', { name: 'New dispatcher' }))
+    change('Task 1', 'first')
+    fireEvent.click(screen.getByRole('button', { name: 'Add task' }))
+    change('Task 2', 'second')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add worker' }))
+    expect(visibleFields('Task 1')).toHaveLength(0)
+    fireEvent.click(screen.getByRole('button', { name: 'New dispatcher' }))
+
+    expect(value('Task 1')).toBe('first')
+    expect(value('Task 2')).toBe('second')
+  })
+
+  it('shows the launch result after toggling away and back mid-flight', async () => {
+    await renderLoaded()
+    fireEvent.click(screen.getByRole('button', { name: 'New dispatcher' }))
+    let resolve!: (o: unknown) => void
+    submitDispatcherMock.mockReturnValue(new Promise((r) => { resolve = r }))
+    fireEvent.click(screen.getByRole('button', { name: 'Start dispatcher' }))
+    await screen.findByRole('button', { name: 'Starting…' })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add worker' }))
+    fireEvent.click(screen.getByRole('button', { name: 'New dispatcher' }))
+    expect(screen.getByRole('button', { name: 'Starting…' })).toBeTruthy()
+    await act(async () => { resolve(startedOutcome) })
+
+    expect(await screen.findByText('proj')).toBeTruthy()
+    expect(submitDispatcherMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('refetches options after a launch so the new crew is listed', async () => {
+    await renderLoaded()
+    fireEvent.click(screen.getByRole('button', { name: 'New dispatcher' }))
+    submitDispatcherMock.mockResolvedValue(startedOutcome)
+    expect(fetchDispatchOptionsMock).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start dispatcher' }))
+
+    await waitFor(() => expect(fetchDispatchOptionsMock).toHaveBeenCalledTimes(2))
+  })
+
+  it('keeps a repo chosen while the post-launch refresh is in flight', async () => {
+    await renderLoaded()
+    fireEvent.click(screen.getByRole('button', { name: 'New dispatcher' }))
+    submitDispatcherMock.mockResolvedValue(startedOutcome)
+    let resolve!: (o: DispatchOptions) => void
+    fetchDispatchOptionsMock.mockReturnValueOnce(new Promise((r) => { resolve = r }))
+    fireEvent.click(screen.getByRole('button', { name: 'Start dispatcher' }))
+    await waitFor(() => expect(fetchDispatchOptionsMock).toHaveBeenCalledTimes(2))
+
+    change('Repo', '/repo/b')
+    await act(async () => {
+      resolve({
+        ...structuredClone(optionsFixture),
+        repos: [{ path: '/repo/c', name: 'repo-c', crews: [] }, optionsFixture.repos[1]],
+      })
+    })
+
+    expect(value('Repo')).toBe('/repo/b')
+  })
+})
+
+describe('DispatchView stale option refreshes', () => {
+  it('ignores an older refresh that resolves after a newer one', async () => {
+    await renderLoaded()
+    const resolvers: ((o: DispatchOptions) => void)[] = []
+    fetchDispatchOptionsMock.mockImplementation(() => new Promise((r) => { resolvers.push(r) }))
+    addRepoMock.mockResolvedValue({ ok: true, path: '/repo/c' })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Manage repos' }))
+    const add = await screen.findByRole('button', { name: 'Add repo-c' })
+    fireEvent.click(add)
+    await waitFor(() => expect(resolvers).toHaveLength(1))
+    await waitFor(() => expect((add as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(add)
+    await waitFor(() => expect(resolvers).toHaveLength(2))
+
+    const withC = {
+      ...structuredClone(optionsFixture),
+      repos: [...optionsFixture.repos, { path: '/repo/c', name: 'repo-c', crews: [] }],
+    }
+    await act(async () => { resolvers[1](withC) })
+    await waitFor(() => expect(value('Repo')).toBe('/repo/c'))
+    await act(async () => { resolvers[0](structuredClone(optionsFixture)) })
+
+    expect(value('Repo')).toBe('/repo/c')
+    expect(within(field('Repo')).getAllByRole('option')).toHaveLength(3)
   })
 })
 
@@ -456,7 +563,7 @@ describe('DispatchView task field', () => {
   it('grows to the viewport cap, then scrolls internally', async () => {
     vi.stubGlobal('visualViewport', { height: 500, addEventListener: vi.fn(), removeEventListener: vi.fn() })
     await renderLoaded()
-    const task = screen.getByLabelText('Task') as HTMLTextAreaElement
+    const task = field('Task') as HTMLTextAreaElement
     expect(task.style.touchAction).toBe('pan-y')
 
     stubScrollHeight(task, 900)
@@ -479,7 +586,7 @@ describe('DispatchView task field', () => {
     }
     vi.stubGlobal('visualViewport', vv)
     await renderLoaded()
-    const task = screen.getByLabelText('Task') as HTMLTextAreaElement
+    const task = field('Task') as HTMLTextAreaElement
     stubScrollHeight(task, 900)
     change('Task', 'long\n'.repeat(80))
     expect(task.style.height).toBe('200px')

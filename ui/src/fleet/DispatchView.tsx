@@ -52,6 +52,8 @@ export function DispatchView({ runs }: { runs: Run[] }) {
   const [outcome, setOutcome] = useState<DispatchOutcome | null>(null)
   const [outcomeWasNewCrew, setOutcomeWasNewCrew] = useState(false)
   const resultRef = useRef<HTMLDivElement>(null)
+  const refreshSeq = useRef(0)
+  const repoRef = useRef(repo)
   const taskRef = useRef<HTMLTextAreaElement>(null)
   const now = useNow()
 
@@ -139,18 +141,28 @@ export function DispatchView({ runs }: { runs: Run[] }) {
   const selectedRepo = options?.repos.find((r) => r.path === repo)
   const models = options?.engines[engine] ?? []
 
-  // Refetches without touching the draft; the picker's edits are the only
-  // thing the form must pick up.
+  useEffect(() => {
+    repoRef.current = repo
+  }, [repo])
+
+  // Refetches without touching the draft; the picker's edits and a launched
+  // dispatcher's crew are what the form must pick up. Only the latest refresh
+  // may apply, and it reads the repo as of its response, not its request.
   function refreshOptions(added?: string): void {
+    const seq = ++refreshSeq.current
     fetchDispatchOptions()
       .then((o) => {
+        if (seq !== refreshSeq.current) return
         setOptions(o)
         setRefreshError(null)
-        const keep = o.repos.some((r) => r.path === repo)
-        const next = added && o.repos.some((r) => r.path === added) ? added : keep ? repo : (o.repos[0]?.path ?? '')
-        if (next !== repo) chooseRepoIn(o, next)
+        const current = repoRef.current
+        const keep = o.repos.some((r) => r.path === current)
+        const next = added && o.repos.some((r) => r.path === added) ? added : keep ? current : (o.repos[0]?.path ?? '')
+        if (next !== current) chooseRepoIn(o, next)
       })
-      .catch((e: unknown) => setRefreshError(e instanceof Error ? e.message : String(e)))
+      .catch((e: unknown) => {
+        if (seq === refreshSeq.current) setRefreshError(e instanceof Error ? e.message : String(e))
+      })
   }
 
   function chooseRepoIn(o: DispatchOptions, path: string): void {
@@ -272,8 +284,11 @@ export function DispatchView({ runs }: { runs: Run[] }) {
         </div>
       )}
 
-      {!loadingOptions && options && mode === 'dispatcher' && (
-        <DispatcherForm options={options} repo={repo} runs={runs} />
+      {/* Kept mounted so the draft and an in-flight launch survive a mode toggle. */}
+      {!loadingOptions && options && (
+        <div hidden={mode !== 'dispatcher'}>
+          <DispatcherForm options={options} repo={repo} runs={runs} onStarted={() => refreshOptions()} />
+        </div>
       )}
 
       {!loadingOptions && options && mode === 'worker' && (

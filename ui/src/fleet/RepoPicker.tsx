@@ -20,7 +20,9 @@ export function RepoPicker({ onChanged, onClose }: { onChanged: (added?: string)
   const [query, setQuery] = useState('')
   const [candidates, setCandidates] = useState<RepoCandidate[]>([])
   const [truncated, setTruncated] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [listError, setListError] = useState<string | null>(null)
+  const [searchError, setSearchError] = useState<string | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
   const [version, setVersion] = useState(0)
   const [busy, setBusy] = useState(false)
 
@@ -31,9 +33,10 @@ export function RepoPicker({ onChanged, onClose }: { onChanged: (added?: string)
         if (cancelled) return
         setRepos(r.repos)
         setRoots(r.roots)
+        setListError(null)
       })
       .catch((e: unknown) => {
-        if (!cancelled) setError(messageOf(e))
+        if (!cancelled) setListError(messageOf(e))
       })
     return () => { cancelled = true }
   }, [version])
@@ -47,9 +50,10 @@ export function RepoPicker({ onChanged, onClose }: { onChanged: (added?: string)
             if (cancelled) return
             setCandidates(r.candidates)
             setTruncated(r.truncated)
+            setSearchError(null)
           })
           .catch((e: unknown) => {
-            if (!cancelled) setError(messageOf(e))
+            if (!cancelled) setSearchError(messageOf(e))
           })
       },
       query === '' ? 0 : SEARCH_DEBOUNCE_MS,
@@ -62,16 +66,18 @@ export function RepoPicker({ onChanged, onClose }: { onChanged: (added?: string)
 
   async function change(action: () => Promise<{ ok: true; path?: string } | { ok: false; error: string }>): Promise<void> {
     setBusy(true)
-    setError(null)
+    setActionError(null)
     const res = await action()
     setBusy(false)
     if (!res.ok) {
-      setError(res.error)
+      setActionError(res.error)
       return
     }
     setVersion((v) => v + 1)
     onChanged(res.path)
   }
+
+  const error = actionError ?? listError ?? searchError
 
   return (
     <section className="repo-picker" aria-label="Manage repos">

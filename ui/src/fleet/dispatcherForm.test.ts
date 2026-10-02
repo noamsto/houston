@@ -15,6 +15,19 @@ describe('normalizeTask', () => {
   })
 })
 
+describe('normalizeTask Go parity', () => {
+  it('collapses U+0085 and the other unicode.IsSpace members', () => {
+    expect(normalizeTask('a\u0085b')).toBe('a b')
+    expect(normalizeTask('a\u00a0\u1680\u2003\u202f\u205f\u3000b')).toBe('a b')
+    expect(normalizeTask('\u0085x\u2029')).toBe('x')
+  })
+
+  it('keeps U+FEFF, which Go does not treat as space', () => {
+    expect(normalizeTask('a\ufeffb')).toBe('a\ufeffb')
+    expect(normalizeTask('\ufeffx')).toBe('\ufeffx')
+  })
+})
+
 describe('taskRowsProblem', () => {
   it('accepts a normal set of rows', () => {
     expect(taskRowsProblem(['fix a', 'fix b', ''])).toBeNull()
@@ -36,6 +49,31 @@ describe('taskRowsProblem', () => {
     expect(taskRowsProblem(['-x'])).not.toBeNull()
     expect(taskRowsProblem(['  \n -x'])).not.toBeNull()
     expect(taskRowsProblem(['a -x'])).toBeNull()
+  })
+
+  it('rejects a leading "-" hidden behind U+0085', () => {
+    expect(taskRowsProblem(['\u0085-x'])).toMatch(/cannot start with "-"/)
+  })
+
+  it('rejects a control character, naming the row by its form label', () => {
+    expect(taskRowsProblem(['ok', '', 'a\u001bb'])).toBe('Task 3 contains a control character')
+    expect(taskRowsProblem(['a\u007fb'])).toMatch(/control character/)
+    expect(taskRowsProblem(['a\u0000b'])).toMatch(/control character/)
+  })
+
+  it('numbers a start-with-dash problem by the raw row, not the post-drop index', () => {
+    expect(taskRowsProblem(['', '', '-x'])).toBe('Task 3 cannot start with "-"')
+  })
+
+  it('caps the composed prompt at 8 KiB, composing like the server', () => {
+    const four = Array(4).fill('a'.repeat(2000)) // "4 tasks:" + 4 * (" (n) " + 2000) = 8028
+    expect(taskRowsProblem([...four, 'a'.repeat(159)])).toBeNull() // exactly 8192
+    expect(taskRowsProblem([...four, 'a'.repeat(160)])).toMatch(/too long together \(8 KB max\)/)
+  })
+
+  it('counts bytes, not characters, toward the 8 KiB cap', () => {
+    const rows = Array.from({ length: 3 }, () => 'é'.repeat(1500))
+    expect(taskRowsProblem(rows)).toMatch(/too long together/)
   })
 
   it('rejects a row over 2000 characters', () => {
