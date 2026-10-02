@@ -217,10 +217,14 @@ function Composer({ run, onSend }: { run: Run; onSend: (text: string) => Promise
       setSending(true)
     }
     setError(null)
-    const err = await send()
-    if (isSend) {
-      sendingRef.current = false
-      setSending(false)
+    let err: string | null
+    try {
+      err = await send()
+    } finally {
+      if (isSend) {
+        sendingRef.current = false
+        setSending(false)
+      }
     }
     if (err) {
       setError(err)

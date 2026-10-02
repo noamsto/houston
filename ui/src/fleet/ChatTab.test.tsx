@@ -342,34 +342,92 @@ describe('ChatTab', () => {
       fetchMock.mockImplementation(d.impl)
       fireEvent.change(screen.getByPlaceholderText('Message…'), { target: { value: 'hello' } })
       fireEvent.click(sendBtn())
-      fireEvent.click(sendBtn())
+      fireEvent.keyDown(screen.getByPlaceholderText('Message…'), { key: 'Enter', ctrlKey: true })
+      fireEvent.keyDown(screen.getByPlaceholderText('Message…'), { key: 'Enter', ctrlKey: true })
       await waitFor(() => expect(d.pending).toHaveLength(1))
       await act(async () => d.pending[0].resolve(okResponse()))
       expect(d.pending).toHaveLength(1)
     })
 
-    it('an image attach holds the gate while the file is read, so a Send cannot overlap or drop it', async () => {
-      const { fetchMock } = await renderReady({}, { page: page('e1', []) })
-      const d = deferredInput()
-      fetchMock.mockImplementation(d.impl)
-      let finishRead: () => void = () => {}
-      const readAsDataURL = vi.spyOn(FileReader.prototype, 'readAsDataURL').mockImplementation(function (this: FileReader) {
-        finishRead = () => {
+    function stubFileReader(mode: 'ok' | 'error') {
+      let finish: () => void = () => {}
+      const spy = vi.spyOn(FileReader.prototype, 'readAsDataURL').mockImplementation(function (this: FileReader) {
+        finish = () => {
+          if (mode === 'error') {
+            this.onerror?.(new ProgressEvent('error') as ProgressEvent<FileReader>)
+            return
+          }
           Object.defineProperty(this, 'result', { value: 'data:image/png;base64,AAAA' })
           this.onload?.(new ProgressEvent('load') as ProgressEvent<FileReader>)
         }
       })
-      fireEvent.change(screen.getByPlaceholderText('Message…'), { target: { value: 'hello' } })
+      return { finish: () => finish(), restore: () => spy.mockRestore() }
+    }
+    const pickFile = () => {
       const input = document.querySelector('input[type=file]') as HTMLInputElement
       fireEvent.change(input, { target: { files: [new File(['x'], 'a.png', { type: 'image/png' })] } })
-      await waitFor(() => expect(sendBtn().disabled).toBe(true))
+    }
+
+    it('an image attach holds the gate while the file is read, so a Send cannot overlap or drop it', async () => {
+      const { fetchMock } = await renderReady({}, { page: page('e1', []) })
+      const d = deferredInput()
+      fetchMock.mockImplementation(d.impl)
+      const reader = stubFileReader('ok')
+      try {
+        const textarea = screen.getByPlaceholderText('Message…') as HTMLTextAreaElement
+        fireEvent.change(textarea, { target: { value: 'hello' } })
+        pickFile()
+        await waitFor(() => expect(sendBtn().disabled).toBe(true))
+        fireEvent.keyDown(textarea, { key: 'Enter', ctrlKey: true })
+        expect(d.pending).toHaveLength(0)
+        await act(async () => reader.finish())
+        await waitFor(() => expect(d.pending).toHaveLength(1))
+        expect(d.pending[0].body).toMatchObject({ type: 'image', text: 'hello' })
+        await act(async () => d.pending[0].resolve(okResponse()))
+        expect(textarea.value).toBe('')
+      } finally {
+        reader.restore()
+      }
+    })
+
+    it('a failed file read shows an error and releases the gate', async () => {
+      await renderReady({}, { page: page('e1', []) })
+      const reader = stubFileReader('error')
+      try {
+        pickFile()
+        await waitFor(() => expect(sendBtn().disabled).toBe(true))
+        await act(async () => reader.finish())
+        expect(screen.getByRole('alert').textContent).toBe('could not read file')
+        expect(sendBtn().disabled).toBe(false)
+      } finally {
+        reader.restore()
+      }
+    })
+
+    it('keeps text typed while a Send was in flight', async () => {
+      const { fetchMock } = await renderReady({}, { page: page('e1', []) })
+      const d = deferredInput()
+      fetchMock.mockImplementation(d.impl)
+      const textarea = screen.getByPlaceholderText('Message…') as HTMLTextAreaElement
+      fireEvent.change(textarea, { target: { value: 'hello' } })
       fireEvent.click(sendBtn())
-      expect(d.pending).toHaveLength(0)
-      await act(async () => finishRead())
       await waitFor(() => expect(d.pending).toHaveLength(1))
-      expect(d.pending[0].body.type).toBe('image')
+      fireEvent.change(textarea, { target: { value: 'hello again' } })
       await act(async () => d.pending[0].resolve(okResponse()))
-      readAsDataURL.mockRestore()
+      expect(textarea.value).toBe('hello again')
+    })
+
+    it('picking a file after a Send started (before the button disabled) reports busy', async () => {
+      const { fetchMock } = await renderReady({}, { page: page('e1', []) })
+      const d = deferredInput()
+      fetchMock.mockImplementation(d.impl)
+      fireEvent.change(screen.getByPlaceholderText('Message…'), { target: { value: 'hello' } })
+      fireEvent.click(sendBtn())
+      await waitFor(() => expect(d.pending).toHaveLength(1))
+      pickFile()
+      expect(screen.getByRole('alert').textContent).toBe('busy — pick the file again')
+      expect(d.pending).toHaveLength(1)
+      await act(async () => d.pending[0].resolve(okResponse()))
     })
 
     it('a later successful settle does not clear an earlier-settling failure', async () => {
