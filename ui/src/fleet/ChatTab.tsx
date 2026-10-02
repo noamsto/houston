@@ -136,6 +136,9 @@ function ToolCallRow({ call, runId }: { call: ToolCall; runId: string }) {
       {detail.status === 'error' && <div className="chat-tool-detail error">Couldn't load tool detail</div>}
       {detail.status === 'ready' && (
         <div className="chat-tool-detail">
+          {detail.data.inputOmitted && (
+            <span className="chat-tool-input-omitted">input omitted (over 16 KiB)</span>
+          )}
           {detail.data.diff ? (
             <pre className="chat-diff">{diffText(detail.data.diff)}</pre>
           ) : (

@@ -759,7 +759,8 @@ a.crews-pr::after { content: ''; position: absolute; inset: -10px -8px -13px; }
   margin: 0; max-width: 100%; overflow-x: auto; font-family: var(--font-mono); font-size: 12px;
   white-space: pre; word-break: normal;
 }
-.chat-tool-truncated { display: block; margin-top: 4px; color: var(--text-faint); font-size: 11px; }
+.chat-tool-truncated,
+.chat-tool-input-omitted { display: block; margin-top: 4px; color: var(--text-faint); font-size: 11px; }
 
 .chat-provisional {
   align-self: flex-start; display: flex; align-items: baseline; gap: 8px; padding: 5px 8px;

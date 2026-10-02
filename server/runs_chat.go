@@ -275,15 +275,16 @@ func orDefault(d, def time.Duration) time.Duration {
 }
 
 type chatToolDetail struct {
-	ToolCallID string          `json:"toolCallId"`
-	Name       string          `json:"name"`
-	Title      string          `json:"title"`
-	Kind       string          `json:"kind"`
-	Status     string          `json:"status"`
-	Input      json.RawMessage `json:"input,omitempty"`
-	Output     string          `json:"output"`
-	Truncated  bool            `json:"truncated"`
-	Diff       *chatToolDiff   `json:"diff,omitempty"`
+	ToolCallID   string          `json:"toolCallId"`
+	Name         string          `json:"name"`
+	Title        string          `json:"title"`
+	Kind         string          `json:"kind"`
+	Status       string          `json:"status"`
+	Input        json.RawMessage `json:"input,omitempty"`
+	Output       string          `json:"output"`
+	Truncated    bool            `json:"truncated"`
+	InputOmitted bool            `json:"inputOmitted,omitempty"`
+	Diff         *chatToolDiff   `json:"diff,omitempty"`
 }
 
 type chatToolDiff struct {
@@ -317,7 +318,7 @@ func (s *Server) handleRunChatTool(w http.ResponseWriter, r *http.Request) {
 		Status:     u.Status,
 	}
 	if len(u.RawInput) > maxChatToolText {
-		d.Truncated = true
+		d.InputOmitted = true
 	} else {
 		d.Input = u.RawInput
 	}

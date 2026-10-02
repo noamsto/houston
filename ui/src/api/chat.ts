@@ -60,6 +60,7 @@ export interface ChatToolDetail {
   input?: unknown
   output?: string
   truncated?: boolean
+  inputOmitted?: boolean
   diff?: { path: string; oldText: string; newText: string }
 }
 

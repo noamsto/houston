@@ -211,6 +211,49 @@ describe('ChatTab', () => {
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/chat/tool/t1'))
   })
 
+  async function expandTool(container: HTMLElement, tool: string) {
+    fireEvent.click(screen.getByRole('button', { name: tool }))
+    fireEvent.click(within(container.querySelector('.chat-tools-calls')!).getByRole('button', { name: `${tool} completed` }))
+  }
+
+  it('labels a truncated output but not a kept input', async () => {
+    const { container } = await renderReady({}, {
+      page: page('e1', [toolCall('t1', 1, 'Write')]),
+      tool: { toolCallId: 't1', name: 'write', output: 'cut here', truncated: true },
+    })
+    await expandTool(container, 'Write')
+
+    await waitFor(() => expect(container.querySelector('.chat-tool-truncated')).toBeTruthy())
+    expect(container.querySelector('.chat-tool-truncated')!.textContent).toBe('(truncated)')
+    expect(container.querySelector('.chat-tool-input-omitted')).toBeNull()
+  })
+
+  it('notes an omitted input but does not label it truncated', async () => {
+    const { container } = await renderReady({}, {
+      page: page('e1', [toolCall('t1', 1, 'Write')]),
+      tool: { toolCallId: 't1', name: 'write', output: 'short', inputOmitted: true },
+    })
+    await expandTool(container, 'Write')
+
+    await waitFor(() => expect(container.querySelector('.chat-tool-input-omitted')).toBeTruthy())
+    expect(container.querySelector('.chat-tool-input-omitted')!.textContent).toBe('input omitted (over 16 KiB)')
+    expect(container.querySelector('.chat-tool-truncated')).toBeNull()
+  })
+
+  it('shows both labels, each in its own place, when both flags are set', async () => {
+    const { container } = await renderReady({}, {
+      page: page('e1', [toolCall('t1', 1, 'Write')]),
+      tool: { toolCallId: 't1', name: 'write', output: 'cut here', truncated: true, inputOmitted: true },
+    })
+    await expandTool(container, 'Write')
+
+    await waitFor(() => expect(container.querySelector('.chat-tool-truncated')).toBeTruthy())
+    const detail = container.querySelector('.chat-tool-detail')!
+    expect(Array.from(detail.children).map((el) => el.className)).toEqual([
+      'chat-tool-input-omitted', 'chat-tool-output', 'chat-tool-truncated',
+    ])
+  })
+
   it('shows "Couldn\'t load tool detail" when the tool fetch fails', async () => {
     const fetchMock = installFetch({ page: page('e1', [toolCall('t1', 1, 'Edit')]) })
     fetchMock.mockImplementation((url: string) => {
