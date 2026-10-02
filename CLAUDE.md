@@ -444,8 +444,10 @@ conversation. Design and measured per-engine mapping:
   over `after`, so a native EventSource reconnect resumes with no gap), `reset`
   then EOF on an epoch mismatch, a cursor the ring can't serve, the run's
   Session changing (checked every 2 s), or the session going away;
-  `GET /api/runs/{id}/chat/tool/{callId}` → name/input/output/diff, texts
-  capped at 16 KiB and an input over 16 KiB omitted (both set `truncated`); a
+  `GET /api/runs/{id}/chat/tool/{callId}` → name/input/output/diff, each of
+  output/oldText/newText capped at 16 KiB (`truncated`), an input over 16 KiB
+  omitted rather than cut (`inputOmitted`, since a cut would no longer be
+  JSON); a
   failed call carries its error output and no diff. Ladder: 503 no registry ·
   404 `no such run` · 404 `no chat`.
 - **Real-transcript check**: `HOUSTON_SAMPLES=<dir> go test -tags samples ./chat/`

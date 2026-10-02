@@ -757,19 +757,31 @@ func TestRunChatToolUnderTheCapIsNotTruncated(t *testing.T) {
 	}
 }
 
-func TestRunChatToolOmitsAnOversizedInput(t *testing.T) {
-	content, _ := json.Marshal(strings.Repeat("a", 64<<10))
+func TestRunChatToolFlagsAreIndependent(t *testing.T) {
+	oversized, _ := json.Marshal(strings.Repeat("a", 64<<10))
+	long := strings.Repeat("b", maxChatToolText+1)
 	f := newFakeChat(1)
-	f.tools["big"] = &chat.Update{ToolCallID: "big", Meta: map[string]any{"tool": "Write"},
-		RawInput: json.RawMessage(`{"file_path":"/p","content":` + string(content) + `}`)}
-	f.tools["small"] = &chat.Update{ToolCallID: "small", Meta: map[string]any{"tool": "Write"},
-		RawInput: json.RawMessage(`{"file_path":"/p","content":"x"}`)}
+	f.tools["inputOnly"] = &chat.Update{ToolCallID: "inputOnly", Meta: map[string]any{"tool": "Write"},
+		RawInput: json.RawMessage(`{"file_path":"/p","content":` + string(oversized) + `}`),
+		Content:  []chat.Content{{Type: "content", Content: &chat.ContentBlock{Type: "text", Text: "ok"}}}}
+	f.tools["outputOnly"] = &chat.Update{ToolCallID: "outputOnly", Meta: map[string]any{"tool": "Write"},
+		RawInput: json.RawMessage(`{"file_path":"/p","content":"x"}`),
+		Content:  []chat.Content{{Type: "content", Content: &chat.ContentBlock{Type: "text", Text: long}}}}
+	f.tools["both"] = &chat.Update{ToolCallID: "both", Meta: map[string]any{"tool": "Write"},
+		RawInput: json.RawMessage(`{"file_path":"/p","content":` + string(oversized) + `}`),
+		Content:  []chat.Content{{Type: "content", Content: &chat.ContentBlock{Type: "text", Text: long}}}}
 	s := newChatServer(t, f, chatSID)
 
 	for _, tc := range []struct {
-		id        string
-		wantInput bool
-	}{{"big", false}, {"small", true}} {
+		id               string
+		wantInput        bool
+		wantTruncated    bool
+		wantInputOmitted bool
+	}{
+		{"inputOnly", false, false, true},
+		{"outputOnly", true, true, false},
+		{"both", false, true, true},
+	} {
 		rec := doChat(t, s, chatRunPath(t, s)+"/tool/"+tc.id)
 		var got map[string]any
 		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
@@ -778,8 +790,14 @@ func TestRunChatToolOmitsAnOversizedInput(t *testing.T) {
 		if _, ok := got["input"]; ok != tc.wantInput {
 			t.Errorf("%s: input present = %v, want %v (%d bytes)", tc.id, ok, tc.wantInput, rec.Body.Len())
 		}
-		if got["truncated"] != !tc.wantInput {
-			t.Errorf("%s: truncated = %v, want %v", tc.id, got["truncated"], !tc.wantInput)
+		// truncated has no omitempty, so it is always present; "absent"
+		// means the flag was never raised by a text cut.
+		if got["truncated"] != tc.wantTruncated {
+			t.Errorf("%s: truncated = %v, want %v", tc.id, got["truncated"], tc.wantTruncated)
+		}
+		// inputOmitted has omitempty: absent when the input was kept.
+		if _, ok := got["inputOmitted"]; ok != tc.wantInputOmitted {
+			t.Errorf("%s: inputOmitted present = %v, want %v", tc.id, ok, tc.wantInputOmitted)
 		}
 	}
 }
