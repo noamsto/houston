@@ -70,9 +70,13 @@ type dispatcherLaunchFile struct {
 	CrewID string   `json:"crew_id"`
 }
 
-// tmuxRunner runs one tmux command with no shell. Stdout comes back trimmed;
-// an error carries tmux's stderr.
-type tmuxRunner func(ctx context.Context, args []string) (string, error)
+// tmuxRunner runs one tmux command with no shell, adding env (KEY=value) to
+// houston's own environment. Stdout comes back trimmed; an error carries
+// tmux's stderr.
+type tmuxRunner func(ctx context.Context, args []string, env ...string) (string, error)
+
+// errNoServerPath: the tmux server's global environment has no usable PATH.
+var errNoServerPath = errors.New("the tmux server has no global PATH")
 
 // normalizeTask turns every run of whitespace (newlines included) into one
 // space, so a multi-line textarea row becomes a one-line prompt.
@@ -182,11 +186,15 @@ func dispatcherArgs(req dispatcherRequest) []string {
 	return args
 }
 
-func execTmux(ctx context.Context, args []string) (string, error) {
+func execTmux(ctx context.Context, args []string, env ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, tmuxTimeout)
 	defer cancel()
 
-	out, err := exec.CommandContext(ctx, "tmux", args...).Output() //nolint:gosec // no shell; every element passed tmuxSafeArg or is a server constant
+	cmd := exec.CommandContext(ctx, "tmux", args...) //nolint:gosec // no shell; every element passed tmuxSafeArg or is a server constant
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
+	out, err := cmd.Output()
 	if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
@@ -355,7 +363,19 @@ func (s *Server) handleDispatcherLaunch(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	engines, err := s.dispatchEngines(r.Context())
+	// Fail closed: under houston.service, houston's own PATH has no
+	// dispatcher, claude or pi, so neither the engine list nor the pane may
+	// fall back to it.
+	serverPath, err := s.tmuxServerPath(r.Context())
+	if err != nil {
+		msg := err.Error()
+		if !errors.Is(err, errNoServerPath) {
+			msg = "tmux unavailable: " + msg
+		}
+		reply(http.StatusServiceUnavailable, dispatcherResponse{Error: msg})
+		return
+	}
+	engines, err := s.dispatchEngines(r.Context(), serverPath)
 	if err != nil {
 		reply(http.StatusBadGateway, dispatcherResponse{Error: "could not list dispatcher engines: " + err.Error()})
 		return
@@ -403,6 +423,8 @@ func (s *Server) handleDispatcherLaunch(w http.ResponseWriter, r *http.Request) 
 		reply(http.StatusTooManyRequests, dispatcherResponse{Error: "another dispatcher launch is already running"})
 		return
 	}
+	// Files kept on a 502 would otherwise wait for the next houston start.
+	sweepLaunchDir(s.launchDir)
 
 	id := s.dispatchNewCrewID()
 	crewDir, merr := mintDispatchCrew(repo.commonDir, id)
@@ -444,7 +466,9 @@ func (s *Server) handleDispatcherLaunch(w http.ResponseWriter, r *http.Request) 
 	}
 	argv = append(argv, "-n", "dispatcher", "-c", repo.Path, "--", s.houstonExe, "launch-dispatcher", file)
 
-	out, err := s.tmuxRun(ctx, argv)
+	// tmux hands a pane created by a session-less client that client's PATH,
+	// over the global environment and even over -e PATH.
+	out, err := s.tmuxRun(ctx, argv, "PATH="+serverPath)
 	if err != nil {
 		_ = os.Remove(file)
 		_ = os.Remove(crewDir)
@@ -589,4 +613,32 @@ func launchEnv(environ []string, crewID string) []string {
 		}
 	}
 	return append(env, "CREW_ID="+crewID)
+}
+
+// tmuxServerPath is the tmux server's global PATH. The value is never logged.
+func (s *Server) tmuxServerPath(ctx context.Context) (string, error) {
+	out, err := s.tmuxRun(ctx, []string{"show-environment", "-g", "PATH"})
+	if err != nil {
+		if strings.Contains(err.Error(), "unknown variable") {
+			return "", errNoServerPath
+		}
+		return "", err
+	}
+	path, ok := strings.CutPrefix(out, "PATH=")
+	if !ok || path == "" {
+		return "", errNoServerPath
+	}
+	return path, nil
+}
+
+// dispatchServerPath is tmuxServerPath for the dispatch CLI, which keeps
+// houston's own PATH after it: when tmux can't say, it warns and returns "",
+// leaving dispatch with houston's PATH alone.
+func (s *Server) dispatchServerPath(ctx context.Context, endpoint string) string {
+	path, err := s.tmuxServerPath(ctx)
+	if err != nil {
+		slog.Warn(endpoint+": tmux server PATH unavailable, dispatch gets houston's alone", "error", err)
+		return ""
+	}
+	return path
 }

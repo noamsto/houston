@@ -128,7 +128,7 @@ type Server struct {
 	// repoReg is the persisted half of the known-repo set; dispatchEngines
 	// lists the engines the host's dispatch can launch.
 	repoReg         *repoRegistry
-	dispatchEngines func(ctx context.Context) ([]string, error)
+	dispatchEngines func(ctx context.Context, serverPath string) ([]string, error)
 	// dispatchSlot caps in-flight dispatches at one: dispatch mutates the
 	// repo (worktrees, branches, the crew bus, GitHub issues), and running
 	// two at once against one repo is not something it is designed for.

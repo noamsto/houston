@@ -18,6 +18,9 @@ type dispatchExec struct {
 	Dir  string   // matched repo path
 	Argv []string // Argv[0] == "dispatch"
 	Spec string   // task body; "" means no DISPATCH_SPEC is set
+	// ServerPath is the tmux server's global PATH, put ahead of houston's;
+	// "" leaves houston's PATH alone.
+	ServerPath string
 }
 
 type dispatchResult struct {
@@ -61,7 +64,7 @@ func (b *cappedBuffer) Write(p []byte) (int, error) {
 func (b *cappedBuffer) String() string { return string(b.buf) }
 
 func execDispatch(ctx context.Context, x dispatchExec) dispatchResult {
-	env := dispatchEnv()
+	env := dispatchEnv(x.ServerPath)
 	if x.Spec != "" {
 		path, err := writeDispatchSpec(x.Spec)
 		if err != nil {
@@ -112,15 +115,27 @@ func execDispatch(ctx context.Context, x dispatchExec) dispatchResult {
 	return res
 }
 
-func dispatchEnv() []string {
+// dispatchEnv is houston's environment for dispatch. A non-empty serverPath
+// goes ahead of houston's PATH: dispatch and the agent CLIs it checks for
+// live on the tmux server's PATH, which houston.service's lacks, while
+// houston's entries stay reachable after it.
+func dispatchEnv(serverPath string) []string {
 	var env []string
 	for _, kv := range os.Environ() {
 		key, _, _ := strings.Cut(kv, "=")
-		if !slices.Contains(strippedDispatchEnv, key) {
-			env = append(env, kv)
+		if slices.Contains(strippedDispatchEnv, key) || (key == "PATH" && serverPath != "") {
+			continue
 		}
+		env = append(env, kv)
 	}
-	return env
+	if serverPath == "" {
+		return env
+	}
+	path := serverPath
+	if own := os.Getenv("PATH"); own != "" {
+		path += string(os.PathListSeparator) + own
+	}
+	return append(env, "PATH="+path)
 }
 
 func writeDispatchSpec(spec string) (string, error) {
@@ -137,13 +152,14 @@ func writeDispatchSpec(spec string) (string, error) {
 	return f.Name(), nil
 }
 
-// execDispatchEngines asks the host's dispatch which engines it can launch.
-func execDispatchEngines(ctx context.Context) ([]string, error) {
+// execDispatchEngines asks the host's dispatch which engines it can launch,
+// with serverPath as in dispatchEnv.
+func execDispatchEngines(ctx context.Context, serverPath string) ([]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, dispatchEnginesTimeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "dispatch", "--engines")
-	cmd.Env = dispatchEnv()
+	cmd.Env = dispatchEnv(serverPath)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("dispatch --engines: %w", err)

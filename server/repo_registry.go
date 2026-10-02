@@ -128,6 +128,9 @@ func (r *repoRegistry) Add(path string) (string, error) {
 	if err != nil {
 		return "", &repoError{http.StatusUnprocessableEntity, "path does not exist"}
 	}
+	if dispatchHasControlRune(resolved) {
+		return "", &repoError{http.StatusUnprocessableEntity, "resolved path must not contain control characters"}
+	}
 	if !r.insideRoot(resolved) {
 		return "", &repoError{http.StatusUnprocessableEntity, "path is outside the repo roots"}
 	}

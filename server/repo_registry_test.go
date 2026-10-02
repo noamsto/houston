@@ -190,6 +190,9 @@ func TestRepoRegistryAddRefusals(t *testing.T) {
 
 	// A real main checkout, so only the control rune can refuse it.
 	control := gitInit(t, filepath.Join(f.root, "ctl\tproj"))
+	// A clean name whose real path carries the control rune.
+	controlLink := filepath.Join(f.root, "ctlink")
+	symlink(t, control, controlLink)
 
 	cases := []struct {
 		name, path string
@@ -198,6 +201,7 @@ func TestRepoRegistryAddRefusals(t *testing.T) {
 		{"empty", "", http.StatusBadRequest},
 		{"relative", "root/proj", http.StatusBadRequest},
 		{"control character", control, http.StatusBadRequest},
+		{"control character once resolved", controlLink, http.StatusUnprocessableEntity},
 		{"outside root", outside, http.StatusUnprocessableEntity},
 		{"symlink escape", escape, http.StatusUnprocessableEntity},
 		{"dotdot escape", f.root + "/../outside", http.StatusUnprocessableEntity},

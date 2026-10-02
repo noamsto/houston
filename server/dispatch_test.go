@@ -82,6 +82,18 @@ func newDispatchTestRepo(t *testing.T, crewIDs ...string) dispatchRepo {
 	return dispatchRepo{Path: "/repo", Name: "repo", Crews: crewIDs, commonDir: dir}
 }
 
+// testServerPath is the global PATH the test tmux servers report.
+const testServerPath = "/srv/bin"
+
+// serverPathTmux answers only show-environment, as a tmux server whose
+// global PATH is testServerPath.
+func serverPathTmux(_ context.Context, args []string, _ ...string) (string, error) {
+	if args[0] == "show-environment" {
+		return "PATH=" + testServerPath, nil
+	}
+	return "", errors.New("unexpected tmux " + args[0])
+}
+
 // newDispatchServer wires the real gates the way New does, without touching
 // disk or spawning tmux.
 func newDispatchServer(t *testing.T, runner dispatchRunner, repos func() ([]dispatchRepo, error)) *Server {
@@ -91,7 +103,8 @@ func newDispatchServer(t *testing.T, runner dispatchRunner, repos func() ([]disp
 		auth:              &authGate{token: dispatchToken, enabled: true, allowedOrigins: allowed},
 		hosts:             deriveHosts(nil, allowed),
 		repoReg:           newRepoRegistry(filepath.Join(t.TempDir(), "repos.json"), nil, gitCommonDir),
-		dispatchEngines:   func(context.Context) ([]string, error) { return []string{"claude"}, nil },
+		dispatchEngines:   func(context.Context, string) ([]string, error) { return []string{"claude"}, nil },
+		tmuxRun:           serverPathTmux,
 		dispatchRunner:    runner,
 		dispatchRepos:     repos,
 		dispatchSlot:      make(chan struct{}, 1),
@@ -871,7 +884,12 @@ func TestHandleDispatchOptionsRepoRootsAndEngines(t *testing.T) {
 	root := realTempDir(t)
 	s := newDispatchServer(t, nil, stubDispatchRepos(nil, nil))
 	s.repoReg = newRepoRegistry(filepath.Join(realTempDir(t), "repos.json"), []string{root}, gitCommonDir)
-	s.dispatchEngines = func(context.Context) ([]string, error) { return []string{"pi", "claude", "bogus"}, nil }
+	s.dispatchEngines = func(_ context.Context, serverPath string) ([]string, error) {
+		if serverPath != testServerPath {
+			t.Errorf("engines lookup got server PATH %q, want %q", serverPath, testServerPath)
+		}
+		return []string{"pi", "claude", "bogus"}, nil
+	}
 
 	opts := getDispatchOptions(t, s)
 	if !slices.Equal(opts.RepoRoots, []string{root}) {
@@ -887,7 +905,7 @@ func TestHandleDispatchOptionsRepoRootsAndEngines(t *testing.T) {
 
 func TestHandleDispatchOptionsEnginesErrorAndEmptyArraysNeverNull(t *testing.T) {
 	s := newDispatchServer(t, nil, stubDispatchRepos(nil, nil))
-	s.dispatchEngines = func(context.Context) ([]string, error) { return nil, errors.New("dispatch not found") }
+	s.dispatchEngines = func(context.Context, string) ([]string, error) { return nil, errors.New("dispatch not found") }
 
 	req := httptest.NewRequest("GET", "http://"+dispatchHost+"/api/dispatch/options", nil)
 	req.Host = dispatchHost
@@ -948,5 +966,38 @@ func TestDispatchDoesNotRememberRepoOnFailure(t *testing.T) {
 	}
 	if s.repoReg.Has(repo.Path) {
 		t.Errorf("registry holds %s after a failed dispatch", repo.Path)
+	}
+}
+
+// TestDispatchServerPathFallsBackWithWarning: the worker and options
+// endpoints keep houston's PATH when tmux can't name its own, but say so.
+func TestDispatchServerPathFallsBackWithWarning(t *testing.T) {
+	logs := captureServerLogs(t)
+	var got []string
+	runner := func(_ context.Context, x dispatchExec) dispatchResult {
+		got = append(got, x.ServerPath)
+		return dispatchResult{Stdout: "worker_id: worker:feat/1-x#s1"}
+	}
+	repo := newDispatchTestRepo(t, "1700000000-123")
+	s := newDispatchServer(t, runner, stubDispatchRepos([]dispatchRepo{repo}, nil))
+	if rec := doDispatch(t, s, dispatchHTTPRequest("POST", dispatchRequestJSON(t, validDispatchRequest(repo, "1700000000-123")))); rec.Code != http.StatusOK {
+		t.Fatalf("status %d (body %s)", rec.Code, rec.Body.String())
+	}
+
+	s.tmuxRun = func(context.Context, []string, ...string) (string, error) { return "-PATH", nil }
+	s.dispatchEngines = func(_ context.Context, serverPath string) ([]string, error) {
+		got = append(got, serverPath)
+		return []string{"claude"}, nil
+	}
+	getDispatchOptions(t, s)
+	if rec := doDispatch(t, s, dispatchHTTPRequest("POST", dispatchRequestJSON(t, validDispatchRequest(repo, "1700000000-123")))); rec.Code != http.StatusOK {
+		t.Fatalf("status %d (body %s)", rec.Code, rec.Body.String())
+	}
+
+	if want := []string{testServerPath, "", ""}; !slices.Equal(got, want) {
+		t.Errorf("server PATHs = %q, want %q", got, want)
+	}
+	if n := strings.Count(logs.String(), "tmux server PATH unavailable"); n != 2 {
+		t.Errorf("%d fallback warnings, want one per request (2):\n%s", n, logs)
 	}
 }

@@ -508,12 +508,16 @@ execution from an HTTP request, so the handler is closed by construction:
 - The model allowlist (`dispatchModels`) and per-tier defaults
   (`dispatchTierModels`) are Go constants; keep both in step with dispatch's
   tier map when models change.
-- houston's environment must provide what dispatch needs: `dispatch`, `crew`,
-  `git`, an authenticated `gh`, `wt`, `direnv`, `tmux` and a running tmux
-  server on `PATH`. A 502 means `dispatch` itself could not be started; any
-  other missing tool fails inside dispatch and comes back as a 422 with its
-  stderr. The new-dispatcher launcher is resolved on the tmux server's `PATH`
-  instead (see "New dispatcher").
+- houston's own `PATH` must reach `tmux` and `dispatch` (exec resolves
+  `dispatch` there; a 502 means it could not be started), and a tmux server
+  must be running. dispatch and `dispatch --engines` run with
+  `PATH=<tmux server's global PATH>:<houston's PATH>` (`dispatchEnv`), so
+  `crew`, `git`, an authenticated `gh`, `wt`, `direnv` and the agent CLIs may
+  live on either. When the server's `PATH` can't be read, the worker and
+  options endpoints `slog.Warn` once per request and keep houston's `PATH`
+  alone; the new-dispatcher endpoint fails closed instead (see "Server
+  PATH"). Any other missing tool fails inside dispatch and comes back as a 422
+  with its stderr.
 - `-no-auth` leaves this endpoint enabled: that mode already exposes
   `/api/pane/:target/send`, which is equivalent command execution.
 - `#/dispatch?repo=<path>&crew=<id|new>` prefills the form (repo and crew
@@ -527,7 +531,7 @@ window in a repo running the host's `dispatcher` launcher, seeded with the
 tasks as its first prompt. Body `{repo, tasks[], engine, model?, effort?}`;
 unknown fields 400, body over 256 KiB 413.
 
-- **Order** (`handleDispatcherLaunch`): engines
+- **Order** (`handleDispatcherLaunch`): tmux server `PATH` 503 → engines
   502 → fields 400 (`validateDispatcher`) → repo 404 → unsafe repo path 422 →
   houston exe/launch dir not passable to tmux 500 → slot 429 → crew mint 409 →
   tmux 503/502. A repo-list failure is 502, a launch-file write 500.
@@ -559,8 +563,9 @@ unknown fields 400, body over 256 KiB 413.
   `tmuxSafeArg` refuses (422) a repo path containing `#`, a control rune or a
   trailing `;` before exec. The file is `<status-dir>/launch/<random>.json`, 0600
   in a 0700 dir; the wrapper removes it on read, houston on a failed start, and
-  `New` sweeps any older than 10 minutes (a wrapper that never ran must not
-  leave task text behind).
+  `New` and every launch (under the slot, so files kept on a 502 don't wait
+  for a restart) sweep any older than 10 minutes (a wrapper that never ran
+  must not leave task text behind).
 - **Wrapper** (`houston launch-dispatcher <file>`, `ExecDispatcherLaunch`): sets
   `remain-on-exit failed` on its own pane (best effort, so a failed launch keeps
   its error text for the startup check and the user; a clean exit closes the
@@ -570,9 +575,10 @@ unknown fields 400, body over 256 KiB 413.
   `syscall.Exec`s the launcher — exec, not a child, so `crew register $$` sees
   an ordinary hand-launched dispatcher. Every tmux call is targeted at
   `$TMUX_PANE` with a 2 s timeout, best effort. It runs in the **tmux
-  server's** environment, not houston's: `PATH` is the tmux server's and must
-  reach `dispatcher` and `claude`/`pi` (a missing launcher fails in the pane,
-  so it comes back as a 422 with that output, never a 502); `HOUSTON_*` and
+  server's** environment, not houston's: `PATH` is the tmux server's global
+  one (see "Server PATH") and must reach `dispatcher` and `claude`/`pi` (a
+  missing launcher fails in the pane, so it comes back as a 422 with that
+  output, never a 502); `HOUSTON_*` and
   service env don't leak; `CREW_ID`, `CREW_WORKER_ID`, `CREW_ROLE_ID` and
   `DISPATCH_SPEC` are stripped (`launchEnv`) and `CREW_ID` set to the minted id,
   so a tmux-global `CREW_ID` can't win.
@@ -592,6 +598,15 @@ unknown fields 400, body over 256 KiB 413.
   close the race: a window made current between `select-window` and the
   launcher's stamps still gets them. The root fix is `-t "$TMUX_PANE"` in the
   launcher.
+- **Server PATH** (`tmuxServerPath`): tmux hands a pane created by a
+  session-less client — houston — that client's `PATH`, over the global
+  environment and even over `-e PATH`. So houston first reads
+  `show-environment -g PATH` and runs the `new-window`/`new-session` client,
+  and `dispatch --engines`, with it (houston.service's own `PATH` has no
+  `dispatcher`, `claude` or `pi`). No global `PATH` (absent, `-PATH`, empty) →
+  503 `the tmux server has no global PATH`; tmux unreachable → 503
+  `tmux unavailable: …`; nothing created, never a fallback to houston's
+  `PATH`. The value is never logged.
 - **Startup check** (≤ 3 s, 200 ms poll of `display-message #{pane_dead}`):
   success as soon as `<crew>/pid` exists (the launcher passed its own gates and
   registered). A dead pane → 422 `dispatcher exited with status N` with the
@@ -614,8 +629,8 @@ unknown fields 400, body over 256 KiB 413.
   `after-new-window` hook stamps — houston doesn't set it. Without that hook the
   run still gets role `dispatcher` (`@crew_name`) but no project chip. The run
   enters Fleet only once its agent sets `@claude_status` or `@agent_screen`.
-- houston's own `PATH` needs `tmux` and `dispatch` (for `--engines`), not
-  `dispatcher`.
+- houston's own `PATH` needs `tmux` and `dispatch` (for `--engines`);
+  `dispatcher` and `claude`/`pi` come from the tmux server's global `PATH`.
 
 ### Repo registry
 
@@ -636,9 +651,10 @@ The set of repos beyond tmux's view (`server/repo_registry.go`,
   a git main checkout (`<real>/.git` is a directory and the git common dir is
   `<real>/.git`). The stored value is the resolved path, so a symlink retargeted
   outside the roots fails the next listing. Add runs the full check including
-  `git rev-parse` (400 relative or containing a control character —
-  `dispatchHasControlRune`, checked before any filesystem access — 422 outside
-  the roots or not a main checkout); listing runs the cheap one (`EvalSymlinks` inside a
+  `git rev-parse` (400 relative or containing a `Cc` or `Cf` rune —
+  `dispatchHasControlRune`, checked before any filesystem access — 422 when the
+  symlink-resolved path contains one, lies outside the roots, or is not a main
+  checkout); listing runs the cheap one (`EvalSymlinks` inside a
   root plus `Lstat(.git)` is a directory), so an options GET never spawns up to
   500 gits. An entry failing it is dropped from `options.repos` but kept in the
   file — a transient unmount must not delete it — and `GET /api/repos` shows it
@@ -651,7 +667,7 @@ The set of repos beyond tmux's view (`server/repo_registry.go`,
   skipped, symlinks not followed, a directory with a `.git` directory is reported
   and not descended into; 10 000 directories visited or 200 results →
   `truncated`. `q` is a case-insensitive substring of the root-relative path,
-  ≤ 200 runes (400 on control characters). Registration re-validates fully.
+  ≤ 200 runes (400 on a `Cc` or `Cf` rune, `dispatchHasControlRune`). Registration re-validates fully.
 - **Remember-on-use:** a 200 from either dispatch endpoint adds the repo through
   the same path; one outside the roots is silently not remembered, which keeps
   one invariant (every entry is inside a root) instead of a second "tmux once

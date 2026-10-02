@@ -222,6 +222,7 @@ func TestDispatcherLaunchWithRealTmuxRunner(t *testing.T) {
 	f := newLaunchFixture(t)
 	installFakeTmux(t, out, `case "$1" in
 has-session) echo "can't find session: proj" >&2; exit 1 ;;
+show-environment) echo "PATH=$PATH" ;;
 new-session) mkdir -p '`+f.crewDir+`' && : > '`+f.crewDir+`/pid'; printf 'proj\t@3\t%%7\n' ;;
 esac
 `)
@@ -238,10 +239,10 @@ esac
 	}
 }
 
-// TestDispatcherLaunchNewSessionKeepsServerEnv runs the launch against a
-// private tmux server: a session houston creates must see the server's global
-// SSH_AUTH_SOCK, not houston's lack of one.
-func TestDispatcherLaunchNewSessionKeepsServerEnv(t *testing.T) {
+// usePrivateTmux points `tmux` on PATH at a fresh private server whose first
+// session is named session, killed at cleanup, and returns bash's path.
+func usePrivateTmux(t *testing.T, session string) string {
+	t.Helper()
 	realTmux, err := exec.LookPath("tmux")
 	if err != nil {
 		t.Skip("tmux not found")
@@ -251,7 +252,7 @@ func TestDispatcherLaunchNewSessionKeepsServerEnv(t *testing.T) {
 		t.Skip("bash not found")
 	}
 	// A socket path is capped near 100 bytes, too short for t.TempDir().
-	sockDir, err := os.MkdirTemp("/tmp", "ht")
+	sockDir, err := os.MkdirTemp("", "ht")
 	if err != nil {
 		t.Skip("no short temp dir for a tmux socket")
 	}
@@ -264,11 +265,19 @@ func TestDispatcherLaunchNewSessionKeepsServerEnv(t *testing.T) {
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	ctx := context.Background()
-	if _, err := execTmux(ctx, []string{"new-session", "-d", "-s", "base"}); err != nil {
+	if _, err := execTmux(ctx, []string{"new-session", "-d", "-s", session, "--", "sleep", "600"}); err != nil {
 		t.Fatalf("start private tmux: %v", err)
 	}
 	t.Cleanup(func() { _, _ = execTmux(ctx, []string{"kill-server"}) })
-	if _, err := execTmux(ctx, []string{"set-environment", "-g", "SSH_AUTH_SOCK", "/fake/agent"}); err != nil {
+	return bash
+}
+
+// TestDispatcherLaunchNewSessionKeepsServerEnv runs the launch against a
+// private tmux server: a session houston creates must see the server's global
+// SSH_AUTH_SOCK, not houston's lack of one.
+func TestDispatcherLaunchNewSessionKeepsServerEnv(t *testing.T) {
+	bash := usePrivateTmux(t, "base")
+	if _, err := execTmux(context.Background(), []string{"set-environment", "-g", "SSH_AUTH_SOCK", "/fake/agent"}); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("SSH_AUTH_SOCK", "")
@@ -293,5 +302,43 @@ func TestDispatcherLaunchNewSessionKeepsServerEnv(t *testing.T) {
 	}
 	if got := readFile(t, out); got != "/fake/agent" {
 		t.Errorf("SSH_AUTH_SOCK in the new session = %q, want the server's global /fake/agent", got)
+	}
+}
+
+// TestDispatcherLaunchPaneGetsServerPath: a pane houston creates must see the
+// tmux server's global PATH, not houston's. tmux gives a pane made by a
+// session-less command client that client's PATH (over the global one and
+// over -e PATH), and houston is that client.
+func TestDispatcherLaunchPaneGetsServerPath(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		base string
+	}{{"new-session", "base"}, {"new-window", "proj"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			bash := usePrivateTmux(t, tc.base)
+			const marker = "/srvpath-marker/bin"
+			if _, err := execTmux(context.Background(), []string{"set-environment", "-g", "PATH", marker + ":" + os.Getenv("PATH")}); err != nil {
+				t.Fatal(err)
+			}
+
+			f := newLaunchFixture(t)
+			f.s.tmuxRun = execTmux
+			out := filepath.Join(t.TempDir(), "path")
+			f.s.houstonExe = filepath.Join(t.TempDir(), "houston")
+			script := "#!" + bash + "\nprintf '%s' \"$PATH\" > '" + out + "'\n: > '" + f.crewDir + "/pid'\nsleep 30\n"
+			if err := os.WriteFile(f.s.houstonExe, []byte(script), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			f.s.launchCheck = 5 * time.Second
+
+			rec, resp := f.post(t, f.request())
+			wantStatus(t, rec, 200)
+			if resp.Session != "proj" {
+				t.Errorf("session = %q, want proj", resp.Session)
+			}
+			if got := readFile(t, out); !strings.Contains(":"+got+":", ":"+marker+":") {
+				t.Errorf("pane PATH lacks the server's global entry %s: houston's PATH reached the pane", marker)
+			}
+		})
 	}
 }

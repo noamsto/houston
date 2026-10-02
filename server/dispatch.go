@@ -362,7 +362,7 @@ func (s *Server) handleDispatchOptions(w http.ResponseWriter, r *http.Request) {
 
 	engines := []string{}
 	enginesErr := ""
-	listed, err := s.dispatchEngines(r.Context())
+	listed, err := s.dispatchEngines(r.Context(), s.dispatchServerPath(r.Context(), "dispatch options"))
 	if err != nil {
 		slog.Warn("dispatch options: engine lookup failed", "error", err)
 		enginesErr = err.Error()
@@ -503,7 +503,7 @@ func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 	}
 	argv = append(argv, valid.Title)
 
-	res := s.dispatchRunner(ctx, dispatchExec{Dir: repo.Path, Argv: argv, Spec: valid.Spec})
+	res := s.dispatchRunner(ctx, dispatchExec{Dir: repo.Path, Argv: argv, Spec: valid.Spec, ServerPath: s.dispatchServerPath(ctx, "dispatch")})
 	dlog.exitCode = res.ExitCode
 
 	switch {

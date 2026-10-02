@@ -138,16 +138,18 @@ func TestSanitizeSessionName(t *testing.T) {
 	}
 }
 
-// scriptedTmux records every tmux argv and answers by subcommand.
+// scriptedTmux records every tmux argv and env and answers by subcommand.
 type scriptedTmux struct {
 	mu    sync.Mutex
 	calls [][]string
+	envs  [][]string
 	reply map[string]func(args []string) (string, error)
 }
 
-func (f *scriptedTmux) run(_ context.Context, args []string) (string, error) {
+func (f *scriptedTmux) run(_ context.Context, args []string, env ...string) (string, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, slices.Clone(args))
+	f.envs = append(f.envs, slices.Clone(env))
 	h := f.reply[args[0]]
 	f.mu.Unlock()
 	if h == nil {
@@ -193,11 +195,12 @@ func newLaunchFixture(t *testing.T) launchFixture {
 	repo := dispatchRepo{Path: path, Name: "proj", Crews: []string{}, Home: []string{}, commonDir: filepath.Join(path, ".git")}
 
 	ft := &scriptedTmux{reply: map[string]func([]string) (string, error){
-		"has-session":     func([]string) (string, error) { return "", errors.New("can't find session: proj") },
-		"new-window":      func([]string) (string, error) { return "proj\t@3\t%7", nil },
-		"new-session":     func([]string) (string, error) { return "proj\t@3\t%7", nil },
-		"display-message": func([]string) (string, error) { return "0 ", nil },
-		"capture-pane":    func([]string) (string, error) { return "dispatcher: engine claude is not enabled", nil },
+		"has-session":      func([]string) (string, error) { return "", errors.New("can't find session: proj") },
+		"show-environment": func([]string) (string, error) { return "PATH=" + testServerPath, nil },
+		"new-window":       func([]string) (string, error) { return "proj\t@3\t%7", nil },
+		"new-session":      func([]string) (string, error) { return "proj\t@3\t%7", nil },
+		"display-message":  func([]string) (string, error) { return "0 ", nil },
+		"capture-pane":     func([]string) (string, error) { return "dispatcher: engine claude is not enabled", nil },
 	}}
 
 	s := newDispatchServer(t, nil, stubDispatchRepos([]dispatchRepo{repo}, nil))
@@ -636,8 +639,14 @@ func TestDispatcherLaunchRefusalsBeforeTmux(t *testing.T) {
 			req.Repo = path
 		}, http.StatusUnprocessableEntity},
 		{"engines lookup failed", func(f *launchFixture, _ *dispatcherRequest) {
-			f.s.dispatchEngines = func(context.Context) ([]string, error) { return nil, errors.New("dispatch not found") }
+			f.s.dispatchEngines = func(context.Context, string) ([]string, error) { return nil, errors.New("dispatch not found") }
 		}, http.StatusBadGateway},
+		{"tmux unreachable", func(f *launchFixture, _ *dispatcherRequest) {
+			f.tmux.set("show-environment", func([]string) (string, error) { return "", errors.New("no server running") })
+		}, http.StatusServiceUnavailable},
+		{"global PATH removed", func(f *launchFixture, _ *dispatcherRequest) {
+			f.tmux.set("show-environment", func([]string) (string, error) { return "-PATH", nil })
+		}, http.StatusServiceUnavailable},
 		{"engine not enabled", func(_ *launchFixture, req *dispatcherRequest) { req.Engine, req.Model = "pi", "" }, http.StatusBadRequest},
 		{"slot busy", func(f *launchFixture, _ *dispatcherRequest) { f.s.launchSlot <- struct{}{} }, http.StatusTooManyRequests},
 		{"crew collision", func(f *launchFixture, _ *dispatcherRequest) { mkdirAll(t, f.crewDir) }, http.StatusConflict},
@@ -652,8 +661,10 @@ func TestDispatcherLaunchRefusalsBeforeTmux(t *testing.T) {
 			if resp.Error == "" {
 				t.Error("no error message")
 			}
-			if calls := f.tmux.all(); len(calls) != 0 {
-				t.Errorf("tmux ran: %q", calls)
+			for _, c := range f.tmux.all() {
+				if c[0] != "show-environment" {
+					t.Errorf("tmux ran: %q", c)
+				}
 			}
 			if files := launchFiles(t, f.s.launchDir); len(files) != 0 {
 				t.Errorf("launch files written: %q", files)
@@ -739,4 +750,90 @@ func TestSweepLaunchDir(t *testing.T) {
 		t.Error("fresh launch file removed")
 	}
 	sweepLaunchDir(filepath.Join(dir, "missing"))
+}
+
+func TestDispatcherLaunchNoServerPath(t *testing.T) {
+	for _, tc := range []struct {
+		name, out, want string
+		err             error
+	}{
+		{"removed", "-PATH", "the tmux server has no global PATH", nil},
+		{"empty", "PATH=", "the tmux server has no global PATH", nil},
+		{"absent", "", "the tmux server has no global PATH", errors.New("tmux show-environment: exit status 1: unknown variable: PATH")},
+		{"unreachable", "", "tmux unavailable: no server running", errors.New("no server running")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newLaunchFixture(t)
+			f.tmux.set("show-environment", func([]string) (string, error) { return tc.out, tc.err })
+			f.s.dispatchEngines = func(context.Context, string) ([]string, error) {
+				t.Error("engines looked up without the server PATH")
+				return nil, nil
+			}
+
+			rec, resp := f.post(t, f.request())
+			wantStatus(t, rec, http.StatusServiceUnavailable)
+			if resp.Error != tc.want {
+				t.Errorf("error = %q, want %q", resp.Error, tc.want)
+			}
+			if exists(f.crewDir) {
+				t.Error("crew dir created")
+			}
+		})
+	}
+}
+
+// TestDispatcherLaunchServerPathEnv: only the window-creating client runs
+// with the tmux server's PATH; the engines lookup gets it too.
+func TestDispatcherLaunchServerPathEnv(t *testing.T) {
+	for _, cmd := range []string{"new-session", "new-window"} {
+		t.Run(cmd, func(t *testing.T) {
+			f := newLaunchFixture(t)
+			if cmd == "new-window" {
+				f.tmux.set("has-session", func([]string) (string, error) { return "", nil })
+			}
+			f.registerOnStart(t, cmd)
+			var enginesPath string
+			f.s.dispatchEngines = func(_ context.Context, serverPath string) ([]string, error) {
+				enginesPath = serverPath
+				return []string{"claude"}, nil
+			}
+
+			rec, _ := f.post(t, f.request())
+			wantStatus(t, rec, http.StatusOK)
+			if enginesPath != testServerPath {
+				t.Errorf("engines lookup server PATH = %q, want %q", enginesPath, testServerPath)
+			}
+			f.tmux.mu.Lock()
+			defer f.tmux.mu.Unlock()
+			for i, c := range f.tmux.calls {
+				var want []string
+				if c[0] == cmd {
+					want = []string{"PATH=" + testServerPath}
+				}
+				if !slices.Equal(f.tmux.envs[i], want) {
+					t.Errorf("tmux %s env = %q, want %q", c[0], f.tmux.envs[i], want)
+				}
+			}
+		})
+	}
+}
+
+func TestDispatcherLaunchSweepsStaleLaunchFiles(t *testing.T) {
+	f := newLaunchFixture(t)
+	f.registerOnStart(t, "new-session")
+	mkdirAll(t, f.s.launchDir)
+	old := filepath.Join(f.s.launchDir, "dispatcher-old.json")
+	if err := os.WriteFile(old, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stale := time.Now().Add(-launchFileMaxAge - time.Minute)
+	if err := os.Chtimes(old, stale, stale); err != nil {
+		t.Fatal(err)
+	}
+
+	rec, _ := f.post(t, f.request())
+	wantStatus(t, rec, http.StatusOK)
+	if exists(old) {
+		t.Error("stale launch file kept past a launch")
+	}
 }
