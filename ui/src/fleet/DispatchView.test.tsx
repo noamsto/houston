@@ -6,10 +6,25 @@ import type { Run } from '../api/runs'
 
 const fetchDispatchOptionsMock = vi.fn<() => Promise<DispatchOptions>>()
 const submitDispatchMock = vi.fn<(req: DispatchRequest) => Promise<DispatchOutcome>>()
+const submitDispatcherMock = vi.fn()
 vi.mock('../api/dispatch', () => ({
   NEW_CREW: 'new',
   fetchDispatchOptions: () => fetchDispatchOptionsMock(),
   submitDispatch: (req: DispatchRequest) => submitDispatchMock(req),
+  submitDispatcher: (req: unknown) => submitDispatcherMock(req),
+}))
+
+const addRepoMock = vi.fn()
+vi.mock('../api/repos', () => ({
+  fetchRepos: () => Promise.resolve({ roots: ['/repo'], repos: [] }),
+  fetchRepoCandidates: () =>
+    Promise.resolve({
+      roots: ['/repo'],
+      candidates: [{ path: '/repo/c', name: 'repo-c', registered: false }],
+      truncated: false,
+    }),
+  addRepo: (path: string) => addRepoMock(path),
+  removeRepo: () => Promise.resolve({ ok: true }),
 }))
 
 const PREFS_KEY = 'houston-dispatch-prefs'
@@ -27,6 +42,7 @@ const optionsFixture: DispatchOptions = {
     codex: ['gpt-5.6-sol', 'gpt-5.6-terra'],
   },
   engine_order: ['claude', 'codex'],
+  dispatcher_engines: ['claude'],
   tier_models: {
     claude: { trivial: 'haiku', standard: 'sonnet', deep: 'opus' },
     codex: { trivial: 'gpt-5.6-sol', standard: 'gpt-5.6-terra', deep: 'gpt-5.6-sol' },
@@ -68,6 +84,8 @@ afterEach(() => {
   cleanup()
   fetchDispatchOptionsMock.mockReset()
   submitDispatchMock.mockReset()
+  submitDispatcherMock.mockReset()
+  addRepoMock.mockReset()
   localStorage.clear()
   window.location.hash = ''
   vi.unstubAllGlobals()
@@ -359,6 +377,74 @@ describe('DispatchView URL prefill', () => {
 
     expect(value('Repo')).toBe('/repo/a')
     expect(value('Crew')).toBe('200-1')
+  })
+})
+
+describe('DispatchView modes', () => {
+  it('switching to New dispatcher shows its form, keeps the shared Repo, and remembers the mode', async () => {
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ repo: '/repo/b', engine: 'codex' }))
+    await renderLoaded()
+    expect(screen.getByRole('button', { name: 'Add worker' }).getAttribute('aria-pressed')).toBe('true')
+
+    fireEvent.click(screen.getByRole('button', { name: 'New dispatcher' }))
+
+    expect(screen.getByLabelText('Task 1')).toBeTruthy()
+    expect(screen.queryByLabelText('Title')).toBeNull()
+    expect(value('Repo')).toBe('/repo/b')
+    expect(screen.getByRole('button', { name: 'New dispatcher' }).getAttribute('aria-pressed')).toBe('true')
+    expect(JSON.parse(localStorage.getItem(PREFS_KEY)!)).toEqual({ repo: '/repo/b', engine: 'codex', mode: 'dispatcher' })
+  })
+
+  it('opens in the remembered mode', async () => {
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ mode: 'dispatcher' }))
+    await renderLoaded()
+
+    expect(screen.getByLabelText('Task 1')).toBeTruthy()
+  })
+
+  it('a #/dispatch link forces worker mode', async () => {
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ mode: 'dispatcher' }))
+    window.location.hash = '#/dispatch?repo=%2Frepo%2Fb&crew=new'
+    await renderLoaded()
+
+    expect(await screen.findByLabelText('Title')).toBeTruthy()
+    expect(value('Repo')).toBe('/repo/b')
+    expect(screen.queryByLabelText('Task 1')).toBeNull()
+  })
+
+  it('a worker dispatch keeps the remembered mode', async () => {
+    await renderLoaded()
+    fireEvent.click(screen.getByRole('button', { name: 'New dispatcher' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add worker' }))
+    submitDispatchMock.mockResolvedValue({ kind: 'started', workerId: 'w', branch: 'feat/1-x' })
+    await submitTitle()
+    await screen.findByText(/Waiting for it to appear in Fleet/)
+
+    expect(JSON.parse(localStorage.getItem(PREFS_KEY)!)).toEqual({
+      mode: 'worker', repo: '/repo/a', engine: 'claude', model: 'sonnet', tier: 'standard', effort: 'medium',
+    })
+  })
+})
+
+describe('DispatchView repo picker', () => {
+  it('adding a repo refetches the options, selects it, and keeps the draft', async () => {
+    await renderLoaded()
+    change('Title', 'my draft')
+    change('Task', 'draft body')
+    fetchDispatchOptionsMock.mockResolvedValue({
+      ...structuredClone(optionsFixture),
+      repos: [...optionsFixture.repos, { path: '/repo/c', name: 'repo-c', crews: [] }],
+    })
+    addRepoMock.mockResolvedValue({ ok: true, path: '/repo/c' })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Manage repos' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Add repo-c' }))
+
+    await waitFor(() => expect(value('Repo')).toBe('/repo/c'))
+    expect(fetchDispatchOptionsMock).toHaveBeenCalledTimes(2)
+    expect(value('Title')).toBe('my draft')
+    expect(value('Task')).toBe('draft body')
+    expect(value('Crew')).toBe('new')
   })
 })
 

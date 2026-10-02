@@ -12,7 +12,10 @@ import {
   resolveInitial,
   savePrefs,
   taskMaxHeight,
+  type DispatchPrefs,
 } from './dispatchForm'
+import { DispatcherForm } from './DispatcherForm'
+import { RepoPicker } from './RepoPicker'
 import { runHash, useDispatchRoute } from './routes'
 import { useNow } from './useNow'
 import './fleet.css'
@@ -41,6 +44,9 @@ export function DispatchView({ runs }: { runs: Run[] }) {
   const [crew, setCrew] = useState('')
   const [issue, setIssue] = useState('')
   const [linkNotice, setLinkNotice] = useState<string | null>(null)
+  const [mode, setMode] = useState<NonNullable<DispatchPrefs['mode']>>(() => loadPrefs().mode ?? 'worker')
+  const [showPicker, setShowPicker] = useState(false)
+  const [refreshError, setRefreshError] = useState<string | null>(null)
 
   const [submitting, setSubmitting] = useState(false)
   const [outcome, setOutcome] = useState<DispatchOutcome | null>(null)
@@ -62,6 +68,7 @@ export function DispatchView({ runs }: { runs: Run[] }) {
       setRepo(link.repo)
       setCrew(link.crew)
       setLinkNotice(link.linkRepoUnknown ? UNKNOWN_REPO_NOTICE : null)
+      setMode('worker')
     }
   }
 
@@ -82,7 +89,7 @@ export function DispatchView({ runs }: { runs: Run[] }) {
 
   useEffect(() => {
     if (taskRef.current) autoGrow(taskRef.current)
-  }, [spec, options])
+  }, [spec, options, mode])
 
   // The cap tracks visualViewport height (keyboard open/close, rotation), so
   // it must re-run when that changes, not just when the textarea content does.
@@ -132,10 +139,33 @@ export function DispatchView({ runs }: { runs: Run[] }) {
   const selectedRepo = options?.repos.find((r) => r.path === repo)
   const models = options?.engines[engine] ?? []
 
-  function chooseRepo(path: string): void {
+  // Refetches without touching the draft; the picker's edits are the only
+  // thing the form must pick up.
+  function refreshOptions(added?: string): void {
+    fetchDispatchOptions()
+      .then((o) => {
+        setOptions(o)
+        setRefreshError(null)
+        const keep = o.repos.some((r) => r.path === repo)
+        const next = added && o.repos.some((r) => r.path === added) ? added : keep ? repo : (o.repos[0]?.path ?? '')
+        if (next !== repo) chooseRepoIn(o, next)
+      })
+      .catch((e: unknown) => setRefreshError(e instanceof Error ? e.message : String(e)))
+  }
+
+  function chooseRepoIn(o: DispatchOptions, path: string): void {
     setRepo(path)
-    setCrew(defaultCrew(options?.repos.find((x) => x.path === path)))
+    setCrew(defaultCrew(o.repos.find((x) => x.path === path)))
     setLinkNotice(null)
+  }
+
+  function chooseMode(m: NonNullable<DispatchPrefs['mode']>): void {
+    setMode(m)
+    savePrefs({ ...loadPrefs(), mode: m })
+  }
+
+  function chooseRepo(path: string): void {
+    if (options) chooseRepoIn(options, path)
   }
 
   function chooseEngine(eng: string): void {
@@ -182,7 +212,7 @@ export function DispatchView({ runs }: { runs: Run[] }) {
       setCrew(minted)
     }
     if (result.kind !== 'started') return
-    savePrefs({ repo: req.repo, engine: req.engine, model: req.model, tier: req.tier, effort: req.effort })
+    savePrefs({ ...loadPrefs(), repo: req.repo, engine: req.engine, model: req.model, tier: req.tier, effort: req.effort })
     setTitle('')
     setSpec('')
   }
@@ -211,17 +241,43 @@ export function DispatchView({ runs }: { runs: Run[] }) {
         </div>
       )}
 
+      {refreshError && <p className="dispatch-notice" role="alert">{refreshError}</p>}
+
       {!loadingOptions && options && (
-        <form className="dispatch-form" onSubmit={(e) => { void handleSubmit(e) }}>
-          <div className="dispatch-field">
-            <label htmlFor="dispatch-repo">Repo</label>
-            <select id="dispatch-repo" value={repo} onChange={(e) => chooseRepo(e.target.value)}>
-              {options.repos.map((r) => (
-                <option key={r.path} value={r.path}>{r.name}</option>
-              ))}
-            </select>
+        <div className="dispatch-shared">
+          <div className="dispatch-modes" role="group" aria-label="Dispatch mode">
+            <button type="button" aria-pressed={mode === 'worker'} onClick={() => chooseMode('worker')}>
+              Add worker
+            </button>
+            <button type="button" aria-pressed={mode === 'dispatcher'} onClick={() => chooseMode('dispatcher')}>
+              New dispatcher
+            </button>
           </div>
 
+          <div className="dispatch-field">
+            <label htmlFor="dispatch-repo">Repo</label>
+            <div className="dispatch-repo-row">
+              <select id="dispatch-repo" value={repo} onChange={(e) => chooseRepo(e.target.value)}>
+                {options.repos.map((r) => (
+                  <option key={r.path} value={r.path}>{r.name}</option>
+                ))}
+              </select>
+              <button type="button" className="dispatch-manage" onClick={() => setShowPicker((v) => !v)}>
+                Manage repos
+              </button>
+            </div>
+          </div>
+
+          {showPicker && <RepoPicker onChanged={refreshOptions} onClose={() => setShowPicker(false)} />}
+        </div>
+      )}
+
+      {!loadingOptions && options && mode === 'dispatcher' && (
+        <DispatcherForm options={options} repo={repo} runs={runs} />
+      )}
+
+      {!loadingOptions && options && mode === 'worker' && (
+        <form className="dispatch-form" onSubmit={(e) => { void handleSubmit(e) }}>
           <div className="dispatch-field">
             <label htmlFor="dispatch-title">Title</label>
             <input
@@ -314,7 +370,7 @@ export function DispatchView({ runs }: { runs: Run[] }) {
       )}
 
       <div ref={resultRef}>
-        {outcome?.kind === 'started' && (
+        {mode === 'worker' && outcome?.kind === 'started' && (
           <div className="dispatch-result success">
             <p>Worker <strong>{outcome.workerId}</strong> started on <code>{outcome.branch}</code>.</p>
             {outcome.crew && (
@@ -331,7 +387,7 @@ export function DispatchView({ runs }: { runs: Run[] }) {
           </div>
         )}
 
-        {outcome?.kind === 'failed' && (
+        {mode === 'worker' && outcome?.kind === 'failed' && (
           <div className="dispatch-result failure">
             <pre>{outcome.error}</pre>
             {outcome.output && (

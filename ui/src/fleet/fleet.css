@@ -593,6 +593,45 @@ a.crews-pr::after { content: ''; position: absolute; inset: -10px -8px -13px; }
 }
 .dispatch-submit:disabled { opacity: 0.5; cursor: default; }
 
+.dispatch-shared { display: flex; flex-direction: column; gap: 14px; padding: 14px 14px 0; }
+
+.dispatch-modes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.dispatch-modes button,
+.dispatch-manage,
+.dispatch-add-task,
+.repo-picker-btn {
+  min-height: var(--tap); padding: 0 12px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--bg-raised); color: var(--text);
+  font: inherit; font-size: 14px; cursor: pointer;
+}
+.dispatch-modes button[aria-pressed='true'] { border-color: var(--accent); background: var(--fill); font-weight: 600; }
+.dispatch-manage:disabled,
+.dispatch-add-task:disabled,
+.repo-picker-btn:disabled { opacity: 0.5; cursor: default; }
+
+.dispatch-repo-row { display: flex; gap: 8px; min-width: 0; }
+.dispatch-repo-row select { flex: 1; min-width: 0; }
+.dispatch-manage { flex: none; }
+
+.dispatch-task-input { display: flex; gap: 8px; align-items: flex-start; min-width: 0; }
+.dispatch-task-input textarea { flex: 1; min-width: 0; min-height: 80px; }
+.dispatch-task-remove {
+  flex: none; width: var(--tap); height: var(--tap); border-radius: 8px;
+  border: 1px solid var(--line); background: var(--bg-raised); color: var(--text);
+  font: inherit; font-size: 20px; line-height: 1; cursor: pointer;
+}
+.dispatch-task-remove:disabled { opacity: 0.5; cursor: default; }
+
+.repo-picker { display: flex; flex-direction: column; gap: 12px; padding: 12px; border-radius: 10px; background: var(--bg-sunken); border: 1px solid var(--line); min-width: 0; }
+.repo-picker-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.repo-picker-head h2 { margin: 0; font-size: 14px; color: var(--text); }
+.repo-picker-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.repo-picker-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.repo-picker-name { display: flex; flex-direction: column; gap: 2px; min-width: 0; color: var(--text); }
+.repo-picker-name .dispatch-hint { overflow-wrap: anywhere; }
+.repo-picker-missing { font-size: 11px; color: var(--state-blocked); }
+.repo-picker-row .repo-picker-btn { flex: none; }
+
 .dispatch-result { margin: 0 14px 20px; padding: 12px 14px; border-radius: 10px; background: var(--bg-sunken); border: 1px solid var(--line); font-size: 13px; line-height: 1.5; }
 .dispatch-result.success { color: var(--state-running); }
 .dispatch-result.failure { color: var(--state-failed); }
@@ -602,6 +641,11 @@ a.crews-pr::after { content: ''; position: absolute; inset: -10px -8px -13px; }
 .dispatch-field input:focus-visible,
 .dispatch-field select:focus-visible,
 .dispatch-field textarea:focus-visible,
+.dispatch-modes button:focus-visible,
+.dispatch-manage:focus-visible,
+.dispatch-add-task:focus-visible,
+.dispatch-task-remove:focus-visible,
+.repo-picker-btn:focus-visible,
 .dispatch-submit:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
