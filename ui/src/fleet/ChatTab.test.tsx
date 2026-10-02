@@ -107,8 +107,7 @@ describe('ChatTab', () => {
   it('renders assistant text as markdown', async () => {
     const { container } = await renderReady({}, { page: page('e1', [textUpdate('a1', 1, 'a **note**\n\n- one\n- two')]) })
     const bubble = container.querySelector('[data-id="a1"]')!
-    expect(bubble.querySelector('ul')).toBeTruthy()
-    expect(bubble.querySelectorAll('li')).toHaveLength(2)
+    await waitFor(() => expect(bubble.querySelectorAll('li')).toHaveLength(2))
   })
 
   it('applies the commentary class to a dimmer assistant chunk', async () => {
@@ -386,6 +385,8 @@ describe('ChatTab', () => {
       expect(afterGrowth.length).toBeGreaterThan(mid.length)
 
       act(() => { vi.advanceTimersByTime(1100) })
+      vi.useRealTimers()
+      await waitFor(() => expect(container.querySelectorAll('[data-id="a1"] p')).toHaveLength(2))
       const paragraphs = container.querySelectorAll('[data-id="a1"] p')
       expect(Array.from(paragraphs).map((p) => p.textContent)).toEqual([first, second])
     } finally {
