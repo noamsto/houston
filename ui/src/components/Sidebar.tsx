@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { SessionsData } from '../api/types'
+import type { PaneRef } from '../hooks/useLayout'
 import { SessionTree } from './SessionTree'
 
 interface Props {
@@ -7,8 +8,8 @@ interface Props {
   connected: boolean
   open: boolean
   onClose: () => void
-  onSelectWindow: (target: string) => void
-  onSplitWindow: (target: string) => void
+  onSelectWindow: (pane: PaneRef) => void
+  onSplitWindow: (pane: PaneRef) => void
   isDesktop: boolean
 }
 

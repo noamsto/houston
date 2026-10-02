@@ -4,14 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
-	"github.com/noamsto/houston/agents"
-	"github.com/noamsto/houston/agents/claude"
 	"github.com/noamsto/houston/tmux"
 )
 
@@ -81,79 +81,68 @@ func (s *Server) streamAPISessionsJSON(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAPIPane(w http.ResponseWriter, r *http.Request) {
-	// Rewrite path: strip /api prefix so parsePaneTarget (which expects /pane/...) works
 	path := strings.TrimPrefix(r.URL.Path, "/api")
-	pane, err := parsePaneTarget(path)
-	if err != nil {
-		http.Error(w, "invalid pane target", http.StatusBadRequest)
-		return
-	}
 
-	// Route based on suffix
+	var serve func(http.ResponseWriter, *http.Request, tmux.Pane)
 	switch {
 	case strings.HasSuffix(path, "/ws"):
-		s.handlePaneWS(w, r, pane)
+		serve = s.handlePaneWS
 	case strings.HasSuffix(path, "/send") && r.Method == http.MethodPost:
-		s.handlePaneSend(w, r, pane)
+		serve = s.handlePaneSend
 	case strings.HasSuffix(path, "/send-with-images") && r.Method == http.MethodPost:
-		s.handlePaneSendWithImages(w, r, pane)
-	case strings.HasSuffix(path, "/kill") && r.Method == http.MethodPost:
-		s.handlePaneKill(w, r, pane)
-	case strings.HasSuffix(path, "/respawn") && r.Method == http.MethodPost:
-		s.handlePaneRespawn(w, r, pane)
-	case strings.HasSuffix(path, "/kill-window") && r.Method == http.MethodPost:
-		s.handleWindowKill(w, r, pane)
-	case strings.HasSuffix(path, "/zoom") && r.Method == http.MethodPost:
-		s.handlePaneZoom(w, r, pane)
+		serve = s.handlePaneSendWithImages
 	default:
-		s.handlePaneJSON(w, r, pane)
-	}
-}
-
-func (s *Server) handlePaneJSON(w http.ResponseWriter, r *http.Request, pane tmux.Pane) {
-	windows, _ := s.tmux.ListWindows(pane.Session)
-	paneInfos, _ := s.tmux.ListPanes(pane.Session, pane.Window)
-
-	capture, err := s.tmux.CapturePaneWithMode(pane, 500)
-	if err != nil {
-		http.Error(w, "failed to capture pane", http.StatusInternalServerError)
+		http.NotFound(w, r)
 		return
 	}
 
-	var panePath, paneCommand string
-	for _, p := range paneInfos {
-		if p.Index == pane.Index {
-			panePath = p.Path
-			paneCommand = p.Command
-			break
+	pane, ok := s.legacyPane(w, r)
+	if !ok {
+		return
+	}
+	serve(w, r, pane)
+}
+
+var tmuxPaneID = regexp.MustCompile(`^%[0-9]+$`)
+
+// legacyPane resolves the pane identity a classic-view request presents. The
+// URL coordinate is not trusted: tmux renumbers and reuses coordinates (and
+// pane ids, across a server restart), so the request must name the pane id
+// and the server it was listed from, and the action targets what that id
+// resolves to now.
+func (s *Server) legacyPane(w http.ResponseWriter, r *http.Request) (tmux.Pane, bool) {
+	q := r.URL.Query()
+	paneID, clientServer := q.Get("pane_id"), q.Get("server")
+	if !tmuxPaneID.MatchString(paneID) || clientServer == "" {
+		legacyPaneRefusal(w, paneID, http.StatusBadRequest, "pane identity required")
+		return tmux.Pane{}, false
+	}
+
+	pane, err := s.runPanes.ResolvePane(paneID)
+	if err != nil {
+		if errors.Is(err, tmux.ErrPaneNotFound) {
+			slog.Debug("resolve legacy pane failed", "pane_id", paneID, "error", err)
+			legacyPaneRefusal(w, paneID, http.StatusConflict, "terminal pane is gone")
+			return tmux.Pane{}, false
 		}
+		slog.Warn("resolve legacy pane failed", "pane_id", paneID, "error", err)
+		legacyPaneRefusal(w, paneID, http.StatusServiceUnavailable, "tmux unavailable")
+		return tmux.Pane{}, false
 	}
-
-	paneID := pane.Target()
-	agent := s.registry.Detect(paneID, paneCommand, capture.Output)
-	parseResult := getAgentState(agent, panePath, capture.Output)
-
-	suggestion := ""
-	if agent.Type() == agents.AgentClaudeCode {
-		suggestion = claude.ExtractSuggestion(capture.Output)
+	if tmux.ServerMismatch(clientServer, pane.Server) {
+		slog.Info("resolve legacy pane refused: server mismatch", "pane_id", paneID, "client_server", clientServer, "pane_server", pane.Server)
+		legacyPaneRefusal(w, paneID, http.StatusConflict, "terminal pane belongs to a different tmux server")
+		return tmux.Pane{}, false
 	}
+	return pane, true
+}
 
-	width, height, _ := s.tmux.GetPaneSize(pane)
-
-	data := PaneData{
-		Pane:        pane,
-		Output:      capture.Output,
-		ParseResult: parseResult,
-		Windows:     windows,
-		Panes:       paneInfos,
-		PaneWidth:   width,
-		PaneHeight:  height,
-		Suggestion:  suggestion,
-		StripItems:  s.buildAgentStripItems(pane.Session, pane.Window, pane.Index),
+func legacyPaneRefusal(w http.ResponseWriter, paneID string, code int, detail string) {
+	if !tmuxPaneID.MatchString(paneID) {
+		paneID = ""
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(data)
+	slog.Info("legacy pane refused", "pane_id", paneID, "status", code, "outcome", detail)
+	http.Error(w, detail, code)
 }
 
 func (s *Server) handleAPIOpenCodeSessions(w http.ResponseWriter, r *http.Request) {

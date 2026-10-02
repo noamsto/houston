@@ -76,6 +76,8 @@ type WSDims struct {
 // metaPollInterval is how often each pane connection re-runs agent detection.
 const metaPollInterval = time.Second
 
+// handlePaneWS streams an already-resolved pane; resolution refuses with a
+// plain HTTP error before this runs.
 func (s *Server) handlePaneWS(w http.ResponseWriter, r *http.Request, pane tmux.Pane) {
 	up := s.wsUpgrader()
 	conn, err := up.Upgrade(w, r, nil)

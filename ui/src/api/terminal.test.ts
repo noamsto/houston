@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { sendImage, sendKey, sendText, terminalKey, terminalSocketPath, type TerminalAddress } from './terminal'
 
 const runAddr: TerminalAddress = { kind: 'run', id: 'run-1' }
-const paneAddr: TerminalAddress = { kind: 'pane', target: 'sess:0.0' }
+const paneAddr: TerminalAddress = { kind: 'pane', target: 'sess:0.0', paneId: '%42', server: '1111' }
 
 function lastRequest(): { url: string; init: RequestInit } {
   const calls = vi.mocked(fetch).mock.calls
@@ -24,7 +24,15 @@ describe('terminalKey', () => {
   })
 
   it('formats a pane address', () => {
-    expect(terminalKey(paneAddr)).toBe('pane:sess:0.0')
+    expect(terminalKey(paneAddr)).toBe('pane:sess:0.0:%42:1111')
+  })
+
+  it('differs for the same target with a different pane id', () => {
+    expect(terminalKey({ ...paneAddr, paneId: '%43' })).not.toBe(terminalKey(paneAddr))
+  })
+
+  it('differs for the same pane id on a different server', () => {
+    expect(terminalKey({ ...paneAddr, server: '2222' })).not.toBe(terminalKey(paneAddr))
   })
 })
 
@@ -33,8 +41,8 @@ describe('terminalSocketPath', () => {
     expect(terminalSocketPath({ kind: 'run', id: 'a/b' })).toBe('/api/runs/a%2Fb/terminal')
   })
 
-  it('pane: reuses the legacy WS path verbatim', () => {
-    expect(terminalSocketPath(paneAddr)).toBe('/api/pane/sess:0.0/ws')
+  it('pane: legacy WS path carrying the pane identity', () => {
+    expect(terminalSocketPath(paneAddr)).toBe('/api/pane/sess:0.0/ws?pane_id=%2542&server=1111')
   })
 })
 
@@ -55,7 +63,7 @@ describe('sendText', () => {
   it('pane: form POST to the legacy send route', async () => {
     await sendText(paneAddr, 'echo hi')
     const { url, init } = lastRequest()
-    expect(url).toBe('/api/pane/sess:0.0/send')
+    expect(url).toBe('/api/pane/sess:0.0/send?pane_id=%2542&server=1111')
     const params = new URLSearchParams(String(init.body))
     expect(params.get('input')).toBe('echo hi')
     expect(params.get('special')).toBeNull()
@@ -73,7 +81,7 @@ describe('sendKey', () => {
   it('pane: form POST with special=true', async () => {
     await sendKey(paneAddr, 'Escape')
     const { url, init } = lastRequest()
-    expect(url).toBe('/api/pane/sess:0.0/send')
+    expect(url).toBe('/api/pane/sess:0.0/send?pane_id=%2542&server=1111')
     const params = new URLSearchParams(String(init.body))
     expect(params.get('input')).toBe('Escape')
     expect(params.get('special')).toBe('true')
@@ -93,7 +101,7 @@ describe('sendImage', () => {
   it('pane: JSON POST to the legacy send-with-images route', async () => {
     await sendImage(paneAddr, 'look at this', image)
     const { url, init } = lastRequest()
-    expect(url).toBe('/api/pane/sess:0.0/send-with-images')
+    expect(url).toBe('/api/pane/sess:0.0/send-with-images?pane_id=%2542&server=1111')
     expect(JSON.parse(String(init.body))).toEqual({ text: 'look at this', images: [image] })
   })
 })

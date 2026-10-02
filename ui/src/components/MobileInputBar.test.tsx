@@ -5,7 +5,7 @@ import type { TerminalAddress } from '../api/terminal'
 import { composerMaxHeight } from './composerMaxHeight'
 
 const target = 'sess:0.0'
-const paneAddress: TerminalAddress = { kind: 'pane', target }
+const paneAddress: TerminalAddress = { kind: 'pane', target, paneId: '%42', server: '1111' }
 const runAddress: TerminalAddress = { kind: 'run', id: 'run-1' }
 
 function lastRequest(): { url: string; params: URLSearchParams } {
@@ -44,7 +44,7 @@ describe('MobileInputBar composer', () => {
     await click(screen.getByRole('button', { name: 'Send' }))
 
     const { url, params } = lastRequest()
-    expect(url).toBe(`/api/pane/${target}/send`)
+    expect(url).toBe(`/api/pane/${target}/send?pane_id=%2542&server=1111`)
     expect(params.get('input')).toBe('echo hi')
     expect(params.get('special')).toBeNull()
     expect(params.get('noenter')).toBeNull()
@@ -102,7 +102,7 @@ describe('MobileInputBar quick keys', () => {
     render(<MobileInputBar address={paneAddress} />)
     await click(screen.getByRole('button', { name: label }))
     const { url, params } = lastRequest()
-    expect(url).toBe(`/api/pane/${target}/send`)
+    expect(url).toBe(`/api/pane/${target}/send?pane_id=%2542&server=1111`)
     expect(params.get('input')).toBe(key)
     expect(params.get('special')).toBe('true')
   })

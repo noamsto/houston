@@ -64,6 +64,8 @@ export interface WindowWithStatus {
   branch: string
   process: string
   agent_type: AgentType
+  pane_id?: string
+  tmux_server?: string
 }
 
 // Mirror of views.SessionWithWindows
@@ -79,30 +81,6 @@ export interface SessionsData {
   needs_attention: SessionWithWindows[]
   active: SessionWithWindows[]
   idle: SessionWithWindows[]
-}
-
-// Mirror of views.AgentStripItem
-export interface AgentStripItem {
-  session: string
-  window: number
-  pane: number
-  name: string
-  indicator: string
-  agent_type: AgentType
-  active: boolean
-}
-
-// Mirror of views.PaneData
-export interface PaneData {
-  pane: Pane
-  output: string
-  parse_result: ParseResult
-  windows: Window[]
-  panes: PaneInfo[]
-  pane_width: number
-  pane_height: number
-  suggestion: string
-  strip_items: AgentStripItem[]
 }
 
 // WebSocket message types
