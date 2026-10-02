@@ -544,7 +544,12 @@ func TestChatHeadChangeNotifiesWithoutUpdates(t *testing.T) {
 	// Swap in the no-update reader while the file is still empty, so every
 	// later refresh consumes the first line without producing an update.
 	f.h.mu.Lock()
-	f.h.sessions["chat-h1"].chat.reader = zeroUpdateReader{}
+	sess := f.h.sessions["chat-h1"]
+	if sess == nil || sess.chat == nil {
+		f.h.mu.Unlock()
+		t.Fatal("no chat state for chat-h1")
+	}
+	sess.chat.reader = zeroUpdateReader{}
 	f.h.mu.Unlock()
 
 	if err := os.WriteFile(f.transcript, []byte(`{"type":"summary"}`+"\n"), 0o644); err != nil {
