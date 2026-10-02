@@ -47,8 +47,6 @@ type SessionView struct {
 	TranscriptPath string      `json:"transcript_path,omitempty"`
 	Agent          string      `json:"agent"`
 
-	// Background lists the background shells and monitors the transcript
-	// shows started and not yet finished.
 	Background []BackgroundTask `json:"background,omitempty"`
 }
 

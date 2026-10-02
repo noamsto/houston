@@ -8,7 +8,6 @@ import (
 	"time"
 )
 
-// Background task kinds.
 const (
 	BackgroundShell   = "shell"
 	BackgroundMonitor = "monitor"
@@ -186,7 +185,6 @@ func (t *bgTracker) list(now time.Time) []BackgroundTask {
 	return out
 }
 
-// backgroundSignature is a cheap comparable summary of a task list.
 func backgroundSignature(tasks []BackgroundTask) string {
 	var b strings.Builder
 	for _, t := range tasks {
