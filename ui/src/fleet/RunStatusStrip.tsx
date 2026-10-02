@@ -1,15 +1,59 @@
+import { useState } from 'react'
 import type { Run } from '../api/runs'
 import { agoLabel } from './format'
 import { ReplyComposer } from './ReplyComposer'
 import { runHash } from './routes'
 import { isFresh, needsYou } from './staleness'
 
+type Task = NonNullable<Run['background']>[number]
+
+function plural(n: number, word: string) {
+  return `${n} ${word}${n === 1 ? '' : 's'}`
+}
+
+function bgSummary(tasks: Task[], now: number) {
+  if (tasks.length === 1) return tasks[0].hint || tasks[0].id
+  const monitors = tasks.filter((t) => t.kind === 'monitor').length
+  const shells = tasks.length - monitors
+  const counts = [monitors && plural(monitors, 'monitor'), shells && plural(shells, 'shell')].filter(Boolean)
+  const since = Math.min(...tasks.map((t) => t.since || Infinity))
+  return Number.isFinite(since) ? `${counts.join(' · ')} · oldest ${agoLabel(since, now)}` : counts.join(' · ')
+}
+
+function BackgroundTasks({ tasks, now }: { tasks: Task[]; now: number }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="run-status-bg-wrap">
+      <button
+        type="button"
+        className="run-status-bg-toggle"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <span className="run-status-bg-chevron" aria-hidden="true">{open ? '▾' : '▸'}</span>
+        <span className="run-status-bg-summary">{bgSummary(tasks, now)}</span>
+      </button>
+      {open && (
+        <ul className="run-status-bg" aria-label="Background tasks">
+          {tasks.map((t) => (
+            <li key={t.id} className="run-status-bg-task">
+              <span className="run-status-bg-kind">{t.kind}</span>
+              <span className="run-status-bg-hint">{t.hint || t.id}</span>
+              {!!t.since && <span className="run-status-bg-age">{agoLabel(t.since, now)}</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 export function RunStatusStrip({ run, now }: { run: Run; now: number }) {
   const blocked = run.state === 'blocked'
   const needsClass = needsYou(run, now) ? ' needs-you' : blocked && !isFresh(run, now) ? ' needs-you muted' : ''
   const { tool, hint, turn } = run.activity
   const crew = run.crew
-  const crewInfo = crew ? [crew.tier, run.agent, crew.model].filter(Boolean).join(' · ') : ''
+  const crewInfo = crew && (crew.tier || crew.model) ? [crew.tier, run.agent, crew.model].filter(Boolean).join(' · ') : ''
   const detail = crew?.detail && crew.detail !== run.question?.text ? crew.detail : null
 
   return (
@@ -32,21 +76,11 @@ export function RunStatusStrip({ run, now }: { run: Run; now: number }) {
           <span>{agoLabel(run.updated_at, now)}</span>
         </span>
       </div>
-      {!!run.background?.length && (
-        <ul className="run-status-bg" aria-label="Background tasks">
-          {run.background.map((t) => (
-            <li key={t.id} className="run-status-bg-task">
-              <span className="run-status-bg-kind">{t.kind}</span>
-              <span className="run-status-bg-hint">{t.hint || t.id}</span>
-              {!!t.since && <span className="run-status-bg-age">{agoLabel(t.since, now)}</span>}
-            </li>
-          ))}
-        </ul>
-      )}
-      {crew && (
+      {!!run.background?.length && <BackgroundTasks tasks={run.background} now={now} />}
+      {crew && (crewInfo || detail || (crew.codename && run.role !== 'dispatcher')) && (
         <div className="run-status-line run-status-crew">
           {crew.codename && run.role !== 'dispatcher' && <span className="run-status-codename">{crew.codename}</span>}
-          <span className="run-status-engine">{crewInfo}</span>
+          {crewInfo && <span className="run-status-engine">{crewInfo}</span>}
           {detail && <span className="run-status-detail">{detail}</span>}
         </div>
       )}

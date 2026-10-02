@@ -69,6 +69,12 @@ describe('RunStatusStrip crew line', () => {
     expect(screen.getByText('standard · claude · opus')).toBeTruthy()
   })
 
+  it('omits the engine label when the crew carries nothing beyond the agent', () => {
+    const { container } = render(<RunStatusStrip run={run({ crew: { name: 'c' }, role: 'dispatcher' })} now={now} />)
+    expect(container.querySelector('.run-status-crew')).toBeNull()
+    expect(screen.queryByText('claude')).toBeNull()
+  })
+
   it('omits crew.detail when it repeats the question', () => {
     const r = run({ state: 'blocked', crew: { ...crew, detail: 'pick one' }, question: { text: 'pick one', via: 'crew' } })
     render(<RunStatusStrip run={r} now={now} />)
@@ -117,25 +123,49 @@ describe('RunQuestion', () => {
 })
 
 describe('RunStatusStrip background tasks', () => {
-  it('lists each task with its hint and age', () => {
-    const since = Math.floor(now / 1000) - 180
+  const since = Math.floor(now / 1000) - 180
+  const bg = (kind: 'shell' | 'monitor', id: string, hint = id, s?: number) => ({ id, kind, hint, since: s })
+  const summary = () => screen.getByRole('button', { expanded: false }).textContent
+
+  it('renders nothing for zero tasks', () => {
+    render(<RunStatusStrip run={run()} now={now} />)
+    expect(screen.queryByLabelText('Background tasks')).toBeNull()
+    expect(screen.queryByRole('button')).toBeNull()
+  })
+
+  it('shows the hint of a single task', () => {
+    render(<RunStatusStrip run={run({ background: [bg('shell', 'a', 'Sleep five minutes')] })} now={now} />)
+    expect(summary()).toContain('Sleep five minutes')
+  })
+
+  it('summarises mixed kinds with pluralisation and the oldest age', () => {
+    const tasks = [bg('monitor', 'a'), bg('monitor', 'b', 'b', since), bg('shell', 'c'), bg('monitor', 'd')]
+    render(<RunStatusStrip run={run({ background: tasks })} now={now} />)
+    expect(summary()).toBe(`▸3 monitors · 1 shell · oldest ${agoLabel(since, now)}`)
+  })
+
+  it('omits kinds with zero tasks', () => {
+    render(<RunStatusStrip run={run({ background: [bg('shell', 'a'), bg('shell', 'b')] })} now={now} />)
+    expect(summary()).toBe('▸2 shells')
+  })
+
+  it('toggles the list and aria-expanded', () => {
     render(
       <RunStatusStrip
-        run={run({ background: [{ id: 'a', kind: 'shell', hint: 'Sleep five minutes', since }, { id: 'b', kind: 'monitor', hint: 'CI checks' }] })}
+        run={run({ background: [bg('shell', 'a', 'Sleep five minutes', since), bg('monitor', 'b', 'CI checks')] })}
         now={now}
       />,
     )
+    expect(screen.queryByLabelText('Background tasks')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { expanded: false }))
+    const toggle = screen.getByRole('button', { expanded: true })
     const items = screen.getByLabelText('Background tasks').querySelectorAll('li')
     expect(items).toHaveLength(2)
-    expect(items[0].textContent).toContain('shell')
     expect(items[0].textContent).toContain('Sleep five minutes')
     expect(items[0].textContent).toContain(agoLabel(since, now))
-    expect(items[1].textContent).toContain('CI checks')
     expect(items[1].querySelector('.run-status-bg-age')).toBeNull()
-  })
-
-  it('renders no list without background tasks', () => {
-    render(<RunStatusStrip run={run()} now={now} />)
+    fireEvent.click(toggle)
     expect(screen.queryByLabelText('Background tasks')).toBeNull()
+    expect(screen.getByRole('button', { expanded: false })).toBeTruthy()
   })
 })
