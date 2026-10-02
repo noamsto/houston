@@ -790,12 +790,11 @@ func TestRunChatToolFlagsAreIndependent(t *testing.T) {
 		if _, ok := got["input"]; ok != tc.wantInput {
 			t.Errorf("%s: input present = %v, want %v (%d bytes)", tc.id, ok, tc.wantInput, rec.Body.Len())
 		}
-		// truncated has no omitempty, so it is always present; "absent"
-		// means the flag was never raised by a text cut.
+		// truncated has no omitempty (always present); inputOmitted does,
+		// so its key is absent when the input was kept.
 		if got["truncated"] != tc.wantTruncated {
 			t.Errorf("%s: truncated = %v, want %v", tc.id, got["truncated"], tc.wantTruncated)
 		}
-		// inputOmitted has omitempty: absent when the input was kept.
 		if _, ok := got["inputOmitted"]; ok != tc.wantInputOmitted {
 			t.Errorf("%s: inputOmitted present = %v, want %v", tc.id, ok, tc.wantInputOmitted)
 		}
