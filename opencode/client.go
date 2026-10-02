@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -59,7 +60,7 @@ func (c *Client) ListSessions(ctx context.Context) ([]Session, error) {
 
 // GetSession returns a single session by ID.
 func (c *Client) GetSession(ctx context.Context, id string) (*Session, error) {
-	resp, err := c.get(ctx, "/session/"+id)
+	resp, err := c.get(ctx, "/session/"+url.PathEscape(id))
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +90,7 @@ func (c *Client) GetSessionStatus(ctx context.Context) (map[string]SessionStatus
 
 // GetMessages returns messages for a session.
 func (c *Client) GetMessages(ctx context.Context, sessionID string, limit int) ([]MessageWithParts, error) {
-	path := fmt.Sprintf("/session/%s/message", sessionID)
+	path := fmt.Sprintf("/session/%s/message", url.PathEscape(sessionID))
 	if limit > 0 {
 		path = fmt.Sprintf("%s?limit=%d", path, limit)
 	}
@@ -109,7 +110,7 @@ func (c *Client) GetMessages(ctx context.Context, sessionID string, limit int) (
 
 // GetTodos returns the todo list for a session.
 func (c *Client) GetTodos(ctx context.Context, sessionID string) ([]Todo, error) {
-	resp, err := c.get(ctx, fmt.Sprintf("/session/%s/todo", sessionID))
+	resp, err := c.get(ctx, fmt.Sprintf("/session/%s/todo", url.PathEscape(sessionID)))
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +125,7 @@ func (c *Client) GetTodos(ctx context.Context, sessionID string) ([]Todo, error)
 
 // SendPrompt sends a prompt to a session and waits for the response.
 func (c *Client) SendPrompt(ctx context.Context, sessionID string, req PromptRequest) (*MessageWithParts, error) {
-	resp, err := c.post(ctx, fmt.Sprintf("/session/%s/message", sessionID), req)
+	resp, err := c.post(ctx, fmt.Sprintf("/session/%s/message", url.PathEscape(sessionID)), req)
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +140,7 @@ func (c *Client) SendPrompt(ctx context.Context, sessionID string, req PromptReq
 
 // SendPromptAsync sends a prompt without waiting for a response.
 func (c *Client) SendPromptAsync(ctx context.Context, sessionID string, req PromptRequest) error {
-	resp, err := c.post(ctx, fmt.Sprintf("/session/%s/prompt_async", sessionID), req)
+	resp, err := c.post(ctx, fmt.Sprintf("/session/%s/prompt_async", url.PathEscape(sessionID)), req)
 	if err != nil {
 		return err
 	}
@@ -149,7 +150,7 @@ func (c *Client) SendPromptAsync(ctx context.Context, sessionID string, req Prom
 
 // AbortSession aborts a running session.
 func (c *Client) AbortSession(ctx context.Context, sessionID string) error {
-	resp, err := c.post(ctx, fmt.Sprintf("/session/%s/abort", sessionID), nil)
+	resp, err := c.post(ctx, fmt.Sprintf("/session/%s/abort", url.PathEscape(sessionID)), nil)
 	if err != nil {
 		return err
 	}
@@ -182,7 +183,7 @@ func (c *Client) CreateSession(ctx context.Context, title string, parentID *stri
 
 // DeleteSession deletes a session.
 func (c *Client) DeleteSession(ctx context.Context, sessionID string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.baseURL+"/session/"+sessionID, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.baseURL+"/session/"+url.PathEscape(sessionID), nil)
 	if err != nil {
 		return err
 	}

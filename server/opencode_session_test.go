@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -134,5 +135,73 @@ func TestOpenCodeSessionOnlyReachesDiscoveredServers(t *testing.T) {
 	}
 	if n := decoyHits.Load(); n != 0 {
 		t.Fatalf("decoy received %d requests, want 0", n)
+	}
+}
+
+func TestOpenCodeSessionIDStaysOneSegment(t *testing.T) {
+	var mu sync.Mutex
+	var seen []string
+	inner := fakeOpenCode(t, nil)
+	rec := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.URL.EscapedPath()+"?"+r.URL.RawQuery)
+		mu.Unlock()
+		inner.Config.Handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(rec.Close)
+
+	disc := opencode.NewDiscovery(opencode.WithStaticURL(rec.URL))
+	disc.Scan(context.Background())
+	if len(disc.GetServers()) != 1 {
+		t.Fatalf("fake server not discovered")
+	}
+	allowed := []string{replyOrigin}
+	s := &Server{
+		auth:        &authGate{token: replyToken, enabled: true, allowedOrigins: allowed},
+		hosts:       deriveHosts(nil, allowed),
+		ocDiscovery: disc,
+		ocManager:   opencode.NewManager(disc),
+	}
+
+	id := "../../config?x=#"
+	escID := url.PathEscape(id)
+	for _, action := range []string{"", "abort", "send"} {
+		p := "/api/opencode/session/" + url.PathEscape(rec.URL) + "/" + escID
+		var body string
+		if action != "" {
+			p += "/" + action
+		}
+		if action == "send" {
+			body = "input=hi"
+		}
+		req := replyRequest(http.MethodPost, p, body)
+		if action == "" {
+			req = replyRequest(http.MethodGet, p, "")
+		}
+		if body != "" {
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		}
+		doReply(t, s, req)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	prefix := "/session/" + escID
+	sawID := false
+	for _, got := range seen {
+		path, query, _ := strings.Cut(got, "?")
+		if query != "" && query != "limit=10" {
+			t.Errorf("request %q carries a query", got)
+		}
+		switch {
+		case path == "/session/status", path == "/project/current", path == "/global/health":
+		case path == prefix, strings.HasPrefix(path, prefix+"/"):
+			sawID = true
+		default:
+			t.Errorf("request %q escaped the session segment", got)
+		}
+	}
+	if !sawID {
+		t.Fatalf("no request carried the escaped session id; saw %q", seen)
 	}
 }

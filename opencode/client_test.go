@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 )
@@ -144,5 +145,25 @@ func TestIsAvailable(t *testing.T) {
 	// Test unavailable server
 	if IsAvailable(context.Background(), "http://localhost:99999") {
 		t.Error("expected server to be unavailable")
+	}
+}
+
+func TestClient_SessionIDIsEscapedIntoOnePathSegment(t *testing.T) {
+	id := "../../config?x=#"
+	var rawPath, rawQuery string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rawPath, rawQuery = r.URL.EscapedPath(), r.URL.RawQuery
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	if _, err := NewClient(server.URL).GetSession(context.Background(), id); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if want := "/session/" + url.PathEscape(id); rawPath != want {
+		t.Errorf("path = %q, want %q", rawPath, want)
+	}
+	if rawQuery != "" {
+		t.Errorf("query = %q, want empty", rawQuery)
 	}
 }
