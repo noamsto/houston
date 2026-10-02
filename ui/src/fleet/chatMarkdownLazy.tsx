@@ -1,20 +1,34 @@
-import { Suspense, lazy } from 'react'
+import { Component, Suspense, lazy } from 'react'
+import type { ReactNode } from 'react'
+import { loadChatMarkdown } from './chatMarkdownLoader'
 
-// The markdown renderer and its deps (react-markdown, remark) are only needed
-// once an assistant bubble finishes revealing, so keep them out of the main
-// chunk. The `.then` wrapper leaves chatMarkdown's named export untouched.
-const LazyChatMarkdown = lazy(() => import('./chatMarkdown').then((m) => ({ default: m.ChatMarkdown })))
+const LazyChatMarkdown = lazy(loadChatMarkdown)
 
-/** Plain-text stand-in for `ChatMarkdown`, matching what the typewriter shows
- *  mid-reveal: whitespace and line breaks preserved, no markdown parsing. */
+/** Plain-text stand-in for `ChatMarkdown`: whitespace and line breaks
+ *  preserved, no markdown parsing. */
 export function ChatPlainText({ text }: { text: string }) {
   return <span className="chat-plain">{text}</span>
 }
 
+// A chunk that fails to load (stale hash after a rebuild, flaky network) makes
+// React.lazy throw on every render; without this the whole app would unmount.
+class ChunkErrorBoundary extends Component<{ fallback: ReactNode; children: ReactNode }, { failed: boolean }> {
+  state = { failed: false }
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
+  render() {
+    return this.state.failed ? this.props.fallback : this.props.children
+  }
+}
+
 export function ChatMarkdownLazy({ text }: { text: string }) {
+  const plain = <ChatPlainText text={text} />
   return (
-    <Suspense fallback={<ChatPlainText text={text} />}>
-      <LazyChatMarkdown text={text} />
-    </Suspense>
+    <ChunkErrorBoundary fallback={plain}>
+      <Suspense fallback={plain}>
+        <LazyChatMarkdown text={text} />
+      </Suspense>
+    </ChunkErrorBoundary>
   )
 }

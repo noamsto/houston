@@ -10,6 +10,7 @@ import { buildItems, provisionalTool, reconcileOptimistic, toolRowLabel } from '
 import type { AssistantItem, ChatItem, DividerItem, Optimistic, ToolCall, ToolsItem, UserItem } from './chatModel'
 import { kindGlyph, statusGlyph } from './chatGlyphs'
 import { ChatMarkdownLazy, ChatPlainText } from './chatMarkdownLazy'
+import { preloadChatMarkdown } from './chatMarkdownLoader'
 import { RunQuestion, RunStatusStrip } from './RunStatusStrip'
 
 const REVEAL_TICKS = 16
@@ -273,6 +274,7 @@ export function ChatTab({ run, now }: { run: Run; now: number }) {
   const [revealVersion, setRevealVersion] = useState(0)
   const bumpReveal = () => setRevealVersion((v) => v + 1)
   const reducedMotion = useMemo(() => prefersReducedMotion(), [])
+  useEffect(preloadChatMarkdown, [])
 
   const [pending, setPending] = useState<Optimistic[]>([])
   const [nowTick, setNowTick] = useState(() => Date.now())
