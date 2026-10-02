@@ -274,7 +274,7 @@ export function ChatTab({ run, now }: { run: Run; now: number }) {
   const [revealVersion, setRevealVersion] = useState(0)
   const bumpReveal = () => setRevealVersion((v) => v + 1)
   const reducedMotion = useMemo(() => prefersReducedMotion(), [])
-  useEffect(preloadChatMarkdown, [])
+  useEffect(() => { preloadChatMarkdown() }, [])
 
   const [pending, setPending] = useState<Optimistic[]>([])
   const [nowTick, setNowTick] = useState(() => Date.now())

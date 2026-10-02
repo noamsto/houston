@@ -25,17 +25,20 @@ describe('ChatMarkdownLazy', () => {
   })
 
   it('falls back to plain text when the chunk fails to load', async () => {
-    vi.resetModules()
-    vi.doMock('./chatMarkdown', () => {
-      throw new Error('chunk load failed')
-    })
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const mod = await import('./chatMarkdownLazy')
-    const { container } = render(<mod.ChatMarkdownLazy text={'- one'} />)
-    await waitFor(() => expect(spy).toHaveBeenCalled())
-    expect(container.querySelector('.chat-plain')?.textContent).toBe('- one')
-    expect(container.querySelector('.chat-md')).toBeNull()
-    spy.mockRestore()
-    vi.doUnmock('./chatMarkdown')
+    try {
+      vi.resetModules()
+      vi.doMock('./chatMarkdown', () => {
+        throw new Error('chunk load failed')
+      })
+      const mod = await import('./chatMarkdownLazy')
+      const { container } = render(<mod.ChatMarkdownLazy text={'- one'} />)
+      await waitFor(() => expect(spy.mock.calls.flat().some((a) => String(a).includes('ChunkErrorBoundary'))).toBe(true))
+      expect(container.querySelector('.chat-plain')?.textContent).toBe('- one')
+      expect(container.querySelector('.chat-md')).toBeNull()
+    } finally {
+      spy.mockRestore()
+      vi.doUnmock('./chatMarkdown')
+    }
   })
 })
