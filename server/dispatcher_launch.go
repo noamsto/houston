@@ -581,11 +581,11 @@ func ExecDispatcherLaunch(file string) error {
 	}
 
 	// Stamp by pane id: houston creates the window with -d, so it is not the
-	// session's current window, and an untargeted stamp would land on the
-	// client's. The launcher targets its own window too (dispatcher#655); a
-	// launcher predating #655 stamps untargeted and would relabel whichever
-	// window is current, so houston and #655 ship in the same bump. This
-	// pre-stamp is the belt-and-braces that keeps the new window tagged.
+	// session's current window and an untargeted stamp lands on the client's.
+	// The launcher targets its own window too (dispatcher#655), but a launcher
+	// predating #655 would relabel whichever window is current, so houston and
+	// #655 ship in the same bump; this pre-stamp is belt-and-braces for a
+	// launcher without it.
 	paneTmux(pane, "set-option", "-w", "-t", pane, "@crew_name", "dispatcher")
 	paneTmux(pane, "set-option", "-w", "-t", pane, "@crew_color", "colour99")
 
