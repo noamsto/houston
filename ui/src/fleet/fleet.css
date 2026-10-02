@@ -659,6 +659,10 @@ a.crews-pr::after { content: ''; position: absolute; inset: -10px -8px -13px; }
 }
 .chat-bubble.chat-assistant.commentary { color: var(--text-faint); font-style: italic; }
 
+/* Assistant text mid-reveal and while its markdown chunk loads: keep the
+   source's line breaks and whitespace. */
+.chat-plain { white-space: pre-wrap; }
+
 /* Assistant markdown. The global reset zeroes margin/padding, so block
    spacing and list indentation are restored here. */
 .chat-md { min-width: 0; overflow-wrap: anywhere; }

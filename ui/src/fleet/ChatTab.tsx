@@ -9,7 +9,8 @@ import { useStickyScroll } from '../hooks/useStickyScroll'
 import { buildItems, provisionalTool, reconcileOptimistic, toolRowLabel } from './chatModel'
 import type { AssistantItem, ChatItem, DividerItem, Optimistic, ToolCall, ToolsItem, UserItem } from './chatModel'
 import { kindGlyph, statusGlyph } from './chatGlyphs'
-import { ChatMarkdown } from './chatMarkdown'
+import { ChatMarkdownLazy, ChatPlainText } from './chatMarkdownLazy'
+import { preloadChatMarkdown } from './chatMarkdownLoader'
 import { RunQuestion, RunStatusStrip } from './RunStatusStrip'
 
 const REVEAL_TICKS = 16
@@ -87,7 +88,7 @@ function AssistantBubble({ item, live, reducedMotion, revealed, onRevealed, onTi
 
   return (
     <div className={`chat-bubble chat-assistant${item.commentary ? ' commentary' : ''}`} data-seq={item.seq} data-id={item.id}>
-      {complete ? <ChatMarkdown text={display} /> : <span>{display}</span>}
+      {complete ? <ChatMarkdownLazy text={display} /> : <ChatPlainText text={display} />}
     </div>
   )
 }
@@ -304,6 +305,7 @@ export function ChatTab({ run, now }: { run: Run; now: number }) {
   const [revealVersion, setRevealVersion] = useState(0)
   const bumpReveal = () => setRevealVersion((v) => v + 1)
   const reducedMotion = useMemo(() => prefersReducedMotion(), [])
+  useEffect(() => { preloadChatMarkdown() }, [])
 
   const [pending, setPending] = useState<Optimistic[]>([])
   const [nowTick, setNowTick] = useState(() => Date.now())
