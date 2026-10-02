@@ -168,10 +168,9 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 		rootList = append(rootList, repo)
 	}
 
-	// The pane → hook session map the terminal join consults. Built from the
+	// The pane → hook session map the terminal join consults, built from the
 	// same listing and the hooks layer's own trust rules (paneSetFrom,
-	// paneHookSessions) — never by re-reading hook state files here. A nil
-	// hub (tests, no hooks) leaves it empty and the join on its old rule.
+	// paneHookSessions).
 	var paneSessions map[string]string
 	if s.sessions != nil {
 		paneSessions = paneHookSessions(s.sessions.Snapshot(), paneSetFrom(panes, time.Now()))

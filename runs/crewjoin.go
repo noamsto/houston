@@ -58,8 +58,7 @@ import "github.com/noamsto/houston/tmux"
 // not terminal and does not gate.
 //
 // busEngineSession is the bus record's engine_session (Run.CrewSession) and
-// paneSessions the pane id → current hook session id map; both are research
-// inputs for the terminal join below.
+// paneSessions maps a pane id to its current hook session id.
 func resolvePane(bus, branch string, busState State, busUpdatedAt, busSession int64, busEngineSession string, paneSessions map[string]string, wins []tmux.WindowOptions, panes []tmux.PaneOptions, busOf func(gitRoot string) string, procStart procStartFunc) (paneID string, candidates int) {
 	terminal := busState == StateDone || busState == StateFailed
 	byTarget := windowsByTarget(wins)
@@ -85,11 +84,10 @@ func resolvePane(bus, branch string, busState State, busUpdatedAt, busSession in
 			if epoch <= 0 || epoch > busUpdatedAt+terminalJoinGrace || !finishedPaneState(p) {
 				continue
 			}
-			// When both sides name a session, they must be the same one: a
-			// /clear or /resume starts a new session id inside the same engine
-			// process, so the process identity above cannot see it. Either side
-			// unknown (an older dispatcher row, codex/cursor null, no hook state
-			// for the pane) falls back to that process rule, unchanged.
+			// A /clear or /resume starts a new session id inside the same engine
+			// process, which the process-start rule above cannot see. When both
+			// sides name a session they must match; either side unknown keeps
+			// that rule.
 			if busEngineSession != "" {
 				if sid := paneSessions[p.PaneID]; sid != "" && sid != busEngineSession {
 					continue

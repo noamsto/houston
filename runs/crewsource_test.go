@@ -992,9 +992,7 @@ func TestScanJoinsTerminalRecordToItsOwnIdlePane(t *testing.T) {
 func TestScanEngineSession(t *testing.T) {
 	// #162: the bus row names its engine session; the pane's hook session must
 	// match for a terminal join, so a /clear or /resume inside the same engine
-	// process does not reattach the finished worker's record to the new
-	// session. The hooks layer's view is the input, so only a non-foreign,
-	// non-ended session on the pane is trusted.
+	// process does not reattach the finished worker's record to the new session.
 	bus := t.TempDir()
 	rec := `{"ts":1000,"crew_id":"c1","from":"worker:fix/412#s1","kind":"dispatch","branch":"fix/412","engine":"claude","engine_session":"sid-1"}
 {"ts":2000,"crew_id":"c1","from":"worker:fix/412#s1","kind":"status","body":{"state":"done"}}

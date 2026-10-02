@@ -536,9 +536,7 @@ func TestPaneHookSessionsFiltersUntrustworthySessions(t *testing.T) {
 	// The crew join's pane→session map is a trust boundary: a session the
 	// hooks layer would not vouch for must not be offered to the terminal
 	// join (#120), and a pane carrying two sessions must pick one
-	// deterministically. Each filter is exercised directly — a caller test
-	// that seeds a single trusted view would stay green if a predicate were
-	// dropped.
+	// deterministically.
 	ps := paneSetFrom([]tmux.PaneOptions{
 		{PaneID: "%1", ServerPID: "2001", ServerStart: 100},
 		{PaneID: "%2", CrewRole: "spec-critic", ServerPID: "2001", ServerStart: 100},
@@ -565,9 +563,6 @@ func TestPaneHookSessionsFiltersUntrustworthySessions(t *testing.T) {
 		{"ended session dropped", []hub.SessionView{ended}, map[string]string{}},
 		{"role pane dropped", []hub.SessionView{role}, map[string]string{}},
 		{"newest session wins", []hub.SessionView{older, trusted}, map[string]string{"%1": "s1"}},
-		// Both orders are seeded deliberately: with the larger id first, a
-		// first-on-tie regression still passes; the reversed row forces the
-		// code to actively overwrite on an equal UpdatedAt.
 		{"equal UpdatedAt tie breaks by session id (larger first)", []hub.SessionView{tieB, tieA}, map[string]string{"%1": "sB"}},
 		{"equal UpdatedAt tie breaks by session id (smaller first)", []hub.SessionView{tieA, tieB}, map[string]string{"%1": "sB"}},
 	}
