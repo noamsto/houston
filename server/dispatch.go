@@ -109,6 +109,10 @@ type dispatchRepo struct {
 	// exists in every mirror, so it's not a usable signal; pane is.
 	Home []string `json:"home"`
 
+	// Registered is true when the repo is in houston's persisted registry
+	// (it may also have a tmux window).
+	Registered bool `json:"registered"`
+
 	// commonDir is <repo>/.git (or a linked worktree's shared common dir),
 	// used to check crew membership. Not exposed to the client.
 	commonDir string
@@ -125,6 +129,12 @@ type dispatchOptions struct {
 	Engines     map[string][]string          `json:"engines"`
 	EngineOrder []string                     `json:"engine_order"`
 	TierModels  map[string]map[string]string `json:"tier_models"`
+
+	RepoRoots []string `json:"repo_roots"`
+	// DispatcherEngines is the engines `dispatch --engines` reports,
+	// narrowed to the ones houston knows and in display order.
+	DispatcherEngines      []string `json:"dispatcher_engines"`
+	DispatcherEnginesError string   `json:"dispatcher_engines_error,omitempty"`
 }
 
 // dispatchResponse covers every documented response shape: an error alone, a
@@ -224,19 +234,26 @@ func dispatchHasASCIIAlnum(s string) bool {
 	return false
 }
 
-// listDispatchRepos computes the known-repo set fresh per request from the
-// same tmux snapshot /api/workspace rolls up: every distinct @git_root
-// resolved to its git common dir, collapsing a repo's worktrees to one entry.
-func listDispatchRepos(lister workspaceLister, commonDir func(root string) (string, error)) ([]dispatchRepo, error) {
+// listDispatchRepos computes the known-repo set fresh per request: every
+// distinct tmux @git_root (the same snapshot /api/workspace rolls up) plus the
+// registry's paths, each resolved to its git common dir so a repo's worktrees
+// collapse to one entry. Paths are symlink-resolved so a tmux window opened
+// through a symlink dedupes against the registry's resolved entry.
+func listDispatchRepos(lister workspaceLister, commonDir func(root string) (string, error), registryPaths []string) ([]dispatchRepo, error) {
 	wins, err := lister.ListWindowOptions()
 	if err != nil {
 		return nil, err
 	}
 
+	roots := make([]string, 0, len(wins)+len(registryPaths))
+	for _, win := range wins {
+		roots = append(roots, win.GitRoot)
+	}
+	roots = append(roots, registryPaths...)
+
 	seenRoots := make(map[string]bool)
 	byPath := make(map[string]string) // repo path -> common dir
-	for _, win := range wins {
-		root := win.GitRoot
+	for _, root := range roots {
 		if root == "" || seenRoots[root] {
 			continue
 		}
@@ -251,22 +268,26 @@ func listDispatchRepos(lister workspaceLister, commonDir func(root string) (stri
 			// layout have no directory dispatch could run against.
 			continue
 		}
-		repo := filepath.Dir(dir)
+		repo, err := filepath.EvalSymlinks(filepath.Dir(dir))
+		if err != nil {
+			continue
+		}
 		if _, ok := byPath[repo]; ok {
 			continue
 		}
-		byPath[repo] = dir
+		byPath[repo] = filepath.Join(repo, ".git")
 	}
 
 	repos := make([]dispatchRepo, 0, len(byPath))
 	for repo, dir := range byPath {
 		crews := listDispatchCrews(dir)
 		repos = append(repos, dispatchRepo{
-			Path:      repo,
-			Name:      filepath.Base(repo),
-			Crews:     crews,
-			Home:      dispatchHomeCrews(dir, crews),
-			commonDir: dir,
+			Path:       repo,
+			Name:       filepath.Base(repo),
+			Crews:      crews,
+			Home:       dispatchHomeCrews(dir, crews),
+			Registered: slices.Contains(registryPaths, repo),
+			commonDir:  dir,
 		})
 	}
 	sort.Slice(repos, func(i, j int) bool {
@@ -327,7 +348,7 @@ func dispatchCrewUnixPrefix(id string) int64 {
 // handleDispatchOptions serves the form's source of truth.
 //
 //	GET /api/dispatch/options → dispatchOptions
-func (s *Server) handleDispatchOptions(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleDispatchOptions(w http.ResponseWriter, r *http.Request) {
 	repos, err := s.dispatchRepos()
 	if err != nil {
 		slog.Error("dispatch options: list repos failed", "error", err)
@@ -335,14 +356,31 @@ func (s *Server) handleDispatchOptions(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 
+	engines := []string{}
+	enginesErr := ""
+	listed, err := s.dispatchEngines(r.Context())
+	if err != nil {
+		slog.Warn("dispatch options: engine lookup failed", "error", err)
+		enginesErr = err.Error()
+	} else {
+		for _, e := range dispatchEngineOrder {
+			if slices.Contains(listed, e) {
+				engines = append(engines, e)
+			}
+		}
+	}
+
 	writeDispatchJSON(w, http.StatusOK, dispatchOptions{
-		Repos:       repos,
-		Tiers:       dispatchTiers,
-		Efforts:     dispatchEfforts,
-		Plans:       dispatchPlans,
-		Engines:     dispatchModels,
-		EngineOrder: dispatchEngineOrder,
-		TierModels:  dispatchTierModels,
+		Repos:                  repos,
+		Tiers:                  dispatchTiers,
+		Efforts:                dispatchEfforts,
+		Plans:                  dispatchPlans,
+		Engines:                dispatchModels,
+		EngineOrder:            dispatchEngineOrder,
+		TierModels:             dispatchTierModels,
+		RepoRoots:              s.repoReg.Roots(),
+		DispatcherEngines:      engines,
+		DispatcherEnginesError: enginesErr,
 	})
 }
 
@@ -514,6 +552,9 @@ func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 		}
 		dlog.workerID = id
 		dlog.status = http.StatusOK
+		if _, err := s.repoReg.Add(repo.Path); err != nil {
+			slog.Debug("dispatch: repo not remembered", "repo", repo.Path, "reason", err)
+		}
 		writeDispatchJSON(w, http.StatusOK, dispatchResponse{
 			WorkerID: id,
 			Branch:   dispatchBranch(id),

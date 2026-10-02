@@ -257,7 +257,10 @@ func (r *repoRegistry) insideRoot(resolved string) bool {
 // isDirNoFollow uses Lstat so a .git symlink never counts as a repo.
 func isDirNoFollow(path string) bool {
 	info, err := os.Lstat(path)
-	return err == nil && info.IsDir()
+	if err != nil {
+		return false
+	}
+	return info.IsDir()
 }
 
 // Candidates walks every root for directories holding a .git directory,

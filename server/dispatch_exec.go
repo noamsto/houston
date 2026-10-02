@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"slices"
@@ -28,7 +29,10 @@ type dispatchResult struct {
 
 type dispatchRunner func(ctx context.Context, x dispatchExec) dispatchResult
 
-const dispatchOutputCap = 64 << 10
+const (
+	dispatchOutputCap      = 64 << 10
+	dispatchEnginesTimeout = 10 * time.Second
+)
 
 // dispatchGrace is how long dispatch gets after SIGTERM to run its trap and
 // drop its branch lock. A var so tests can shorten it.
@@ -131,4 +135,24 @@ func writeDispatchSpec(spec string) (string, error) {
 		return "", err
 	}
 	return f.Name(), nil
+}
+
+// execDispatchEngines asks the host's dispatch which engines it can launch.
+func execDispatchEngines(ctx context.Context) ([]string, error) {
+	ctx, cancel := context.WithTimeout(ctx, dispatchEnginesTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "dispatch", "--engines")
+	cmd.Env = dispatchEnv()
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("dispatch --engines: %w", err)
+	}
+	var engines []string
+	for _, line := range strings.Split(string(out), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			engines = append(engines, line)
+		}
+	}
+	return engines, nil
 }

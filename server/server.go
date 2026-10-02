@@ -125,6 +125,10 @@ type Server struct {
 	// dispatchRepos computes the known-repo set fresh per request. A field so
 	// tests can fake it without a real tmux server or git checkout.
 	dispatchRepos func() ([]dispatchRepo, error)
+	// repoReg is the persisted half of the known-repo set; dispatchEngines
+	// lists the engines the host's dispatch can launch.
+	repoReg         *repoRegistry
+	dispatchEngines func(ctx context.Context) ([]string, error)
 	// dispatchSlot caps in-flight dispatches at one: dispatch mutates the
 	// repo (worktrees, branches, the crew bus, GitHub issues), and running
 	// two at once against one repo is not something it is designed for.
@@ -188,6 +192,9 @@ type Config struct {
 	// it can derive about itself (loopback, hostname, Tailscale addresses).
 	// For reverse proxies or custom DNS.
 	AllowedHosts []string
+
+	// RepoRoots confine which directories the repo registry accepts.
+	RepoRoots []string
 }
 
 func New(cfg Config) (*Server, error) {
@@ -199,6 +206,7 @@ func New(cfg Config) (*Server, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	tmuxClient := tmux.NewClient()
+	repoReg := newRepoRegistry(filepath.Join(cfg.StatusDir, "repos.json"), resolveRepoRoots(cfg.RepoRoots), gitCommonDir)
 	s := &Server{
 		cancel:         cancel,
 		pumpDone:       make(chan struct{}),
@@ -215,9 +223,11 @@ func New(cfg Config) (*Server, error) {
 		wsTmux:         tmuxClient,
 		runPanes:       tmuxClient,
 		dispatchRunner: execDispatch,
+		repoReg:        repoReg,
 		dispatchRepos: func() ([]dispatchRepo, error) {
-			return listDispatchRepos(tmuxClient, gitCommonDir)
+			return listDispatchRepos(tmuxClient, gitCommonDir, repoReg.ValidPaths())
 		},
+		dispatchEngines: execDispatchEngines,
 		dispatchSlot:    make(chan struct{}, 1),
 		dispatchTimeout: dispatchTimeout,
 		dispatchNewCrewID: func() string {
@@ -374,6 +384,10 @@ func (s *Server) Handler() http.Handler {
 	apiMux.HandleFunc("GET /api/workspace", s.handleWorkspace)
 	apiMux.HandleFunc("POST /api/dispatch", s.handleDispatch)
 	apiMux.HandleFunc("GET /api/dispatch/options", s.handleDispatchOptions)
+	apiMux.HandleFunc("GET /api/repos", s.handleReposList)
+	apiMux.HandleFunc("POST /api/repos", s.handleReposAdd)
+	apiMux.HandleFunc("DELETE /api/repos", s.handleReposRemove)
+	apiMux.HandleFunc("GET /api/repos/candidates", s.handleRepoCandidates)
 	mux.Handle("/api/", s.auth.middleware(apiMux))
 
 	// The host gate wraps everything, including "/", so a rebound domain is
