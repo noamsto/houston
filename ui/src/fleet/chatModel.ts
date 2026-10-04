@@ -251,6 +251,12 @@ export interface ProvisionalTool {
  * run is actually working and no confirmed tool_call for that tool has
  * arrived since it was first shown.
  */
+// hookyard reports pi's `find` tool as `Glob` in live activity.
+const normTool = (t: string) => {
+  const l = t.toLowerCase()
+  return l === 'find' ? 'glob' : l
+}
+
 export function provisionalTool(
   run: { state: string; activity: { tool?: string; hint?: string } },
   updates: ChatUpdate[],
@@ -259,7 +265,7 @@ export function provisionalTool(
   if (run.state !== 'running' && run.state !== 'thinking') return null
   const tool = run.activity.tool
   if (!tool) return null
-  const matched = updates.some((u) => u.sessionUpdate === 'tool_call' && u._meta?.tool?.toLowerCase() === tool.toLowerCase() && u.ts >= shownSince)
+  const matched = updates.some((u) => u.sessionUpdate === 'tool_call' && u._meta?.tool && normTool(u._meta.tool) === normTool(tool) && u.ts >= shownSince)
   if (matched) return null
   return { tool, hint: run.activity.hint }
 }

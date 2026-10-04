@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-var piFixtures = []string{"basic", "tools", "noise"}
+var piFixtures = []string{"basic", "tools", "noise", "interrupted"}
 
 func piFixturePath(name string) string {
 	return filepath.Join("testdata", "pi", name+".jsonl")
@@ -291,6 +291,32 @@ func TestPiTool(t *testing.T) {
 		}
 		if u.SessionUpdate != SessionUpdateToolCall || u.Status != StatusInProgress {
 			t.Errorf("got %s/%s, want tool_call/in_progress", u.SessionUpdate, u.Status)
+		}
+	})
+
+	t.Run("aborted call", func(t *testing.T) {
+		u, err := r.Tool(piFixturePath("interrupted"), "call_abort1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if u.SessionUpdate != SessionUpdateToolCall || u.Status != StatusFailed {
+			t.Errorf("got %s/%s, want tool_call/failed", u.SessionUpdate, u.Status)
+		}
+		if u.Meta["tool"] != "bash" || string(u.RawInput) == "" {
+			t.Errorf("meta/input lost: %v %s", u.Meta, u.RawInput)
+		}
+	})
+
+	t.Run("empty edits", func(t *testing.T) {
+		u, err := r.Tool(piFixturePath("interrupted"), "call_edit0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if u.Status != StatusCompleted {
+			t.Errorf("status = %s, want completed", u.Status)
+		}
+		if findDiff(u.Content) != nil {
+			t.Error("empty edits carry a diff")
 		}
 	})
 

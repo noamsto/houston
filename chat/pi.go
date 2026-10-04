@@ -32,6 +32,9 @@ type piMessage struct {
 	Content    json.RawMessage `json:"content"`   // string, or []piBlock
 	ToolCallID string          `json:"toolCallId"`
 	IsError    bool            `json:"isError"`
+	StopReason string          `json:"stopReason"`
+	// ErrorMessage accompanies stopReason "error".
+	ErrorMessage string `json:"errorMessage"`
 }
 
 type piBlock struct {
@@ -76,6 +79,10 @@ func decodePiLine(line []byte, lineOffset int64) []Update {
 		return []Update{userChunk(nextID(), ts, text, nil)}
 	case "assistant":
 		var ups []Update
+		toolStatus := StatusInProgress
+		if piNeverRan(m.StopReason) {
+			toolStatus = StatusFailed
+		}
 		for _, b := range piBlocks(m.Content) {
 			switch b.Type {
 			case "text":
@@ -95,13 +102,22 @@ func decodePiLine(line []byte, lineOffset int64) []Update {
 					TS:            ts,
 					SessionUpdate: SessionUpdateToolCall,
 					ToolCallID:    b.ID,
-					Status:        StatusInProgress,
+					Status:        toolStatus,
 					Title:         ToolTitle(b.Name, b.Arguments),
 					Kind:          ToolKind(b.Name),
 					Locations:     toolLocations(b.Arguments),
 					Meta:          map[string]any{"tool": b.Name, "messageId": e.ID},
 				})
 			}
+		}
+		if m.StopReason == "error" && m.ErrorMessage != "" {
+			ups = append(ups, Update{
+				ID:            nextID(),
+				TS:            ts,
+				SessionUpdate: SessionUpdateAgentMessageChunk,
+				Content:       []Content{textContent(m.ErrorMessage)},
+				Meta:          map[string]any{"messageId": e.ID},
+			})
 		}
 		return ups
 	case "toolResult":
@@ -120,6 +136,12 @@ func decodePiLine(line []byte, lineOffset int64) []Update {
 	default:
 		return nil
 	}
+}
+
+// piNeverRan reports whether an assistant message's stop reason means pi
+// dropped its tool calls without running them or persisting a result.
+func piNeverRan(stopReason string) bool {
+	return stopReason == "aborted" || stopReason == "error"
 }
 
 // piBlocks decodes an array content field; a string or anything else is nil.
@@ -162,6 +184,7 @@ func (pi) Tool(path, toolCallID string) (*Update, error) {
 		input  json.RawMessage
 		ts     int64
 		result *piMessage
+		stop   string
 	)
 
 	for _, line := range bytes.Split(data, []byte("\n")) {
@@ -180,6 +203,7 @@ func (pi) Tool(path, toolCallID string) (*Update, error) {
 					found = true
 					name = b.Name
 					input = b.Arguments
+					stop = e.Message.StopReason
 					ts = e.Message.Timestamp
 					if ts == 0 {
 						ts = parseClaudeTS(e.Timestamp)
@@ -210,6 +234,9 @@ func (pi) Tool(path, toolCallID string) (*Update, error) {
 	if result == nil {
 		u.SessionUpdate = SessionUpdateToolCall
 		u.Status = StatusInProgress
+		if piNeverRan(stop) {
+			u.Status = StatusFailed
+		}
 		return u, nil
 	}
 
@@ -240,6 +267,9 @@ func piEditDiff(input json.RawMessage) *Content {
 		} `json:"edits"`
 	}
 	if json.Unmarshal(input, &in) != nil {
+		return nil
+	}
+	if len(in.Edits) == 0 {
 		return nil
 	}
 	olds := make([]string, len(in.Edits))

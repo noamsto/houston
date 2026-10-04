@@ -442,7 +442,9 @@ conversation. Design and measured per-engine mapping:
   are dropped. Assistant text → `agent_message_chunk` with `_meta.messageId` =
   the entry id, thinking blocks dropped, `toolCall` → `tool_call`; a `toolResult`
   pairs by `toolCallId` (`isError` → failed). `Tool()` builds an edit diff from
-  the arguments' `edits[]`; `write` gets none.
+  the arguments' `edits[]`; `write` gets none. An `aborted`/`error` assistant
+  message's tool calls are emitted `failed` (pi never runs them) and an
+  `error` message's `errorMessage` becomes an agent chunk.
 - **Readers must be chunking-independent**: reading a file in one call or in
   any number of incremental calls yields the same updates. They consume only
   complete lines, never replace an emitted update, and keep no per-file state

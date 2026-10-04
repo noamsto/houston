@@ -1,0 +1,9 @@
+{"id":"0:0","seq":0,"ts":1735862400000,"sessionUpdate":"user_message_chunk","content":[{"type":"content","content":{"type":"text","text":"run the build"}}]}
+{"id":"162:0","seq":0,"ts":1735862401000,"sessionUpdate":"agent_message_chunk","content":[{"type":"content","content":{"type":"text","text":"Running the build now."}}],"_meta":{"messageId":"i2"}}
+{"id":"162:1","seq":0,"ts":1735862401000,"sessionUpdate":"tool_call","toolCallId":"call_abort1","title":"make build","kind":"execute","status":"failed","_meta":{"messageId":"i2","tool":"bash"}}
+{"id":"476:0","seq":0,"ts":1735862402000,"sessionUpdate":"user_message_chunk","content":[{"type":"content","content":{"type":"text","text":"try again"}}]}
+{"id":"634:0","seq":0,"ts":1735862403000,"sessionUpdate":"agent_message_chunk","content":[{"type":"content","content":{"type":"text","text":"rate limited"}}],"_meta":{"messageId":"i4"}}
+{"id":"839:0","seq":0,"ts":1735862404000,"sessionUpdate":"tool_call","toolCallId":"call_err1","title":"main.go","kind":"read","status":"failed","locations":[{"path":"/work/demo/main.go"}],"_meta":{"messageId":"i5","tool":"read"}}
+{"id":"839:1","seq":0,"ts":1735862404000,"sessionUpdate":"agent_message_chunk","content":[{"type":"content","content":{"type":"text","text":"overloaded"}}],"_meta":{"messageId":"i5"}}
+{"id":"1134:0","seq":0,"ts":1735862405000,"sessionUpdate":"tool_call","toolCallId":"call_edit0","title":"main.go","kind":"edit","status":"in_progress","locations":[{"path":"/work/demo/main.go"}],"_meta":{"messageId":"i6","tool":"edit"}}
+{"id":"1415:0","seq":0,"ts":1735862406000,"sessionUpdate":"tool_call_update","toolCallId":"call_edit0","status":"completed"}
