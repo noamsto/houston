@@ -444,7 +444,7 @@ conversation. Design and measured per-engine mapping:
   pairs by `toolCallId` (`isError` → failed). `Tool()` builds an edit diff from
   the arguments' `edits[]`; `write` gets none. An `aborted`/`error` assistant
   message's tool calls are emitted `failed` (pi never runs them) and an
-  `error` message's `errorMessage` becomes an agent chunk.
+  `error` message's `errorMessage` becomes an `Error: …` agent chunk.
 - **Readers must be chunking-independent**: reading a file in one call or in
   any number of incremental calls yields the same updates. They consume only
   complete lines, never replace an emitted update, and keep no per-file state

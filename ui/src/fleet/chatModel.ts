@@ -246,17 +246,17 @@ export interface ProvisionalTool {
   hint?: string
 }
 
-/**
- * A provisional tool row from the run's live activity, shown only while the
- * run is actually working and no confirmed tool_call for that tool has
- * arrived since it was first shown.
- */
 // hookyard reports pi's `find` tool as `Glob` in live activity.
 const normTool = (t: string) => {
   const l = t.toLowerCase()
   return l === 'find' ? 'glob' : l
 }
 
+/**
+ * A provisional tool row from the run's live activity, shown only while the
+ * run is actually working and no confirmed tool_call for that tool has
+ * arrived since it was first shown.
+ */
 export function provisionalTool(
   run: { state: string; activity: { tool?: string; hint?: string } },
   updates: ChatUpdate[],

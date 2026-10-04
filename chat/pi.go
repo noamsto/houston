@@ -115,7 +115,7 @@ func decodePiLine(line []byte, lineOffset int64) []Update {
 				ID:            nextID(),
 				TS:            ts,
 				SessionUpdate: SessionUpdateAgentMessageChunk,
-				Content:       []Content{textContent(m.ErrorMessage)},
+				Content:       []Content{textContent("Error: " + m.ErrorMessage)},
 				Meta:          map[string]any{"messageId": e.ID},
 			})
 		}
