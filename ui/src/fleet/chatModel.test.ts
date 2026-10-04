@@ -235,6 +235,13 @@ describe('reconcileOptimistic', () => {
     expect(result.confirmed).toEqual([])
   })
 
+  it('still confirms via a chunk with an unknown origin', () => {
+    const pending = [{ localId: 'p1', text: 'hello', sentAt: 10_000 }]
+    const updates = [userChunk('u1', 1, 'hello', { ts: 10_500, _meta: { origin: 'something-new' } })]
+    expect(reconcileOptimistic(pending, updates, 20_000).confirmed).toEqual(['p1'])
+    expect(buildItems(updates)[0]).toMatchObject({ kind: 'user', text: 'hello' })
+  })
+
   it('confirms at exactly the 30s late boundary', () => {
     const pending = [{ localId: 'p1', text: 'hello', sentAt: 10_000 }]
     const updates = [userChunk('u1', 1, 'hello', { ts: 40_000 })]

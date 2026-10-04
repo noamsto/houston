@@ -131,6 +131,7 @@ describe('ChatTab', () => {
       page: page('e1', [userChunk('d1', 1, '', { _meta: { origin: 'pi-compaction' } })]),
     })
     expect(container.querySelector('[data-id="d1"]')!.textContent).toMatch(/context compacted/i)
+    expect(screen.queryByRole('button', { name: /context compacted/i })).toBeNull()
   })
 
   it('toggles a pi-branch divider summary', async () => {
