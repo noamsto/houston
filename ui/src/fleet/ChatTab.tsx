@@ -37,11 +37,38 @@ function UserBubble({ item }: { item: UserItem }) {
 }
 
 function Divider({ item }: { item: DividerItem }) {
-  return (
-    <div className="chat-divider" data-seq={item.seq} data-id={item.id}>
+  const [open, setOpen] = useState(false)
+  const label = (
+    <>
       <span className="chat-glyph" aria-hidden="true">✦</span>
       {item.text}
-    </div>
+    </>
+  )
+  if (!item.summary) {
+    return (
+      <div className="chat-divider" data-seq={item.seq} data-id={item.id}>
+        {label}
+      </div>
+    )
+  }
+  return (
+    <>
+      <button
+        type="button"
+        className="chat-divider"
+        data-seq={item.seq}
+        data-id={item.id}
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+      >
+        {label}
+      </button>
+      {open && (
+        <div className="chat-divider-summary">
+          <ChatMarkdownLazy text={item.summary} />
+        </div>
+      )}
+    </>
   )
 }
 

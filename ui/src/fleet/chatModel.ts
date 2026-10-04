@@ -47,6 +47,7 @@ export interface DividerItem {
   kind: 'divider'
   id: string
   text: string
+  summary?: string
   seq: number
 }
 
@@ -114,10 +115,10 @@ export function toolRowLabel(row: ToolRow): string {
 
 /**
  * Turns the update list into render items in stream order: a user bubble, a
- * task-notification divider, assistant text (consecutive chunks sharing a
- * messageId joined), or a tools row collapsing a run of consecutive
- * tool_calls (tool_call_update never breaks the run — it folds into its
- * call by toolCallId). Each item's `seq` is the minimum seq of its members.
+ * divider (task notification, pi branch switch or compaction), assistant
+ * text (consecutive chunks sharing a messageId joined), or a tools row
+ * collapsing a run of consecutive tool_calls (tool_call_update never breaks
+ * the run — it folds into its call by toolCallId). Each item's `seq` is the minimum seq of its members.
  */
 export function buildItems(updates: ChatUpdate[]): ChatItem[] {
   const sorted = [...updates].sort((a, b) => a.seq - b.seq)
@@ -134,8 +135,18 @@ export function buildItems(updates: ChatUpdate[]): ChatItem[] {
       currentTools = null
       currentAssistant = null
       currentAssistantMessageId = undefined
-      if (u._meta?.origin === 'task-notification') {
+      const origin = u._meta?.origin
+      if (origin === 'task-notification') {
         items.push({ kind: 'divider', id: u.id, text: 'background task finished', seq: u.seq })
+      } else if (origin === 'pi-branch' || origin === 'pi-compaction') {
+        const summary = textOf(u)
+        items.push({
+          kind: 'divider',
+          id: u.id,
+          text: origin === 'pi-branch' ? 'switched branch' : 'context compacted',
+          ...(summary && { summary }),
+          seq: u.seq,
+        })
       } else {
         items.push({ kind: 'user', id: u.id, text: textOf(u), seq: u.seq })
       }
@@ -217,7 +228,7 @@ const OPTIMISTIC_LATE_MS = 30000
  */
 export function reconcileOptimistic(pending: Optimistic[], updates: ChatUpdate[], now: number): ReconcileResult {
   const chunks = updates
-    .filter((u) => u.sessionUpdate === 'user_message_chunk')
+    .filter((u) => u.sessionUpdate === 'user_message_chunk' && !u._meta?.origin)
     .map((u) => ({ text: textOf(u).trim(), ts: u.ts }))
     .sort((a, b) => a.ts - b.ts)
   const claimed = new Set<number>()

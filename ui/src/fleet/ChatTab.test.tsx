@@ -126,6 +126,30 @@ describe('ChatTab', () => {
     expect(el.textContent).toMatch(/background task finished/i)
   })
 
+  it('renders a pi-compaction divider label', async () => {
+    const { container } = await renderReady({}, {
+      page: page('e1', [userChunk('d1', 1, '', { _meta: { origin: 'pi-compaction' } })]),
+    })
+    expect(container.querySelector('[data-id="d1"]')!.textContent).toMatch(/context compacted/i)
+  })
+
+  it('toggles a pi-branch divider summary', async () => {
+    await renderReady({}, {
+      page: page('e1', [userChunk('d1', 1, 'abandoned branch gist', { _meta: { origin: 'pi-branch' } })]),
+    })
+    const toggle = screen.getByRole('button', { name: /switched branch/i })
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByText('abandoned branch gist')).toBeNull()
+
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(await screen.findByText('abandoned branch gist')).toBeTruthy()
+
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByText('abandoned branch gist')).toBeNull()
+  })
+
   it('collapses consecutive tool calls into one row and expands to per-call rows', async () => {
     const { container } = await renderReady({}, {
       page: page('e1', [

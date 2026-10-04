@@ -5,12 +5,13 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 )
 
-var piFixtures = []string{"basic", "tools", "noise", "interrupted"}
+var piFixtures = []string{"basic", "tools", "noise", "interrupted", "branch"}
 
 func piFixturePath(name string) string {
 	return filepath.Join("testdata", "pi", name+".jsonl")
@@ -346,5 +347,36 @@ func TestPiToolWriteHasNoDiffAndImageResultIsPlaceholder(t *testing.T) {
 	}
 	if got := findText(u.Content); got != "[image]" {
 		t.Errorf("text = %q, want [image]", got)
+	}
+}
+
+func TestPiBranchAndCompactionDividers(t *testing.T) {
+	raw, err := os.ReadFile(piFixturePath("branch"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	updates, _, _, err := NewPi().Read(copyToTemp(t, t.TempDir(), "s1", raw), Cursor{})
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	type row struct{ kind, origin, text string }
+	want := []row{
+		{SessionUpdateUserMessageChunk, "", "start"},
+		{SessionUpdateAgentMessageChunk, "", "ok"},
+		{SessionUpdateUserMessageChunk, "", "on branch A"},
+		{SessionUpdateAgentMessageChunk, "", "A reply"},
+		{SessionUpdateUserMessageChunk, "pi-branch", "Branch A tried X"},
+		{SessionUpdateUserMessageChunk, "", "on branch B"},
+		{SessionUpdateAgentMessageChunk, "", "B reply"},
+		{SessionUpdateUserMessageChunk, "pi-compaction", "Earlier work summarized"},
+		{SessionUpdateUserMessageChunk, "", "after compaction"},
+	}
+	var got []row
+	for _, u := range updates {
+		origin, _ := u.Meta["origin"].(string)
+		got = append(got, row{u.SessionUpdate, origin, findText(u.Content)})
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got %+v\nwant %+v", got, want)
 	}
 }
