@@ -20,11 +20,3 @@ export interface WSMeta {
   activity?: string
   window_name?: string
 }
-
-// Mirror of hub.TrailChip
-export interface TrailChip {
-  tool: string
-  hint: string
-  done: boolean
-  error?: boolean
-}

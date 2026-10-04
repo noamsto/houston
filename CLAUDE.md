@@ -132,7 +132,6 @@ houston/
 ├── scripts/             # claude-hook.sh
 ├── docs/                # Design notes and plans
 ├── parser/              # Terminal output parsing
-├── status/              # Status file management
 ├── internal/            # Internal utilities
 ├── ui/                  # React frontend (Vite)
 │   ├── src/
@@ -710,4 +709,4 @@ This model is the primary defense; the following are additional layers:
 
 **Go:** `github.com/gorilla/websocket` and `github.com/fsnotify/fsnotify` (hub state-dir watcher) — the only external dependencies. Everything else is stdlib.
 
-**React:** `@xterm/xterm`, `@xterm/addon-fit`, `@xterm/addon-web-links`, `allotment`, `react`, `react-dom`, `react-markdown`, `remark-gfm`, `remark-breaks`
+**React:** `@xterm/xterm`, `@xterm/addon-fit`, `@xterm/addon-web-links`, `react`, `react-dom`, `react-markdown`, `remark-gfm`, `remark-breaks`
