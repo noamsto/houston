@@ -1039,9 +1039,13 @@ func TestRunChatForAPiRunServesItsTranscript(t *testing.T) {
 		t.Fatalf("kinds = %v, want %v", kinds, wantKinds)
 	}
 
+	snap := s.runs.Snapshot()
+	if len(snap) != 1 {
+		t.Fatalf("registry holds %d listed runs, want 1", len(snap))
+	}
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", chatRunPath(t, s)+"/tool/call_1", nil)
-	req.SetPathValue("id", s.runs.Snapshot()[0].ID)
+	req.SetPathValue("id", snap[0].ID)
 	req.SetPathValue("callId", "call_1")
 	s.handleRunChatTool(rec, req)
 	if rec.Code != 200 {
