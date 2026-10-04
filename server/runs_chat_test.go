@@ -889,27 +889,42 @@ func pollChat(t *testing.T, s *Server, want func(int, []byte) bool) (int, []byte
 	return code, body
 }
 
-func TestRunChatForAPiRunIsNoChat(t *testing.T) {
+func TestRunChatForACodexRunIsNoChat(t *testing.T) {
 	t.Setenv("TMUX_PANE", "")
 	t.Setenv("TMUX", "")
 
+	transcript := filepath.Join(t.TempDir(), "codex.jsonl")
+	if err := os.WriteFile(transcript, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	stateDir := t.TempDir()
-	payload := []byte(`{
-		"engine": "pi",
+	payload, err := json.Marshal(map[string]any{
+		"engine":          "codex",
 		"canonical_event": "session_start",
-		"native_event": "session_start",
-		"session_id": "pi-s1",
-		"cwd": "/w",
-		"native": {
-			"cwd": "/w",
-			"hook_event_name": "session_start",
-			"session_id": "pi-s1",
-			"session_file": "/s/pi.jsonl",
-			"reason": "startup"
-		}
-	}`)
+		"native_event":    "SessionStart",
+		"session_id":      "codex-s1",
+		"cwd":             "/w",
+		"native": map[string]any{
+			"cwd":             "/w",
+			"hook_event_name": "SessionStart",
+			"session_id":      "codex-s1",
+			"transcript_path": transcript,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := hook.Dispatch("", stateDir, bytes.NewReader(payload)); err != nil {
 		t.Fatalf("Dispatch: %v", err)
+	}
+
+	// The 404 below must come from the missing reader, not a missing Session.
+	st, err := hook.Read(hook.Path(stateDir, "codex-s1"))
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	if st.Agent != "codex" || st.TranscriptPath != transcript {
+		t.Fatalf("state agent=%q transcript_path=%q, want codex and %q", st.Agent, st.TranscriptPath, transcript)
 	}
 
 	s := startHubPipeline(t, stateDir)
@@ -966,5 +981,76 @@ func TestRunChatForANativeClaudeRunServesItsTranscript(t *testing.T) {
 	kinds := []string{page.Updates[0].SessionUpdate, page.Updates[1].SessionUpdate, page.Updates[2].SessionUpdate}
 	if fmt.Sprint(kinds) != fmt.Sprint([]string{chat.SessionUpdateUserMessageChunk, chat.SessionUpdateAgentMessageChunk, chat.SessionUpdateToolCall}) {
 		t.Fatalf("kinds = %v", kinds)
+	}
+}
+
+func TestRunChatForAPiRunServesItsTranscript(t *testing.T) {
+	t.Setenv("TMUX_PANE", "")
+	t.Setenv("TMUX", "")
+
+	transcript := filepath.Join(t.TempDir(), "pi-s1.jsonl")
+	lines := strings.Join([]string{
+		`{"type":"session","version":3,"id":"pi-s1","timestamp":"2025-01-01T00:00:00.000Z","cwd":"/w"}`,
+		`{"type":"message","id":"e1","parentId":null,"timestamp":"2025-01-01T00:00:01.000Z","message":{"role":"user","content":"read main.go","timestamp":1735689601000}}`,
+		`{"type":"message","id":"e2","parentId":"e1","timestamp":"2025-01-01T00:00:02.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Reading it"},{"type":"toolCall","id":"call_1","name":"read","arguments":{"path":"/w/main.go"}}],"timestamp":1735689602000}}`,
+		`{"type":"message","id":"e3","parentId":"e2","timestamp":"2025-01-01T00:00:03.000Z","message":{"role":"toolResult","toolCallId":"call_1","toolName":"read","content":[{"type":"text","text":"package main"}],"isError":false,"timestamp":1735689603000}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(transcript, []byte(lines), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	stateDir := t.TempDir()
+	payload, err := json.Marshal(map[string]any{
+		"engine":          "pi",
+		"canonical_event": "session_start",
+		"native_event":    "session_start",
+		"session_id":      "pi-s1",
+		"cwd":             "/w",
+		"native": map[string]any{
+			"session_file": transcript,
+			"reason":       "startup",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := hook.Dispatch("", stateDir, bytes.NewReader(payload)); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+
+	s := startHubPipeline(t, stateDir)
+	code, body := pollChat(t, s, func(code int, body []byte) bool {
+		var p hub.ChatPage
+		return code == 200 && json.Unmarshal(body, &p) == nil && len(p.Updates) == 4
+	})
+	if code != 200 {
+		t.Fatalf("got %d %q, want 200", code, body)
+	}
+	var page hub.ChatPage
+	if err := json.Unmarshal(body, &page); err != nil {
+		t.Fatalf("decode: %v; %s", err, body)
+	}
+	var kinds []string
+	for _, u := range page.Updates {
+		kinds = append(kinds, u.SessionUpdate)
+	}
+	wantKinds := []string{chat.SessionUpdateUserMessageChunk, chat.SessionUpdateAgentMessageChunk, chat.SessionUpdateToolCall, chat.SessionUpdateToolCallUpdate}
+	if fmt.Sprint(kinds) != fmt.Sprint(wantKinds) {
+		t.Fatalf("kinds = %v, want %v", kinds, wantKinds)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", chatRunPath(t, s)+"/tool/call_1", nil)
+	req.SetPathValue("id", s.runs.Snapshot()[0].ID)
+	req.SetPathValue("callId", "call_1")
+	s.handleRunChatTool(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("tool: status %d: %s", rec.Code, rec.Body)
+	}
+	var tool struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &tool); err != nil || tool.Name != "read" {
+		t.Fatalf("tool body = %s (err %v), want name read", rec.Body, err)
 	}
 }

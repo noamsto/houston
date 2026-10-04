@@ -283,6 +283,12 @@ describe('provisionalTool', () => {
     expect(result).toBeNull()
   })
 
+  it('matches the tool name case-insensitively', () => {
+    const updates = [toolCall('t1', 1, { ts: 5000, _meta: { tool: 'bash' } })]
+    const result = provisionalTool({ state: 'running', activity: { tool: 'Bash' } }, updates, 4000)
+    expect(result).toBeNull()
+  })
+
   it('still shows when the matching tool_call is older than shownSince', () => {
     const updates = [toolCall('t1', 1, { ts: 1000, _meta: { tool: 'Bash' } })]
     const result = provisionalTool({ state: 'running', activity: { tool: 'Bash' } }, updates, 4000)

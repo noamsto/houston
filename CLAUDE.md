@@ -433,9 +433,16 @@ conversation. Design and measured per-engine mapping:
   (`chat/boundary_test.go` fails otherwise) so it can move to its own module.
   It speaks ACP `session/update` shapes (`chat.Update`: `user_message_chunk`,
   `agent_message_chunk`, `tool_call`, `tool_call_update`) plus `id`/`seq`/`ts`.
-  `chat.For(agent)` picks the reader; only claude-code (`"claude"`,
-  `"claude-code"`) has one, so every other engine has no Chat tab yet.
+  `chat.For(agent)` picks the reader; claude-code (`"claude"`,
+  `"claude-code"`) and `"pi"` have one, so codex and cursor have no Chat tab yet.
   `chat.ToolTitle` mirrors `hook.ToolHint`; `hub/chat_title_test.go` pins them.
+- **pi mapping** (`chat/pi.go`): only `type:"message"` entries count, with
+  roles user/assistant/toolResult; `system` and other roles, and non-message
+  entries (`session`, `session_info`, `model_change`, `thinking_level_change`),
+  are dropped. Assistant text → `agent_message_chunk` with `_meta.messageId` =
+  the entry id, thinking blocks dropped, `toolCall` → `tool_call`; a `toolResult`
+  pairs by `toolCallId` (`isError` → failed). `Tool()` builds an edit diff from
+  the arguments' `edits[]`; `write` gets none.
 - **Readers must be chunking-independent**: reading a file in one call or in
   any number of incremental calls yields the same updates. They consume only
   complete lines, never replace an emitted update, and keep no per-file state
@@ -475,8 +482,8 @@ conversation. Design and measured per-engine mapping:
   failed call carries its error output and no diff. Ladder: 503 no registry ·
   404 `no such run` · 404 `no chat`.
 - **Real-transcript check**: `HOUSTON_SAMPLES=<dir> go test -tags samples ./chat/`
-  replays `<dir>/claude-code/*.jsonl` and logs counts only; it skips when
-  unset. Never commit transcript content — fixtures under `chat/testdata/` are
+  replays `<dir>/claude-code/*.jsonl` and `<dir>/pi/*.jsonl` and logs counts
+  only; it skips when unset. Never commit transcript content — fixtures under `chat/testdata/` are
   hand-written. `go run -tags tools ./cmd/sessionlog <file>` prints a file as
   ACP JSONL for eyeballing.
 

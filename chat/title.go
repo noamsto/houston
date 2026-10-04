@@ -26,7 +26,7 @@ func ToolTitle(toolName string, raw json.RawMessage) string {
 	}
 
 	switch toolName {
-	case "Bash":
+	case "Bash", "bash":
 		if v, ok := m["description"].(string); ok && v != "" {
 			return truncateTitle(strings.TrimSpace(v), 120)
 		}
@@ -34,10 +34,17 @@ func ToolTitle(toolName string, raw json.RawMessage) string {
 			return truncateTitle(strings.TrimSpace(v), 120)
 		}
 		return ""
-	case "Read", "Edit":
+	case "Read", "Edit", "read", "edit":
 		for _, k := range []string{"file_path", "path"} {
 			if v, ok := m[k].(string); ok && v != "" {
 				return truncateTitle(filepath.Base(strings.TrimSpace(v)), 120)
+			}
+		}
+		return ""
+	case "grep", "find":
+		for _, k := range []string{"pattern", "path"} {
+			if v, ok := m[k].(string); ok && v != "" {
+				return truncateTitle(strings.TrimSpace(v), 120)
 			}
 		}
 		return ""
@@ -61,13 +68,13 @@ func truncateTitle(s string, n int) string {
 // ToolKind maps a tool name to an ACP kind.
 func ToolKind(name string) string {
 	switch name {
-	case "Read":
+	case "Read", "read":
 		return KindRead
-	case "Edit", "Write", "MultiEdit", "NotebookEdit":
+	case "Edit", "Write", "MultiEdit", "NotebookEdit", "edit", "write":
 		return KindEdit
-	case "Grep", "Glob":
+	case "Grep", "Glob", "grep", "find", "ls":
 		return KindSearch
-	case "Bash":
+	case "Bash", "bash":
 		return KindExecute
 	case "WebFetch", "WebSearch":
 		return KindFetch

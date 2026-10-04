@@ -1,0 +1,5 @@
+{"id":"523:0","seq":0,"ts":1735689601000,"sessionUpdate":"user_message_chunk","content":[{"type":"content","content":{"type":"text","text":"please read the config"}}]}
+{"id":"694:0","seq":0,"ts":1735689602000,"sessionUpdate":"agent_message_chunk","content":[{"type":"content","content":{"type":"text","text":"Reading it now."}}],"_meta":{"messageId":"e5"}}
+{"id":"694:1","seq":0,"ts":1735689602000,"sessionUpdate":"tool_call","toolCallId":"call_read1","title":"config.toml","kind":"read","status":"in_progress","locations":[{"path":"/work/demo/config.toml"}],"_meta":{"messageId":"e5","tool":"read"}}
+{"id":"1061:0","seq":0,"ts":1735689603000,"sessionUpdate":"tool_call_update","toolCallId":"call_read1","status":"completed"}
+{"id":"1316:0","seq":0,"ts":1735689604000,"sessionUpdate":"agent_message_chunk","content":[{"type":"content","content":{"type":"text","text":"The config names the project demo."}}],"_meta":{"messageId":"e7"}}

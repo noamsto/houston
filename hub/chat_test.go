@@ -182,7 +182,7 @@ func TestChatPageAfterLoad(t *testing.T) {
 }
 
 func TestChatForNormalizedClaude(t *testing.T) {
-	for _, engine := range []string{"claude", "claude-code"} {
+	for _, engine := range []string{"claude", "claude-code", "pi"} {
 		if chat.For(engine) == nil {
 			t.Errorf("chat.For(%q) = nil", engine)
 		}
@@ -568,8 +568,8 @@ func TestChatHeadChangeNotifiesWithoutUpdates(t *testing.T) {
 }
 
 func TestChatNoChat(t *testing.T) {
-	f := newChatFixture(t, "chat-pi", "pi", humans(1, 2))
-	for _, sid := range []string{"chat-pi", "no-such-session"} {
+	f := newChatFixture(t, "chat-codex", "codex", humans(1, 2))
+	for _, sid := range []string{"chat-codex", "no-such-session"} {
 		if _, err := f.h.ChatPage(sid, 0, 50); !errors.Is(err, ErrNoChat) {
 			t.Errorf("%s: ChatPage err = %v, want ErrNoChat", sid, err)
 		}
@@ -659,5 +659,36 @@ func TestChatTool(t *testing.T) {
 	}
 	if _, err := f.h.ChatTool("chat-t", "toolu_nope"); !errors.Is(err, chat.ErrToolNotFound) {
 		t.Errorf("unknown call err = %v, want chat.ErrToolNotFound", err)
+	}
+}
+
+const piChatBody = `{"type":"session","version":3,"id":"pi-s1","timestamp":"2025-01-01T00:00:00.000Z","cwd":"/w"}
+{"type":"message","id":"e1","parentId":null,"timestamp":"2025-01-01T00:00:01.000Z","message":{"role":"user","content":"read main.go","timestamp":1735689601000}}
+{"type":"message","id":"e2","parentId":"e1","timestamp":"2025-01-01T00:00:02.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Reading it"},{"type":"toolCall","id":"call_1","name":"read","arguments":{"path":"/w/main.go"}}],"timestamp":1735689602000}}
+{"type":"message","id":"e3","parentId":"e2","timestamp":"2025-01-01T00:00:03.000Z","message":{"role":"toolResult","toolCallId":"call_1","toolName":"read","content":[{"type":"text","text":"package main"}],"isError":false,"timestamp":1735689603000}}
+`
+
+func TestChatPiSession(t *testing.T) {
+	f := newChatFixture(t, "chat-pi", "pi", piChatBody)
+	f.waitNewest(4)
+
+	p, err := f.h.ChatPage("chat-pi", 0, 50)
+	if err != nil {
+		t.Fatalf("ChatPage: %v", err)
+	}
+	wantSeqs(t, "page", p.Updates, 1, 4)
+	kinds := []string{chat.SessionUpdateUserMessageChunk, chat.SessionUpdateAgentMessageChunk, chat.SessionUpdateToolCall, chat.SessionUpdateToolCallUpdate}
+	for i, u := range p.Updates {
+		if u.SessionUpdate != kinds[i] {
+			t.Errorf("update %d kind = %q, want %q", i, u.SessionUpdate, kinds[i])
+		}
+	}
+
+	u, err := f.h.ChatTool("chat-pi", "call_1")
+	if err != nil {
+		t.Fatalf("ChatTool: %v", err)
+	}
+	if u.Status != chat.StatusCompleted || u.Meta["tool"] != "read" {
+		t.Errorf("ChatTool = %+v", u)
 	}
 }

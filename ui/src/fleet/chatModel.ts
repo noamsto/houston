@@ -259,7 +259,7 @@ export function provisionalTool(
   if (run.state !== 'running' && run.state !== 'thinking') return null
   const tool = run.activity.tool
   if (!tool) return null
-  const matched = updates.some((u) => u.sessionUpdate === 'tool_call' && u._meta?.tool === tool && u.ts >= shownSince)
+  const matched = updates.some((u) => u.sessionUpdate === 'tool_call' && u._meta?.tool?.toLowerCase() === tool.toLowerCase() && u.ts >= shownSince)
   if (matched) return null
   return { tool, hint: run.activity.hint }
 }

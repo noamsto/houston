@@ -256,7 +256,7 @@ func ToolHint(toolName string, raw json.RawMessage) string {
 	}
 
 	switch toolName {
-	case "Bash":
+	case "Bash", "bash":
 		if v, ok := m["description"].(string); ok && v != "" {
 			return truncate(strings.TrimSpace(v), 120)
 		}
@@ -264,10 +264,17 @@ func ToolHint(toolName string, raw json.RawMessage) string {
 			return truncate(strings.TrimSpace(v), 120)
 		}
 		return ""
-	case "Read", "Edit":
+	case "Read", "Edit", "read", "edit":
 		for _, k := range []string{"file_path", "path"} {
 			if v, ok := m[k].(string); ok && v != "" {
 				return truncate(filepath.Base(strings.TrimSpace(v)), 120)
+			}
+		}
+		return ""
+	case "grep", "find":
+		for _, k := range []string{"pattern", "path"} {
+			if v, ok := m[k].(string); ok && v != "" {
+				return truncate(strings.TrimSpace(v), 120)
 			}
 		}
 		return ""
