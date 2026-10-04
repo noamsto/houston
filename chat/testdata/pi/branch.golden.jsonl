@@ -1,0 +1,9 @@
+{"id":"103:0","seq":0,"ts":1735948801000,"sessionUpdate":"user_message_chunk","content":[{"type":"content","content":{"type":"text","text":"start"}}]}
+{"id":"257:0","seq":0,"ts":1735948802000,"sessionUpdate":"agent_message_chunk","content":[{"type":"content","content":{"type":"text","text":"ok"}}],"_meta":{"messageId":"e2"}}
+{"id":"458:0","seq":0,"ts":1735948803000,"sessionUpdate":"user_message_chunk","content":[{"type":"content","content":{"type":"text","text":"on branch A"}}]}
+{"id":"618:0","seq":0,"ts":1735948804000,"sessionUpdate":"agent_message_chunk","content":[{"type":"content","content":{"type":"text","text":"A reply"}}],"_meta":{"messageId":"e4"}}
+{"id":"824:0","seq":0,"ts":1735948805000,"sessionUpdate":"user_message_chunk","content":[{"type":"content","content":{"type":"text","text":"Branch A tried X"}}],"_meta":{"origin":"pi-branch"}}
+{"id":"958:0","seq":0,"ts":1735948806000,"sessionUpdate":"user_message_chunk","content":[{"type":"content","content":{"type":"text","text":"on branch B"}}]}
+{"id":"1118:0","seq":0,"ts":1735948807000,"sessionUpdate":"agent_message_chunk","content":[{"type":"content","content":{"type":"text","text":"B reply"}}],"_meta":{"messageId":"e7"}}
+{"id":"1324:0","seq":0,"ts":1735948808000,"sessionUpdate":"user_message_chunk","content":[{"type":"content","content":{"type":"text","text":"Earlier work summarized"}}],"_meta":{"origin":"pi-compaction"}}
+{"id":"1492:0","seq":0,"ts":1735948809000,"sessionUpdate":"user_message_chunk","content":[{"type":"content","content":{"type":"text","text":"after compaction"}}]}

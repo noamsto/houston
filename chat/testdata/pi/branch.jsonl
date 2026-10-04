@@ -1,0 +1,10 @@
+{"type":"session","version":3,"id":"sess-b","timestamp":"2025-01-04T00:00:00.000Z","cwd":"/work/demo"}
+{"type":"message","id":"e1","parentId":null,"timestamp":"2025-01-04T00:00:01.000Z","message":{"role":"user","content":"start","timestamp":1735948801000}}
+{"type":"message","id":"e2","parentId":"e1","timestamp":"2025-01-04T00:00:02.000Z","message":{"role":"assistant","content":[{"type":"text","text":"ok"}],"stopReason":"stop","timestamp":1735948802000}}
+{"type":"message","id":"e3","parentId":"e2","timestamp":"2025-01-04T00:00:03.000Z","message":{"role":"user","content":"on branch A","timestamp":1735948803000}}
+{"type":"message","id":"e4","parentId":"e3","timestamp":"2025-01-04T00:00:04.000Z","message":{"role":"assistant","content":[{"type":"text","text":"A reply"}],"stopReason":"stop","timestamp":1735948804000}}
+{"type":"branch_summary","id":"e5","parentId":"e2","timestamp":"2025-01-04T00:00:05.000Z","fromId":"e4","summary":"Branch A tried X"}
+{"type":"message","id":"e6","parentId":"e5","timestamp":"2025-01-04T00:00:06.000Z","message":{"role":"user","content":"on branch B","timestamp":1735948806000}}
+{"type":"message","id":"e7","parentId":"e6","timestamp":"2025-01-04T00:00:07.000Z","message":{"role":"assistant","content":[{"type":"text","text":"B reply"}],"stopReason":"stop","timestamp":1735948807000}}
+{"type":"compaction","id":"e8","parentId":"e7","timestamp":"2025-01-04T00:00:08.000Z","summary":"Earlier work summarized","firstKeptEntryId":"e6","tokensBefore":50000}
+{"type":"message","id":"e9","parentId":"e8","timestamp":"2025-01-04T00:00:09.000Z","message":{"role":"user","content":"after compaction","timestamp":1735948809000}}

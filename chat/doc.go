@@ -49,7 +49,7 @@
 // Other Meta keys: "tool" names the tool on a tool_call (the human-readable
 // hint rides Title instead — see ToolTitle); "origin" marks a
 // user_message_chunk that came from something other than a typed human
-// prompt (e.g. "task-notification"); "subagent" names the agent id a
-// tool_call_update's result spawned, when that subagent's transcript file
-// is known to exist.
+// prompt (e.g. "task-notification", "pi-branch", "pi-compaction"); "subagent"
+// names the agent id a tool_call_update's result spawned, when that
+// subagent's transcript file is known to exist.
 package chat

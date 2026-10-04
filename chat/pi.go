@@ -8,8 +8,9 @@ import (
 	"strings"
 )
 
-// pi reads a pi session file (JSONL of tree entries; only `message` entries
-// are chat). The shape is pi's own docs/session-format.md.
+// pi reads a pi session file (JSONL of tree entries; `message` entries are
+// chat; `branch_summary` and `compaction` become dividers). The shape is pi's
+// own docs/session-format.md.
 type pi struct{}
 
 // NewPi returns a pi Reader.
@@ -24,6 +25,7 @@ type piEntry struct {
 	ID        string     `json:"id"`
 	Timestamp string     `json:"timestamp"`
 	Message   *piMessage `json:"message"`
+	Summary   string     `json:"summary"` // branch_summary, compaction
 }
 
 type piMessage struct {
@@ -52,6 +54,12 @@ func decodePiLine(line []byte, lineOffset int64) []Update {
 	var e piEntry
 	if err := json.Unmarshal(line, &e); err != nil {
 		return nil // malformed line: skipped, but already consumed by the caller
+	}
+	switch e.Type {
+	case "branch_summary":
+		return []Update{userChunk(fmt.Sprintf("%d:0", lineOffset), parseClaudeTS(e.Timestamp), e.Summary, map[string]any{"origin": "pi-branch"})}
+	case "compaction":
+		return []Update{userChunk(fmt.Sprintf("%d:0", lineOffset), parseClaudeTS(e.Timestamp), e.Summary, map[string]any{"origin": "pi-compaction"})}
 	}
 	if e.Type != "message" || e.Message == nil {
 		return nil

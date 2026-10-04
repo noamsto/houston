@@ -408,11 +408,15 @@ conversation. Design and measured per-engine mapping:
   `chat.For(agent)` picks the reader; claude-code (`"claude"`,
   `"claude-code"`) and `"pi"` have one, so codex and cursor have no Chat tab yet.
   `chat.ToolTitle` mirrors `hook.ToolHint`; `hub/chat_title_test.go` pins them.
-- **pi mapping** (`chat/pi.go`): only `type:"message"` entries count, with
-  roles user/assistant/toolResult; `system` and other roles, and non-message
-  entries (`session`, `session_info`, `model_change`, `thinking_level_change`),
-  are dropped. Assistant text → `agent_message_chunk` with `_meta.messageId` =
-  the entry id, thinking blocks dropped, `toolCall` → `tool_call`; a `toolResult`
+- **pi mapping** (`chat/pi.go`): `type:"message"` entries count, with
+  roles user/assistant/toolResult; `system` and other roles, and other
+  non-message entries (`session`, `session_info`, `model_change`,
+  `thinking_level_change`), are dropped. `branch_summary` and `compaction`
+  entries become a `user_message_chunk` with `_meta.origin` `pi-branch` /
+  `pi-compaction` and the summary as content (a `/tree` switch without a
+  summary writes no entry, so no divider). Assistant text →
+  `agent_message_chunk` with `_meta.messageId` = the entry id, thinking
+  blocks dropped, `toolCall` → `tool_call`; a `toolResult`
   pairs by `toolCallId` (`isError` → failed). `Tool()` builds an edit diff from
   the arguments' `edits[]`; `write` gets none. An `aborted`/`error` assistant
   message's tool calls are emitted `failed` (pi never runs them) and an
@@ -433,8 +437,9 @@ conversation. Design and measured per-engine mapping:
   lands. A new session in the same pane is a new run `Session`, hence a new
   epoch.
 - **`_meta` keys**: `messageId` (on text chunks and tool calls), `tool` (tool
-  name — `title` is the human hint), `origin: task-notification` (rendered as
-  a divider), `subagent` (on the Agent/Task call's update). The claude reader
+  name — `title` is the human hint), `origin` (`task-notification`,
+  `pi-branch`, `pi-compaction`; rendered as a divider), `subagent` (on the
+  Agent/Task call's update). The claude reader
   never sets `phase`: the UI treats a text chunk as commentary when
   `_meta.phase == "commentary"` or a later `tool_call` shares its `messageId`.
   Tool input and output never ride the stream; the tool route serves them.

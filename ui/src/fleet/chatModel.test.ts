@@ -94,6 +94,22 @@ describe('buildItems', () => {
     expect(items).toEqual([{ kind: 'divider', id: 'u1', text: 'background task finished', seq: 1 }])
   })
 
+  it('renders a pi-branch chunk as a divider carrying the summary', () => {
+    const items = buildItems([userChunk('u1', 1, 'abandoned work', { _meta: { origin: 'pi-branch' } })])
+    expect(items).toEqual([{ kind: 'divider', id: 'u1', text: 'switched branch', summary: 'abandoned work', seq: 1 }])
+  })
+
+  it('renders a pi-compaction chunk as a divider carrying the summary', () => {
+    const items = buildItems([userChunk('u1', 1, 'the gist', { _meta: { origin: 'pi-compaction' } })])
+    expect(items).toEqual([{ kind: 'divider', id: 'u1', text: 'context compacted', summary: 'the gist', seq: 1 }])
+  })
+
+  it('leaves summary undefined for an empty pi origin chunk', () => {
+    const items = buildItems([userChunk('u1', 1, '', { _meta: { origin: 'pi-branch' } })])
+    expect(items[0]).toMatchObject({ kind: 'divider', text: 'switched branch' })
+    expect(items[0]).not.toHaveProperty('summary')
+  })
+
   it('joins consecutive assistant chunks sharing a messageId into one item', () => {
     const items = buildItems([
       textUpdate('a1', 1, 'first part', { _meta: { messageId: 'm1' } }),
@@ -210,6 +226,20 @@ describe('reconcileOptimistic', () => {
     const updates = [userChunk('u1', 1, 'hello', { ts: 10_500 })]
     const result = reconcileOptimistic(pending, updates, 20_000)
     expect(result).toEqual({ confirmed: ['p1'], remaining: [] })
+  })
+
+  it('does not confirm via an origin chunk with matching text', () => {
+    const pending = [{ localId: 'p1', text: 'hello', sentAt: 10_000 }]
+    const updates = [userChunk('u1', 1, 'hello', { ts: 10_500, _meta: { origin: 'pi-compaction' } })]
+    const result = reconcileOptimistic(pending, updates, 20_000)
+    expect(result.confirmed).toEqual([])
+  })
+
+  it('still confirms via a chunk with an unknown origin', () => {
+    const pending = [{ localId: 'p1', text: 'hello', sentAt: 10_000 }]
+    const updates = [userChunk('u1', 1, 'hello', { ts: 10_500, _meta: { origin: 'something-new' } })]
+    expect(reconcileOptimistic(pending, updates, 20_000).confirmed).toEqual(['p1'])
+    expect(buildItems(updates)[0]).toMatchObject({ kind: 'user', text: 'hello' })
   })
 
   it('confirms at exactly the 30s late boundary', () => {
