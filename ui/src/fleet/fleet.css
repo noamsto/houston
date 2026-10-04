@@ -774,7 +774,7 @@ a.crews-pr::after { content: ''; position: absolute; inset: -10px -8px -13px; }
   background: var(--bg-sunken); color: var(--text-faint); font-size: 11px;
 }
 button.chat-divider { border: 0; font: inherit; font-size: 11px; cursor: pointer; position: relative; }
-button.chat-divider::after { content: ''; position: absolute; inset: -13px -6px; }
+button.chat-divider::after { content: ''; position: absolute; left: -6px; right: -6px; top: 50%; height: var(--tap); transform: translateY(-50%); }
 .chat-divider-summary {
   align-self: stretch; max-width: 85%; margin: 0 auto; padding: 8px 12px; border-radius: 8px;
   background: var(--bg-sunken); color: var(--text-faint); font-size: 12px;
