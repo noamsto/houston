@@ -27,14 +27,13 @@ type piEntry struct {
 }
 
 type piMessage struct {
-	Role       string          `json:"role"`
-	Timestamp  int64           `json:"timestamp"` // unix ms
-	Content    json.RawMessage `json:"content"`   // string, or []piBlock
-	ToolCallID string          `json:"toolCallId"`
-	IsError    bool            `json:"isError"`
-	StopReason string          `json:"stopReason"`
-	// ErrorMessage accompanies stopReason "error".
-	ErrorMessage string `json:"errorMessage"`
+	Role         string          `json:"role"`
+	Timestamp    int64           `json:"timestamp"` // unix ms
+	Content      json.RawMessage `json:"content"`   // string, or []piBlock
+	ToolCallID   string          `json:"toolCallId"`
+	IsError      bool            `json:"isError"`
+	StopReason   string          `json:"stopReason"`
+	ErrorMessage string          `json:"errorMessage"` // set with stopReason "error"
 }
 
 type piBlock struct {
@@ -45,7 +44,7 @@ type piBlock struct {
 	Arguments json.RawMessage `json:"arguments"` // toolCall input
 }
 
-func (p pi) Read(path string, from Cursor) (updates []Update, next Cursor, reset bool, err error) {
+func (pi) Read(path string, from Cursor) (updates []Update, next Cursor, reset bool, err error) {
 	return readLines(path, from, decodePiLine)
 }
 
