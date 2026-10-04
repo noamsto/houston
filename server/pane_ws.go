@@ -76,19 +76,6 @@ type WSDims struct {
 // metaPollInterval is how often each pane connection re-runs agent detection.
 const metaPollInterval = time.Second
 
-// handlePaneWS streams an already-resolved pane; resolution refuses with a
-// plain HTTP error before this runs.
-func (s *Server) handlePaneWS(w http.ResponseWriter, r *http.Request, pane tmux.Pane) {
-	up := s.wsUpgrader()
-	conn, err := up.Upgrade(w, r, nil)
-	if err != nil {
-		slog.Error("websocket upgrade failed", "error", err)
-		return
-	}
-
-	servePane(conn, s.tmux, controlManagerAdapter{mgr: s.controlMgr}, s.registry, pane, metaPollInterval)
-}
-
 // servePane owns an upgraded pane connection: seeding, streaming and cleanup.
 func servePane(conn *websocket.Conn, tm tmuxOps, cm controlManagerOps, registry *agents.Registry, pane tmux.Pane, metaEvery time.Duration) {
 	// Look up tmux pane ID (%N format) for control mode routing

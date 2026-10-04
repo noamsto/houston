@@ -13,8 +13,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,11 +23,9 @@ import (
 	"github.com/noamsto/houston/agents/claude"
 	"github.com/noamsto/houston/agents/generic"
 	"github.com/noamsto/houston/hub"
-	"github.com/noamsto/houston/internal/ansi"
 	"github.com/noamsto/houston/opencode"
 	"github.com/noamsto/houston/parser"
 	"github.com/noamsto/houston/runs"
-	"github.com/noamsto/houston/status"
 	"github.com/noamsto/houston/tmux"
 )
 
@@ -70,20 +66,12 @@ func getAgentState(agent agents.Agent, panePath, terminalOutput string) parser.R
 	return agent.ParseOutput(terminalOutput).Result
 }
 
-// recentActivityTTL is how long a session stays in "Active" after becoming idle
-const recentActivityTTL = 2 * time.Minute
-
 type Server struct {
 	tmux       *tmux.Client
 	controlMgr *tmux.ControlManager
-	watcher    *status.Watcher
 	registry   *agents.Registry
 	font       FontController
 	uiFS       fs.FS // embedded React SPA
-
-	// Track when sessions last had activity (for keeping recently-active in Active section)
-	lastActivity   map[string]time.Time // session name -> last working timestamp
-	lastActivityMu sync.RWMutex
 
 	// OpenCode integration
 	ocDiscovery *opencode.Discovery
@@ -232,11 +220,9 @@ func New(cfg Config) (*Server, error) {
 		pumpDone:       make(chan struct{}),
 		tmux:           tmuxClient,
 		controlMgr:     tmux.NewControlManager(),
-		watcher:        status.NewWatcher(cfg.StatusDir),
 		registry:       registry,
 		font:           cfg.FontController,
 		uiFS:           cfg.UIFS,
-		lastActivity:   make(map[string]time.Time),
 		hub:            hub.New(cfg.StatusDir, slog.Default()),
 		replyRunner:    execCrewReply,
 		wsRepos:        newRepoClassifier(),
@@ -394,12 +380,8 @@ func (s *Server) Handler() http.Handler {
 
 	// JSON API routes (always available)
 	apiMux := http.NewServeMux()
-	apiMux.HandleFunc("/api/sessions", s.handleAPISessions)
-	apiMux.HandleFunc("/api/pane/", s.handleAPIPane)
 	apiMux.HandleFunc("/api/opencode/sessions", s.handleAPIOpenCodeSessions)
 	apiMux.HandleFunc("/api/opencode/session/", s.handleAPIOpenCodeSession)
-	apiMux.HandleFunc("/api/agents", s.handleAgentsSnapshot)
-	apiMux.HandleFunc("/api/agents/stream", s.handleAgentsStream)
 	apiMux.HandleFunc("/api/runs", s.handleRunsSnapshot)
 	apiMux.HandleFunc("/api/runs/stream", s.handleRunsStream)
 	apiMux.HandleFunc("POST /api/runs/{id}/reply", s.handleRunReply)
@@ -451,395 +433,6 @@ func SPAHandler(uiFS fs.FS, auth *authGate) http.Handler {
 		r.URL.Path = "/"
 		fileServer.ServeHTTP(w, r)
 	})
-}
-
-// paneScore represents the priority score for a pane
-type paneScore struct {
-	info        *tmux.PaneInfo
-	index       int
-	score       int           // Higher score = higher priority
-	output      string        // cached CapturePane output
-	agent       agents.Agent  // detected agent
-	parseResult parser.Result // parsed state
-}
-
-// findBestPane selects the best pane to display for a window
-// Priority: Agent attention > Agent working > Agent idle > active > first
-func (s *Server) findBestPane(session string, windowIdx int, panes []tmux.PaneInfo) paneScore {
-	if len(panes) == 0 {
-		return paneScore{}
-	}
-
-	best := paneScore{info: &panes[0], index: panes[0].Index}
-
-	for i := range panes {
-		p := &panes[i]
-
-		pane := tmux.Pane{Session: session, Window: windowIdx, Index: p.Index}
-		paneID := pane.Target()
-		output, err := s.tmux.CapturePane(pane, 100)
-		if err != nil {
-			slog.Warn("capture pane failed", "pane", paneID, "error", err)
-			continue
-		}
-
-		agent := s.registry.Detect(paneID, p.Command, output)
-		var parseResult parser.Result
-		score := 0
-
-		if agent.Type() != agents.AgentGeneric {
-			parseResult = getAgentState(agent, p.Path, output)
-
-			switch parseResult.Type {
-			case parser.TypeError, parser.TypeChoice, parser.TypeQuestion:
-				score = 100
-			case parser.TypeWorking:
-				score = 50
-			default:
-				score = 30
-			}
-		} else {
-			parseResult = parser.Result{Type: parser.TypeIdle}
-			if p.Active {
-				score = 10
-			} else {
-				score = 1
-			}
-		}
-
-		if score > best.score {
-			best = paneScore{
-				info:        p,
-				index:       p.Index,
-				score:       score,
-				output:      output,
-				agent:       agent,
-				parseResult: parseResult,
-			}
-		}
-	}
-
-	return best
-}
-
-func (s *Server) buildSessionsData() SessionsData {
-	sessions, err := s.tmux.ListSessions()
-	if err != nil {
-		slog.Warn("list sessions failed", "error", err)
-	}
-	statuses := s.watcher.GetAll()
-	_ = statuses // TODO: integrate hook status per-window
-
-	// Initialize slices to empty (not nil) so JSON serializes as [] not null.
-	data := SessionsData{
-		NeedsAttention: []SessionWithWindows{},
-		Active:         []SessionWithWindows{},
-		Idle:           []SessionWithWindows{},
-	}
-
-	for _, sess := range sessions {
-		// Get all windows for this session
-		windows, err := s.tmux.ListWindows(sess.Name)
-		if err != nil || len(windows) == 0 {
-			continue
-		}
-
-		sessionData := SessionWithWindows{
-			Session: sess,
-		}
-
-		// Get worktrees once per session (using first window's pane path)
-		var worktrees map[string]string
-		var worktreesLoaded bool
-
-		for _, win := range windows {
-			// Get actual panes for this window
-			panes, err := s.tmux.ListPanes(sess.Name, win.Index)
-			if err != nil {
-				slog.Warn("list panes failed", "session", sess.Name, "window", win.Index, "error", err)
-			}
-
-			// Find best pane to display based on priority:
-			// 1. Agent pane needing attention (error/choice/question)
-			// 2. Agent pane that's working
-			// 3. Agent pane that's idle/done
-			// 4. Active pane (non-agent)
-			// 5. First pane
-			bestPane := s.findBestPane(sess.Name, win.Index, panes)
-			activePaneInfo := bestPane.info
-			paneIdx := bestPane.index
-
-			// Load worktrees on first window (lazy load)
-			if !worktreesLoaded && activePaneInfo != nil && activePaneInfo.Path != "" {
-				worktrees, _ = tmux.GetWorktrees(activePaneInfo.Path)
-				worktreesLoaded = true
-			}
-
-			// Get branch for this window's pane
-			var branch string
-			if activePaneInfo != nil {
-				branch = tmux.GetBranchForPath(activePaneInfo.Path, worktrees)
-			}
-			process := win.Name
-
-			pane := tmux.Pane{Session: sess.Name, Window: win.Index, Index: paneIdx}
-
-			// Use cached values from findBestPane instead of re-capturing
-			output := bestPane.output
-			agent := bestPane.agent
-			if agent == nil {
-				agent = s.registry.Detect(pane.Target(), "", "")
-			}
-			parseResult := bestPane.parseResult
-
-			// Only mark as needing attention if it's an agent window
-			isAgentWindow := agent.Type() != agents.AgentGeneric
-			windowNeedsAttention := isAgentWindow && (parseResult.Type == parser.TypeError ||
-				parseResult.Type == parser.TypeChoice ||
-				parseResult.Type == parser.TypeQuestion)
-
-			// Extract preview lines - more for attention states
-			previewLines := 15
-			if windowNeedsAttention {
-				previewLines = 25
-			}
-			preview := s.getPreviewLines(agent, output, previewLines)
-
-			windowStatus := WindowWithStatus{
-				Window:         win,
-				Pane:           pane,
-				ParseResult:    parseResult,
-				Preview:        preview,
-				NeedsAttention: windowNeedsAttention,
-				Branch:         branch,
-				Process:        process,
-				AgentType:      agent.Type(),
-			}
-			if activePaneInfo != nil {
-				windowStatus.PaneID = activePaneInfo.ID
-				windowStatus.TmuxServer = activePaneInfo.Server
-			}
-
-			sessionData.Windows = append(sessionData.Windows, windowStatus)
-
-			if windowNeedsAttention {
-				sessionData.AttentionCount++
-			}
-			// Check if window is actively working using smarter heuristics
-			cmd := ""
-			if activePaneInfo != nil {
-				cmd = activePaneInfo.Command
-			}
-			if isWindowActive(cmd, win.LastActivity, isAgentWindow, parseResult) {
-				sessionData.HasWorking = true
-			}
-		}
-
-		// Sort windows by activity: attention first, then working, then idle
-		sort.SliceStable(sessionData.Windows, func(i, j int) bool {
-			wi, wj := sessionData.Windows[i], sessionData.Windows[j]
-			// Priority: attention > working > idle
-			scoreI := windowActivityScore(wi)
-			scoreJ := windowActivityScore(wj)
-			return scoreI > scoreJ
-		})
-
-		// Update last activity tracking
-		if sessionData.HasWorking {
-			s.lastActivityMu.Lock()
-			s.lastActivity[sess.Name] = time.Now()
-			s.lastActivityMu.Unlock()
-		}
-
-		// Check if session has recent activity (within TTL)
-		s.lastActivityMu.RLock()
-		lastActive, hasLastActive := s.lastActivity[sess.Name]
-		s.lastActivityMu.RUnlock()
-		recentlyActive := hasLastActive && time.Since(lastActive) < recentActivityTTL
-
-		// Categorize session based on its windows' actual status
-		if sessionData.AttentionCount > 0 {
-			data.NeedsAttention = append(data.NeedsAttention, sessionData)
-		} else if sessionData.HasWorking || recentlyActive {
-			// Keep in Active if currently working OR recently active
-			data.Active = append(data.Active, sessionData)
-		} else {
-			data.Idle = append(data.Idle, sessionData)
-		}
-	}
-
-	return data
-}
-
-// getPreviewLines extracts the last n non-empty lines from output, using agent-specific filtering
-// Note: Preview lines in window cards are now only used as fallback - action bar uses SSE for live data
-func (s *Server) getPreviewLines(_ agents.Agent, output string, n int) []string {
-	lines := strings.Split(output, "\n")
-	var result []string
-
-	// Work backwards to find non-empty lines
-	for i := len(lines) - 1; i >= 0 && len(result) < n; i-- {
-		line := strings.TrimSpace(lines[i])
-		if line == "" {
-			continue
-		}
-		// Skip prompt line (just ">")
-		if line == ">" {
-			continue
-		}
-		// Skip separator lines (all dashes or box drawing)
-		if isAllSeparator(line) {
-			continue
-		}
-		// Strip ANSI codes for window card preview (ESC gets lost in HTML anyway)
-		line = ansi.StripOrphaned(line)
-		result = append([]string{line}, result...)
-	}
-
-	return result
-}
-
-// windowActivityScore returns a score for sorting windows by activity
-// Higher score = more important (should appear first)
-func windowActivityScore(win WindowWithStatus) int {
-	if win.NeedsAttention {
-		return 4 // Highest priority - needs user attention
-	}
-	if win.ParseResult.Type == parser.TypeWorking {
-		return 3 // Claude actively working
-	}
-	// Check process type for non-Claude windows
-	procType := classifyProcess(win.Process)
-	switch procType {
-	case ProcessServer:
-		return 2 // Servers running
-	case ProcessUnknown:
-		// Unknown process with recent activity
-		if time.Since(win.Window.LastActivity) < 30*time.Second {
-			return 2 // Recent activity
-		}
-		return 1
-	default:
-		return 1 // Shell or interactive - idle
-	}
-}
-
-// ProcessType categorizes what kind of process is running
-type ProcessType int
-
-const (
-	ProcessShell       ProcessType = iota // bash, zsh, fish - idle prompt
-	ProcessInteractive                    // vim, less, htop - waiting for user input
-	ProcessServer                         // servers, daemons - running in background
-	ProcessUnknown                        // other processes
-)
-
-// classifyProcess determines what type of process is running
-func classifyProcess(cmd string) ProcessType {
-	cmd = strings.ToLower(cmd)
-
-	// Shells - always idle
-	shells := []string{"bash", "zsh", "fish", "sh", "dash", "ksh", "tcsh", "csh"}
-	if slices.Contains(shells, cmd) {
-		return ProcessShell
-	}
-
-	// Interactive tools - waiting for user input, effectively idle
-	interactive := []string{
-		"vim", "nvim", "vi", "nano", "emacs", "pico", "micro", // editors
-		"less", "more", "most", "man", "info", // pagers
-		"htop", "top", "btop", "atop", "glances", // monitors
-		"lazygit", "lazydocker", "tig", "gitui", // git TUIs
-		"ranger", "mc", "nnn", "lf", "yazi", // file managers
-		"tmux", "screen", // multiplexers (nested)
-		"fzf", "sk", // fuzzy finders
-	}
-	if slices.Contains(interactive, cmd) {
-		return ProcessInteractive
-	}
-
-	// Known server/daemon processes
-	servers := []string{
-		"node", "deno", "bun", // JS runtimes
-		"nginx", "apache", "caddy", "httpd", // web servers
-		"postgres", "mysql", "redis", "mongo", "sqlite", // databases
-		"docker", "podman", "containerd", // containers
-	}
-	if slices.Contains(servers, cmd) {
-		return ProcessServer
-	}
-
-	return ProcessUnknown
-}
-
-// isWindowActive determines if a window is actively working based on:
-// - Process type (shells/interactive are idle)
-// - Recent activity (output in last N seconds)
-// - For agent windows, use the parser
-func isWindowActive(cmd string, lastActivity time.Time, isAgentWindow bool, parseResult parser.Result) bool {
-	// Agent windows use their own detection
-	if isAgentWindow {
-		return parseResult.Type == parser.TypeWorking
-	}
-
-	procType := classifyProcess(cmd)
-
-	switch procType {
-	case ProcessShell:
-		// Shells are always idle
-		return false
-	case ProcessInteractive:
-		// Interactive tools are waiting for user - idle
-		return false
-	case ProcessServer:
-		// Servers are always "active" (running useful background work)
-		return true
-	default:
-		// Unknown process - check for recent activity
-		// If there was output in the last 30 seconds, consider it active
-		return time.Since(lastActivity) < 30*time.Second
-	}
-}
-
-// isAllSeparator checks if a line is just separator characters
-func isAllSeparator(line string) bool {
-	for _, r := range line {
-		// Allow box drawing chars, dashes, equals
-		if r != '─' && r != '-' && r != '=' && r != '━' && r != '│' && r != '┃' {
-			return false
-		}
-	}
-	return len(line) > 3 // Must be at least a few chars to be a separator
-}
-
-func (s *Server) handlePaneSend(w http.ResponseWriter, r *http.Request, pane tmux.Pane) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	_ = r.ParseForm()
-	input := r.FormValue("input")
-	special := r.FormValue("special") == "true"
-	noEnter := r.FormValue("noenter") == "true"
-
-	slog.Info("send keys", "pane", pane.Target(), "input", input, "special", special, "noenter", noEnter)
-
-	var err error
-	if special {
-		err = s.runPanes.SendSpecialKey(pane, input)
-	} else {
-		err = s.runPanes.SendKeys(pane, input, !noEnter)
-	}
-
-	if err != nil {
-		slog.Error("send keys failed", "error", err)
-		http.Error(w, "failed to send keys: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	slog.Debug("send keys success")
-	w.WriteHeader(http.StatusOK)
 }
 
 type imageUpload struct {
@@ -903,55 +496,6 @@ func saveImages(images []imageUpload) (paths []string, status int, err error) {
 		})
 	}
 	return tmpFiles, 0, nil
-}
-
-func (s *Server) handlePaneSendWithImages(w http.ResponseWriter, r *http.Request, pane tmux.Pane) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	r.Body = http.MaxBytesReader(w, r.Body, 50*1024*1024) // 50MB limit
-
-	var req struct {
-		Text   string        `json:"text"`
-		Images []imageUpload `json:"images"`
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		slog.Error("failed to decode images request", "error", err)
-		http.Error(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	if len(req.Images) == 0 {
-		http.Error(w, "no images provided", http.StatusBadRequest)
-		return
-	}
-
-	tmpFiles, status, err := saveImages(req.Images)
-	if err != nil {
-		http.Error(w, err.Error(), status)
-		return
-	}
-
-	// Send all image paths and text to Claude Code as a single prompt line
-	// Format: image1 image2 image3 text + Enter
-	message := strings.Join(tmpFiles, " ")
-	if req.Text != "" {
-		message = fmt.Sprintf("%s %s", message, req.Text)
-	}
-
-	slog.Info("send images with text", "pane", pane.Target(), "count", len(tmpFiles), "text", req.Text)
-
-	if err := s.runPanes.SendKeys(pane, message, true); err != nil {
-		slog.Error("failed to send images", "error", err)
-		http.Error(w, "failed to send: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	slog.Debug("send images success", "count", len(tmpFiles))
-	w.WriteHeader(http.StatusOK)
 }
 
 // OpenCode handlers

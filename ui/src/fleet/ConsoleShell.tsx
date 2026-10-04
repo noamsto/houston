@@ -176,16 +176,6 @@ export function ConsoleShell({ runs, connected, hasSnapshot, now }: ShellData) {
           <button type="button" className="console-rail-item" aria-pressed={section === 'dispatch'} onClick={() => goTab('dispatch')}>Dispatch</button>
         </div>
 
-        <div className="console-rail-foot">
-          <button
-            type="button"
-            className="fleet-classic"
-            aria-label="Switch to the classic view"
-            onClick={() => { window.location.hash = '#/agents' }}
-          >
-            Classic
-          </button>
-        </div>
       </nav>
 
       <section className="console-list" aria-label="list">
