@@ -1,0 +1,9 @@
+{"type":"session","version":3,"id":"sess-1","timestamp":"2025-01-01T00:00:00.000Z","cwd":"/work/demo"}
+{"type":"model_change","id":"e1","parentId":null,"timestamp":"2025-01-01T00:00:00.100Z","provider":"acme","modelId":"model-x"}
+{"type":"thinking_level_change","id":"e2","parentId":"e1","timestamp":"2025-01-01T00:00:00.200Z","thinkingLevel":"high"}
+{"type":"message","id":"e3","parentId":"e2","timestamp":"2025-01-01T00:00:00.300Z","message":{"role":"system","content":"synthetic system text","timestamp":1735689600300}}
+{"type":"message","id":"e4","parentId":"e3","timestamp":"2025-01-01T00:00:01.000Z","message":{"role":"user","content":"please read the config","timestamp":1735689601000}}
+{"type":"message","id":"e5","parentId":"e4","timestamp":"2025-01-01T00:00:02.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"internal reasoning"},{"type":"text","text":"Reading it now."},{"type":"toolCall","id":"call_read1","name":"read","arguments":{"path":"/work/demo/config.toml"}}],"stopReason":"toolUse","timestamp":1735689602000}}
+{"type":"message","id":"e6","parentId":"e5","timestamp":"2025-01-01T00:00:03.000Z","message":{"role":"toolResult","toolCallId":"call_read1","toolName":"read","content":[{"type":"text","text":"name = \"demo\""}],"isError":false,"timestamp":1735689603000}}
+{"type":"message","id":"e7","parentId":"e6","timestamp":"2025-01-01T00:00:04.000Z","message":{"role":"assistant","content":[{"type":"text","text":"The config names the project demo."}],"stopReason":"stop","timestamp":1735689604000}}
+{"type":"session_info","id":"e8","parentId":"e7","timestamp":"2025-01-01T00:00:05.000Z","name":"demo session"}

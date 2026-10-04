@@ -256,3 +256,146 @@ func splitKeepingEnds(data []byte) [][]byte {
 	}
 	return lines
 }
+
+// TestSamplesPi replays real pi sessions from $HOUSTON_SAMPLES/pi. Like the
+// claude-code test it logs counts only, never transcript content.
+func TestSamplesPi(t *testing.T) {
+	dir := os.Getenv("HOUSTON_SAMPLES")
+	if dir == "" {
+		t.Skip("HOUSTON_SAMPLES not set")
+	}
+	files, err := filepath.Glob(filepath.Join(dir, "pi", "*.jsonl"))
+	if err != nil {
+		t.Fatalf("glob: %v", err)
+	}
+	if len(files) == 0 {
+		t.Skip("no pi sample files")
+	}
+	for _, f := range files {
+		f := f
+		t.Run(filepath.Base(f), func(t *testing.T) {
+			checkPiSampleFile(t, NewPi(), f)
+		})
+	}
+}
+
+type rawPiEntry struct {
+	Type    string `json:"type"`
+	Message *struct {
+		Role         string          `json:"role"`
+		Content      json.RawMessage `json:"content"`
+		ToolCallID   string          `json:"toolCallId"`
+		StopReason   string          `json:"stopReason"`
+		ErrorMessage string          `json:"errorMessage"`
+	} `json:"message"`
+}
+
+type rawPiBlock struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+	ID   string `json:"id"`
+}
+
+func checkPiSampleFile(t *testing.T, r Reader, path string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	var userMsgs, textBlocks, toolCalls, toolResults int
+	var callIDs []string
+	for _, line := range bytes.Split(data, []byte("\n")) {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+		var e rawPiEntry
+		if json.Unmarshal(line, &e) != nil || e.Type != "message" || e.Message == nil {
+			continue
+		}
+		switch e.Message.Role {
+		case "user":
+			var s string
+			if json.Unmarshal(e.Message.Content, &s) == nil {
+				if s != "" {
+					userMsgs++
+				}
+				continue
+			}
+			var blocks []rawPiBlock
+			if json.Unmarshal(e.Message.Content, &blocks) != nil {
+				continue
+			}
+			for _, b := range blocks {
+				if b.Type == "image" || (b.Type == "text" && b.Text != "") {
+					userMsgs++
+					break
+				}
+			}
+		case "assistant":
+			if e.Message.StopReason == "error" && e.Message.ErrorMessage != "" {
+				textBlocks++
+			}
+			var blocks []rawPiBlock
+			if json.Unmarshal(e.Message.Content, &blocks) != nil {
+				continue
+			}
+			for _, b := range blocks {
+				switch b.Type {
+				case "text":
+					if b.Text != "" {
+						textBlocks++
+					}
+				case "toolCall":
+					toolCalls++
+					callIDs = append(callIDs, b.ID)
+				}
+			}
+		case "toolResult":
+			toolResults++
+		}
+	}
+
+	updates, _, _, err := r.Read(path, Cursor{})
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	kindCounts := map[string]int{}
+	seenCall := map[string]bool{}
+	orphanResults := 0
+	for _, u := range updates {
+		kindCounts[u.SessionUpdate]++
+		switch u.SessionUpdate {
+		case SessionUpdateToolCall:
+			seenCall[u.ToolCallID] = true
+		case SessionUpdateToolCallUpdate:
+			if !seenCall[u.ToolCallID] {
+				orphanResults++
+			}
+		}
+	}
+	if got := kindCounts[SessionUpdateUserMessageChunk]; got != userMsgs {
+		t.Errorf("user_message_chunk = %d, want %d", got, userMsgs)
+	}
+	if got := kindCounts[SessionUpdateAgentMessageChunk]; got != textBlocks {
+		t.Errorf("agent_message_chunk = %d, want %d", got, textBlocks)
+	}
+	if got := kindCounts[SessionUpdateToolCall]; got != toolCalls {
+		t.Errorf("tool_call = %d, want %d", got, toolCalls)
+	}
+	if got := kindCounts[SessionUpdateToolCallUpdate]; got != toolResults {
+		t.Errorf("tool_call_update = %d, want %d", got, toolResults)
+	}
+	for _, id := range callIDs {
+		if _, err := r.Tool(path, id); err != nil {
+			t.Errorf("Tool(%s): %v", id, err)
+		}
+	}
+
+	if inc := readIncrementalByLine(t, r, path, data); !equalUpdates(t, updates, inc) {
+		t.Errorf("chunking-dependent output for %s", filepath.Base(path))
+	}
+
+	t.Logf("%s: %d updates (by kind: %v), %d results without a preceding call", filepath.Base(path), len(updates), kindCounts, orphanResults)
+}

@@ -990,7 +990,8 @@ func TestCapsChat(t *testing.T) {
 		want  bool
 	}{
 		{"claude with session", &Run{Agent: "claude", Session: "sess-1"}, false, true},
-		{"pi with session", &Run{Agent: "pi", Session: "sess-1"}, false, false},
+		{"pi with session", &Run{Agent: "pi", Session: "sess-1"}, false, true},
+		{"codex with session", &Run{Agent: "codex", Session: "sess-1"}, false, false},
 		{"claude with no session", &Run{Agent: "claude"}, false, false},
 		{"tmux-only, no hooks layer", nil, true, false},
 	}
@@ -1080,6 +1081,15 @@ func TestCrewSessionNeedsAReaderForTheBusEngine(t *testing.T) {
 	r.Apply(Delta{Source: "crew", Key: "%1", Run: Run{Agent: "codex", CrewSession: "s1"}})
 	if got := firstRun(t, r); got.Caps.Chat {
 		t.Error("a codex bus record granted Chat")
+	}
+}
+
+func TestCrewSessionGrantsChatForAPiBusRecord(t *testing.T) {
+	r := NewRegistry(DefaultOrder)
+	r.Apply(Delta{Source: "crew", Key: "%1", Run: Run{Agent: "pi", CrewSession: "s1"}})
+	got := firstRun(t, r)
+	if !got.Caps.Chat || got.Session != "s1" {
+		t.Errorf("pi bus record: chat=%v session=%q, want Chat and s1", got.Caps.Chat, got.Session)
 	}
 }
 

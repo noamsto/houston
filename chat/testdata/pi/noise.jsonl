@@ -1,0 +1,15 @@
+{"type":"usage","id":"n1","parentId":null,"timestamp":"2025-01-03T00:00:00.000Z","input":10,"output":5}
+{"type":"compaction","id":"n2","parentId":"n1","timestamp":"2025-01-03T00:00:01.000Z","summary":"synthetic summary"}
+{"type":"branch_summary","id":"n3","parentId":"n2","timestamp":"2025-01-03T00:00:02.000Z","summary":"synthetic branch"}
+{"type":"custom","id":"n4","parentId":"n3","timestamp":"2025-01-03T00:00:03.000Z","customType":"ext","data":{"k":"v"}}
+{"type":"custom_message","id":"n5","parentId":"n4","timestamp":"2025-01-03T00:00:04.000Z","customType":"ext","content":"hidden","display":true}
+{"type":"label","id":"n6","parentId":"n5","timestamp":"2025-01-03T00:00:05.000Z","label":"mark"}
+{"type":"context_edit","id":"n7","parentId":"n6","timestamp":"2025-01-03T00:00:06.000Z"}
+{"type":"message","id":"n8","parentId":"n7","timestamp":"2025-01-03T00:00:07.000Z","message":{"role":"bashExecution","command":"ls","output":"x","timestamp":1735862407000}}
+{"type":"message","id":"n9","parentId":"n8","timestamp":"2025-01-03T00:00:08.000Z","message":{"role":"custom","customType":"ext","content":"c","timestamp":1735862408000}}
+{"type":"message","id":"n10","parentId":"n9","timestamp":"2025-01-03T00:00:09.000Z","message":{"role":"branchSummary","summary":"s","timestamp":1735862409000}}
+{"type":"message","id":"n11","parentId":"n10","timestamp":"2025-01-03T00:00:10.000Z","message":{"role":"compactionSummary","summary":"s","timestamp":1735862410000}}
+{this is not json
+{"type":"message","id":"n12","parentId":"n11","timestamp":"2025-01-03T00:00:11.000Z","message":{"role":"assistant","content":[{"type":"text","text":""}],"stopReason":"stop","timestamp":1735862411000}}
+{"type":"message","id":"n13","parentId":"n12","timestamp":"2025-01-03T00:00:12.000Z","message":{"role":"mystery","content":"unknown role","timestamp":1735862412000}}
+{"type":"message","id":"n14","parentId":"n13","timestamp":"2025-01-03T00:00:13.000Z","message":{"role":"user","content":"after the noise","timestamp":1735862413000}}

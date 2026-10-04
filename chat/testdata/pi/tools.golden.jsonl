@@ -1,0 +1,7 @@
+{"id":"0:0","seq":0,"ts":1735776000000,"sessionUpdate":"user_message_chunk","content":[{"type":"content","content":{"type":"text","text":"look at this\n[image]"}}]}
+{"id":"240:0","seq":0,"ts":1735776001000,"sessionUpdate":"tool_call","toolCallId":"call_bash1","title":"make build","kind":"execute","status":"in_progress","_meta":{"messageId":"t2","tool":"bash"}}
+{"id":"240:1","seq":0,"ts":1735776001000,"sessionUpdate":"tool_call","toolCallId":"call_edit1","title":"main.go","kind":"edit","status":"in_progress","locations":[{"path":"/work/demo/main.go"}],"_meta":{"messageId":"t2","tool":"edit"}}
+{"id":"690:0","seq":0,"ts":1735776002000,"sessionUpdate":"tool_call_update","toolCallId":"call_bash1","status":"failed"}
+{"id":"969:0","seq":0,"ts":1735776003000,"sessionUpdate":"tool_call_update","toolCallId":"call_edit1","status":"completed"}
+{"id":"1224:0","seq":0,"ts":1735776004000,"sessionUpdate":"tool_call","toolCallId":"call_grep1","title":"func main","kind":"search","status":"in_progress","locations":[{"path":"."}],"_meta":{"messageId":"t5","tool":"grep"}}
+{"id":"1224:1","seq":0,"ts":1735776004000,"sessionUpdate":"tool_call","toolCallId":"call_write1","title":"/work/demo/notes.txt","kind":"edit","status":"in_progress","locations":[{"path":"/work/demo/notes.txt"}],"_meta":{"messageId":"t5","tool":"write"}}
