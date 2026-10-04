@@ -107,7 +107,7 @@ describe('buildItems', () => {
   it('leaves summary undefined for an empty pi origin chunk', () => {
     const items = buildItems([userChunk('u1', 1, '', { _meta: { origin: 'pi-branch' } })])
     expect(items[0]).toMatchObject({ kind: 'divider', text: 'switched branch' })
-    expect((items[0] as { summary?: string }).summary).toBeUndefined()
+    expect(items[0]).not.toHaveProperty('summary')
   })
 
   it('joins consecutive assistant chunks sharing a messageId into one item', () => {

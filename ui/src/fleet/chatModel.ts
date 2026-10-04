@@ -124,7 +124,8 @@ const DIVIDER_LABELS = new Map([
  * divider (task notification, pi branch switch or compaction), assistant
  * text (consecutive chunks sharing a messageId joined), or a tools row
  * collapsing a run of consecutive tool_calls (tool_call_update never breaks
- * the run — it folds into its call by toolCallId). Each item's `seq` is the minimum seq of its members.
+ * the run — it folds into its call by toolCallId). Each item's `seq` is the
+ * minimum seq of its members.
  */
 export function buildItems(updates: ChatUpdate[]): ChatItem[] {
   const sorted = [...updates].sort((a, b) => a.seq - b.seq)
