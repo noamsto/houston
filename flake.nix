@@ -20,7 +20,7 @@
             pname = "houston-ui";
             version = "0.1.0";
             src = ./ui;
-            npmDepsHash = "sha256-+uN5P6u9kpNHl7TS5AmdINPR9YixM7/9d3Q2vUEcGX4=";
+            npmDepsHash = "sha256-t4FEW2kPZBlSPjnDpmmb1GGR0YTzW1qzDbWKARIHrGs=";
             buildPhase = "npm run build";
             installPhase = "cp -r dist $out";
             dontNpmInstall = true;
