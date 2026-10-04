@@ -199,7 +199,7 @@ func TestWSUpgraderCheckOrigin(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "http://this-host.local/api/pane/x/ws", nil)
+			req := httptest.NewRequest(http.MethodGet, "http://this-host.local/api/runs/x/terminal", nil)
 			if tt.origin != "" {
 				req.Header.Set("Origin", tt.origin)
 			}

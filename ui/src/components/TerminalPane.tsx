@@ -669,7 +669,7 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
     >
       {isDesktop && !hideHeader && (
         <PaneHeader
-          target={address.kind === 'pane' ? address.target : address.id}
+          target={address.id}
           meta={meta}
           connected={connected}
           onClose={onClose}

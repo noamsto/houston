@@ -33,14 +33,6 @@ export function FleetView({ runs, connected, now, onOpen }: FleetViewProps) {
         <div className="fleet-nav-actions">
           <button
             type="button"
-            className="fleet-classic"
-            aria-label="Switch to the classic view"
-            onClick={() => { window.location.hash = '#/agents' }}
-          >
-            Classic
-          </button>
-          <button
-            type="button"
             className={`fleet-badge${attentionCount === 0 ? ' quiet' : ''}`}
             onClick={() => setFilter('needs-you')}
           >

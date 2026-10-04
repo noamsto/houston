@@ -65,13 +65,6 @@ Houston scans ports 4096-4100 by default. Use `--no-opencode` to disable.
 │  WS   /api/runs/:id/terminal  - Run terminal I/O      │
 │  POST /api/runs/:id/input     - Send text/key/image   │
 │  GET  /api/runs/:id/chat*     - Chat page, SSE, tool  │
-│  GET  /api/sessions?stream=1  - SSE session stream    │
-│  WS   /api/pane/:target/ws   - Pane I/O (bidi)        │
-│    (classic views only; needs ?pane_id=&server=)      │
-│  POST /api/pane/:target/send - Send text/special keys │
-│    (classic views only; needs ?pane_id=&server=)      │
-│  GET  /api/font/bigger       - Increase terminal font │
-│  GET  /api/font/smaller      - Decrease terminal font │
 │  GET  /api/dispatch/options  - Dispatch form choices  │
 │  POST /api/dispatch          - Start a worker         │
 │  POST /api/dispatch/dispatcher - New dispatcher       │
@@ -102,7 +95,6 @@ Houston scans ports 4096-4100 by default. Use `--no-opencode` to disable.
 | Backend | Go | Single binary, fast, good tmux process handling |
 | Frontend | React + TypeScript | Rich terminal rendering with xterm.js |
 | Terminal | xterm.js v6 | Full terminal emulation in browser |
-| Layout | allotment | Resizable split panes (desktop) |
 | Styling | CSS custom properties | Dark theme, no framework dependency |
 | Build | Vite | Fast dev server with HMR, production bundling |
 | Live updates | SSE + WebSocket | SSE for session list, WS for pane I/O |
@@ -116,9 +108,9 @@ houston/
 ├── main.go              # Entry point, CLI flags, embed FS setup
 ├── embed.go             # go:embed directive for ui/dist
 ├── server/
-│   ├── server.go        # HTTP server, mux, SSE session stream
-│   ├── api.go           # JSON API handlers (sessions, panes, font)
-│   ├── pane_ws.go       # WebSocket handler for pane I/O
+│   ├── server.go        # HTTP server, mux, route wiring
+│   ├── api.go           # OpenCode session handlers
+│   ├── pane_ws.go       # Shared WebSocket pane I/O (terminal routes)
 │   └── runs_terminal.go # Run-addressed terminal WS + input routes
 ├── tmux/
 │   ├── client.go        # tmux CLI wrapper (list/capture/send)
@@ -140,29 +132,23 @@ houston/
 ├── scripts/             # claude-hook.sh
 ├── docs/                # Design notes and plans
 ├── parser/              # Terminal output parsing
-├── status/              # Status file management
 ├── internal/            # Internal utilities
 ├── ui/                  # React frontend (Vite)
 │   ├── src/
-│   │   ├── App.tsx              # Root layout, sidebar toggle, pane management
+│   │   ├── App.tsx              # Root: renders the Fleet shell
 │   │   ├── main.tsx             # React entry point
 │   │   ├── api/
-│   │   │   ├── types.ts         # Shared TypeScript types (Session, WSMeta, etc.)
-│   │   │   └── terminal.ts      # TerminalAddress (run|pane) + send helpers
+│   │   │   ├── types.ts         # Shared TypeScript types (WSMeta, etc.)
+│   │   │   └── terminal.ts      # TerminalAddress (run) + send helpers
 │   │   ├── components/
-│   │   │   ├── Sidebar.tsx      # Slide-out session list with filter
-│   │   │   ├── SessionTree.tsx  # Collapsible session/window tree
-│   │   │   ├── TerminalArea.tsx # Container managing open panes
 │   │   │   ├── TerminalPane.tsx # xterm.js terminal with mobile zoom/pan
-│   │   │   ├── SplitContainer.tsx # Desktop split pane layout (allotment)
-│   │   │   ├── PaneHeader.tsx   # Agent icon, status, mode badge, wide toggle
+│   │   │   ├── PaneHeader.tsx   # Agent icon, status, mode badge
 │   │   │   └── MobileInputBar.tsx # Quick actions, text input, voice
 │   │   ├── fleet/
 │   │   │   └── RunDetail.tsx    # Run detail view; Terminal tab uses run address
 │   │   ├── hooks/
-│   │   │   ├── useSessionsStream.ts # SSE hook for live session list
 │   │   │   ├── usePaneSocket.ts     # WebSocket hook for pane I/O
-│   │   │   ├── useLayout.ts         # Persist layout state to localStorage
+│   │   │   ├── useLayout.ts         # Persisted font-size/grouping preferences
 │   │   │   └── useMediaQuery.ts     # Responsive breakpoint hook
 │   │   ├── lib/
 │   │   │   └── xterm.ts        # xterm.js theme and initialization
@@ -227,7 +213,7 @@ The Vite dev server (`ui/vite.config.ts`) proxies `/api` to `http://localhost:90
 - **Pinch-to-zoom**: Two-finger pinch with focal-point tracking
 - **Detached mode**: horizontal finger movement (≥8px that actually pans, drag, pinch or the column scrubber) or ending a drag scrolled up detaches the view from the live cursor — output no longer auto-pans it, a reconnect reseed with unchanged dims keeps the pan and distance from the bottom, and a "↓ Live" pill appears bottom-centre (a keyboard/container resize still re-snaps vertically). Re-attach = tapping the pill, or a drag that starts scrolled up and ends at the bottom edge; either snaps to the cursor and follows it immediately
 - **Composer** (`MobileInputBar.tsx`, docked under the terminal in the run-detail Terminal tab): multi-line field where Enter inserts a newline and Send (or Ctrl/Cmd+Enter) sends the text followed by Enter; an empty Send presses Enter. Also a voice button (Web Speech API) and file attach.
-- **Quick keys**: one horizontally scrollable row — Esc, ^C, Enter, Tab, Shift+Tab, ↑/↓, 1–5, Y/N, Alt+P, ^O, ^Z, `/copy`. All but `/copy` are keystrokes: for a run address, `POST /api/runs/:id/input` `{type:'key', key:...}` (400 if `key` isn't in the `terminalKeys` allowlist); classic pane views still use the legacy `POST /api/pane/:target/send?pane_id=&server=` with `special=true`. Either way, no implicit Enter, so a digit answers a numbered prompt without a stray Enter.
+- **Quick keys**: one horizontally scrollable row — Esc, ^C, Enter, Tab, Shift+Tab, ↑/↓, 1–5, Y/N, Alt+P, ^O, ^Z, `/copy`. All but `/copy` are keystrokes: `POST /api/runs/:id/input` `{type:'key', key:...}` (400 if `key` isn't in the `terminalKeys` allowlist). No implicit Enter, so a digit answers a numbered prompt without a stray Enter.
 - **Choices**: when the pane `meta.choices` is present, each choice renders as a tappable `n. label` button above the row and answers with its ordinal key.
 - **Keyboard**: `useKeyboardInset` tracks the on-screen keyboard via `visualViewport`; `MobileShell` shortens itself to sit above it and hides the tab bar so the terminal and composer keep the space.
 
@@ -347,7 +333,7 @@ Every run can carry `project` and `role` (`runs/project.go`, `runs/tmuxsource.go
 - **Ghost hook runs:** a hook state file whose pane is missing from a *successful* `ListPaneOptions` is published as `done` (kept in history, `caps.terminal` false); a failed listing never ends anything. Hook activity newer than that verdict marks the session alive elsewhere (another tmux server) and it is never ended again.
 - `hub` prunes an ended hook state file `hub.DefaultPruneTTL` (24h) after its last update; a file whose last-written state is not `ended` — including a ghost session's — is never pruned by this pass.
 - **Foreign panes:** tmux pane ids are unique only within one server incarnation and restart at `%0` after a server restart, so a hook state file can name a pane that now belongs to someone else. Every hook event re-reads `$TMUX_PANE` and the server pid from `$TMUX` (no exec) and recomputes the coordinates when they disagree with the file or on `SessionStart`, recording the server pid as `tmux_server`. `runs/hooksource.go` then distrusts a pane whose recorded server differs from the one houston is listing, or whose state predates that server's start time (which covers files written before `tmux_server` existed): the coordinates are dropped before the run is keyed, so it keys off its session id, carries no `Tmux` ref or terminal/reply/kill caps, and is ended into history under the same revive rule as a vanished pane. The server identity rides the same `list-panes -a -F` listing that produces the pane ids (`#{pid}`/`#{start_time}` in `paneOptionsFormat`), so the two can never disagree about which server minted a pane; a failed listing publishes nothing and leaves earlier verdicts standing, and a tmux that cannot expand those fields logs once and falls back to trusting the recorded pane. The same normalize step disowns a session whose hook state is `ended` even when its pane is live and same-server: tmux hands that id to the next occupant the moment the pane is reused, and a session that announced its own end can never prove it is still there, so it too keys off its session id with no `Tmux` ref or terminal/reply/kill caps (#120). `last_message` is cleared by every hook event except `Notification`, and the hub only surfaces it while the state is waiting.
-- **Point-of-use server check:** the foreign-pane guard above is sound only for the listing it ran against — `HookSource` polls every 5s, so a tmux restart landing right after a successful listing leaves a window where a cached `Tmux` ref still matches the pre-restart server while the new server has already reused the same pane id. `runs.TmuxRef` and `tmux.Pane` both carry the tmux server pid (`Server`, internal only — `json:"-"`, never reaches the runs JSON/SSE API) alongside the pane id, and `server/runs_terminal.go`'s `runPane` re-resolves and compares it on every send/terminal-attach, refusing with 409 when both the run's recorded server and the freshly resolved pane's server are known and disagree. Either side being unknown never refuses on its own — same "unknown ⇒ false" posture as the foreign-pane guard. This closes the race for the run-addressed routes below. An already-open run-route WebSocket re-verifies too: it re-resolves the pane at open and again after every control-client reconnect, gated on the client's generation counter (`server/pane_ws.go`, `tmux.ControlClient.Generation`), and WS input is dropped until that check passes. A gone pane or a different server closes the socket with 4409, which the UI shows as ended without retrying; an unverifiable resolve closes with 1011 instead. The legacy `/api/pane/:target/{ws,send,send-with-images}` routes are identity-guarded the same way, and the client's identity is mandatory: the client presents `?pane_id=<%N>&server=<tmux server pid>` (from `pane_id`/`tmux_server` on `/api/sessions` windows), the server resolves the pane by that id and acts on the resolved pane (the URL coordinate is ignored), and the legacy WS gets the same post-open reverify (4409/1011). A missing `server` or a `pane_id` that isn't `%N` is 400 `pane identity required`; only an unknown server on the *resolved* pane falls back to trust (unknown ⇒ allow, as in `runPane`). `metaPollLoop`'s `meta` frames stay ungated on both.
+- **Point-of-use server check:** the foreign-pane guard above is sound only for the listing it ran against — `HookSource` polls every 5s, so a tmux restart landing right after a successful listing leaves a window where a cached `Tmux` ref still matches the pre-restart server while the new server has already reused the same pane id. `runs.TmuxRef` and `tmux.Pane` both carry the tmux server pid (`Server`, internal only — `json:"-"`, never reaches the runs JSON/SSE API) alongside the pane id, and `server/runs_terminal.go`'s `runPane` re-resolves and compares it on every send/terminal-attach, refusing with 409 when both the run's recorded server and the freshly resolved pane's server are known and disagree. Either side being unknown never refuses on its own — same "unknown ⇒ false" posture as the foreign-pane guard. This closes the race for the run-addressed routes below. An already-open run-route WebSocket re-verifies too: it re-resolves the pane at open and again after every control-client reconnect, gated on the client's generation counter (`server/pane_ws.go`, `tmux.ControlClient.Generation`), and WS input is dropped until that check passes. A gone pane or a different server closes the socket with 4409, which the UI shows as ended without retrying; an unverifiable resolve closes with 1011 instead. Only an unknown server on the resolved pane falls back to trust (unknown ⇒ allow, as in `runPane`). `metaPollLoop`'s `meta` frames stay ungated.
 - **Needs-you (`runs/state.go`):** `blocked` is the only state meaning a human is required — it drives the badge, the sort order, and `NeedsAttention()`. Three hook/crew shapes deliberately do *not* claim it. A role-grid `@crew_role` pane is skipped by every layer (tmux/crew since #99, the hooks layer since #143, which gates its `@crew_role`/`@claude_status` lookups on the same not-foreign test `normalize` uses), so a critic pane never becomes its own card (#111). A grid lead's `@crew_role=lead` marks the worker itself and is not skipped (#179). A hook turn-end `waiting` (`idle_prompt`, `Stop`, a default notification) is demoted to the tmux layer's `idle` verdict for the same pane (`runs/hooksource.go`); `permission_prompt` maps to the distinct `hook.StatePermission` and is never demoted, and a hook-only run with no pane/status keeps the hook verdict. A crew watchdog `blocked` status is liveness bookkeeping, not a question: `runs/crewsource.go` raises a `Question` only for the `prompt:`/`quota:` prefixes a human clears at the pane (via `pane`); every other prefix (`turn-stall:`, `quiet:`, `stalled:`, `load:`) shows as `running` with no `Question`.
 - **Crew-layer pane join:** `runs/crewjoin.go`'s `resolvePane` joins a crew-bus branch to its one candidate pane. A candidate is any pane carrying `@claude_status` (a Claude run) **or** `@agent_screen` (agent-detect's stamp for pi, codex and cursor), excluding role-grid panes (any `@crew_role` other than `lead`) and plain shells. When the branch's latest bus status is terminal (`done`/`failed`) it only joins if the pane looks like that same finished session: its own activity epoch — `@claude_status`'s 2nd field if present, else `@agent_screen`'s — is within `terminalJoinGrace` (5 min) of the terminal record, and its state word says the session finished (`done`/`idle`/`error` — the `@claude_status` vocabulary; `error` maps to the internal failed state — for a Claude pane, `idle` for `@agent_screen`). The grace exists because the worker posts `done` and *then* ends its final turn, so the Stop hook stamps the pane a few seconds later (observed +4s/+13s); an actively working pane (processing, or waiting on a prompt) is a new occupant even inside the window, and an unknown epoch (0) refuses the join. A third condition guards the pane's identity, not just its epoch: the pane's foreground engine — the tty's foreground process-group leader, reached from `#{pane_pid}` (procfs on Linux, `/bin/ps` elsewhere, since houston's service PATH has no `ps`) — must have started within `[s<epoch> − 30s, record ts]`, where `s<epoch>` comes from the latest status record's worker id `worker:<branch>#s<epoch>-<pid>`; an unknown start time or a bare worker id (no `#s<epoch>`) refuses the join. A fourth condition is engine-session identity: when the branch's bus record carries `engine_session` (`Run.CrewSession`, on dispatcher#652 dispatch/resume rows) and the pane's current hook session id is known, the two must match. The pane→session map comes from the hooks layer's own view (`paneHookSessions` over `hub.Snapshot()`, filtered by the same `paneForeign`/ended/role-pane tests), so a `/clear` or `/resume` in the same engine process starts a new session id the process identity can't see and the stale terminal record no longer joins. Either side unknown — an older dispatcher row, codex/cursor's null `engine_session`, or no hook state for the pane — keeps the process-start rule exactly. Residual: the bus row keeps its pre-`/clear` `engine_session` until a `resume` row replaces it, so a worker that cleared mid-run and then finished splits into a fallback bus card plus the hooks card instead of joining.
 - **Crew-named chat session (#184):** a `dispatch`/`resume` bus row carries `engine_session`, the engine's own session id (a uuid for claude/pi, `null` for codex/cursor, absent on an older dispatcher's rows — all three read as today). The newest such row per branch lands on `Run.CrewSession` (internal) and, when no hooks layer names a `Session`, on the composed `Session`. `deriveCaps` grants `caps.chat` from it when the *bus record's* engine has a chat reader, with no pane identity involved, so the #120 ended-session disown is untouched: a worker whose Claude exited back to the shell keeps its Chat on the worker card. The registry then hides the session-keyed `sess-<id>` history card (`shadowedLocked`) while any other key's crew layer names that session, and shows it again once that layer is gone.
@@ -368,18 +354,14 @@ and the freshly resolved pane's server are both known and disagree (see
 "Point-of-use server check" above), or 503 `tmux unavailable` if tmux itself
 couldn't be reached (missing binary, timeout, wrong socket permissions, or a
 client/server protocol mismatch after an upgrade left a stale tmux server
-running). The legacy `/api/pane/:target/ws` is classic-views only; it needs `?pane_id=&server=` and refuses 400 `pane identity required`,
-409 `terminal pane is gone`, 503 `tmux unavailable`, or 409 `terminal pane
-belongs to a different tmux server` before the upgrade. Every other
-`/api/pane/...` path (kill, respawn, kill-window, zoom, bare GET) is gone and
-404s.
+running).
 
 Past the upgrade, a run-route socket can still close with 4409 "tmux server
 changed" (the pane is gone or has moved to a different server) or 1011
 "could not verify tmux server" (the check itself failed) — see "Point-of-use
 server check" above.
 
-Both routes carry a JSON envelope, `{"type":"...","data":{...}}`
+The run route carries a JSON envelope, `{"type":"...","data":{...}}`
 (`server/pane_ws.go`, `ui/src/hooks/usePaneSocket.ts`,
 `ui/src/api/terminal.ts` for address/URL selection):
 
@@ -406,21 +388,11 @@ the allowlist that bounds it lives there, not on the socket:
   isn't in the `terminalKeys` allowlist in `server/runs_terminal.go`: Escape,
   C-c, Enter, Tab, BTab, Up, Down, M-p, C-o, C-z, y, n, 1–9), or
   `{"type":"image","text":"...","images":[...]}` (temp-file paths + text,
-  then Enter). Max body 50 MiB (matches the legacy send-with-images limit); an
+  then Enter). Max body 50 MiB; an
   oversized body is 413. Success is 204 with no body. Because the allowlist
   tops out at `9`, a choice past the 9th ordinal has no key to send.
-- `POST /api/pane/:target/send` and `/send-with-images` (classic pane
-  address, `server/server.go`) — classic-views only. They
-  require `?pane_id=&server=` and share the WS route's refusal ladder
-  (400/409/503/409) before the body is read; unlike the run route they have no
-  key allowlist. A persisted classic layout from before the identity guard
-  (any pane lacking `paneId`/`server`) is discarded on load, so the user
-  starts from an empty layout; a window whose snapshot lacked
-  `pane_id`/`tmux_server` still gets 400. `special=true` sends `input` as a key name (C-c, Up, Down,
-  Escape, Tab, BTab, M-p, C-o, C-z) rather than literal text.
-  `MobileInputBar.tsx` picks between the two POST routes (and the two WS
-  routes) based on the `TerminalAddress` it's given — see
-  `ui/src/api/terminal.ts`.
+  `MobileInputBar.tsx` sends through `ui/src/api/terminal.ts`'s run-address
+  helpers.
 
 ## Chat
 
@@ -541,8 +513,8 @@ execution from an HTTP request, so the handler is closed by construction:
   PATH"). Any other missing tool fails inside dispatch and comes back as a 422
   with its stderr.
 - `-no-auth` leaves this endpoint enabled: that mode already exposes
-  `/api/runs/:id/input` and `/api/pane/:target/send` (identity-guarded, but
-  not authenticated), which are equivalent command execution.
+  `/api/runs/:id/input` (identity-guarded, but not authenticated), which is
+  equivalent command execution.
 - `#/dispatch?repo=<path>&crew=<id|new>` prefills the form (repo and crew
   only) from a link; after applying it the UI replaces the hash with
   `#/dispatch`.
@@ -737,4 +709,4 @@ This model is the primary defense; the following are additional layers:
 
 **Go:** `github.com/gorilla/websocket` and `github.com/fsnotify/fsnotify` (hub state-dir watcher) — the only external dependencies. Everything else is stdlib.
 
-**React:** `@xterm/xterm`, `@xterm/addon-fit`, `@xterm/addon-web-links`, `allotment`, `react`, `react-dom`, `react-markdown`, `remark-gfm`, `remark-breaks`
+**React:** `@xterm/xterm`, `@xterm/addon-fit`, `@xterm/addon-web-links`, `react`, `react-dom`, `react-markdown`, `remark-gfm`, `remark-breaks`

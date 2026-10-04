@@ -97,7 +97,7 @@ vi.mock('../hooks/useTouchGestures', async (importOriginal) => {
 })
 
 const target = 'sess:0.0'
-const address: TerminalAddress = { kind: 'pane', target }
+const address: TerminalAddress = { kind: 'run', id: target }
 
 afterEach(async () => {
   cleanup()
@@ -218,7 +218,7 @@ describe('TerminalPane address change on a mounted instance', () => {
   it('treats a fresh seed on a new address as first-seed, not a reseed', async () => {
     desktop = false
     const { rerender } = render(
-      <TerminalPane address={{ kind: 'pane', target: 't1' }} isFocused onFocus={() => {}} onClose={() => {}} />,
+      <TerminalPane address={{ kind: 'run', id: 't1' }} isFocused onFocus={() => {}} onClose={() => {}} />,
     )
 
     act(() => {
@@ -234,7 +234,7 @@ describe('TerminalPane address change on a mounted instance', () => {
     // Same TerminalPane instance, new address identity — the `[key]`
     // effect should reset firstSeedDoneRef so the next seed isn't mistaken
     // for a mid-session reseed of run A's content.
-    rerender(<TerminalPane address={{ kind: 'pane', target: 't2' }} isFocused onFocus={() => {}} onClose={() => {}} />)
+    rerender(<TerminalPane address={{ kind: 'run', id: 't2' }} isFocused onFocus={() => {}} onClose={() => {}} />)
 
     act(() => {
       capturedCallbacks!.onDims({ cols: 80, rows: 24 })
@@ -302,7 +302,7 @@ describe('TerminalPane detached mode', () => {
     touchGesturesMock.termDimsRef.current = { w: 800, h: 400 }
     const { container, rerender } = render(<TerminalPane address={address} isFocused onFocus={() => {}} onClose={() => {}} />)
     const rerenderTarget = (target: string) =>
-      rerender(<TerminalPane address={{ kind: 'pane', target }} isFocused onFocus={() => {}} onClose={() => {}} />)
+      rerender(<TerminalPane address={{ kind: 'run', id: target }} isFocused onFocus={() => {}} onClose={() => {}} />)
     const outer = container.querySelector('.xterm')!.parentElement!.parentElement as HTMLElement
     Object.defineProperty(outer, 'clientWidth', { value: 400, configurable: true })
     Object.defineProperty(outer, 'clientHeight', { value: 300, configurable: true })
@@ -791,7 +791,7 @@ describe('TerminalPane desktop fill scale (#107)', () => {
     inner.style.transform = 'translate(10px, 20px) scale(2)'
 
     rerender(
-      <TerminalPane address={{ kind: 'pane', target: 'sess:1.0' }} isFocused onFocus={() => {}} onClose={() => {}} />,
+      <TerminalPane address={{ kind: 'run', id: 'sess:1.0' }} isFocused onFocus={() => {}} onClose={() => {}} />,
     )
 
     expect(inner.style.transform).toBe('')
