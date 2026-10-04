@@ -282,9 +282,11 @@ func TestSamplesPi(t *testing.T) {
 type rawPiEntry struct {
 	Type    string `json:"type"`
 	Message *struct {
-		Role       string          `json:"role"`
-		Content    json.RawMessage `json:"content"`
-		ToolCallID string          `json:"toolCallId"`
+		Role         string          `json:"role"`
+		Content      json.RawMessage `json:"content"`
+		ToolCallID   string          `json:"toolCallId"`
+		StopReason   string          `json:"stopReason"`
+		ErrorMessage string          `json:"errorMessage"`
 	} `json:"message"`
 }
 
@@ -332,6 +334,9 @@ func checkPiSampleFile(t *testing.T, r Reader, path string) {
 				}
 			}
 		case "assistant":
+			if e.Message.StopReason == "error" && e.Message.ErrorMessage != "" {
+				textBlocks++
+			}
 			var blocks []rawPiBlock
 			if json.Unmarshal(e.Message.Content, &blocks) != nil {
 				continue
