@@ -491,6 +491,8 @@ func TestMergeIntoCoversEveryField(t *testing.T) {
 			continue // derived in composeLocked from layer presence, not merged
 		case "CrewSession":
 			continue // crew-layer evidence; composeLocked falls back to it only when no layer names a Session
+		case "Attention", "AttentionNote":
+			continue // computed in composeLocked from the layers, never merged
 		}
 		if v.Field(i).IsZero() {
 			t.Errorf("mergeInto drops %s — it will never reach the API", tp.Field(i).Name)
@@ -1121,5 +1123,100 @@ func TestShadowFollowsTheSessionTheWorkerCardShows(t *testing.T) {
 	}
 	if !ids["sess-s1"] || ids["sess-s3"] {
 		t.Fatalf("after fresh resume: %v, want sess-s1 shown and sess-s3 hidden", ids)
+	}
+}
+
+func TestComposeAttention(t *testing.T) {
+	type layer struct {
+		source string
+		run    Run
+	}
+	cases := []struct {
+		name      string
+		layers    []layer
+		wantAtt   Attention
+		wantNote  string
+		wantState State
+	}{
+		{"hooks blocked is needs-you", []layer{
+			{"hooks", Run{Agent: "claude", State: StateBlocked}},
+		}, AttentionNeedsYou, "", StateBlocked},
+		{"hooks idle alone is none", []layer{
+			{"hooks", Run{Agent: "claude", State: StateIdle}},
+		}, AttentionNone, "", StateIdle},
+		{"crew done under hooks idle is done", []layer{
+			{"crew", Run{Agent: "claude", State: StateDone}},
+			{"hooks", Run{Agent: "claude", State: StateIdle}},
+		}, AttentionDone, "", StateIdle},
+		{"crew review under hooks idle is done", []layer{
+			{"crew", Run{Agent: "claude", State: StateReview}},
+			{"hooks", Run{Agent: "claude", State: StateIdle}},
+		}, AttentionDone, "", StateIdle},
+		{"crew failed is stuck", []layer{
+			{"crew", Run{Agent: "claude", State: StateFailed}},
+		}, AttentionStuck, "", StateFailed},
+		{"crew stuck opinion survives hooks running", []layer{
+			{"crew", Run{Agent: "claude", State: StateRunning, Attention: AttentionStuck, AttentionNote: "x"}},
+			{"hooks", Run{Agent: "claude", State: StateRunning}},
+		}, AttentionStuck, "x", StateRunning},
+		{"tmux failed is stuck under hooks thinking", []layer{
+			{"tmux", Run{Agent: "claude", State: StateFailed}},
+			{"hooks", Run{Agent: "claude", State: StateThinking}},
+		}, AttentionStuck, tmuxFailedNote, StateThinking},
+		{"hooks-ended run alone is none", []layer{
+			{"hooks", Run{Agent: "claude", State: StateDone}},
+		}, AttentionNone, "", StateDone},
+		{"crew blocked with a question is needs-you", []layer{
+			{"crew", Run{Agent: "claude", State: StateBlocked, Question: &Question{Text: "go?", Via: "crew"}}},
+		}, AttentionNeedsYou, "", StateBlocked},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := NewRegistry(DefaultOrder)
+			for _, l := range tc.layers {
+				r.Apply(Delta{Source: l.source, Key: "%1", Run: l.run})
+			}
+			got := firstRun(t, r)
+			if got.Attention != tc.wantAtt || got.AttentionNote != tc.wantNote {
+				t.Errorf("Attention = %q/%q, want %q/%q", got.Attention, got.AttentionNote, tc.wantAtt, tc.wantNote)
+			}
+			if got.State != tc.wantState {
+				t.Errorf("State = %q, want %q", got.State, tc.wantState)
+			}
+		})
+	}
+}
+
+func TestAttentionAgreesWithNeedsAttention(t *testing.T) {
+	r := NewRegistry(DefaultOrder)
+	for i, s := range AllStates() {
+		r.Apply(Delta{Source: "hooks", Key: fmt.Sprintf("%%%d", i), Run: Run{Agent: "claude", State: s}})
+	}
+	r.Apply(Delta{Source: "crew", Key: "%q", Run: Run{Agent: "claude", State: StateBlocked, Question: &Question{Text: "go?", Via: "crew"}}})
+	r.Apply(Delta{Source: "hooks", Key: "%q", Run: Run{Agent: "claude", State: StateRunning}})
+
+	rows := r.Snapshot()
+	if len(rows) != len(AllStates())+1 {
+		t.Fatalf("%d rows, want %d", len(rows), len(AllStates())+1)
+	}
+	for _, run := range rows {
+		if got := run.Attention == AttentionNeedsYou; got != run.State.NeedsAttention() {
+			t.Errorf("%s: attention %q disagrees with State %q NeedsAttention()=%v", run.ID, run.Attention, run.State, run.State.NeedsAttention())
+		}
+	}
+}
+
+func TestRunSignatureSeesAttention(t *testing.T) {
+	base := Run{Agent: "claude", State: StateRunning}
+	stuck := base
+	stuck.Attention = AttentionStuck
+	noted := stuck
+	noted.AttentionNote = "x"
+
+	if runSignature(base) == runSignature(stuck) {
+		t.Error("an Attention change must change the signature")
+	}
+	if runSignature(stuck) == runSignature(noted) {
+		t.Error("an AttentionNote change must change the signature")
 	}
 }

@@ -32,6 +32,18 @@ func AllStates() []State {
 	}
 }
 
+// Attention is the second dimension next to State: how much a run wants a
+// human. needs-you holds exactly when State is blocked; stuck is stopped making
+// progress and may need a look; done is finished, awaiting review or cleanup.
+type Attention string
+
+const (
+	AttentionNone     Attention = ""
+	AttentionNeedsYou Attention = "needs-you"
+	AttentionStuck    Attention = "stuck"
+	AttentionDone     Attention = "done"
+)
+
 // NeedsAttention reports whether a human is required. Exactly one state says
 // yes: it drives the badge, the sort order and later the push notification, so
 // nothing else may claim it.
