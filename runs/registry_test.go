@@ -1222,9 +1222,7 @@ func TestRunSignatureSeesAttention(t *testing.T) {
 }
 
 // TestComposeAttentionFromCrewLog feeds the crew layer from a real bus fold
-// (deltasFromCrewLog + routeCrewQuestion) rather than hand-built runs, so a
-// change to the fold or the router that the composer's inputs depend on shows
-// up here.
+// (deltasFromCrewLog + routeCrewQuestion).
 func TestComposeAttentionFromCrewLog(t *testing.T) {
 	const (
 		statusTS = int64(1_700_000_000_000)
