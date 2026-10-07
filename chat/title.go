@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 )
 
 // TitleKeys lists the tool_input fields ToolTitle pulls a display hint from,
@@ -76,7 +77,11 @@ func truncateTitle(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	return s[:n-1] + "…"
+	cut := n - 1
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "…"
 }
 
 // ToolKind maps a tool name to an ACP kind.
