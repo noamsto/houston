@@ -490,7 +490,6 @@ func TestRunInputPartialSend(t *testing.T) {
 	}
 }
 
-// inputReqKey is private so only this test can read the value it stored.
 type inputReqKey struct{}
 
 func TestRunInputForwardsRequestContext(t *testing.T) {
