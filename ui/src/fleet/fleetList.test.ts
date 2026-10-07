@@ -76,6 +76,62 @@ describe('filterRuns', () => {
     expect(result.map((r) => r.id)).toEqual(['fresh-blocked', 'new-running', 'old-running'])
   })
 
+  it('stuck keeps only stuck runs, fresh first then recency', () => {
+    const runs = [
+      run({ id: 'plain' }),
+      run({ id: 'stale-stuck', attention: 'stuck', updated_at: nowSec - 2 * HOUR }),
+      run({ id: 'older-stuck', attention: 'stuck', updated_at: nowSec - 50 }),
+      run({ id: 'fresh-stuck', attention: 'stuck' }),
+      run({ id: 'done', attention: 'done' }),
+    ]
+    expect(filterRuns(runs, 'stuck', now).map((r) => r.id)).toEqual(['fresh-stuck', 'older-stuck', 'stale-stuck'])
+  })
+
+  it('done keeps only done-attention runs, fresh first then recency', () => {
+    const runs = [
+      run({ id: 'plain' }),
+      run({ id: 'stale-done', state: 'done', attention: 'done', updated_at: nowSec - 2 * HOUR }),
+      run({ id: 'fresh-done', state: 'done', attention: 'done' }),
+      run({ id: 'stuck', attention: 'stuck' }),
+    ]
+    expect(filterRuns(runs, 'done', now).map((r) => r.id)).toEqual(['fresh-done', 'stale-done'])
+  })
+
+  it('active excludes a fresh ended run and all includes it', () => {
+    const runs = [
+      run({ id: 'ended', state: 'done' }),
+      run({ id: 'finished', state: 'done', attention: 'done' }),
+      run({ id: 'running' }),
+    ]
+    expect(filterRuns(runs, 'active', now).map((r) => r.id).sort()).toEqual(['finished', 'running'])
+    expect(filterRuns(runs, 'all', now).map((r) => r.id).sort()).toEqual(['ended', 'finished', 'running'])
+  })
+
+  it('sorts fresh needs-you > stuck > done > rest, ties by recency', () => {
+    const runs = [
+      run({ id: 'rest-new', updated_at: nowSec }),
+      run({ id: 'done-old', state: 'done', attention: 'done', updated_at: nowSec - 30 }),
+      run({ id: 'done-new', state: 'done', attention: 'done', updated_at: nowSec - 10 }),
+      run({ id: 'stuck', attention: 'stuck', updated_at: nowSec - 40 }),
+      run({ id: 'blocked', state: 'blocked', updated_at: nowSec - 50 }),
+      run({ id: 'rest-old', updated_at: nowSec - 60 }),
+    ]
+    expect(filterRuns(runs, 'active', now).map((r) => r.id)).toEqual([
+      'blocked', 'stuck', 'done-new', 'done-old', 'rest-new', 'rest-old',
+    ])
+    expect(filterRuns(runs, 'all', now).map((r) => r.id)).toEqual([
+      'blocked', 'stuck', 'done-new', 'done-old', 'rest-new', 'rest-old',
+    ])
+  })
+
+  it('ranks a stale stuck run as rest', () => {
+    const runs = [
+      run({ id: 'stale-stuck', attention: 'stuck', updated_at: nowSec - 2 * HOUR }),
+      run({ id: 'rest', updated_at: nowSec - 100 }),
+    ]
+    expect(filterRuns(runs, 'active', now).map((r) => r.id)).toEqual(['rest', 'stale-stuck'])
+  })
+
   it('does not mutate the input array', () => {
     const runs = [
       run({ id: 'a', updated_at: nowSec - 100 }),

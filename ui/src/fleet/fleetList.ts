@@ -1,30 +1,40 @@
 import type { Run } from '../api/runs'
-import { isFresh, isHistory, needsYou } from './staleness'
+import { isDone, isFresh, isHistory, isStuck, needsYou } from './staleness'
 
-export type Filter = 'active' | 'needs-you' | 'all'
+export type Filter = 'active' | 'needs-you' | 'stuck' | 'done' | 'all'
+
+// Fresh needs-you, then fresh stuck, then fresh done, then the rest. A stale
+// run of any kind ranks as the rest: the verdict no longer describes it.
+function rank(r: Run, now: number): number {
+  if (needsYou(r, now)) return 3
+  if (isStuck(r, now)) return 2
+  if (isDone(r, now)) return 1
+  return 0
+}
 
 export function filterRuns(runs: Run[], filter: Filter, now: number): Run[] {
   // Needs-you shows every blocked run, not just fresh ones — the badge
   // and the sort answer "how many need me now", this filter answers
-  // "what asked for me at all".
+  // "what asked for me at all". Stuck and done work the same way.
   const keep = runs.filter((r) => {
     if (filter === 'needs-you') return r.state === 'blocked'
+    if (filter === 'stuck') return r.attention === 'stuck'
+    if (filter === 'done') return r.attention === 'done'
     if (filter === 'active') return !isHistory(r, now)
     return true
   })
   return keep.sort((a, b) => {
-    if (filter === 'needs-you') {
+    if (filter === 'needs-you' || filter === 'stuck' || filter === 'done') {
       const af = isFresh(a, now) ? 1 : 0
       const bf = isFresh(b, now) ? 1 : 0
       if (af !== bf) return bf - af
       return b.updated_at - a.updated_at
     }
-    // Anything asking for input first, then most recently active. Stale
-    // blocked runs deliberately stay out of this bucket — see RunCard's
-    // muted attention border for how they stay findable in place instead.
-    const an = needsYou(a, now) ? 1 : 0
-    const bn = needsYou(b, now) ? 1 : 0
-    if (an !== bn) return bn - an
+    // Stale blocked runs deliberately stay out of the ranked buckets — see
+    // RunCard's muted attention border for how they stay findable in place.
+    const ar = rank(a, now)
+    const br = rank(b, now)
+    if (ar !== br) return br - ar
     return b.updated_at - a.updated_at
   })
 }

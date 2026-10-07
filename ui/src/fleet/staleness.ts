@@ -19,12 +19,38 @@ export function isFresh(run: Freshness, now: number): boolean {
 }
 
 /**
- * needsYou drives the badge and the sort. A run that asked for input long ago
- * is almost always a session that ended while waiting, and counting it would
- * leave the badge permanently lit — but see isHistory: it is still shown.
+ * needsYou drives the badge and the sort: a human must act now. A run that
+ * asked for input long ago is almost always a session that ended while
+ * waiting, and counting it would leave the badge permanently lit — but see
+ * isHistory: it is still shown.
  */
 export function needsYou(run: Freshness, now: number): boolean {
   return run.state === 'blocked' && isFresh(run, now)
+}
+
+/**
+ * Stuck is "stopped making progress, may need a look" — a calmer signal than
+ * needsYou, so it is never counted in the badge. Gated on freshness for the
+ * same reason: a stuck verdict from hours ago describes a session that has
+ * since moved on or ended.
+ */
+export function isStuck(run: Run, now: number): boolean {
+  return run.attention === 'stuck' && isFresh(run, now)
+}
+
+/** Done is "finished, awaiting review or cleanup" — fresh only, like isStuck. */
+export function isDone(run: Run, now: number): boolean {
+  return run.attention === 'done' && isFresh(run, now)
+}
+
+/**
+ * Ended means the session is over (SessionEnd, ghost, foreign pane), as
+ * opposed to a worker that finished its task and awaits review, which the
+ * server flags `attention: done`. Both publish state `done`, so the
+ * attention field is the only thing telling them apart.
+ */
+export function isEnded(run: Run): boolean {
+  return run.state === 'done' && run.attention !== 'done'
 }
 
 /**
@@ -38,7 +64,8 @@ export function needsYou(run: Freshness, now: number): boolean {
 export const REVIEW_HISTORY_MS = 24 * 60 * 60 * 1000
 
 /**
- * isHistory marks a run as foldable behind the "All" filter. Terminal states
+ * isHistory marks a run as foldable behind the "All" filter. An ended run
+ * qualifies at once — nothing is left to watch — while other terminal states
  * qualify once stale, and a review run qualifies once it is a day old with no
  * live pane — the one non-terminal state houston publishes that nothing will
  * ever move on its own. A run that is blocked, running or thinking is never
@@ -46,6 +73,7 @@ export const REVIEW_HISTORY_MS = 24 * 60 * 60 * 1000
  * you is the worse failure.
  */
 export function isHistory(run: Run, now: number): boolean {
+  if (isEnded(run)) return true
   if (run.state === 'done' || run.state === 'failed') return !isFresh(run, now)
   if (run.state === 'review' && run.caps?.terminal !== true) {
     return run.updated_at > 0 && now - run.updated_at * 1000 > REVIEW_HISTORY_MS

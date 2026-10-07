@@ -107,6 +107,24 @@ describe('ConsoleShell layout', () => {
     expect(within(rail).getByRole('button', { name: /^All/ }).querySelector('.console-count')?.textContent).toBe('4')
   })
 
+  it('shows Stuck and Done rail entries with their counts', () => {
+    const runs = [
+      run({ id: 'stuck-a', attention: 'stuck' }),
+      run({ id: 'stuck-b', attention: 'stuck', updated_at: nowSec - 2 * 3600 }),
+      run({ id: 'done-a', state: 'done', attention: 'done' }),
+      run({ id: 'ended', state: 'done' }),
+    ]
+    render(<ConsoleShell runs={runs} connected hasSnapshot now={now} />)
+
+    const rail = screen.getByLabelText('rail')
+    expect(within(rail).getByRole('button', { name: /^Stuck/ }).querySelector('.console-count')?.textContent).toBe('2')
+    expect(within(rail).getByRole('button', { name: /^Done/ }).querySelector('.console-count')?.textContent).toBe('1')
+
+    fireEvent.click(within(rail).getByRole('button', { name: /^Stuck/ }))
+    const list = screen.getByLabelText('fleet list')
+    expect(within(list).getByRole('heading', { name: 'Stuck' })).toBeTruthy()
+  })
+
   it('drops a crew from the rail once its only run has aged into history', () => {
     const runs = [
       run({
