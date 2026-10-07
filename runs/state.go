@@ -43,9 +43,11 @@ func FromHookState(s hook.State) State {
 		return StateThinking
 	case hook.StateToolRunning:
 		return StateRunning
-	case hook.StateWaiting, hook.StatePermission:
+	case hook.StatePermission:
 		return StateBlocked
-	case hook.StateIdle:
+	case hook.StateWaiting, hook.StateIdle:
+		// A turn end awaits the next prompt; nobody is blocked. A turn that
+		// ended on a question is promoted to blocked by runFromSessionView.
 		return StateIdle
 	case hook.StateCompacting:
 		return StateCompacting
@@ -80,14 +82,20 @@ func FromClaudeStatus(v string) State {
 	switch word {
 	case "processing":
 		return StateRunning
-	case "waiting", "denied":
+	case "waiting":
 		return StateBlocked
+	case "denied":
+		// Written on PermissionDenied, the auto-mode classifier's refusal; the
+		// turn continues.
+		return StateRunning
 	case "compacting":
 		return StateCompacting
 	case "error":
 		return StateFailed
 	case "done":
-		return StateDone
+		// Written on Stop: a turn end, the session is alive (SessionEnd
+		// clears the option).
+		return StateIdle
 	default:
 		// Covers "idle", "interrupted" and the empty string. Interrupting is
 		// something the user did deliberately, so it must not raise a badge.

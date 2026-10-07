@@ -103,36 +103,9 @@ func (s *HookSource) Run(ctx context.Context, out chan<- Delta) error {
 
 	build := func(v hub.SessionView) (string, Run) {
 		gone := paneGone(v, panes.live, panes.at)
-		// The pane's @claude_status may only be trusted for a session that can
-		// still vouch for the pane: a foreign session's pane id may already
-		// belong to the next server incarnation's occupant. normalize returns
-		// exactly that foreign bit (it is the same paneForeign test that keeps
-		// the coordinates at all).
-		origPane := v.TmuxPane
 		v, foreign := normalize(v)
-		var tmuxState State
-		if !foreign && origPane != "" {
-			if st := panes.status[origPane]; st != "" {
-				tmuxState = FromClaudeStatus(st)
-			}
-		}
 		gone = gone || foreign
 		key, r := runFromSessionView(v, s.projects.resolved(v.CWD))
-		// A hook turn-end `waiting` (idle_prompt, Stop, a default notification)
-		// must not outrank the tmux layer's own verdict for the same pane: idle
-		// means not working and neither needs a
-		// human. permission_prompt is a distinct hook state and is never
-		// demoted. A hook-only run has no tmux verdict to consult and keeps the
-		// hook's blocked verdict.
-		if v.State == hook.StateWaiting && tmuxState == StateIdle {
-			r.State = tmuxState
-			r.Question = nil
-			// LastMessage is a waiting-only field (hub only populates it while
-			// StateWaiting), so a demoted idle run must drop it too, or the
-			// stale "Claude is waiting for your input" text survives the merge
-			// and reaches the detail view.
-			r.Activity.Message = ""
-		}
 		switch {
 		case gone:
 			if at, ok := endedAt[v.SessionID]; ok && v.UpdatedAt > at {
@@ -269,12 +242,10 @@ type paneSet struct {
 	at          time.Time
 	server      string
 	serverStart int64
-	// roles marks role-grid panes (see tmux.PaneOptions.IsRolePane); status
-	// carries each pane's raw @claude_status. Both are keyed by pane id off the same listing
-	// as live, and both are only trusted for a session that can vouch for the
-	// pane (not foreign).
-	roles  map[string]bool
-	status map[string]string
+	// roles marks role-grid panes (see tmux.PaneOptions.IsRolePane), keyed by
+	// pane id off the same listing as live, and only trusted for a session
+	// that can vouch for the pane (not foreign).
+	roles map[string]bool
 }
 
 // hookSessions is the hooks layer's exposure the crew join reuses: the live
@@ -322,20 +293,16 @@ func listPanes(l paneLister) (paneSet, bool) {
 	return paneSetFrom(panes, at), true
 }
 
-// paneSetFrom builds the pane identity/role/status view off one listing, the
+// paneSetFrom builds the pane identity/role view off one listing, the
 // same construction the hooks layer uses, so the crew join's pane→session map
 // trusts exactly the panes the hooks layer trusts.
 func paneSetFrom(panes []tmux.PaneOptions, at time.Time) paneSet {
 	live := make(map[string]bool, len(panes))
 	roles := make(map[string]bool)
-	status := make(map[string]string, len(panes))
 	for _, p := range panes {
 		live[p.PaneID] = true
 		if p.IsRolePane() {
 			roles[p.PaneID] = true
-		}
-		if p.ClaudeStatus != "" {
-			status[p.PaneID] = p.ClaudeStatus
 		}
 	}
 	var server string
@@ -350,7 +317,7 @@ func paneSetFrom(panes []tmux.PaneOptions, at time.Time) paneSet {
 			slog.Warn("hooks: pane listing carries no server identity, foreign-pane guard disabled")
 		}
 	}
-	return paneSet{live: live, at: at, server: server, serverStart: serverStart, roles: roles, status: status}
+	return paneSet{live: live, at: at, server: server, serverStart: serverStart, roles: roles}
 }
 
 // pollPanes publishes each successful listing until ctx ends. A failed one is
@@ -422,6 +389,10 @@ func endRun(r Run) Run {
 	return r
 }
 
+// askUserQuestionNote stands in for the question text of an AskUserQuestion
+// call, whose options live in the tool input and never reach the state file.
+const askUserQuestionNote = "Asking you a question — answer it in its terminal."
+
 // runFromSessionView converts one hub view into this source's layer. The key is
 // the tmux pane id when there is one, because that is what tmux and crew
 // deltas can also produce; a headless session falls back to its own id and
@@ -465,8 +436,23 @@ func runFromSessionView(v hub.SessionView, project string) (string, Run) {
 		r.Tmux = &TmuxRef{Session: v.TmuxSession, Window: win, PaneID: v.TmuxPane, Server: v.TmuxServer}
 	}
 
-	if r.State == StateBlocked && v.LastMessage != "" {
+	switch {
+	case v.State == hook.StatePermission && v.LastMessage != "":
 		r.Question = &Question{Text: v.LastMessage, Via: "pane"}
+	case v.State == hook.StateWaiting && v.Asks != "":
+		// The turn ended on a question: the agent is parked on the human even
+		// though the turn-end state itself is idle.
+		r.State = StateBlocked
+		r.Question = &Question{Text: v.Asks, Via: "pane"}
+	case v.State == hook.StateToolRunning && v.Tool == "AskUserQuestion":
+		// The tool exists to ask the human and blocks until answered.
+		r.State = StateBlocked
+		r.Question = &Question{Text: askUserQuestionNote, Via: "pane"}
+	}
+	// The hub fills LastMessage for waiting too; an idle run must not show
+	// "Claude is waiting for your input".
+	if r.State != StateBlocked {
+		r.Activity.Message = ""
 	}
 	return key, r
 }

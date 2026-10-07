@@ -73,6 +73,54 @@ func TestRunFromSessionViewCarriesQuestionWhenBlocked(t *testing.T) {
 	}
 }
 
+func TestRunFromSessionViewTurnEndQuestionNeedsYou(t *testing.T) {
+	_, r := runFromSessionView(hub.SessionView{
+		SessionID: "abc",
+		TmuxPane:  "%1",
+		State:     hook.StateWaiting,
+		Asks:      "A or B?",
+	}, "")
+	if r.State != StateBlocked {
+		t.Fatalf("State = %q, want blocked", r.State)
+	}
+	if r.Question == nil || *r.Question != (Question{Text: "A or B?", Via: "pane"}) {
+		t.Fatalf("Question = %+v, want the turn-ending question via pane", r.Question)
+	}
+}
+
+func TestRunFromSessionViewAskUserQuestionNeedsYou(t *testing.T) {
+	_, r := runFromSessionView(hub.SessionView{
+		SessionID: "abc",
+		TmuxPane:  "%1",
+		State:     hook.StateToolRunning,
+		Tool:      "AskUserQuestion",
+	}, "")
+	if r.State != StateBlocked {
+		t.Fatalf("State = %q, want blocked", r.State)
+	}
+	if r.Question == nil || *r.Question != (Question{Text: askUserQuestionNote, Via: "pane"}) {
+		t.Fatalf("Question = %+v, want the fixed AskUserQuestion note via pane", r.Question)
+	}
+}
+
+func TestRunFromSessionViewIdleDropsWaitingText(t *testing.T) {
+	_, r := runFromSessionView(hub.SessionView{
+		SessionID:   "abc",
+		TmuxPane:    "%1",
+		State:       hook.StateWaiting,
+		LastMessage: "Claude is waiting for your input",
+	}, "")
+	if r.State != StateIdle {
+		t.Fatalf("State = %q, want idle", r.State)
+	}
+	if r.Activity.Message != "" {
+		t.Errorf("Activity.Message = %q, want empty for a run nobody is blocked on", r.Activity.Message)
+	}
+	if r.Question != nil {
+		t.Errorf("Question = %+v, want none", r.Question)
+	}
+}
+
 func TestRunFromSessionViewNamesTheRepo(t *testing.T) {
 	_, r := runFromSessionView(hub.SessionView{
 		SessionID: "abc-123",
