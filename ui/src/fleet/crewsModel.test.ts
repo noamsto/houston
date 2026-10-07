@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Run } from '../api/runs'
-import { countsLabel, dispatchHref, groupCrews } from './crewsModel'
+import { countsLabel, crewAttention, dispatchHref, groupCrews } from './crewsModel'
 
 const now = 1_800_000_000_000 // ms
 const nowSec = now / 1000
@@ -101,7 +101,7 @@ describe('groupCrews', () => {
       run({ id: 'd', crew: { name: 'c' }, state: 'idle', updated_at: old }),
     ]
     const [g] = groupCrews(runs, now).live
-    expect(g.counts).toEqual({ blocked: 1, running: 2, review: 0, done: 0, failed: 0, other: 1 })
+    expect(g.counts).toEqual({ working: 2, needsYou: 1, stuck: 0, done: 0, idle: 1 })
     expect(g.needsYou).toBe(1)
     expect(g.lastActive).toBe(nowSec)
   })
@@ -120,14 +120,28 @@ describe('groupCrews', () => {
   })
 })
 
+describe('crewAttention', () => {
+  it('prefers the server attention over the state', () => {
+    expect(crewAttention(run({ state: 'running', attention: 'stuck' }))).toBe('stuck')
+    expect(crewAttention(run({ state: 'done', attention: 'done' }))).toBe('done')
+  })
+
+  it('falls back to the state when the server flagged nothing', () => {
+    expect(crewAttention(run({ state: 'blocked' }))).toBe('needs-you')
+    expect(crewAttention(run({ state: 'failed' }))).toBe('stuck')
+    expect(crewAttention(run({ state: 'review' }))).toBe('done')
+    expect(crewAttention(run({ state: 'running' }))).toBeUndefined()
+  })
+})
+
 describe('countsLabel', () => {
   it('joins non-zero buckets in a fixed order', () => {
-    expect(countsLabel({ blocked: 1, running: 2, review: 0, done: 1, failed: 0, other: 0 }))
-      .toBe('1 blocked · 2 running · 1 done')
+    expect(countsLabel({ working: 2, needsYou: 1, stuck: 1, done: 1, idle: 0 }))
+      .toBe('2 working · 1 needs you · 1 stuck · 1 done')
   })
 
   it('is empty when there is nothing to count', () => {
-    expect(countsLabel({ blocked: 0, running: 0, review: 0, done: 0, failed: 0, other: 0 })).toBe('')
+    expect(countsLabel({ working: 0, needsYou: 0, stuck: 0, done: 0, idle: 0 })).toBe('')
   })
 })
 

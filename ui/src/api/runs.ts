@@ -41,6 +41,7 @@ export interface CrewRef {
   title?: string // task title from the dispatch record
   model?: string
   detail?: string // latest status detail — the live phase
+  sessions?: number // dispatch + resume rows seen for this worker
 }
 
 export interface TrailChip {

@@ -3,8 +3,8 @@ import type { Run } from '../api/runs'
 import { fetchDispatchOptions } from '../api/dispatch'
 import { isFresh } from './staleness'
 import { agoLabel, BLOCKED_FALLBACK } from './format'
-import { crewShortId, projectOf } from './fleetList'
-import { countsLabel, dispatchHref, groupCrews, type CrewGroup } from './crewsModel'
+import { crewShortId } from './fleetList'
+import { countsLabel, crewAttention, dispatchHref, groupCrews, type CrewGroup } from './crewsModel'
 import { ReplyComposer } from './ReplyComposer'
 import './fleet.css'
 
@@ -21,10 +21,13 @@ interface CrewRepo {
 
 function phase(run: Run): string {
   if (run.state === 'blocked') return run.activity.message || BLOCKED_FALLBACK
+  if (run.crew?.detail) return run.crew.detail
   const { tool, hint } = run.activity
   if (tool) return hint ? `${tool} · ${hint}` : tool
   return run.state
 }
+
+const ATTENTION_LABEL = { 'needs-you': 'needs you', stuck: 'stuck', done: 'done' } as const
 
 function resolveRepo(
   group: CrewGroup,
@@ -36,34 +39,27 @@ function resolveRepo(
 
 function Member({ run, now, onOpen }: { run: Run; now: number; onOpen?: (r: Run) => void }) {
   const stale = !isFresh(run, now)
+  const attention = crewAttention(run)
+  const meta = [run.crew?.tier, run.agent, run.crew?.model].filter(Boolean).join(' · ')
+  const sessions = run.crew?.sessions ?? 0
   return (
-    <div className="crews-member">
+    <div className={`crews-member${attention ? ` ${attention}` : ''}${attention && stale ? ' muted' : ''}`}>
       <button type="button" className="crews-member-main" onClick={() => onOpen?.(run)}>
         <span className="crews-member-head">
           <span className="crews-swatch" style={{ background: run.crew?.color || 'var(--text-faint)' }} />
           <span className="crews-codename">{run.crew?.codename || 'worker'}</span>
           <span className="crews-when">
-            <span
-              className="run-dot"
-              role="img"
-              aria-label={run.state}
-              title={run.state}
-              style={{ background: `var(--state-${run.state}, var(--text-faint))` }}
-            />
+            {attention && <span className={`run-chip crews-attention ${attention}`}>{ATTENTION_LABEL[attention]}</span>}
             <span className={`run-age${stale ? ' stale' : ''}`}>{agoLabel(run.updated_at, now)}</span>
           </span>
         </span>
         <span className="crews-title">{run.crew?.title || run.issue?.title || run.branch}</span>
+        <span className="crews-meta">{meta}</span>
         {!(run.question && phase(run) === run.question.text) && <span className="run-sub crews-phase">{phase(run)}</span>}
         {run.question && <span className="run-question crews-question">{run.question.text}</span>}
+        {attention === 'stuck' && run.attention_note && <span className="crews-note">{run.attention_note}</span>}
       </button>
       <span className="run-chips crews-chips">
-        <span className="run-project">{projectOf(run)}</span>
-        {run.crew?.tier && <span className="run-chip tier">{run.crew.tier}</span>}
-        <span className="run-chip">{run.agent}</span>
-        {run.crew?.model && <span className="run-chip model">{run.crew.model}</span>}
-        {run.issue && <span className="run-chip issue">{run.issue.id}</span>}
-        {run.stale === true && <span className="run-chip stale">stale</span>}
         {run.pr &&
           (run.pr.url ? (
             <a
@@ -78,6 +74,8 @@ function Member({ run, now, onOpen }: { run: Run; now: number; onOpen?: (r: Run)
           ) : (
             <span className={`run-chip pr${run.pr.check_state === 'failure' ? ' failing' : ''}`}>#{run.pr.number}</span>
           ))}
+        {sessions > 1 && <span className="run-chip crews-sessions">{sessions} sessions</span>}
+        {run.stale === true && <span className="run-chip stale">stale</span>}
       </span>
       {run.question?.via === 'crew' && <ReplyComposer runId={run.id} />}
       {run.question?.via === 'pane' && <div className="crews-hint">Answer in the terminal — tap to open.</div>}

@@ -1,13 +1,12 @@
-import type { Run } from '../api/runs'
+import type { Attention, Run } from '../api/runs'
 import { isFresh, needsYou } from './staleness'
 
 export interface CrewCounts {
-  blocked: number
-  running: number
-  review: number
+  working: number
+  needsYou: number
+  stuck: number
   done: number
-  failed: number
-  other: number
+  idle: number
 }
 
 export interface CrewGroup {
@@ -25,20 +24,34 @@ function isLiveMember(run: Run, now: number): boolean {
   return (working && run.stale !== true && isFresh(run, now)) || needsYou(run, now)
 }
 
-function bucket(run: Run): keyof CrewCounts {
+// What a card is flagged as. The server computes `attention`; a run from a
+// layer that publishes none (a bare hooks run) falls back to its state so it
+// still lands in a bucket.
+export function crewAttention(run: Run): Attention | undefined {
+  if (run.attention) return run.attention
   switch (run.state) {
     case 'blocked':
+      return 'needs-you'
+    case 'failed':
+      return 'stuck'
     case 'review':
     case 'done':
-    case 'failed':
-      return run.state
-    case 'running':
-    case 'thinking':
-    case 'compacting':
-      return 'running'
+      return 'done'
     default:
-      return 'other'
+      return undefined
   }
+}
+
+function bucket(run: Run): keyof CrewCounts {
+  switch (crewAttention(run)) {
+    case 'needs-you':
+      return 'needsYou'
+    case 'stuck':
+      return 'stuck'
+    case 'done':
+      return 'done'
+  }
+  return run.state === 'idle' ? 'idle' : 'working'
 }
 
 function rank(run: Run, now: number): number {
@@ -64,7 +77,7 @@ function buildGroup(name: string, runs: Run[], now: number): CrewGroup {
     const dr = rank(b, now) - rank(a, now)
     return dr !== 0 ? dr : b.updated_at - a.updated_at
   })
-  const counts: CrewCounts = { blocked: 0, running: 0, review: 0, done: 0, failed: 0, other: 0 }
+  const counts: CrewCounts = { working: 0, needsYou: 0, stuck: 0, done: 0, idle: 0 }
   for (const m of members) counts[bucket(m)]++
   return {
     name,
@@ -103,12 +116,11 @@ export function groupCrews(runs: Run[], now: number): { live: CrewGroup[]; finis
 }
 
 const COUNT_LABELS: [keyof CrewCounts, string][] = [
-  ['blocked', 'blocked'],
-  ['running', 'running'],
-  ['review', 'review'],
+  ['working', 'working'],
+  ['needsYou', 'needs you'],
+  ['stuck', 'stuck'],
   ['done', 'done'],
-  ['failed', 'failed'],
-  ['other', 'other'],
+  ['idle', 'idle'],
 ]
 
 export function countsLabel(counts: CrewCounts): string {
