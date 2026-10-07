@@ -426,8 +426,11 @@ the allowlist that bounds it lives there, not on the socket:
   isn't in the `terminalKeys` allowlist in `server/runs_terminal.go`: Escape,
   C-c, Enter, Tab, BTab, Up, Down, M-p, C-o, C-z, y, n, 1–9), or
   `{"type":"image","text":"...","images":[...]}` (temp-file paths + text,
-  then Enter). Max body 50 MiB; an
-  oversized body is 413. Success is 204 with no body. Because the allowlist
+  then Enter). Text and image `text` longer than 256 KiB is 413 `text too long`
+  before any `send-keys`. `SendKeys` uses the request context, so a client
+  disconnect stops later chunks and never sends Enter after cancel. Max body 50 MiB; an
+  oversized body is 413. A send that already delivered a chunk and then fails
+  or is cancelled is 502 with body `{"partial":true}`. Success is 204 with no body. Because the allowlist
   tops out at `9`, a choice past the 9th ordinal has no key to send.
   `MobileInputBar.tsx` sends through `ui/src/api/terminal.ts`'s run-address
   helpers.

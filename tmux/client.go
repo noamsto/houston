@@ -423,25 +423,61 @@ const sendChunkBytes = 8 << 10
 // newline in its input box instead of submitting.
 const enterSettle = 75 * time.Millisecond
 
-func (c *Client) SendKeys(p Pane, keys string, enter bool) error {
+// DeliveryPartialError wraps a cause after some of a send already reached tmux.
+type DeliveryPartialError struct {
+	Err error
+}
+
+func (e *DeliveryPartialError) Error() string {
+	if e.Err == nil {
+		return "partial send"
+	}
+	return "partial send: " + e.Err.Error()
+}
+
+func (e *DeliveryPartialError) Unwrap() error { return e.Err }
+
+func (c *Client) SendKeys(ctx context.Context, p Pane, keys string, enter bool) error {
 	mu, _ := c.sendLocks.LoadOrStore(p.Target(), new(sync.Mutex))
 	lock := mu.(*sync.Mutex)
 	lock.Lock()
 	defer lock.Unlock()
 
-	for _, chunk := range splitSendChunks(keys) {
-		// "--" stops tmux parsing text such as "-l" or "-1 x" as flags.
-		if err := c.run("send-keys", "-t", p.Target(), "-l", "--", escapeTrailingSemicolon(chunk)); err != nil {
+	failSend := func(delivered int, err error) error {
+		if delivered == 0 {
 			return err
 		}
+		return &DeliveryPartialError{Err: err}
 	}
 
-	// Send Enter separately (not literal)
+	delivered := 0
+	for _, chunk := range splitSendChunks(keys) {
+		if err := ctx.Err(); err != nil {
+			return failSend(delivered, err)
+		}
+		// "--" stops tmux parsing text such as "-l" or "-1 x" as flags.
+		if err := c.run("send-keys", "-t", p.Target(), "-l", "--", escapeTrailingSemicolon(chunk)); err != nil {
+			return failSend(delivered, err)
+		}
+		delivered++
+	}
+
+	// Send Enter separately (not literal).
 	if enter {
 		if keys != "" {
-			time.Sleep(enterSettle)
+			timer := time.NewTimer(enterSettle)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return failSend(delivered, ctx.Err())
+			case <-timer.C:
+			}
+		} else if err := ctx.Err(); err != nil {
+			return err
 		}
-		return c.run("send-keys", "-t", p.Target(), "Enter")
+		if err := c.run("send-keys", "-t", p.Target(), "Enter"); err != nil {
+			return failSend(delivered, err)
+		}
 	}
 	return nil
 }

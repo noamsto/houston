@@ -84,4 +84,38 @@ describe('error mapping', () => {
     vi.mocked(fetch).mockRejectedValue(new DOMException('The operation timed out.', 'TimeoutError'))
     expect(await sendKey(runAddr, 'Escape')).toBe('timed out')
   })
+
+  it('a timeout on sendText warns the text may have been partly sent', async () => {
+    vi.mocked(fetch).mockRejectedValue(new DOMException('The operation timed out.', 'TimeoutError'))
+    expect(await sendText(runAddr, 'x')).toEqual(expect.stringContaining('may have been partly sent'))
+  })
+
+  it('502 with partial true warns the send may have been partly sent', async () => {
+    vi.mocked(fetch).mockResolvedValue({
+      ok: false,
+      status: 502,
+      json: async () => ({ partial: true }),
+    } as Response)
+    expect(await sendText(runAddr, 'x')).toEqual(expect.stringContaining('may have been partly sent'))
+  })
+
+  it('502 with an empty body reads as HTTP 502', async () => {
+    vi.mocked(fetch).mockResolvedValue({
+      ok: false,
+      status: 502,
+      json: async () => ({}),
+    } as Response)
+    expect(await sendText(runAddr, 'x')).toBe('HTTP 502')
+  })
+
+  it('502 whose json rejects reads as HTTP 502', async () => {
+    vi.mocked(fetch).mockResolvedValue({
+      ok: false,
+      status: 502,
+      json: async () => {
+        throw new SyntaxError('Unexpected token')
+      },
+    } as unknown as Response)
+    expect(await sendText(runAddr, 'x')).toBe('HTTP 502')
+  })
 })

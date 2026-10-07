@@ -2,11 +2,13 @@
 package tmux
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -326,7 +328,7 @@ func TestSendKeys(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			c, calls := recordingTmux(t)
-			if err := c.SendKeys(pane, tc.text, false); err != nil {
+			if err := c.SendKeys(context.Background(), pane, tc.text, false); err != nil {
 				t.Fatalf("SendKeys() error: %v", err)
 			}
 			got := calls()
@@ -362,7 +364,7 @@ func TestSendKeys(t *testing.T) {
 
 	t.Run("enter follows text after a settle gap", func(t *testing.T) {
 		c, calls := recordingTmux(t)
-		if err := c.SendKeys(pane, "hello", true); err != nil {
+		if err := c.SendKeys(context.Background(), pane, "hello", true); err != nil {
 			t.Fatalf("SendKeys() error: %v", err)
 		}
 		got := calls()
@@ -381,7 +383,7 @@ func TestSendKeys(t *testing.T) {
 
 	t.Run("no enter means no Enter call", func(t *testing.T) {
 		c, calls := recordingTmux(t)
-		if err := c.SendKeys(pane, "hello", false); err != nil {
+		if err := c.SendKeys(context.Background(), pane, "hello", false); err != nil {
 			t.Fatalf("SendKeys() error: %v", err)
 		}
 		for _, call := range calls() {
@@ -393,7 +395,7 @@ func TestSendKeys(t *testing.T) {
 
 	t.Run("empty text still presses Enter", func(t *testing.T) {
 		c, calls := recordingTmux(t)
-		if err := c.SendKeys(pane, "", true); err != nil {
+		if err := c.SendKeys(context.Background(), pane, "", true); err != nil {
 			t.Fatalf("SendKeys() error: %v", err)
 		}
 		got := calls()
@@ -405,8 +407,10 @@ func TestSendKeys(t *testing.T) {
 	t.Run("a failing chunk stops the loop and sends no Enter", func(t *testing.T) {
 		c, calls := loggingTmux(t, 2)
 		text := strings.Repeat("a", 3*maxChunk)
-		if err := c.SendKeys(pane, text, true); err == nil {
-			t.Fatal("SendKeys() = nil, want the failing chunk's error")
+		err := c.SendKeys(context.Background(), pane, text, true)
+		var partial *DeliveryPartialError
+		if !errors.As(err, &partial) {
+			t.Fatalf("SendKeys() = %v, want *DeliveryPartialError", err)
 		}
 		got := calls()
 		if len(got) != 2 {
@@ -426,7 +430,7 @@ func TestSendKeys(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				if err := c.SendKeys(pane, text, true); err != nil {
+				if err := c.SendKeys(context.Background(), pane, text, true); err != nil {
 					t.Errorf("SendKeys(%q) error: %v", text, err)
 				}
 			}()
@@ -445,4 +449,238 @@ func TestSendKeys(t *testing.T) {
 			t.Errorf("both texts are %q, want one A and one B", got[0].args[5])
 		}
 	})
+}
+
+// holdSecondChunkTmux logs every argv like loggingTmux. The first call exits
+// 0. The second creates entered2, then polls every 20ms for release2 (max 5s,
+// then exit 2) and exits 0. Later calls exit 0.
+func holdSecondChunkTmux(t *testing.T) (*Client, func() []loggedCall, string) {
+	t.Helper()
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not found")
+	}
+	if out, _ := exec.Command(bash, "-c", `printf %s "$EPOCHREALTIME"`).Output(); len(out) == 0 {
+		t.Skip("bash lacks EPOCHREALTIME (needs >= 5.0)")
+	}
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "calls.log")
+	counterPath := filepath.Join(dir, "counter")
+	entered2 := filepath.Join(dir, "entered2")
+	release2 := filepath.Join(dir, "release2")
+	script := "#!" + bash + "\n" +
+		"printf '%s\\0' \"$EPOCHREALTIME\" \"$@\" $'\\001' >> " + strconv.Quote(logPath) + "\n" +
+		"n=$(( $(cat " + strconv.Quote(counterPath) + " 2>/dev/null || echo 0) + 1 ))\n" +
+		"echo \"$n\" > " + strconv.Quote(counterPath) + "\n" +
+		"if [ \"$n\" -eq 2 ]; then\n" +
+		"  : > " + strconv.Quote(entered2) + "\n" +
+		"  for ((i = 0; i < 250; i++)); do\n" +
+		"    [ -f " + strconv.Quote(release2) + " ] && exit 0\n" +
+		"    sleep 0.02\n" +
+		"  done\n" +
+		"  exit 2\n" +
+		"fi\n" +
+		"exit 0\n"
+	path := filepath.Join(dir, "faketmux")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake tmux: %v", err)
+	}
+	calls := func() []loggedCall {
+		data, err := os.ReadFile(logPath)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			t.Fatalf("read call log: %v", err)
+		}
+		var out []loggedCall
+		var cur []string
+		for _, tok := range strings.Split(string(data), "\x00") {
+			switch tok {
+			case "":
+			case "\x01":
+				micros, err := strconv.ParseInt(strings.NewReplacer(".", "", ",", "").Replace(cur[0]), 10, 64)
+				if err != nil {
+					t.Fatalf("bad call timestamp %q: %v", cur[0], err)
+				}
+				out = append(out, loggedCall{at: time.Duration(micros) * time.Microsecond, args: cur[1:]})
+				cur = nil
+			default:
+				cur = append(cur, tok)
+			}
+		}
+		return out
+	}
+	return &Client{tmuxPath: path}, calls, dir
+}
+
+func countLiteralSends(calls []loggedCall) int {
+	n := 0
+	for _, call := range calls {
+		if slices.Contains(call.args, "-l") {
+			n++
+		}
+	}
+	return n
+}
+
+func enterSent(calls []loggedCall) bool {
+	for _, call := range calls {
+		if strings.Join(call.args, " ") == "send-keys -t %1 Enter" {
+			return true
+		}
+	}
+	return false
+}
+
+func pollUntil(t *testing.T, what string, done func() bool) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		if done() {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("timed out waiting for %s", what)
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+}
+
+func TestSendKeysCancelStopsLaterChunks(t *testing.T) {
+	c, calls, dir := holdSecondChunkTmux(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pane := Pane{ID: "%1"}
+	text := strings.Repeat("a", 3*(8<<10))
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- c.SendKeys(ctx, pane, text, true)
+	}()
+
+	entered2 := filepath.Join(dir, "entered2")
+	pollUntil(t, "entered2", func() bool {
+		_, err := os.Stat(entered2)
+		return err == nil
+	})
+	cancel()
+	release2 := filepath.Join(dir, "release2")
+	if err := os.WriteFile(release2, nil, 0o644); err != nil {
+		t.Fatalf("create release2: %v", err)
+	}
+
+	var err error
+	select {
+	case err = <-errCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for SendKeys")
+	}
+
+	var partial *DeliveryPartialError
+	if !errors.As(err, &partial) {
+		t.Fatalf("SendKeys() = %v, want *DeliveryPartialError", err)
+	}
+	if !errors.Is(partial.Unwrap(), context.Canceled) {
+		t.Fatalf("unwrap = %v, want context.Canceled", partial.Unwrap())
+	}
+	got := calls()
+	if n := countLiteralSends(got); n != 2 {
+		t.Fatalf("recorded %d -l calls, want 2: %v", n, got)
+	}
+	if enterSent(got) {
+		t.Fatalf("unexpected send-keys -t %%1 Enter: %v", got)
+	}
+}
+
+func TestSendKeysCancelDuringSettle(t *testing.T) {
+	c, calls := recordingTmux(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pane := Pane{ID: "%1"}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- c.SendKeys(ctx, pane, "hello", true)
+	}()
+
+	deadline := time.After(2 * time.Second)
+	for {
+		got := calls()
+		hasL := false
+		for _, call := range got {
+			for _, arg := range call.args {
+				if arg == "-l" {
+					hasL = true
+				}
+			}
+		}
+		if hasL {
+			if enterSent(got) {
+				t.Fatalf("Enter already sent before cancel: %v", got)
+			}
+			cancel()
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for -l call")
+		case <-time.After(time.Millisecond):
+		}
+	}
+
+	var err error
+	select {
+	case err = <-errCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for SendKeys")
+	}
+
+	var partial *DeliveryPartialError
+	if !errors.As(err, &partial) {
+		t.Fatalf("SendKeys() = %v, want *DeliveryPartialError", err)
+	}
+	if !errors.Is(partial.Unwrap(), context.Canceled) {
+		t.Fatalf("unwrap = %v, want context.Canceled", partial.Unwrap())
+	}
+	if got := calls(); enterSent(got) {
+		t.Fatalf("unexpected send-keys -t %%1 Enter: %v", got)
+	}
+}
+
+func TestSendKeysPartialOnLaterChunk(t *testing.T) {
+	c, calls := loggingTmux(t, 2)
+	pane := Pane{ID: "%1"}
+	text := strings.Repeat("a", 3*(8<<10))
+	err := c.SendKeys(context.Background(), pane, text, true)
+
+	var partial *DeliveryPartialError
+	if !errors.As(err, &partial) {
+		t.Fatalf("SendKeys() = %v, want *DeliveryPartialError", err)
+	}
+	got := calls()
+	if n := countLiteralSends(got); n != 2 {
+		t.Fatalf("recorded %d -l calls, want 2: %v", n, got)
+	}
+	if enterSent(got) {
+		t.Fatalf("unexpected send-keys -t %%1 Enter: %v", got)
+	}
+}
+
+func TestSendKeysCancelBeforeEmptyEnter(t *testing.T) {
+	c, calls := recordingTmux(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := c.SendKeys(ctx, Pane{ID: "%1"}, "", true)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("SendKeys() = %v, want context.Canceled", err)
+	}
+	var partial *DeliveryPartialError
+	if errors.As(err, &partial) {
+		t.Fatalf("errors.As *DeliveryPartialError = true, want false: %v", err)
+	}
+	if got := calls(); len(got) != 0 {
+		t.Fatalf("recorded %d calls, want 0: %v", len(got), got)
+	}
 }

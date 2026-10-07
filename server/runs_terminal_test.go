@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -37,6 +38,7 @@ type fakeRunPanes struct {
 	sendErr       error
 	resolved      []string
 	sent          []sentInput
+	lastCtx       context.Context
 }
 
 func (f *fakeRunPanes) ResolvePane(paneID string) (tmux.Pane, error) {
@@ -49,9 +51,10 @@ func (f *fakeRunPanes) ResolvePane(paneID string) (tmux.Pane, error) {
 	return tmux.Pane{ID: paneID, Session: "s", Server: f.resolveServer}, nil
 }
 
-func (f *fakeRunPanes) SendKeys(p tmux.Pane, keys string, enter bool) error {
+func (f *fakeRunPanes) SendKeys(ctx context.Context, p tmux.Pane, keys string, enter bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.lastCtx = ctx
 	f.sent = append(f.sent, sentInput{pane: p, keys: keys, enter: enter})
 	return f.sendErr
 }
@@ -416,6 +419,89 @@ func TestRunInputSendFailure(t *testing.T) {
 	rec := doReply(t, s, replyRequest("POST", "/api/runs/"+termRunID+"/input", `{"type":"text","text":"x"}`))
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status %d, want 500", rec.Code)
+	}
+}
+
+func TestRunInputTextTooLong(t *testing.T) {
+	panes := &fakeRunPanes{}
+	s := newRunTerminalServer(t, panes, termDelta())
+
+	body := inputBody(t, map[string]any{
+		"type": "text",
+		"text": strings.Repeat("a", maxInputText+1),
+	})
+	rec := doReply(t, s, replyRequest("POST", "/api/runs/"+termRunID+"/input", body))
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status %d, want 413 (%q)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "text too long") {
+		t.Fatalf("body %q, want text too long", rec.Body.String())
+	}
+	if _, sent := panes.calls(); len(sent) != 0 {
+		t.Fatalf("sent %d, want zero sends", len(sent))
+	}
+}
+
+func TestRunInputImageTextTooLong(t *testing.T) {
+	panes := &fakeRunPanes{}
+	s := newRunTerminalServer(t, panes, termDelta())
+
+	body := inputBody(t, map[string]any{
+		"type": "image",
+		"text": strings.Repeat("a", maxInputText+1),
+		"images": []map[string]string{{
+			"name": "../../evil.png",
+			"type": "image/png",
+			"data": base64.StdEncoding.EncodeToString([]byte("\x89PNG not really")),
+		}},
+	})
+	rec := doReply(t, s, replyRequest("POST", "/api/runs/"+termRunID+"/input", body))
+	if _, sent := panes.calls(); len(sent) > 0 {
+		path, _, _ := strings.Cut(sent[0].keys, " ")
+		t.Cleanup(func() { _ = os.Remove(path) })
+	}
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status %d, want 413 (%q)", rec.Code, rec.Body.String())
+	}
+	if _, sent := panes.calls(); len(sent) != 0 {
+		t.Fatalf("sent %d, want zero SendKeys", len(sent))
+	}
+}
+
+func TestRunInputPartialSend(t *testing.T) {
+	panes := &fakeRunPanes{sendErr: &tmux.DeliveryPartialError{Err: errors.New("boom")}}
+	s := newRunTerminalServer(t, panes, termDelta())
+
+	rec := doReply(t, s, replyRequest("POST", "/api/runs/"+termRunID+"/input", `{"type":"text","text":"x"}`))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status %d, want 502 (%q)", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "application/json") {
+		t.Fatalf("Content-Type %q, want application/json", ct)
+	}
+	var body struct {
+		Partial bool `json:"partial"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body %q: %v", rec.Body.String(), err)
+	}
+	if !body.Partial {
+		t.Fatalf("partial %v, want true", body.Partial)
+	}
+}
+
+type inputReqKey struct{}
+
+func TestRunInputForwardsRequestContext(t *testing.T) {
+	panes := &fakeRunPanes{}
+	s := newRunTerminalServer(t, panes, termDelta())
+
+	req := replyRequest("POST", "/api/runs/"+termRunID+"/input", `{"type":"text","text":"x"}`)
+	req = req.WithContext(context.WithValue(req.Context(), inputReqKey{}, "req"))
+	doReply(t, s, req)
+
+	if got := panes.lastCtx.Value(inputReqKey{}); got != "req" {
+		t.Fatalf("context value %v, want %q", got, "req")
 	}
 }
 

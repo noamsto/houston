@@ -14,22 +14,41 @@ export function terminalSocketPath(a: TerminalAddress): string {
   return `/api/runs/${encodeURIComponent(a.id)}/terminal`
 }
 
+// A text or image body can already be in the pane when the client timer fires,
+// because the server may have typed it and then failed to answer in time.
+const longSendTimeout = 'timed out — the text may have been partly sent; check the agent before resending'
+
 // Resolves to a short reason on failure, null on success.
-async function request(url: string, init: RequestInit): Promise<string | null> {
+async function request(url: string, init: RequestInit, onTimeout = 'timed out'): Promise<string | null> {
   try {
     const res = await fetch(url, { method: 'POST', signal: AbortSignal.timeout(15000), ...init })
     if (res.ok) return null
-    return res.status === 401 ? 'session expired — reload' : `HTTP ${res.status}`
+    if (res.status === 401) return 'session expired — reload'
+    if (res.status === 502) {
+      try {
+        const body: unknown = await res.json()
+        if (body !== null && typeof body === 'object' && 'partial' in body && body.partial === true) {
+          return 'may have been partly sent — check the agent before resending'
+        }
+      } catch {
+        // A missing or unreadable body is still a plain 502.
+      }
+    }
+    return `HTTP ${res.status}`
   } catch (e) {
-    return e instanceof DOMException && e.name === 'TimeoutError' ? 'timed out' : 'offline'
+    return e instanceof DOMException && e.name === 'TimeoutError' ? onTimeout : 'offline'
   }
 }
 
-const runInput = (id: string, body: unknown) =>
-  request(`/api/runs/${encodeURIComponent(id)}/input`, {
-    body: JSON.stringify(body),
-    headers: { 'Content-Type': 'application/json' },
-  })
+const runInput = (id: string, body: unknown, onTimeout?: string) =>
+  request(
+    `/api/runs/${encodeURIComponent(id)}/input`,
+    {
+      body: JSON.stringify(body),
+      headers: { 'Content-Type': 'application/json' },
+    },
+    onTimeout,
+  )
 
 export interface TerminalImage {
   name: string
@@ -38,7 +57,7 @@ export interface TerminalImage {
 }
 
 export function sendText(a: TerminalAddress, text: string): Promise<string | null> {
-  return runInput(a.id, { type: 'text', text })
+  return runInput(a.id, { type: 'text', text }, longSendTimeout)
 }
 
 export function sendKey(a: TerminalAddress, key: string): Promise<string | null> {
@@ -46,5 +65,5 @@ export function sendKey(a: TerminalAddress, key: string): Promise<string | null>
 }
 
 export function sendImage(a: TerminalAddress, text: string, image: TerminalImage): Promise<string | null> {
-  return runInput(a.id, { type: 'image', text, images: [image] })
+  return runInput(a.id, { type: 'image', text, images: [image] }, longSendTimeout)
 }
