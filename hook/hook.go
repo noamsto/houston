@@ -185,7 +185,7 @@ func lockStateDir(dir string) (unlock func(), err error) {
 func apply(s *SessionState, event string, ev Event, now int64) {
 	clearTool := func() { s.Tool = ""; s.ToolInputHint = "" }
 	s.Since = now
-	if event != EventNotification {
+	if event != EventNotification && event != EventSubagentStop {
 		s.LastMessage = ""
 	}
 	switch event {
@@ -208,20 +208,30 @@ func apply(s *SessionState, event string, ev Event, now int64) {
 		s.State = StateThinking
 		clearTool()
 	case EventNotification:
+		// A permission or elicitation dialog blocks the turn until answered, so
+		// nothing later (an idle_prompt reminder, an informational type such as
+		// auth_success) may displace it or its message. Other types say nothing
+		// about the turn and leave the state alone.
 		switch ev.NotificationType {
-		case "permission_prompt":
+		case "permission_prompt", "elicitation_dialog":
 			s.State = StatePermission
 		case "idle_prompt":
+			if s.State == StatePermission {
+				return
+			}
 			s.State = StateWaiting
 		default:
-			if s.State != StatePermission && s.State != StateWaiting {
-				s.State = StateWaiting
+			if s.State == StatePermission {
+				return
 			}
 		}
 		s.LastMessage = ev.Message
-	case EventStop, EventSubagentStop:
+	case EventStop:
 		clearTool()
 		s.State = StateWaiting
+	case EventSubagentStop:
+		// Fires while the main agent is still inside the Task tool, so it ends
+		// nothing: state, tool and any pending dialog's message all stand.
 	case EventTurnEnd:
 		// pi's turn_end after any LLM response is always intermediate: pi's
 		// final signal is agent_settled, mapped to Stop above. But when
