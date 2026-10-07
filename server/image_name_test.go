@@ -65,10 +65,7 @@ func TestRunInputImageSanitizesName(t *testing.T) {
 				}
 			})
 
-			if strings.Contains(path, " ") {
-				t.Errorf("path %q contains a space", path)
-			}
-			for i := 0; i < len(path); i++ {
+			for i := range len(path) {
 				if path[i] < 0x21 || path[i] > 0x7e {
 					t.Errorf("path %q has byte 0x%02x outside 0x21..0x7e at %d", path, path[i], i)
 					break
@@ -81,8 +78,8 @@ func TestRunInputImageSanitizesName(t *testing.T) {
 			if !imageBaseRE.MatchString(base) {
 				t.Errorf("basename %q does not match %s", base, imageBaseRE)
 			}
-			if max := len("houston-") + 10 + 1 + 64; len(base) > max {
-				t.Errorf("basename %q is %d bytes, want <= %d", base, len(base), max)
+			if limit := len("houston-") + 10 + 1 + 64; len(base) > limit {
+				t.Errorf("basename %q is %d bytes, want <= %d", base, len(base), limit)
 			}
 			if !strings.HasSuffix(base, tc.suffix) {
 				t.Errorf("basename %q, want suffix %q", base, tc.suffix)
