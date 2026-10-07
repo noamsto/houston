@@ -30,6 +30,9 @@ interface Props {
   hideHeader?: boolean
   onConnectionChange?: (connected: boolean) => void
   onEnded?: (reason: string) => void
+  runAgent?: string
+  runState?: string
+  suggestion?: string | null
 }
 
 /** Write a capture-pane snapshot into xterm.js.
@@ -59,7 +62,7 @@ function writeSnapshot(term: Terminal, data: string, onDone?: () => void) {
 const MOBILE_TERM_WIDTH = 960
 const PAD = 6
 
-export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader = false, onConnectionChange, onEnded }: Props) {
+export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader = false, onConnectionChange, onEnded, runAgent, runState, suggestion }: Props) {
   const key = terminalKey(address)
   // outerRef: observed by ResizeObserver; has padding that creates visual breathing room
   const outerRef = useRef<HTMLDivElement>(null)
@@ -797,6 +800,9 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
           choices={meta?.choices}
           inputText={meta?.input_text}
           agent={meta?.agent}
+          runAgent={runAgent}
+          runState={runState}
+          suggestion={suggestion}
         />
       )}
     </div>
