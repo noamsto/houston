@@ -51,6 +51,10 @@ describe('staleness', () => {
     expect(isHistory(run({ state: 'idle', attention: 'done', updated_at: agoSec(1000) }), now)).toBe(false)
   })
 
+  it('keeps a fresh stuck run on a dead worker out of history', () => {
+    expect(isHistory(run({ state: 'done', attention: 'stuck', updated_at: agoSec(1000) }), now)).toBe(false)
+  })
+
   it('ages a done-attention run into history once stale', () => {
     expect(isHistory(run({ state: 'done', attention: 'done', updated_at: agoSec(2 * 60 * 60_000) }), now)).toBe(true)
   })
@@ -94,6 +98,7 @@ describe('staleness', () => {
   it('isEnded marks a done run without done-attention', () => {
     expect(isEnded(run({ state: 'done' }))).toBe(true)
     expect(isEnded(run({ state: 'done', attention: 'done' }))).toBe(false)
+    expect(isEnded(run({ state: 'done', attention: 'stuck' }))).toBe(false)
     expect(isEnded(run({ state: 'idle' }))).toBe(false)
   })
 

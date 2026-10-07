@@ -44,13 +44,14 @@ export function isDone(run: Run, now: number): boolean {
 }
 
 /**
- * Ended means the session is over (SessionEnd, ghost, foreign pane), as
- * opposed to a worker that finished its task and awaits review, which the
- * server flags `attention: done`. Both publish state `done`, so the
- * attention field is the only thing telling them apart.
+ * Ended means the session is over (SessionEnd, ghost, foreign pane) and the
+ * server has nothing to flag: state `done` with no attention. A worker that
+ * finished its task and awaits review is `attention: done`, and a dead worker
+ * the server still calls out is `attention: stuck`; both also publish state
+ * `done`, so the attention field is what keeps them visible.
  */
 export function isEnded(run: Run): boolean {
-  return run.state === 'done' && run.attention !== 'done'
+  return run.state === 'done' && !run.attention
 }
 
 /**

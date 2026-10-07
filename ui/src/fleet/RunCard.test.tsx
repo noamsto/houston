@@ -94,13 +94,30 @@ describe('RunCard attention treatments', () => {
     expect(container.querySelector('.run-stuck-note')).toBeNull()
   })
 
-  it('gives a stale stuck or done run neither class', () => {
+  it('mutes a stale stuck run but keeps its chip and note', () => {
     const old = Math.floor(now / 1000) - 2 * 3600
-    const stuck = card(run({ attention: 'stuck', attention_note: 'x', updated_at: old }))
-    expect(stuck.classList.contains('stuck')).toBe(false)
+    const r = run({ attention: 'stuck', attention_note: 'no output for 20 min', updated_at: old })
+    const { container } = render(<RunCard run={r} now={now} />)
+    const el = container.querySelector('.run-card') as HTMLElement
+    expect(el.classList.contains('stuck')).toBe(true)
+    expect(el.classList.contains('muted')).toBe(true)
+    expect(container.querySelector('.run-chip.stuck')?.textContent).toBe('stuck')
+    expect(container.querySelector('.run-stuck-note')?.textContent).toBe('no output for 20 min')
+  })
+
+  it('mutes a stale done run but keeps its chip', () => {
+    const old = Math.floor(now / 1000) - 2 * 3600
+    const { container } = render(<RunCard run={run({ state: 'done', attention: 'done', updated_at: old })} now={now} />)
+    const el = container.querySelector('.run-card') as HTMLElement
+    expect(el.classList.contains('done')).toBe(true)
+    expect(el.classList.contains('muted')).toBe(true)
+    expect(container.querySelector('.run-chip.done')?.textContent).toBe('done')
+  })
+
+  it('does not mute a fresh stuck or done run', () => {
+    expect(card(run({ attention: 'stuck' })).classList.contains('muted')).toBe(false)
     cleanup()
-    const done = card(run({ state: 'done', attention: 'done', updated_at: old }))
-    expect(done.classList.contains('done')).toBe(false)
+    expect(card(run({ state: 'done', attention: 'done' })).classList.contains('muted')).toBe(false)
   })
 
   it('keeps a fresh blocked run on attention only', () => {

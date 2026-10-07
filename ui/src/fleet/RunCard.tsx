@@ -39,7 +39,9 @@ export function RunCard({ run, now, onOpen, selected, crewLine }: RunCardProps) 
   const done = isDone(run, now)
 
   const attentionClass = attention ? ' attention' : staleBlocked ? ' attention muted' : ''
-  const calmClass = stuck ? ' stuck' : done ? ' done' : ''
+  const staleStuck = run.attention === 'stuck' && !stuck
+  const staleDone = run.attention === 'done' && !done
+  const calmClass = stuck ? ' stuck' : staleStuck ? ' stuck muted' : done ? ' done' : staleDone ? ' done muted' : ''
 
   return (
     <button
@@ -66,12 +68,12 @@ export function RunCard({ run, now, onOpen, selected, crewLine }: RunCardProps) 
 
       {run.question && <div className="run-question">{run.question.text}</div>}
 
-      {stuck && run.attention_note && <div className="run-stuck-note">{run.attention_note}</div>}
+      {run.attention === 'stuck' && run.attention_note && <div className="run-stuck-note">{run.attention_note}</div>}
 
       <div className="run-chips">
         {run.role && <span className={`run-role ${run.role}`}>{run.role}</span>}
-        {stuck && <span className="run-chip stuck">stuck</span>}
-        {done && <span className="run-chip done">done</span>}
+        {run.attention === 'stuck' && <span className="run-chip stuck">stuck</span>}
+        {run.attention === 'done' && <span className="run-chip done">done</span>}
         <span className="run-chip">{run.agent}</span>
         {run.issue && <span className="run-chip issue">{run.issue.id}</span>}
         {run.pr && <PRChip pr={run.pr} />}

@@ -94,6 +94,8 @@
 .run-card.attention.muted { border-color: color-mix(in srgb, var(--state-blocked) 22%, var(--line)); }
 .run-card.stuck { border-color: color-mix(in srgb, var(--state-failed) 35%, var(--line)); }
 .run-card.done { border-color: color-mix(in srgb, var(--state-running) 25%, var(--line)); }
+.run-card.stuck.muted { border-color: color-mix(in srgb, var(--state-failed) 18%, var(--line)); }
+.run-card.done.muted { border-color: color-mix(in srgb, var(--state-running) 12%, var(--line)); }
 .run-card.history { opacity: 0.55; }
 .run-card.selected { background: var(--fill); border-color: var(--accent); }
 .run-card:active { background: var(--fill); transform: scale(0.995); }
