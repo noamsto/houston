@@ -314,6 +314,7 @@ type signature struct {
 	hasCrew                                                bool
 	crewName, crewCodename, crewColor, crewTier, crewTitle string
 	crewModel, crewDetail                                  string
+	crewSessions                                           int
 
 	hasQuestion bool
 	qText, qVia string
@@ -370,6 +371,7 @@ func runSignature(r Run) signature {
 		s.hasCrew = true
 		s.crewName, s.crewCodename, s.crewColor, s.crewTier = r.Crew.Name, r.Crew.Codename, r.Crew.Color, r.Crew.Tier
 		s.crewTitle, s.crewModel, s.crewDetail = r.Crew.Title, r.Crew.Model, r.Crew.Detail
+		s.crewSessions = r.Crew.Sessions
 	}
 	if r.Question != nil {
 		s.hasQuestion = true
@@ -503,6 +505,9 @@ func mergeInto(dst *Run, src Run) {
 		}
 		if src.Crew.Detail != "" {
 			dst.Crew.Detail = src.Crew.Detail
+		}
+		if src.Crew.Sessions != 0 {
+			dst.Crew.Sessions = src.Crew.Sessions
 		}
 	}
 	if src.Question != nil {

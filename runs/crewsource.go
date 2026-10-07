@@ -460,6 +460,7 @@ func deltasFromCrewLog(rd io.Reader) map[string]crewBranch {
 		// a new session id.
 		if rec.Kind == "dispatch" || rec.Kind == "resume" {
 			r.CrewSession = rec.EngineSession
+			r.Crew.Sessions++
 		}
 		if rec.Kind == "msg" && strings.HasPrefix(rec.From, "dispatcher:") && rec.TS > dispatcherReplyTS[branch] {
 			dispatcherReplyTS[branch] = rec.TS

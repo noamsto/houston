@@ -1703,3 +1703,28 @@ func TestCrewLogReadsEngineSessionNewestWins(t *testing.T) {
 		}
 	}
 }
+
+func TestDeltasFromCrewLogCarriesRosterFields(t *testing.T) {
+	const fixture = `{"ts":1000,"crew_id":"c1","kind":"dispatch","branch":"feat/7","title":"add the roster","tier":"standard","engine":"claude","model":"sonnet","engine_session":"s-1"}
+{"ts":1100,"crew_id":"c1","from":"worker:feat/7#s1","kind":"status","body":{"state":"working","detail":"executing plan"}}
+{"ts":1200,"crew_id":"c1","kind":"resume","branch":"feat/7","engine_session":"s-2"}
+{"ts":1300,"crew_id":"c1","from":"worker:feat/7#s2","kind":"status","body":{"state":"pr_open","detail":"AC1 pass","pr_url":"https://github.com/x/y/pull/12"}}
+`
+	r := deltasFromCrewLog(strings.NewReader(fixture))["feat/7"]
+	if r.Crew == nil {
+		t.Fatal("no crew ref")
+	}
+	c := r.Crew
+	if c.Title != "add the roster" || c.Tier != "standard" || c.Model != "sonnet" || c.Detail != "AC1 pass" {
+		t.Errorf("Crew = %+v, want title/tier/model/latest detail", c)
+	}
+	if r.Agent != "claude" {
+		t.Errorf("Agent = %q, want claude", r.Agent)
+	}
+	if c.Sessions != 2 {
+		t.Errorf("Sessions = %d, want 2 (dispatch + resume)", c.Sessions)
+	}
+	if r.PR == nil || r.PR.URL != "https://github.com/x/y/pull/12" || r.PR.Number != "12" {
+		t.Errorf("PR = %+v, want the status pr_url", r.PR)
+	}
+}

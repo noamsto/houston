@@ -100,15 +100,16 @@ describe('CrewsView', () => {
   it('shows the counts label in the crew header', () => {
     const runs = [
       run({ id: 'a', crew: { name: 'c' }, state: 'running' }),
-      run({ id: 'b', crew: { name: 'c' }, state: 'blocked' }),
+      run({ id: 'b', crew: { name: 'c' }, state: 'blocked', attention: 'needs-you' }),
       run({ id: 'd', crew: { name: 'c' }, state: 'done', updated_at: old }),
+      run({ id: 'e', crew: { name: 'c' }, state: 'idle' }),
     ]
     const { container } = render(<CrewsView runs={runs} now={now} />)
-    expect(container.querySelector('.crews-counts')?.textContent).toBe('1 blocked · 1 running · 1 done')
+    expect(container.querySelector('.crews-counts')?.textContent).toBe('1 working · 1 needs you · 1 idle · 1 ended')
   })
 
   describe('roster row', () => {
-    it('shows codename, branch as title, tier and engine chips, phase and age', () => {
+    it('shows codename, branch as title, the tier · engine line, phase and age', () => {
       const runs = [
         run({
           id: 'a',
@@ -124,9 +125,7 @@ describe('CrewsView', () => {
 
       expect(container.querySelector('.crews-codename')?.textContent).toBe('Apollo')
       expect(container.querySelector('.crews-title')?.textContent).toBe('feat/thing')
-      expect(container.querySelector('.run-chip.tier')?.textContent).toBe('deep')
-      expect(screen.getByText('codex')).toBeTruthy()
-      expect(container.querySelector('.run-chip.issue')?.textContent).toBe('HOU-9')
+      expect(container.querySelector('.crews-meta')?.textContent).toBe('deep · codex')
       expect(container.querySelector('.crews-phase')?.textContent).toBe('Edit · main.go')
       expect(container.querySelector('.run-age')?.textContent).toBe('2m')
       expect(container.textContent).not.toContain('garbage first prompt')
@@ -144,7 +143,7 @@ describe('CrewsView', () => {
       expect(container.querySelector('.crews-title')?.textContent).toBe('Do the thing')
     })
 
-    it('shows the crew title, then the issue title, then the branch, and a model chip', () => {
+    it('shows the crew title, then the issue title, then the branch, and the model in the meta line', () => {
       const runs = [
         run({ id: 'a', crew: { name: 'c', title: 'Crew title', model: 'sonnet' }, branch: 'b', issue: { id: 'H-1', title: 'Issue title' }, updated_at: nowSec - 1 }),
         run({ id: 'b', crew: { name: 'c' }, branch: 'br', issue: { id: 'H-2', title: 'Issue two' }, updated_at: nowSec - 2 }),
@@ -154,9 +153,7 @@ describe('CrewsView', () => {
 
       expect(Array.from(container.querySelectorAll('.crews-title')).map((n) => n.textContent))
         .toEqual(['Crew title', 'Issue two', 'only-branch'])
-      const models = container.querySelectorAll('.run-chip.model')
-      expect(models.length).toBe(1)
-      expect(models[0].textContent).toBe('sonnet')
+      expect(container.querySelector('.crews-meta')?.textContent).toBe('claude · sonnet')
     })
 
     it('shows the state label when the run has no tool', () => {
@@ -179,21 +176,9 @@ describe('CrewsView', () => {
       expect(container.querySelector('.crews-phase')?.textContent).toBe('waiting on you')
     })
 
-    it('exposes the run state as a text alternative on the state dot', () => {
-      const { container } = render(<CrewsView runs={[run({ crew: { name: 'c' }, state: 'running' })]} now={now} />)
-      expect(container.querySelector('.run-dot')?.getAttribute('aria-label')).toBe('running')
-      expect(screen.getByRole('img', { name: 'running' })).toBeTruthy()
-    })
-
     it('marks a run with a down control connection as stale', () => {
       const { container } = render(<CrewsView runs={[run({ crew: { name: 'c' }, stale: true })]} now={now} />)
       expect(container.querySelector('.run-chip.stale')).toBeTruthy()
-    })
-
-    it('shows the project chip from run.project', () => {
-      const runs = [run({ id: 'a', crew: { name: 'c' }, project: 'houston' })]
-      const { container } = render(<CrewsView runs={runs} now={now} />)
-      expect(container.querySelector('.run-project')?.textContent).toBe('houston')
     })
 
     it('calls onOpen with the run when its main button is tapped', () => {
@@ -203,6 +188,87 @@ describe('CrewsView', () => {
 
       fireEvent.click(screen.getByRole('button', { name: /apollo/i }))
       expect(onOpen).toHaveBeenCalledWith(r)
+    })
+  })
+
+  describe('worker roster card', () => {
+    const worker = (id: string, p: Partial<Run>) =>
+      run({ id, crew: { name: 'c', codename: id, color: '#336699', title: `task ${id}`, tier: 'standard', model: 'sonnet' }, ...p })
+
+    it('buckets cards and the header counts by attention and shows each card\'s fields', () => {
+      const runs = [
+        worker('Nova', {
+          state: 'blocked', attention: 'needs-you', question: { text: 'Keep the alias?', via: 'crew' },
+          crew: { name: 'c', codename: 'Nova', title: 'task Nova', tier: 'deep', model: 'opus', sessions: 3 },
+          updated_at: nowSec - 30,
+        }),
+        worker('Rook', {
+          state: 'running', attention: 'stuck', attention_note: 'No output for 20 minutes.',
+          crew: { name: 'c', codename: 'Rook', title: 'task Rook', detail: 'executing step 3' }, updated_at: nowSec - 120,
+        }),
+        worker('Kite', {
+          state: 'idle', attention: 'done', pr: { number: '12', url: 'https://github.com/x/y/pull/12' },
+          crew: { name: 'c', codename: 'Kite', title: 'task Kite', detail: 'AC1 pass', sessions: 1 }, updated_at: nowSec - 3600 + 60,
+        }),
+        worker('Wren', {
+          state: 'running', crew: { name: 'c', codename: 'Wren', title: 'task Wren', tier: 'standard', model: 'sonnet', detail: 'writing the plan' },
+          updated_at: nowSec - 5,
+        }),
+      ]
+      const { container } = render(<CrewsView runs={runs} now={now} />)
+
+      expect(container.querySelector('.crews-counts')?.textContent).toBe('1 working · 1 needs you · 1 stuck · 1 done')
+
+      const card = (name: string) =>
+        Array.from(container.querySelectorAll<HTMLElement>('.crews-member')).find((m) => m.textContent?.includes(name))!
+      const nova = card('Nova')
+      expect(nova.classList.contains('needs-you')).toBe(true)
+      expect(nova.querySelector('.crews-attention')?.textContent).toBe('needs you')
+      expect(nova.querySelector('.crews-title')?.textContent).toBe('task Nova')
+      expect(nova.querySelector('.crews-meta')?.textContent).toBe('deep · claude · opus')
+      expect(nova.querySelector('.crews-sessions')?.textContent).toBe('3 sessions')
+      expect(nova.querySelector('.crews-question')?.textContent).toBe('Keep the alias?')
+
+      const rook = card('Rook')
+      expect(rook.classList.contains('stuck')).toBe(true)
+      expect(rook.querySelector('.crews-attention')?.textContent).toBe('stuck')
+      expect(rook.querySelector('.crews-phase')?.textContent).toBe('executing step 3')
+      expect(rook.querySelector('.crews-note')?.textContent).toBe('No output for 20 minutes.')
+      expect(rook.querySelector('.run-age')?.textContent).toBe('2m')
+      expect(rook.querySelector('.crews-sessions')).toBeNull()
+
+      const kite = card('Kite')
+      expect(kite.classList.contains('done')).toBe(true)
+      expect(kite.querySelector('.crews-attention')?.textContent).toBe('done')
+      expect(kite.querySelector('.crews-pr')?.getAttribute('href')).toBe('https://github.com/x/y/pull/12')
+      expect(kite.querySelector('.crews-sessions')).toBeNull()
+
+      const wren = card('Wren')
+      expect(wren.querySelector('.crews-idle')).toBeNull()
+      expect(wren.querySelector('.crews-attention')).toBeNull()
+      expect(wren.querySelector('.crews-phase')?.textContent).toBe('writing the plan')
+    })
+  })
+
+  describe('card states', () => {
+    it('shows an idle chip for an unflagged idle worker and prefers live tool activity over the bus detail', () => {
+      const runs = [
+        run({ id: 'i', crew: { name: 'c', codename: 'Idler', detail: 'old line' }, state: 'idle', activity: { tool: 'Bash', hint: 'rm -rf build' } }),
+        run({ id: 'w', crew: { name: 'c', codename: 'Busy', detail: 'old line' }, activity: { tool: 'Edit', hint: 'main.go' }, updated_at: nowSec - 1 }),
+      ]
+      const { container } = render(<CrewsView runs={runs} now={now} />)
+      const cards = container.querySelectorAll<HTMLElement>('.crews-member')
+      const byName = (n: string) => Array.from(cards).find((c) => c.textContent?.includes(n))!
+      expect(byName('Idler').querySelector('.crews-idle')?.textContent).toBe('idle')
+      expect(byName('Busy').querySelector('.crews-phase')?.textContent).toBe('Edit · main.go')
+      expect(byName('Idler').querySelector('.crews-phase')?.textContent).toBe('old line')
+    })
+
+    it('mutes the border of a flagged card that stopped reporting', () => {
+      const runs = [run({ crew: { name: 'c' }, state: 'running', attention: 'stuck', updated_at: nowSec - 2 * 3600 })]
+      const { container } = render(<CrewsView runs={runs} now={now} />)
+      fireEvent.click(screen.getByRole('button', { name: /finished \(1\)/i }))
+      expect(container.querySelector('.crews-member')?.classList.contains('muted')).toBe(true)
     })
   })
 
@@ -285,7 +351,7 @@ describe('CrewsView', () => {
       expect(onOpen).not.toHaveBeenCalled()
     })
 
-    it('sits in the same chip row as the tier, engine and model chips', () => {
+    it('sits in the chip row, outside the tap target', () => {
       const runs = [
         run({ crew: { name: 'c', tier: 'deep', model: 'opus' }, pr: { number: '42', url: 'https://example.com/pull/42' } }),
       ]
@@ -294,8 +360,6 @@ describe('CrewsView', () => {
       const a = container.querySelector('a.run-chip.pr') as HTMLAnchorElement
       const row = container.querySelector('.crews-chips') as HTMLElement
       expect(a.parentElement).toBe(row)
-      expect(row.querySelector('.run-chip.tier')).toBeTruthy()
-      expect(row.querySelector('.run-chip.model')).toBeTruthy()
       expect(container.querySelector('.crews-member-main')?.contains(row)).toBe(false)
     })
 
