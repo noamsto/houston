@@ -19,7 +19,18 @@ async function request(url: string, init: RequestInit): Promise<string | null> {
   try {
     const res = await fetch(url, { method: 'POST', signal: AbortSignal.timeout(15000), ...init })
     if (res.ok) return null
-    return res.status === 401 ? 'session expired — reload' : `HTTP ${res.status}`
+    if (res.status === 401) return 'session expired — reload'
+    if (res.status === 502) {
+      try {
+        const body: unknown = await res.json()
+        if (body !== null && typeof body === 'object' && 'partial' in body && body.partial === true) {
+          return 'may have been partly sent — check the agent before resending'
+        }
+      } catch {
+        // A missing or unreadable body is still a plain 502.
+      }
+    }
+    return `HTTP ${res.status}`
   } catch (e) {
     return e instanceof DOMException && e.name === 'TimeoutError' ? 'timed out' : 'offline'
   }

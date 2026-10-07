@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -14,10 +15,13 @@ import (
 // image upload needs.
 const maxInputBody = 50 << 20
 
+// maxInputText is the cap on literal text handed to SendKeys (32 chunks).
+const maxInputText = 256 << 10
+
 // runPaneOps is what the run-addressed terminal routes need from tmux.
 type runPaneOps interface {
 	ResolvePane(paneID string) (tmux.Pane, error)
-	SendKeys(p tmux.Pane, keys string, enter bool) error
+	SendKeys(ctx context.Context, p tmux.Pane, keys string, enter bool) error
 	SendSpecialKey(p tmux.Pane, key string) error
 }
 
@@ -133,11 +137,15 @@ func (s *Server) handleRunInput(w http.ResponseWriter, r *http.Request) {
 	var err error
 	switch in.Type {
 	case "text":
+		if len(in.Text) > maxInputText {
+			inputOutcome(w, id, pane, in, http.StatusRequestEntityTooLarge, "text too long")
+			return
+		}
 		if strings.TrimSpace(in.Text) == "" {
 			inputOutcome(w, id, pane, in, http.StatusBadRequest, "empty text")
 			return
 		}
-		err = s.runPanes.SendKeys(pane, in.Text, true)
+		err = s.runPanes.SendKeys(r.Context(), pane, in.Text, true)
 	case "key":
 		if !terminalKeys[in.Key] {
 			inputOutcome(w, id, pane, in, http.StatusBadRequest, "key not allowed")
@@ -145,6 +153,10 @@ func (s *Server) handleRunInput(w http.ResponseWriter, r *http.Request) {
 		}
 		err = s.runPanes.SendSpecialKey(pane, in.Key)
 	case "image":
+		if len(in.Text) > maxInputText {
+			inputOutcome(w, id, pane, in, http.StatusRequestEntityTooLarge, "text too long")
+			return
+		}
 		if len(in.Images) == 0 {
 			inputOutcome(w, id, pane, in, http.StatusBadRequest, "no images provided")
 			return
@@ -158,13 +170,23 @@ func (s *Server) handleRunInput(w http.ResponseWriter, r *http.Request) {
 		if in.Text != "" {
 			message += " " + in.Text
 		}
-		err = s.runPanes.SendKeys(pane, message, true)
+		err = s.runPanes.SendKeys(r.Context(), pane, message, true)
 	default:
 		inputOutcome(w, id, pane, in, http.StatusBadRequest, "unknown input type")
 		return
 	}
 
 	if err != nil {
+		var partial *tmux.DeliveryPartialError
+		if errors.As(err, &partial) {
+			// inputOutcome writes text/plain through http.Error; a partial
+			// delivery is JSON so the client can tell it from a total failure.
+			slog.Info("run input", inputLogAttrs(id, pane, in, http.StatusBadGateway, "partial send")...)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte("{\"partial\":true}\n"))
+			return
+		}
 		inputOutcome(w, id, pane, in, http.StatusInternalServerError, "failed to send: "+err.Error())
 		return
 	}
@@ -175,6 +197,15 @@ func (s *Server) handleRunInput(w http.ResponseWriter, r *http.Request) {
 // string verbatim: only text length, and the type and key names once they are
 // known to be ours.
 func inputOutcome(w http.ResponseWriter, id string, pane tmux.Pane, in runInput, code int, detail string) {
+	slog.Info("run input", inputLogAttrs(id, pane, in, code, detail)...)
+	if code == http.StatusNoContent {
+		w.WriteHeader(code)
+		return
+	}
+	http.Error(w, detail, code)
+}
+
+func inputLogAttrs(id string, pane tmux.Pane, in runInput, code int, detail string) []any {
 	attrs := []any{"id", id, "pane", pane.Target(), "status", code, "outcome", detail}
 	switch in.Type {
 	case "text":
@@ -187,10 +218,5 @@ func inputOutcome(w http.ResponseWriter, id string, pane tmux.Pane, in runInput,
 	case "image":
 		attrs = append(attrs, "type", in.Type, "text_len", len(in.Text), "images", len(in.Images))
 	}
-	slog.Info("run input", attrs...)
-	if code == http.StatusNoContent {
-		w.WriteHeader(code)
-		return
-	}
-	http.Error(w, detail, code)
+	return attrs
 }
