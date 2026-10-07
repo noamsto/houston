@@ -898,3 +898,35 @@ describe('ChatTab', () => {
     })
   })
 })
+
+describe('ChatTab quick commands', () => {
+  const fenced = (cmd: string) => `Compact first:\n\n\`\`\`\n${cmd}\n\`\`\`\n`
+
+  it('offers the suggestion when the latest assistant message has a fenced slash command', async () => {
+    await renderReady({ state: 'idle' }, { page: page('e1', [textUpdate('a1', 1, fenced('/compact keep the plan'))]) })
+    expect(screen.getByRole('button', { name: '↳ suggested' })).toBeTruthy()
+  })
+
+  it('offers none without a fenced command', async () => {
+    await renderReady({ state: 'idle' }, { page: page('e1', [textUpdate('a1', 1, 'nothing to run')]) })
+    expect(screen.queryByRole('button', { name: '↳ suggested' })).toBeNull()
+  })
+
+  it('/compact… prefills an empty draft but never overwrites one', async () => {
+    await renderReady({ state: 'idle' }, { page: page('e1', []) })
+    const textarea = screen.getByPlaceholderText('Message…') as HTMLTextAreaElement
+    fireEvent.click(screen.getByRole('button', { name: 'Commands' }))
+    fireEvent.click(screen.getByRole('button', { name: '/compact…' }))
+    expect(textarea.value).toBe('/compact ')
+
+    fireEvent.change(textarea, { target: { value: 'my draft' } })
+    fireEvent.click(screen.getByRole('button', { name: '/compact…' }))
+    expect(textarea.value).toBe('my draft')
+    expect(screen.getByText('Clear the draft and attachment first, then tap /compact…')).toBeTruthy()
+  })
+
+  it('is absent for a non-claude run', async () => {
+    await renderReady({ state: 'idle', agent: 'pi' }, { page: page('e1', [textUpdate('a1', 1, fenced('/compact'))]) })
+    expect(screen.queryByRole('button', { name: 'Commands' })).toBeNull()
+  })
+})

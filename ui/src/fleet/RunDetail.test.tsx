@@ -491,6 +491,22 @@ describe('RunDetail chat tab', () => {
     expect(vi.mocked(fetch).mock.calls.some((c) => String(c[0]).includes('/chat'))).toBe(false)
   })
 
+  it('does not carry one run\'s suggestion onto a run without chat', async () => {
+    desktop = false
+    const fenced = { epoch: 'e1', more: false, updates: [{
+      id: 'a1', seq: 1, ts: 1000, sessionUpdate: 'agent_message_chunk',
+      content: [{ type: 'content', content: { type: 'text', text: 'Try:\n\n```\n/compact keep\n```\n' } }],
+    }] }
+    stubChatFetch(fenced)
+    const a = liveRun({ id: 'pane-a', state: 'idle', caps: { terminal: true, reply: true, kill: true, chat: true } })
+    const b = liveRun({ id: 'pane-b', state: 'idle' })
+    const { rerender } = render(<RunDetail runs={[a, b]} hasSnapshot streamConnected now={now} id="pane-a" tab="terminal" />)
+    await waitFor(() => expect(screen.getByRole('button', { name: '↳ suggested' })).toBeTruthy())
+
+    rerender(<RunDetail runs={[a, b]} hasSnapshot streamConnected now={now} id="pane-b" tab="terminal" />)
+    expect(screen.queryByRole('button', { name: '↳ suggested' })).toBeNull()
+  })
+
   it('shows "Chat unavailable" with a Retry when the chat page fetch 404s', async () => {
     stubChatFetch({}, 404)
     const r = chatRun()

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { sendImage, sendKey, sendText, terminalKey, type TerminalAddress } from '../api/terminal'
 import { composerMaxHeight } from './composerMaxHeight'
+import { QuickCommands } from './QuickCommands'
 import { StagedImageChip } from './StagedImageChip'
 import { useComposerDraft } from './useComposerDraft'
 import { readBase64, useStagedImage } from './useStagedImage'
@@ -10,6 +11,9 @@ interface Props {
   choices?: string[]
   inputText?: string
   agent?: string
+  runAgent?: string
+  runState?: string
+  suggestion?: string | null
 }
 
 // Web Speech API types (not in TS lib by default)
@@ -92,13 +96,14 @@ const errorStyle: React.CSSProperties = {
   padding: '6px 10px 0',
 }
 
-export function MobileInputBar({ address, choices, inputText, agent }: Props) {
+export function MobileInputBar({ address, choices, inputText, agent, runAgent, runState, suggestion }: Props) {
   const [text, setText, clearIf] = useComposerDraft(terminalKey(address))
   const { staged, stage, clear: clearStaged } = useStagedImage()
   const [listening, setListening] = useState(false)
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState<string | null>(null)
   const [keyError, setKeyError] = useState<string | null>(null)
+  const [confirmInterrupt, setConfirmInterrupt] = useState(false)
   const sendingRef = useRef(false)
   const keyErrorTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   useEffect(() => () => clearTimeout(keyErrorTimer.current), [])
@@ -152,6 +157,13 @@ export function MobileInputBar({ address, choices, inputText, agent }: Props) {
   const handleQuickAction = useCallback(async (action: 'text' | 'special', value: string) => {
     reportKeyError(action === 'special' ? await sendKey(address, value) : await sendText(address, value))
   }, [address, reportKeyError])
+
+  const prefill = (value: string) => {
+    if (text.trim() || staged) return false
+    setText(value)
+    textareaRef.current?.focus()
+    return true
+  }
 
   const handleVoice = () => {
     if (!SpeechRecognitionCtor) return
@@ -257,6 +269,8 @@ export function MobileInputBar({ address, choices, inputText, agent }: Props) {
         </div>
       )}
 
+      <QuickCommands address={address} agent={runAgent} state={runState} suggestion={suggestion} onPrefill={prefill} />
+
       <div
         data-testid="quick-keys"
         style={{ display: 'flex', gap: 6, padding: '8px 8px 0', overflowX: 'auto' }}
@@ -267,13 +281,33 @@ export function MobileInputBar({ address, choices, inputText, agent }: Props) {
             className="pill-btn"
             title={qa.title}
             aria-label={qa.title}
-            onClick={() => void handleQuickAction(qa.action, qa.value)}
+            onClick={() => (qa.value === 'C-c' ? setConfirmInterrupt(true) : void handleQuickAction(qa.action, qa.value))}
             style={pillStyle}
           >
             {qa.label}
           </button>
         ))}
       </div>
+
+      {confirmInterrupt && (
+        <div role="group" aria-label="Confirm ^C" style={{ ...errorStyle, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span>Send ^C?</span>
+          <button
+            type="button"
+            className="pill-btn"
+            style={pillStyle}
+            onClick={() => {
+              setConfirmInterrupt(false)
+              void handleQuickAction('special', 'C-c')
+            }}
+          >
+            Confirm
+          </button>
+          <button type="button" className="pill-btn" style={pillStyle} onClick={() => setConfirmInterrupt(false)}>
+            Cancel
+          </button>
+        </div>
+      )}
 
       {sendError && (
         <div role="alert" data-testid="send-error" style={errorStyle}>

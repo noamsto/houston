@@ -71,7 +71,6 @@ describe('MobileInputBar composer', () => {
 describe('MobileInputBar quick keys', () => {
   it.each([
     ['Esc', 'Escape'],
-    ['Ctrl+C', 'C-c'],
     ['Enter', 'Enter'],
     ['Tab', 'Tab'],
     ['Shift+Tab', 'BTab'],
@@ -93,6 +92,41 @@ describe('MobileInputBar quick keys', () => {
     const { url, body } = lastJSONRequest()
     expect(url).toBe('/api/runs/run-1/input')
     expect(body).toEqual({ type: 'key', key })
+  })
+})
+
+describe('MobileInputBar ^C', () => {
+  it('needs a confirm before sending C-c', async () => {
+    render(<MobileInputBar address={runAddress} />)
+    await click(screen.getByRole('button', { name: 'Ctrl+C' }))
+    expect(fetch).not.toHaveBeenCalled()
+    await click(screen.getByRole('button', { name: 'Confirm' }))
+    expect(lastJSONRequest().body).toEqual({ type: 'key', key: 'C-c' })
+  })
+
+  it('Cancel sends nothing', async () => {
+    render(<MobileInputBar address={runAddress} />)
+    await click(screen.getByRole('button', { name: 'Ctrl+C' }))
+    await click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(fetch).not.toHaveBeenCalled()
+    expect(screen.queryByText('Send ^C?')).toBeNull()
+  })
+
+  it('shows quick commands for a claude run and prefills /compact', async () => {
+    render(<MobileInputBar address={runAddress} runAgent="claude" runState="idle" />)
+    await click(screen.getByRole('button', { name: 'Commands' }))
+    await click(screen.getByRole('button', { name: '/compact…' }))
+    expect((screen.getByPlaceholderText('Send a message...') as HTMLTextAreaElement).value).toBe('/compact ')
+  })
+
+  it('does not overwrite a draft with /compact…', async () => {
+    render(<MobileInputBar address={runAddress} runAgent="claude" runState="idle" />)
+    const field = screen.getByPlaceholderText('Send a message...') as HTMLTextAreaElement
+    fireEvent.change(field, { target: { value: 'my draft' } })
+    await click(screen.getByRole('button', { name: 'Commands' }))
+    await click(screen.getByRole('button', { name: '/compact…' }))
+    expect(field.value).toBe('my draft')
+    expect(screen.getByText('Clear the draft and attachment first, then tap /compact…')).toBeTruthy()
   })
 })
 
@@ -181,6 +215,7 @@ describe('MobileInputBar send failures', () => {
     vi.mocked(fetch).mockResolvedValue({ ok: false, status: 500 } as Response)
     render(<MobileInputBar address={runAddress} />)
     await click(screen.getByRole('button', { name: 'Ctrl+C' }))
+    await click(screen.getByRole('button', { name: 'Confirm' }))
     expect(screen.getByTestId('key-error').textContent).toContain('HTTP 500')
   })
 
@@ -302,6 +337,15 @@ describe('MobileInputBar staged attachment', () => {
       await new Promise((r) => setTimeout(r, 20))
     })
   }
+
+  it('refuses the /compact… prefill while an image is staged', async () => {
+    render(<MobileInputBar address={runAddress} runAgent="claude" runState="idle" />)
+    pick()
+    await click(screen.getByRole('button', { name: 'Commands' }))
+    await click(screen.getByRole('button', { name: '/compact…' }))
+    expect((field() as HTMLTextAreaElement).value).toBe('')
+    expect(screen.getByText('Clear the draft and attachment first, then tap /compact…')).toBeTruthy()
+  })
 
   it('picking a file stages a chip and does not call fetch', () => {
     render(<MobileInputBar address={runAddress} />)

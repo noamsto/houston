@@ -1,8 +1,10 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { Run } from '../api/runs'
 import { agoLabel, nameLabel } from './format'
 import { projectOf } from './fleetList'
 import { TerminalPane } from '../components/TerminalPane'
+import { isClaudeAgent, suggestedCommand } from '../components/quickCommands'
+import { useRunChat } from '../hooks/useRunChat'
 import { useTerminalLifecycle } from './useTerminalLifecycle'
 import { ChatTab } from './ChatTab'
 import { RunQuestion, RunStatusStrip } from './RunStatusStrip'
@@ -85,6 +87,10 @@ function RunDetailBody({ run, tab, streamConnected, now, onBack, backLabel }: { 
   // instead (see the terminal branch below) rather than silently falling back
   // here.
   const effectiveTab: DetailTab = tab === 'terminal' && (run.caps.terminal || lifecycle.everLive) ? 'terminal' : 'chat'
+  // useRunChat keeps its last updates once disabled, so gate the result too.
+  const chatEnabled = effectiveTab === 'terminal' && chatOffered && isClaudeAgent(run.agent)
+  const { updates } = useRunChat(run.id, chatEnabled)
+  const suggestion = useMemo(() => (chatEnabled ? suggestedCommand(updates) : null), [chatEnabled, updates])
 
   return (
     <>
@@ -139,6 +145,9 @@ function RunDetailBody({ run, tab, streamConnected, now, onBack, backLabel }: { 
                   onClose={onBack}
                   onConnectionChange={lifecycle.onConnectionChange}
                   onEnded={lifecycle.end}
+                  runAgent={run.agent}
+                  runState={run.state}
+                  suggestion={suggestion}
                 />
               </>
             )}

@@ -4,7 +4,9 @@ import { fetchTool } from '../api/chat'
 import type { ChatToolDetail } from '../api/chat'
 import { sendImage, sendKey, sendText } from '../api/terminal'
 import type { TerminalAddress } from '../api/terminal'
+import { QuickCommands } from '../components/QuickCommands'
 import { StagedImageChip } from '../components/StagedImageChip'
+import { suggestedCommand } from '../components/quickCommands'
 import { useComposerDraft } from '../components/useComposerDraft'
 import { readBase64, useStagedImage } from '../components/useStagedImage'
 import { useRunChat } from '../hooks/useRunChat'
@@ -224,12 +226,13 @@ function ChatItemRow({ item, runId, live, reducedMotion, revealed, onRevealed, o
 }
 
 /** `onSend` resolves to an error reason, or null once the text was sent. */
-function Composer({ run, onSend }: { run: Run; onSend: (text: string) => Promise<string | null> }) {
+function Composer({ run, suggestion, onSend }: { run: Run; suggestion: string | null; onSend: (text: string) => Promise<string | null> }) {
   const [text, setText, clearIf] = useComposerDraft(`chat:${run.id}`)
   const { staged, stage, clear } = useStagedImage()
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
   const disabled = !run.caps.terminal
   const address: TerminalAddress = { kind: 'run', id: run.id }
 
@@ -237,6 +240,13 @@ function Composer({ run, onSend }: { run: Run; onSend: (text: string) => Promise
   // gate; only text/image sends do. A failure is shown until the next action
   // starts, and a success never clears another action's error.
   const sendingRef = useRef(false)
+
+  const prefill = (value: string) => {
+    if (text.trim() || staged) return false
+    setText(value)
+    textareaRef.current?.focus()
+    return true
+  }
 
   const attempt = async (send: () => Promise<string | null>, sent: string | null) => {
     const isSend = sent !== null
@@ -300,12 +310,14 @@ function Composer({ run, onSend }: { run: Run; onSend: (text: string) => Promise
       {disabled && <div className="chat-composer-reason">No live terminal for this run</div>}
       {error && <div className="chat-composer-error" role="alert">{error}</div>}
       {staged && <StagedImageChip staged={staged} onRemove={clear} disabled={sending} />}
+      {!disabled && <QuickCommands address={address} agent={run.agent} state={run.state} suggestion={suggestion} onPrefill={prefill} />}
       <div className="chat-composer-row">
         <button type="button" className="chat-composer-esc" disabled={disabled} onClick={() => void attempt(() => sendKey(address, 'Escape'), null)}>
           Esc
         </button>
         <textarea
           className="chat-composer-textarea"
+          ref={textareaRef}
           value={text}
           disabled={disabled}
           onChange={(e) => setText(e.target.value)}
@@ -333,6 +345,7 @@ function Composer({ run, onSend }: { run: Run; onSend: (text: string) => Promise
 export function ChatTab({ run, now }: { run: Run; now: number }) {
   const { status, updates, liveIds, more, loadEarlier, retry } = useRunChat(run.id, true)
   const items = useMemo(() => buildItems(updates), [updates])
+  const suggestion = useMemo(() => suggestedCommand(updates), [updates])
   const [revealedIds, setRevealedIds] = useState<Set<string>>(new Set())
   const markRevealed = (id: string) => setRevealedIds((prev) => (prev.has(id) ? prev : new Set(prev).add(id)))
   const [revealVersion, setRevealVersion] = useState(0)
@@ -471,7 +484,7 @@ export function ChatTab({ run, now }: { run: Run; now: number }) {
         )}
       </div>
 
-      <Composer run={run} onSend={handleSend} />
+      <Composer run={run} suggestion={suggestion} onSend={handleSend} />
     </div>
   )
 }
