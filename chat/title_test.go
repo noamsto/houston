@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestToolTitle(t *testing.T) {
@@ -100,6 +101,18 @@ func TestToolKind(t *testing.T) {
 	for _, tt := range tests {
 		if got := ToolKind(tt.tool); got != tt.want {
 			t.Errorf("ToolKind(%q) = %q, want %q", tt.tool, got, tt.want)
+		}
+	}
+}
+
+func TestTruncateTitleRuneSafe(t *testing.T) {
+	for _, r := range []string{"ש", "😀"} {
+		got := truncateTitle(strings.Repeat(r, 200), 120)
+		if !utf8.ValidString(got) {
+			t.Fatalf("invalid UTF-8 for %q: %q", r, got)
+		}
+		if n := utf8.RuneCountInString(got); n > 120 {
+			t.Fatalf("%d runes, want <= 120", n)
 		}
 	}
 }
