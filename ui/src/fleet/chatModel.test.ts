@@ -242,19 +242,22 @@ describe('reconcileOptimistic', () => {
     expect(buildItems(updates)[0]).toMatchObject({ kind: 'user', text: 'hello' })
   })
 
-  it('confirms at exactly the 30s late boundary', () => {
+  it('confirms a chunk that lands long after the send (a message queued behind a running turn)', () => {
     const pending = [{ localId: 'p1', text: 'hello', sentAt: 10_000 }]
-    const updates = [userChunk('u1', 1, 'hello', { ts: 40_000 })]
-    const result = reconcileOptimistic(pending, updates, 41_000)
-    expect(result.confirmed).toEqual(['p1'])
+    const before = reconcileOptimistic(pending, [], 41_000)
+    expect(before.remaining).toEqual([{ localId: 'p1', text: 'hello', sentAt: 10_000, unconfirmed: true }])
+
+    const updates = [userChunk('u1', 1, 'hello', { ts: 70_000 })]
+    const result = reconcileOptimistic(pending, updates, 71_000)
+    expect(result).toEqual({ confirmed: ['p1'], remaining: [] })
   })
 
-  it('does not confirm just past the 30s late boundary', () => {
-    const pending = [{ localId: 'p1', text: 'hello', sentAt: 10_000 }]
-    const updates = [userChunk('u1', 1, 'hello', { ts: 40_001 })]
-    const result = reconcileOptimistic(pending, updates, 39_000)
+  it('does not confirm a lost bubble from an identical message arriving beyond 30 minutes', () => {
+    const pending = [{ localId: 'p1', text: 'yes', sentAt: 10_000 }]
+    const updates = [userChunk('u1', 1, 'yes', { ts: 10_000 + 30 * 60_000 + 1 })]
+    const result = reconcileOptimistic(pending, updates, 10_000 + 31 * 60_000)
     expect(result.confirmed).toEqual([])
-    expect(result.remaining).toEqual([{ localId: 'p1', text: 'hello', sentAt: 10_000, unconfirmed: false }])
+    expect(result.remaining).toEqual([{ localId: 'p1', text: 'yes', sentAt: 10_000, unconfirmed: true }])
   })
 
   it('does not confirm past the 5s early boundary', () => {

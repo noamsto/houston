@@ -77,6 +77,7 @@ function mockMatchMedia(matches: boolean) {
 let fake: FakeEventSourceHandle
 
 beforeEach(() => {
+  localStorage.clear()
   fake = installFakeEventSource()
   mockMatchMedia(false)
 })
@@ -330,6 +331,33 @@ describe('ChatTab', () => {
     expect(screen.getByText('ping the server')).toBeTruthy()
   })
 
+  it('a message queued behind a long turn is flagged not confirmed, then reconciles when its chunk lands late', async () => {
+    await renderReady({}, { page: page('e1', []) })
+    const es = fake.instances[0]
+
+    vi.useFakeTimers()
+    try {
+      const textarea = screen.getByPlaceholderText('Message…') as HTMLTextAreaElement
+      fireEvent.change(textarea, { target: { value: 'queued message' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+      await act(async () => {})
+      expect(document.querySelector('.chat-optimistic')?.textContent).toBe('queued message')
+
+      act(() => { vi.advanceTimersByTime(35_000) })
+      expect(document.querySelector('.chat-optimistic-flag')?.textContent).toBe('not confirmed')
+
+      act(() => { vi.advanceTimersByTime(25_000) })
+      act(() => {
+        es.emit('updates', [userChunk('late', 100, 'queued message', { ts: Date.now() })])
+      })
+
+      expect(document.querySelector('.chat-optimistic')).toBeNull()
+      expect(screen.getByText('queued message')).toBeTruthy()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('a failed Send keeps the text, shows the error, and leaves no optimistic bubble', async () => {
     const { fetchMock } = await renderReady({}, { page: page('e1', []) })
     fetchMock.mockImplementation((url: string) => {
@@ -344,6 +372,108 @@ describe('ChatTab', () => {
     await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('HTTP 500'))
     expect(textarea.value).toBe('ping the server')
     expect(document.querySelector('.chat-optimistic')).toBeNull()
+  })
+
+  describe('durable drafts and staged attachments', () => {
+    const textarea = () => screen.getByPlaceholderText('Message…') as HTMLTextAreaElement
+    const input = () => document.querySelector('input[type=file]') as HTMLInputElement
+    const png = () => new File(['x'], 'shot.png', { type: 'image/png' })
+    const pick = () => fireEvent.change(input(), { target: { files: [png()] } })
+    const storedDraft = () => {
+      const raw = localStorage.getItem('houston-draft:chat:r1')
+      return raw === null ? null : (JSON.parse(raw) as { t: string }).t
+    }
+    const inputCalls = (fetchMock: ReturnType<typeof vi.fn>) =>
+      fetchMock.mock.calls.filter((c: unknown[]) => String(c[0]).includes('/input')) as [string, RequestInit][]
+
+    it('restores the typed draft after the tab remounts for the same run, and not for another run', async () => {
+      const first = await renderReady({}, { page: page('e1', []) })
+      fireEvent.change(textarea(), { target: { value: 'half-typed' } })
+      first.unmount()
+
+      render(<ChatTab run={run()} now={now} />)
+      await waitFor(() => expect(textarea().value).toBe('half-typed'))
+      cleanup()
+
+      render(<ChatTab run={run({ id: 'r2' })} now={now} />)
+      await waitFor(() => expect(textarea().value).toBe(''))
+    })
+
+    it('drops the stored draft after a successful send', async () => {
+      await renderReady({}, { page: page('e1', []) })
+      fireEvent.change(textarea(), { target: { value: 'ping the server' } })
+      expect(storedDraft()).toBe('ping the server')
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+      await waitFor(() => expect(textarea().value).toBe(''))
+      expect(storedDraft()).toBeNull()
+    })
+
+    it('a timed-out send keeps the full multi-line text, stored draft and no optimistic bubble', async () => {
+      const { fetchMock } = await renderReady({}, { page: page('e1', []) })
+      fetchMock.mockImplementation((url: string) => {
+        if (url.includes('/input')) return Promise.reject(new DOMException('x', 'TimeoutError'))
+        return Promise.resolve(jsonResponse(page('e1', [])))
+      })
+      const body = 'line one\nline two\n\nline four'
+      fireEvent.change(textarea(), { target: { value: body } })
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+
+      await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('timed out'))
+      expect(textarea().value).toBe(body)
+      expect(document.querySelector('.chat-optimistic')).toBeNull()
+      expect(storedDraft()).toBe(body)
+    })
+
+    it('picking a file only stages it: no /input request, chip shown, × removes it', async () => {
+      const { fetchMock } = await renderReady({}, { page: page('e1', []) })
+      pick()
+      await waitFor(() => expect(screen.getByTestId('staged-image').textContent).toContain('shot.png'))
+      expect(inputCalls(fetchMock)).toHaveLength(0)
+
+      fireEvent.click(screen.getByRole('button', { name: 'Remove attachment' }))
+      expect(screen.queryByTestId('staged-image')).toBeNull()
+    })
+
+    it('Send with a chip and text posts the image, then clears the chip and the field', async () => {
+      const { fetchMock } = await renderReady({}, { page: page('e1', []) })
+      fireEvent.change(textarea(), { target: { value: 'look at this' } })
+      pick()
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+
+      await waitFor(() => expect(screen.queryByTestId('staged-image')).toBeNull())
+      expect(textarea().value).toBe('')
+      const calls = inputCalls(fetchMock)
+      expect(calls).toHaveLength(1)
+      expect(JSON.parse(String(calls[0][1].body))).toEqual({
+        type: 'image',
+        text: 'look at this',
+        images: [{ name: 'shot.png', type: 'image/png', data: 'eA==' }],
+      })
+      expect(document.querySelector('.chat-optimistic')).toBeNull()
+    })
+
+    it('Send with only a chip (no text) is allowed', async () => {
+      const { fetchMock } = await renderReady({}, { page: page('e1', []) })
+      pick()
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+      await waitFor(() => expect(screen.queryByTestId('staged-image')).toBeNull())
+      expect(JSON.parse(String(inputCalls(fetchMock)[0][1].body))).toMatchObject({ type: 'image', text: '' })
+    })
+
+    it('a failed image send keeps the chip and the text', async () => {
+      const { fetchMock } = await renderReady({}, { page: page('e1', []) })
+      fetchMock.mockImplementation((url: string) => {
+        if (url.includes('/input')) return Promise.resolve({ status: 500, ok: false, json: async () => ({}), text: async () => '' } as Response)
+        return Promise.resolve(jsonResponse(page('e1', [])))
+      })
+      fireEvent.change(textarea(), { target: { value: 'look at this' } })
+      pick()
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+
+      await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('HTTP 500'))
+      expect(screen.getByTestId('staged-image')).toBeTruthy()
+      expect(textarea().value).toBe('look at this')
+    })
   })
 
   it('a failed Esc shows the error inline', async () => {
@@ -435,7 +565,7 @@ describe('ChatTab', () => {
       fireEvent.change(input, { target: { files: [new File(['x'], 'a.png', { type: 'image/png' })] } })
     }
 
-    it('an image attach holds the gate while the file is read, so a Send cannot overlap or drop it', async () => {
+    it('a Send with a staged image holds the gate while the file is read, so another Send cannot overlap or drop it', async () => {
       const { fetchMock } = await renderReady({}, { page: page('e1', []) })
       const d = deferredInput()
       fetchMock.mockImplementation(d.impl)
@@ -444,6 +574,7 @@ describe('ChatTab', () => {
         const textarea = screen.getByPlaceholderText('Message…') as HTMLTextAreaElement
         fireEvent.change(textarea, { target: { value: 'hello' } })
         pickFile()
+        fireEvent.click(sendBtn())
         await waitFor(() => expect(sendBtn().disabled).toBe(true))
         fireEvent.keyDown(textarea, { key: 'Enter', ctrlKey: true })
         expect(d.pending).toHaveLength(0)
@@ -457,14 +588,16 @@ describe('ChatTab', () => {
       }
     })
 
-    it('a failed file read shows an error and releases the gate', async () => {
+    it('a failed file read shows an error, keeps the chip and releases the gate', async () => {
       await renderReady({}, { page: page('e1', []) })
       const reader = stubFileReader('error')
       try {
         pickFile()
+        fireEvent.click(sendBtn())
         await waitFor(() => expect(sendBtn().disabled).toBe(true))
         await act(async () => reader.finish())
         expect(screen.getByRole('alert').textContent).toBe('could not read file')
+        expect(screen.getByTestId('staged-image')).toBeTruthy()
         expect(sendBtn().disabled).toBe(false)
       } finally {
         reader.restore()
@@ -482,6 +615,24 @@ describe('ChatTab', () => {
       fireEvent.change(textarea, { target: { value: 'hello again' } })
       await act(async () => d.pending[0].resolve(okResponse()))
       expect(textarea.value).toBe('hello again')
+    })
+
+    it('a send that succeeds after the composer remounted does not leave the sent text in the new one', async () => {
+      const first = await renderReady({}, { page: page('e1', []) })
+      const d = deferredInput()
+      first.fetchMock.mockImplementation(d.impl)
+      fireEvent.change(screen.getByPlaceholderText('Message…'), { target: { value: 'deploy prod' } })
+      fireEvent.click(sendBtn())
+      await waitFor(() => expect(d.pending).toHaveLength(1))
+      first.unmount()
+
+      render(<ChatTab run={run()} now={now} />)
+      const textarea = await screen.findByPlaceholderText('Message…') as HTMLTextAreaElement
+      expect(textarea.value).toBe('deploy prod')
+
+      await act(async () => d.pending[0].resolve(okResponse()))
+      expect(textarea.value).toBe('')
+      expect(localStorage.getItem('houston-draft:chat:r1')).toBeNull()
     })
 
     it('picking a file after a Send started (before the button disabled) reports busy', async () => {
