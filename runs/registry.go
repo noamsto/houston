@@ -213,6 +213,7 @@ func (r *Registry) composeLocked(key string) (Run, bool) {
 	if crew := bySource["crew"]; out.Session == "" && chat.For(crew.Agent) != nil {
 		out.Session = crew.CrewSession
 	}
+	out.DraftKey = draftKeyOf(out)
 	out.Caps = deriveCaps(bySource)
 	// run.go documents "non-nil Question implies State == StateBlocked", and
 	// composition is where that invariant must actually hold: hooksource.go
@@ -321,7 +322,7 @@ type signature struct {
 
 	actTool, actHint, actMessage, actTask, actPreview string
 
-	session string
+	session, draftKey string
 
 	// background encodes the task list as a string; the struct must stay comparable.
 	background string
@@ -351,6 +352,7 @@ func runSignature(r Run) signature {
 		actTask:       r.Activity.Task,
 		actPreview:    r.Activity.Preview,
 		session:       r.Session,
+		draftKey:      r.DraftKey,
 		stale:         r.Stale,
 		capTerminal:   r.Caps.Terminal,
 		capReply:      r.Caps.Reply,

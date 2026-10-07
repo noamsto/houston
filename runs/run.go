@@ -28,6 +28,13 @@ type Run struct {
 	Branch   string `json:"branch,omitempty"`
 	Worktree string `json:"worktree,omitempty"`
 
+	// DraftKey is an opaque, non-secret id of the session behind a pane run.
+	// It changes when the tmux server or the session does, so a draft keyed
+	// by it can't reappear in another agent that inherits the pane id. It can
+	// change while a layer is still filling in, and with neither server nor
+	// session known it is only as unique as the pane id.
+	DraftKey string `json:"draft_key,omitempty"`
+
 	Tmux  *TmuxRef  `json:"tmux,omitempty"`
 	Issue *IssueRef `json:"issue,omitempty"`
 	PR    *PRRef    `json:"pr,omitempty"`

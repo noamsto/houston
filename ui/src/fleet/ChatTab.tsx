@@ -228,7 +228,7 @@ function ChatItemRow({ item, runId, canAnswer, live, reducedMotion, revealed, on
 
 /** `onSend` resolves to an error reason, or null once the text was sent. */
 function Composer({ run, suggestion, onSend }: { run: Run; suggestion: string | null; onSend: (text: string) => Promise<string | null> }) {
-  const [text, setText, clearIf] = useComposerDraft(`chat:${run.id}`)
+  const [text, setText, clearIf] = useComposerDraft(`chat:${run.draft_key ?? run.id}`)
   const { staged, stage, clear } = useStagedImage()
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -486,7 +486,7 @@ export function ChatTab({ run, now }: { run: Run; now: number }) {
         )}
       </div>
 
-      <Composer run={run} suggestion={suggestion} onSend={handleSend} />
+      <Composer key={run.draft_key ?? run.id} run={run} suggestion={suggestion} onSend={handleSend} />
     </div>
   )
 }

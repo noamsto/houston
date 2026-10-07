@@ -399,6 +399,30 @@ describe('ChatTab', () => {
       await waitFor(() => expect(textarea().value).toBe(''))
     })
 
+    it('does not restore a draft written for another session on the same run id', async () => {
+      const first = await renderReady({ draft_key: 'sess-a' }, { page: page('e1', []) })
+      fireEvent.change(textarea(), { target: { value: 'for agent A' } })
+      first.unmount()
+
+      render(<ChatTab run={run({ draft_key: 'sess-b' })} now={now} />)
+      await waitFor(() => expect(textarea().value).toBe(''))
+      cleanup()
+
+      render(<ChatTab run={run({ draft_key: 'sess-a' })} now={now} />)
+      await waitFor(() => expect(textarea().value).toBe('for agent A'))
+    })
+
+    it('a draft_key change on a mounted chat tab does not carry the text over', async () => {
+      const view = await renderReady({ draft_key: 'sess-a' }, { page: page('e1', []) })
+      fireEvent.change(textarea(), { target: { value: 'for agent A' } })
+
+      view.rerender(<ChatTab run={run({ draft_key: 'sess-b' })} now={now} />)
+      await waitFor(() => expect(textarea().value).toBe(''))
+      fireEvent.change(textarea(), { target: { value: 'x' } })
+      expect(JSON.parse(localStorage.getItem('houston-draft:chat:sess-b') ?? '{}').t).toBe('x')
+      expect(JSON.parse(localStorage.getItem('houston-draft:chat:sess-a') ?? '{}').t).toBe('for agent A')
+    })
+
     it('drops the stored draft after a successful send', async () => {
       await renderReady({}, { page: page('e1', []) })
       fireEvent.change(textarea(), { target: { value: 'ping the server' } })

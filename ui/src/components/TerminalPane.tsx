@@ -33,6 +33,7 @@ interface Props {
   runAgent?: string
   runState?: string
   suggestion?: string | null
+  draftKey?: string
 }
 
 /** Write a capture-pane snapshot into xterm.js.
@@ -62,7 +63,7 @@ function writeSnapshot(term: Terminal, data: string, onDone?: () => void) {
 const MOBILE_TERM_WIDTH = 960
 const PAD = 6
 
-export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader = false, onConnectionChange, onEnded, runAgent, runState, suggestion }: Props) {
+export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader = false, onConnectionChange, onEnded, runAgent, runState, suggestion, draftKey }: Props) {
   const key = terminalKey(address)
   // outerRef: observed by ResizeObserver; has padding that creates visual breathing room
   const outerRef = useRef<HTMLDivElement>(null)
@@ -795,8 +796,9 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
       )}
       {!isDesktop && (
         <MobileInputBar
-          key={key}
+          key={`${key}:${draftKey ?? ''}`}
           address={address}
+          draftKey={draftKey}
           choices={meta?.choices}
           inputText={meta?.input_text}
           agent={meta?.agent}
