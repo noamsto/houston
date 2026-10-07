@@ -1212,6 +1212,44 @@ func TestScanWorkerBlockedOnLiveDispatcherIsNotNeedsYou(t *testing.T) {
 	}
 }
 
+// With no dispatcher pane on record (a houston-minted crew, or one whose
+// dispatcher is gone) nobody can answer the worker's question but the human.
+func TestScanWorkerBlockedWithoutDispatcherNeedsYou(t *testing.T) {
+	bus := t.TempDir()
+	statusTS := time.Now().Add(-60 * time.Second).UnixMilli()
+	events := `{"ts":1000,"crew_id":"c1","kind":"dispatch","branch":"fix/412","engine":"claude"}` + "\n" +
+		fmt.Sprintf(`{"ts":%d,"crew_id":"c1","from":"worker:fix/412#s1","kind":"status","body":{"state":"blocked","detail":"spec: which engine?"}}`, statusTS) + "\n"
+	if err := os.WriteFile(filepath.Join(bus, "events.jsonl"), []byte(events), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := crewScanner(
+		map[string]string{"/wt/a": bus},
+		[]tmux.WindowOptions{
+			{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"},
+			{Session: "h", Window: 2, CrewName: "dispatcher"},
+		},
+		[]tmux.PaneOptions{
+			agentPane("%307", "h:1"),
+			{PaneID: "%1", Target: "h:2", ClaudeStatus: "idle 1 "},
+		},
+	)
+
+	got, ok := s.scan()
+	if !ok {
+		t.Fatal("scan reported failure")
+	}
+	r, found := got["%307"]
+	if !found {
+		t.Fatalf("no run under the pane key — keys %v", keysOf(got))
+	}
+	if r.State != StateBlocked {
+		t.Errorf("State = %q, want blocked: no dispatcher can answer", r.State)
+	}
+	if r.Question == nil || r.Question.Via != "crew" || r.Question.Text != "spec: which engine?" {
+		t.Errorf("Question = %+v, want the worker's question via crew", r.Question)
+	}
+}
+
 func TestScanFallsBackWhenNoPaneJoins(t *testing.T) {
 	t.Run("the only pane is a shell", func(t *testing.T) {
 		bus := writeBus(t, "fix/412")
@@ -1400,48 +1438,256 @@ func TestPRNumberFromURL(t *testing.T) {
 	}
 }
 
-// TestDeltasFromCrewLogWatchdogAsksOnlyWhatTheHumanCanAnswer is #143 root
-// cause 3: a watchdog blocked status is liveness bookkeeping for the
-// dispatcher, not a question addressed to a human. Only the prefixes a human
-// can clear at the pane (prompt:/quota:) may raise the attention badge.
-func TestDeltasFromCrewLogWatchdogAsksOnlyWhatTheHumanCanAnswer(t *testing.T) {
-	status := func(detail string) string {
-		return `{"ts":1000,"crew_id":"c1","kind":"dispatch","branch":"fix/10","engine":"claude"}` + "\n" +
-			`{"ts":1100,"crew_id":"c1","from":"worker:fix/10#s1","kind":"status","body":{"state":"blocked","detail":"` + detail + `","source":"watchdog"}}` + "\n"
+// TestDeltasFromCrewLogWatchdogPrefixes pins what each watchdog blocked prefix
+// means for the card: only prompt: needs a human (at the pane); the prefixes
+// that signal a stalled or limited worker mark it stuck while it reads
+// running; load: and anything unlisted claim nothing. The prefix must be
+// followed by a colon.
+func TestDeltasFromCrewLogWatchdogPrefixes(t *testing.T) {
+	cases := []struct {
+		detail        string
+		state         State
+		question      string // "" = no Question; else its pane text
+		attention     Attention
+		attentionNote string
+	}{
+		{"prompt: interactive prompt in pane %326 — worker is waiting on input nobody can give", StateBlocked, crewWatchdogPromptNote, AttentionNone, ""},
+		{"quota: quota exhausted — worker parked on the rate-limit prompt in pane %326", StateRunning, "", AttentionStuck, crewWatchdogQuotaNote},
+		{"turn-stall: token count static at 25.0k for 1800s", StateRunning, "", AttentionStuck, crewWatchdogTurnStallNote},
+		{"quiet: pane unchanged for 1800s", StateRunning, "", AttentionStuck, crewWatchdogQuietNote},
+		{"stalled: no output for 300s", StateRunning, "", AttentionStuck, crewWatchdogStalledNote},
+		{"runaway: sentinel tokens leaked", StateRunning, "", AttentionStuck, crewWatchdogRunawayNote},
+		{"unread: lead has not read the reviewer verdict", StateRunning, "", AttentionStuck, crewWatchdogUnreadNote},
+		{"budget: token budget reached", StateRunning, "", AttentionStuck, crewWatchdogBudgetNote},
+		{"load: 1m load 9 on 8 cores for 60s", StateRunning, "", AttentionNone, ""},
+		{"mystery: x", StateRunning, "", AttentionNone, ""},
+		{"quietly waiting", StateRunning, "", AttentionNone, ""},
+		{"", StateRunning, "", AttentionNone, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.detail, func(t *testing.T) {
+			fixture := `{"ts":1000,"crew_id":"c1","kind":"dispatch","branch":"fix/10","engine":"claude"}` + "\n" +
+				fmt.Sprintf(`{"ts":1100,"crew_id":"c1","from":"worker:fix/10#s1","kind":"status","body":{"state":"blocked","detail":%q,"source":"watchdog"}}`, c.detail) + "\n"
+			r := deltasFromCrewLog(strings.NewReader(fixture))["fix/10"]
+			if r.State != c.state {
+				t.Errorf("State = %q, want %q", r.State, c.state)
+			}
+			switch {
+			case c.question == "" && r.Question != nil:
+				t.Errorf("Question = %+v, want nil", r.Question)
+			case c.question != "" && (r.Question == nil || r.Question.Via != "pane" || r.Question.Text != c.question):
+				t.Errorf("Question = %+v, want Via pane text %q", r.Question, c.question)
+			}
+			if r.Attention != c.attention || r.AttentionNote != c.attentionNote {
+				t.Errorf("Attention = %q %q, want %q %q", r.Attention, r.AttentionNote, c.attention, c.attentionNote)
+			}
+			if r.Crew.Detail != "" {
+				t.Errorf("Detail = %q, want cleared — a watchdog note never reaches the card", r.Crew.Detail)
+			}
+			if r.blockedSince != 0 {
+				t.Errorf("blockedSince = %d, want 0 — a watchdog status is not a question to the dispatcher", r.blockedSince)
+			}
+		})
+	}
+}
+
+func TestDeltasFromCrewLogFailedIsStuck(t *testing.T) {
+	const head = `{"ts":1000,"crew_id":"c1","kind":"dispatch","branch":"fix/11","engine":"claude"}` + "\n"
+	cases := []struct {
+		name, status string
+		note, detail string
+	}{
+		{"watchdog dead", `{"state":"failed","detail":"dead: engine process gone","source":"watchdog"}`, crewWatchdogDeadNote, ""},
+		{"worker failed", `{"state":"failed","detail":"gate won't pass"}`, "", "gate won't pass"},
+		{"exited", `{"state":"exited"}`, "", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			fixture := head + `{"ts":1100,"crew_id":"c1","from":"worker:fix/11#s1","kind":"status","body":` + c.status + "}\n"
+			r := deltasFromCrewLog(strings.NewReader(fixture))["fix/11"]
+			if r.State != StateFailed {
+				t.Errorf("State = %q, want failed", r.State)
+			}
+			if r.AttentionNote != c.note {
+				t.Errorf("AttentionNote = %q, want %q", r.AttentionNote, c.note)
+			}
+			if r.Crew.Detail != c.detail {
+				t.Errorf("Detail = %q, want %q", r.Crew.Detail, c.detail)
+			}
+		})
 	}
 
-	t.Run("informational prefixes ask nobody", func(t *testing.T) {
-		for _, detail := range []string{
-			"quiet: pane unchanged for 1800s",
-			"stalled: no output for 300s",
-			"turn-stall: token count static at 25.0k for 1800s",
-			"load: 1m load 9 on 8 cores for 60s",
-		} {
-			r := deltasFromCrewLog(strings.NewReader(status(detail)))["fix/10"]
-			if r.State == StateBlocked {
-				t.Errorf("%q: State = blocked, want not needs-attention", detail)
-			}
-			if r.Question != nil {
-				t.Errorf("%q: Question = %+v, want nil", detail, r.Question)
-			}
-		}
-	})
-
-	t.Run("prompt and quota are answerable at the pane", func(t *testing.T) {
-		for detail, want := range map[string]string{
-			"prompt: interactive prompt in pane %326 — worker is waiting on input nobody can give": crewWatchdogPromptNote,
-			"quota: quota exhausted — worker parked on the rate-limit prompt in pane %326":         crewWatchdogQuotaNote,
-		} {
-			r := deltasFromCrewLog(strings.NewReader(status(detail)))["fix/10"]
-			if r.State != StateBlocked {
-				t.Errorf("%q: State = %q, want blocked", detail, r.State)
-			}
-			if r.Question == nil || r.Question.Via != "pane" || r.Question.Text != want {
-				t.Errorf("%q: Question = %+v, want Via pane text %q", detail, r.Question, want)
-			}
+	t.Run("latest status resets the attention", func(t *testing.T) {
+		fixture := head +
+			`{"ts":1100,"crew_id":"c1","from":"worker:fix/11#s1","kind":"status","body":{"state":"blocked","detail":"quota: limit","source":"watchdog"}}` + "\n" +
+			`{"ts":1200,"crew_id":"c1","from":"worker:fix/11#s1","kind":"status","body":{"state":"working"}}` + "\n"
+		r := deltasFromCrewLog(strings.NewReader(fixture))["fix/11"]
+		if r.Attention != AttentionNone || r.AttentionNote != "" {
+			t.Errorf("Attention = %q %q, want none — the later status replaced the stuck one", r.Attention, r.AttentionNote)
 		}
 	})
 }
+
+func TestDeltasFromCrewLogDoneAndPROpen(t *testing.T) {
+	const fixture = `{"ts":1000,"crew_id":"c1","kind":"dispatch","branch":"fix/13","engine":"claude"}
+{"ts":1100,"crew_id":"c1","from":"worker:fix/13#s1","kind":"status","body":{"state":"done"}}
+{"ts":1200,"crew_id":"c1","from":"worker:fix/14#s1","kind":"status","body":{"state":"pr_open","pr_url":"https://github.com/x/y/pull/9"}}
+`
+	got := deltasFromCrewLog(strings.NewReader(fixture))
+	if got["fix/13"].State != StateDone || got["fix/14"].State != StateReview {
+		t.Errorf("States = %q, %q; want done, review", got["fix/13"].State, got["fix/14"].State)
+	}
+}
+
+func TestDeltasFromCrewLogBlockedSince(t *testing.T) {
+	const head = `{"ts":500,"crew_id":"c1","kind":"dispatch","branch":"fix/12","engine":"claude"}` + "\n"
+	status := func(ts int64, state string) string {
+		return fmt.Sprintf(`{"ts":%d,"crew_id":"c1","from":"worker:fix/12#s1","kind":"status","body":{"state":%q,"detail":"which way?"}}`+"\n", ts, state)
+	}
+	reply := func(ts int64) string {
+		return fmt.Sprintf(`{"ts":%d,"crew_id":"c1","from":"dispatcher:c1","to":"worker:fix/12#s1","kind":"msg","body":"this way"}`+"\n", ts)
+	}
+	cases := []struct {
+		name string
+		log  string
+		want int64
+	}{
+		{"re-stamp keeps the episode start", head + status(1000, "blocked") + status(2000, "blocked"), 1000},
+		{"working in between starts a new episode", head + status(1000, "blocked") + status(3000, "working") + status(4000, "blocked"), 4000},
+		{"a reply in between starts a new episode", head + status(1000, "blocked") + reply(4500) + status(5000, "blocked"), 5000},
+		{"a reply older than the episode does not end it", head + reply(900) + status(1000, "blocked") + status(2000, "blocked"), 1000},
+		{"not blocked", head + status(1000, "working"), 0},
+		{"answered and retired", head + status(1000, "blocked") + reply(2000), 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := deltasFromCrewLog(strings.NewReader(c.log))["fix/12"].blockedSince; got != c.want {
+				t.Errorf("blockedSince = %d, want %d", got, c.want)
+			}
+		})
+	}
+}
+
+func TestRouteCrewQuestion(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	blockedAt := func(ago time.Duration) crewBranch {
+		return crewBranch{
+			Run: Run{
+				State:    StateBlocked,
+				Question: &Question{Text: "which engine?", Via: "crew"},
+				Crew:     &CrewRef{Name: "c1", Detail: "which engine?"},
+			},
+			blockedSince: now.Add(-ago).UnixMilli(),
+		}
+	}
+	watchdog := crewBranch{Run: Run{
+		State:    StateBlocked,
+		Question: &Question{Text: crewWatchdogPromptNote, Via: "pane"},
+		Crew:     &CrewRef{Name: "c1"},
+	}}
+	running := crewBranch{Run: Run{State: StateRunning, Crew: &CrewRef{Name: "c1"}}}
+
+	cases := []struct {
+		name         string
+		b            crewBranch
+		live         bool
+		wantState    State
+		wantQuestion bool
+	}{
+		{"live dispatcher, asked a minute ago", blockedAt(time.Minute), true, StateRunning, false},
+		{"live dispatcher, silent past the window", blockedAt(crewDispatcherSilence + time.Minute), true, StateBlocked, true},
+		{"live dispatcher, exactly at the window", blockedAt(crewDispatcherSilence), true, StateBlocked, true},
+		{"no live dispatcher", blockedAt(time.Minute), false, StateBlocked, true},
+		{"watchdog prompt, live dispatcher", watchdog, true, StateBlocked, true},
+		{"watchdog prompt, no dispatcher", watchdog, false, StateBlocked, true},
+		{"not blocked", running, true, StateRunning, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := routeCrewQuestion(c.b, c.live, now)
+			if got.State != c.wantState {
+				t.Errorf("State = %q, want %q", got.State, c.wantState)
+			}
+			if (got.Question != nil) != c.wantQuestion {
+				t.Errorf("Question = %+v, want present=%v", got.Question, c.wantQuestion)
+			}
+			if c.b.Crew != nil && got.Crew != c.b.Crew {
+				t.Errorf("Crew pointer changed — the routing must keep the card's detail")
+			}
+		})
+	}
+
+	t.Run("does not write through the cached branch", func(t *testing.T) {
+		b := blockedAt(time.Minute)
+		q := b.Question
+		got := routeCrewQuestion(b, true, now)
+		if got.Question != nil {
+			t.Fatalf("Question = %+v, want nil", got.Question)
+		}
+		if b.Question != q || b.Question == nil || b.State != StateBlocked {
+			t.Errorf("input mutated: State=%q Question=%+v", b.State, b.Question)
+		}
+		if got.Crew == nil || got.Crew.Detail != "which engine?" {
+			t.Errorf("Crew = %+v, want Detail kept", got.Crew)
+		}
+	})
+}
+
+func TestDispatcherLive(t *testing.T) {
+	dispatcherWin := tmux.WindowOptions{Session: "h", Window: 2, CrewName: "dispatcher"}
+	workerWin := tmux.WindowOptions{Session: "h", Window: 3, CrewName: "bronze"}
+	claudePane := tmux.PaneOptions{PaneID: "%1", Target: "h:2", ClaudeStatus: "idle 1 "}
+
+	cases := []struct {
+		name     string
+		paneFile *string // nil: no file
+		crewID   string
+		wins     []tmux.WindowOptions
+		panes    []tmux.PaneOptions
+		want     bool
+	}{
+		{"claude pane on a dispatcher window", ptr("%1"), "c1", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{claudePane}, true},
+		{"agent-detect pane", ptr("%1"), "c1", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{piPane("%1", "h:2", "idle", 1)}, true},
+		{"pane missing from the listing", ptr("%9"), "c1", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{claudePane}, false},
+		{"window is not a dispatcher", ptr("%1"), "c1", []tmux.WindowOptions{{Session: "h", Window: 2, CrewName: "bronze"}, workerWin}, []tmux.PaneOptions{claudePane}, false},
+		{"no engine status", ptr("%1"), "c1", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{{PaneID: "%1", Target: "h:2"}}, false},
+		{"no pane file", nil, "c1", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{claudePane}, false},
+		{"empty crew id", ptr("%1"), "", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{claudePane}, false},
+		{"surrounding whitespace", ptr("  %1\n"), "c1", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{claudePane}, true},
+		{"crew id escaping crews/", ptr("%1"), "../c1", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{claudePane}, false},
+		{"crew id dot-dot", ptr("%1"), "..", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{claudePane}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			bus := t.TempDir()
+			if c.paneFile != nil {
+				for _, id := range []string{"c1", "."} {
+					dir := filepath.Join(bus, "crews", id)
+					if err := os.MkdirAll(dir, 0o755); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(dir, "pane"), []byte(*c.paneFile), 0o644); err != nil {
+						t.Fatal(err)
+					}
+				}
+				// Files reachable only through a crew id that climbs out of crews/.
+				if err := os.MkdirAll(filepath.Join(bus, "c1"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				for _, rel := range []string{"pane", filepath.Join("c1", "pane")} {
+					if err := os.WriteFile(filepath.Join(bus, rel), []byte(*c.paneFile), 0o644); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if got := dispatcherLive(bus, c.crewID, c.wins, c.panes); got != c.want {
+				t.Errorf("dispatcherLive = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+func ptr[T any](v T) *T { return &v }
 
 func TestCrewLogReadsEngineSessionNewestWins(t *testing.T) {
 	log := `{"ts":1,"kind":"dispatch","branch":"feat/a","engine":"claude","engine_session":"old"}
