@@ -21,9 +21,9 @@ interface CrewRepo {
 
 function phase(run: Run): string {
   if (run.state === 'blocked') return run.activity.message || BLOCKED_FALLBACK
-  if (run.crew?.detail) return run.crew.detail
   const { tool, hint } = run.activity
   if (tool) return hint ? `${tool} · ${hint}` : tool
+  if (run.crew?.detail) return run.crew.detail
   return run.state
 }
 
@@ -49,6 +49,7 @@ function Member({ run, now, onOpen }: { run: Run; now: number; onOpen?: (r: Run)
           <span className="crews-swatch" style={{ background: run.crew?.color || 'var(--text-faint)' }} />
           <span className="crews-codename">{run.crew?.codename || 'worker'}</span>
           <span className="crews-when">
+            {!attention && run.state === 'idle' && <span className="run-chip crews-idle">idle</span>}
             {attention && <span className={`run-chip crews-attention ${attention}`}>{ATTENTION_LABEL[attention]}</span>}
             <span className={`run-age${stale ? ' stale' : ''}`}>{agoLabel(run.updated_at, now)}</span>
           </span>

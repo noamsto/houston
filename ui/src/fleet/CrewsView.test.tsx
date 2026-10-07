@@ -100,11 +100,12 @@ describe('CrewsView', () => {
   it('shows the counts label in the crew header', () => {
     const runs = [
       run({ id: 'a', crew: { name: 'c' }, state: 'running' }),
-      run({ id: 'b', crew: { name: 'c' }, state: 'blocked' }),
+      run({ id: 'b', crew: { name: 'c' }, state: 'blocked', attention: 'needs-you' }),
       run({ id: 'd', crew: { name: 'c' }, state: 'done', updated_at: old }),
+      run({ id: 'e', crew: { name: 'c' }, state: 'idle' }),
     ]
     const { container } = render(<CrewsView runs={runs} now={now} />)
-    expect(container.querySelector('.crews-counts')?.textContent).toBe('1 working · 1 needs you · 1 done')
+    expect(container.querySelector('.crews-counts')?.textContent).toBe('1 working · 1 needs you · 1 idle · 1 ended')
   })
 
   describe('roster row', () => {
@@ -243,8 +244,30 @@ describe('CrewsView', () => {
       expect(kite.querySelector('.crews-sessions')).toBeNull()
 
       const wren = card('Wren')
+      expect(wren.querySelector('.crews-idle')).toBeNull()
       expect(wren.querySelector('.crews-attention')).toBeNull()
       expect(wren.querySelector('.crews-phase')?.textContent).toBe('writing the plan')
+    })
+  })
+
+  describe('card states', () => {
+    it('shows an idle chip for an unflagged idle worker and prefers live tool activity over the bus detail', () => {
+      const runs = [
+        run({ id: 'i', crew: { name: 'c', codename: 'Idler', detail: 'old line' }, state: 'idle' }),
+        run({ id: 'w', crew: { name: 'c', codename: 'Busy', detail: 'old line' }, activity: { tool: 'Edit', hint: 'main.go' }, updated_at: nowSec - 1 }),
+      ]
+      const { container } = render(<CrewsView runs={runs} now={now} />)
+      const cards = container.querySelectorAll<HTMLElement>('.crews-member')
+      const byName = (n: string) => Array.from(cards).find((c) => c.textContent?.includes(n))!
+      expect(byName('Idler').querySelector('.crews-idle')?.textContent).toBe('idle')
+      expect(byName('Busy').querySelector('.crews-phase')?.textContent).toBe('Edit · main.go')
+    })
+
+    it('mutes the border of a flagged card that stopped reporting', () => {
+      const runs = [run({ crew: { name: 'c' }, state: 'running', attention: 'stuck', updated_at: nowSec - 2 * 3600 })]
+      const { container } = render(<CrewsView runs={runs} now={now} />)
+      fireEvent.click(screen.getByRole('button', { name: /finished \(1\)/i }))
+      expect(container.querySelector('.crews-member')?.classList.contains('muted')).toBe(true)
     })
   })
 

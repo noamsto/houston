@@ -805,16 +805,17 @@ func TestTmuxMergeDoesNotMutateSourceRefs(t *testing.T) {
 func TestCrewBusFieldsMergeAndReachTheSignature(t *testing.T) {
 	r := NewRegistry(DefaultOrder)
 	r.Apply(Delta{Source: "tmux", Key: "%1", Run: Run{Agent: "claude", Crew: &CrewRef{Codename: "Ferris"}}})
-	r.Apply(Delta{Source: "crew", Key: "%1", Run: Run{Crew: &CrewRef{Name: "c", Title: "fix it", Model: "sonnet", Detail: "review"}}})
+	r.Apply(Delta{Source: "crew", Key: "%1", Run: Run{Crew: &CrewRef{Name: "c", Title: "fix it", Model: "sonnet", Detail: "review", Sessions: 2}}})
 
 	got := firstRun(t, r).Crew
-	if got.Title != "fix it" || got.Model != "sonnet" || got.Detail != "review" || got.Codename != "Ferris" {
+	if got.Title != "fix it" || got.Model != "sonnet" || got.Detail != "review" || got.Sessions != 2 || got.Codename != "Ferris" {
 		t.Errorf("Crew = %+v", got)
 	}
 
 	base := Run{Agent: "claude", Crew: &CrewRef{Name: "c"}}
 	for name, mod := range map[string]func(*CrewRef){
 		"title": func(c *CrewRef) { c.Title = "t" }, "model": func(c *CrewRef) { c.Model = "m" }, "detail": func(c *CrewRef) { c.Detail = "d" },
+		"sessions": func(c *CrewRef) { c.Sessions = 2 },
 	} {
 		changed := Run{Agent: "claude", Crew: &CrewRef{Name: "c"}}
 		mod(changed.Crew)

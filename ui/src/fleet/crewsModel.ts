@@ -7,6 +7,7 @@ export interface CrewCounts {
   stuck: number
   done: number
   idle: number
+  ended: number
 }
 
 export interface CrewGroup {
@@ -24,26 +25,18 @@ function isLiveMember(run: Run, now: number): boolean {
   return (working && run.stale !== true && isFresh(run, now)) || needsYou(run, now)
 }
 
-// What a card is flagged as. The server computes `attention`; a run from a
-// layer that publishes none (a bare hooks run) falls back to its state so it
-// still lands in a bucket.
+// What a card is flagged as: the server's verdict, nothing inferred. A run with
+// no attention is either working, idle, or ended (state done), and Fleet calls
+// that last one history, not "done".
 export function crewAttention(run: Run): Attention | undefined {
-  if (run.attention) return run.attention
-  switch (run.state) {
-    case 'blocked':
-      return 'needs-you'
-    case 'failed':
-      return 'stuck'
-    case 'review':
-    case 'done':
-      return 'done'
-    default:
-      return undefined
-  }
+  return run.attention
 }
 
-function bucket(run: Run): keyof CrewCounts {
-  switch (crewAttention(run)) {
+// Flags are gated on freshness like Fleet's badge, so a stale question does not
+// keep lighting the header of a crew that is already under Finished.
+function bucket(run: Run, now: number): keyof CrewCounts {
+  if (!isFresh(run, now)) return 'ended'
+  switch (run.attention) {
     case 'needs-you':
       return 'needsYou'
     case 'stuck':
@@ -51,6 +44,7 @@ function bucket(run: Run): keyof CrewCounts {
     case 'done':
       return 'done'
   }
+  if (run.state === 'done') return 'ended'
   return run.state === 'idle' ? 'idle' : 'working'
 }
 
@@ -77,8 +71,8 @@ function buildGroup(name: string, runs: Run[], now: number): CrewGroup {
     const dr = rank(b, now) - rank(a, now)
     return dr !== 0 ? dr : b.updated_at - a.updated_at
   })
-  const counts: CrewCounts = { working: 0, needsYou: 0, stuck: 0, done: 0, idle: 0 }
-  for (const m of members) counts[bucket(m)]++
+  const counts: CrewCounts = { working: 0, needsYou: 0, stuck: 0, done: 0, idle: 0, ended: 0 }
+  for (const m of members) counts[bucket(m, now)]++
   return {
     name,
     project: soleProject(members),
@@ -121,6 +115,7 @@ const COUNT_LABELS: [keyof CrewCounts, string][] = [
   ['stuck', 'stuck'],
   ['done', 'done'],
   ['idle', 'idle'],
+  ['ended', 'ended'],
 ]
 
 export function countsLabel(counts: CrewCounts): string {

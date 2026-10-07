@@ -436,6 +436,7 @@
 .crews-attention.needs-you { background: color-mix(in srgb, var(--state-blocked) 18%, transparent); color: var(--state-blocked); }
 .crews-attention.stuck { background: color-mix(in srgb, var(--state-failed) 18%, transparent); color: var(--state-failed); }
 .crews-attention.done { background: color-mix(in srgb, var(--state-running) 18%, transparent); color: var(--state-running); }
+.crews-idle { background: var(--bg-sunken); color: var(--text-faint); }
 .crews-meta { color: var(--text-faint); font-size: 12px; }
 .crews-meta:empty { display: none; }
 .crews-phase {

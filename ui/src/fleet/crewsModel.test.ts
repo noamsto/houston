@@ -97,11 +97,11 @@ describe('groupCrews', () => {
     const runs = [
       run({ id: 'a', crew: { name: 'c' }, state: 'running' }),
       run({ id: 'b', crew: { name: 'c' }, state: 'thinking' }),
-      run({ id: 'c', crew: { name: 'c' }, state: 'blocked', updated_at: nowSec - 30 }),
+      run({ id: 'c', crew: { name: 'c' }, state: 'blocked', attention: 'needs-you', updated_at: nowSec - 30 }),
       run({ id: 'd', crew: { name: 'c' }, state: 'idle', updated_at: old }),
     ]
     const [g] = groupCrews(runs, now).live
-    expect(g.counts).toEqual({ working: 2, needsYou: 1, stuck: 0, done: 0, idle: 1 })
+    expect(g.counts).toEqual({ working: 2, needsYou: 1, stuck: 0, done: 0, idle: 0, ended: 1 })
     expect(g.needsYou).toBe(1)
     expect(g.lastActive).toBe(nowSec)
   })
@@ -121,27 +121,36 @@ describe('groupCrews', () => {
 })
 
 describe('crewAttention', () => {
-  it('prefers the server attention over the state', () => {
+  it('is the server verdict only — an ended run is not "done"', () => {
     expect(crewAttention(run({ state: 'running', attention: 'stuck' }))).toBe('stuck')
-    expect(crewAttention(run({ state: 'done', attention: 'done' }))).toBe('done')
+    expect(crewAttention(run({ state: 'done' }))).toBeUndefined()
+    expect(crewAttention(run({ state: 'blocked' }))).toBeUndefined()
   })
+})
 
-  it('falls back to the state when the server flagged nothing', () => {
-    expect(crewAttention(run({ state: 'blocked' }))).toBe('needs-you')
-    expect(crewAttention(run({ state: 'failed' }))).toBe('stuck')
-    expect(crewAttention(run({ state: 'review' }))).toBe('done')
-    expect(crewAttention(run({ state: 'running' }))).toBeUndefined()
+describe('bucketing', () => {
+  it('counts fresh flags by attention, idle and ended runs apart, and stale ones as ended', () => {
+    const runs = [
+      run({ id: 'a', crew: { name: 'c' }, state: 'blocked', attention: 'needs-you' }),
+      run({ id: 'b', crew: { name: 'c' }, state: 'running', attention: 'stuck' }),
+      run({ id: 'd', crew: { name: 'c' }, state: 'idle', attention: 'done' }),
+      run({ id: 'e', crew: { name: 'c' }, state: 'idle' }),
+      run({ id: 'f', crew: { name: 'c' }, state: 'done' }),
+      run({ id: 'g', crew: { name: 'c' }, state: 'blocked', attention: 'needs-you', updated_at: old }),
+    ]
+    const [g] = groupCrews(runs, now).live
+    expect(g.counts).toEqual({ working: 0, needsYou: 1, stuck: 1, done: 1, idle: 1, ended: 2 })
   })
 })
 
 describe('countsLabel', () => {
   it('joins non-zero buckets in a fixed order', () => {
-    expect(countsLabel({ working: 2, needsYou: 1, stuck: 1, done: 1, idle: 0 }))
+    expect(countsLabel({ working: 2, needsYou: 1, stuck: 1, done: 1, idle: 0, ended: 0 }))
       .toBe('2 working · 1 needs you · 1 stuck · 1 done')
   })
 
   it('is empty when there is nothing to count', () => {
-    expect(countsLabel({ working: 0, needsYou: 0, stuck: 0, done: 0, idle: 0 })).toBe('')
+    expect(countsLabel({ working: 0, needsYou: 0, stuck: 0, done: 0, idle: 0, ended: 0 })).toBe('')
   })
 })
 
