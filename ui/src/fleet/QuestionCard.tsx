@@ -93,7 +93,8 @@ function FallbackRow({ call }: { call: ToolCall }) {
   )
 }
 
-export function QuestionCard({ item, runId }: { item: QuestionItem; runId: string }) {
+/** `canAnswer`: the run is live and has a terminal to answer in. */
+export function QuestionCard({ item, runId, canAnswer }: { item: QuestionItem; runId: string; canAnswer: boolean }) {
   const { call } = item
   const [detail, setDetail] = useState<ChatToolDetail | 'error' | null>(null)
   const done = call.status === 'completed' || call.status === 'failed'
@@ -119,7 +120,8 @@ export function QuestionCard({ item, runId }: { item: QuestionItem; runId: strin
       {questions.map((q) => (
         <QuestionBlock key={q.question} q={q} chosen={answers?.get(q.question)} />
       ))}
-      {!done && <div className="chat-question-pending">Waiting for an answer — answer in the Terminal tab</div>}
+      {!done && canAnswer && <div className="chat-question-pending">Waiting for an answer — answer in the Terminal tab</div>}
+      {!done && !canAnswer && <div className="chat-question-declined">Not answered — the run ended or has no terminal</div>}
       {call.status === 'completed' && !answers && output && <pre className="chat-tool-output">{output}</pre>}
       {call.status === 'failed' && (
         <div className="chat-question-declined">
