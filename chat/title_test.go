@@ -34,6 +34,11 @@ func TestToolTitle(t *testing.T) {
 		{"pi grep path fallback", "grep", `{"path":"src"}`, "src"},
 		{"pi find pattern over path", "find", `{"pattern":"*.go","path":"src"}`, "*.go"},
 		{"pi ls path", "ls", `{"path":"src"}`, "src"},
+		{"ask header", "AskUserQuestion", `{"questions":[{"header":"Scope","question":"Which scope?"},{"header":"Other"}]}`, "Scope"},
+		{"ask question fallback", "AskUserQuestion", `{"questions":[{"question":"Which scope?"}]}`, "Which scope?"},
+		{"ask blank header", "AskUserQuestion", `{"questions":[{"header":" ","question":"Which scope?"}]}`, "Which scope?"},
+		{"ask empty questions", "AskUserQuestion", `{"questions":[]}`, ""},
+		{"ask missing questions", "AskUserQuestion", `{"other":"x"}`, ""},
 		{"empty input", "Bash", ``, ""},
 		{"bad json", "Bash", `{not json`, ""},
 	}

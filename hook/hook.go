@@ -278,6 +278,20 @@ func ToolHint(toolName string, raw json.RawMessage) string {
 			}
 		}
 		return ""
+	case "AskUserQuestion":
+		qs, _ := m["questions"].([]any)
+		if len(qs) == 0 {
+			return ""
+		}
+		q, _ := qs[0].(map[string]any)
+		for _, k := range []string{"header", "question"} {
+			if v, ok := q[k].(string); ok {
+				if v = strings.TrimSpace(v); v != "" {
+					return truncate(v, 120)
+				}
+			}
+		}
+		return ""
 	}
 
 	for _, k := range ToolHintKeys {
