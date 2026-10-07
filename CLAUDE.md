@@ -212,7 +212,8 @@ The Vite dev server (`ui/vite.config.ts`) proxies `/api` to `http://localhost:90
 - **Free one-finger pan**: a single finger drags in both axes at once (after an 8px slop) — horizontal movement pans, vertical movement scrolls terminal history; there is no axis lock
 - **Pinch-to-zoom**: Two-finger pinch with focal-point tracking
 - **Detached mode**: horizontal finger movement (≥8px that actually pans, drag, pinch or the column scrubber) or ending a drag scrolled up detaches the view from the live cursor — output no longer auto-pans it, a reconnect reseed with unchanged dims keeps the pan and distance from the bottom, and a "↓ Live" pill appears bottom-centre (a keyboard/container resize still re-snaps vertically). Re-attach = tapping the pill, or a drag that starts scrolled up and ends at the bottom edge; either snaps to the cursor and follows it immediately
-- **Composer** (`MobileInputBar.tsx`, docked under the terminal in the run-detail Terminal tab): multi-line field where Enter inserts a newline and Send (or Ctrl/Cmd+Enter) sends the text followed by Enter; an empty Send presses Enter. Also a voice button (Web Speech API) and file attach.
+- **Composer** (`MobileInputBar.tsx`, docked under the terminal in the run-detail Terminal tab): multi-line field where Enter inserts a newline and Send (or Ctrl/Cmd+Enter) sends the text followed by Enter; an empty Send presses Enter. Also a voice button (Web Speech API) and file attach: picking a file only stages it as a thumbnail chip (× removes it), and Send then posts image plus text as one `{type:'image'}` input.
+  Both composers (this one and the Chat tab's) keep their draft per run in localStorage (`houston-draft:<key>`, `useComposerDraft`) and clear it only after a confirmed successful send; a failed or timed-out send shows the error and keeps the text and any staged image.
 - **Quick keys**: one horizontally scrollable row — Esc, ^C, Enter, Tab, Shift+Tab, ↑/↓, 1–5, Y/N, Alt+P, ^O, ^Z, `/copy`. All but `/copy` are keystrokes: `POST /api/runs/:id/input` `{type:'key', key:...}` (400 if `key` isn't in the `terminalKeys` allowlist). No implicit Enter, so a digit answers a numbered prompt without a stray Enter.
 - **Choices**: when the pane `meta.choices` is present, each choice renders as a tappable `n. label` button above the row and answers with its ordinal key.
 - **Keyboard**: `useKeyboardInset` tracks the on-screen keyboard via `visualViewport`; `MobileShell` shortens itself to sit above it and hides the tab bar so the terminal and composer keep the space.
@@ -383,7 +384,10 @@ the allowlist that bounds it lives there, not on the socket:
 
 - `POST /api/runs/:id/input` (run address) — same resolution ladder as the WS
   route (503/404/409/409/409/503) before the body is even read. Body is one of:
-  `{"type":"text","text":"..."}` (literal text, then Enter),
+  `{"type":"text","text":"..."}` (literal text, then Enter — `tmux.Client.SendKeys` sends it as
+  `send-keys -l -- <chunk>` in ≤ 8 KiB chunks, backslash-escaping a chunk's trailing `;` because tmux
+  drops it as a command separator, and waits `enterSettle` before Enter so a TUI agent doesn't read
+  text+Enter as one paste and turn the Enter into a newline),
   `{"type":"key","key":"<terminalKeys>"}` (one key, no Enter — 400 if `key`
   isn't in the `terminalKeys` allowlist in `server/runs_terminal.go`: Escape,
   C-c, Enter, Tab, BTab, Up, Down, M-p, C-o, C-z, y, n, 1–9), or

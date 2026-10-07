@@ -218,13 +218,15 @@ export interface ReconcileResult {
 }
 
 const OPTIMISTIC_EARLY_MS = 5000
-const OPTIMISTIC_LATE_MS = 30000
+const OPTIMISTIC_UNCONFIRMED_MS = 30000
 
 /**
  * Matches an optimistically-shown bubble to the `user_message_chunk` it
- * became, by trimmed text within [sentAt-5s, sentAt+30s]. Each chunk matches
- * at most one pending bubble; pending bubbles claim a chunk oldest-sent
- * first. Unmatched after 30s is flagged unconfirmed, not dropped.
+ * became, by trimmed text at or after sentAt-5s. There is no upper bound: a
+ * message queued while the agent is mid-turn lands in the transcript only when
+ * the turn ends. Each chunk matches at most one pending bubble; pending
+ * bubbles claim a chunk oldest-sent first. Unmatched after 30s is flagged
+ * unconfirmed, not dropped.
  */
 export function reconcileOptimistic(pending: Optimistic[], updates: ChatUpdate[], now: number): ReconcileResult {
   const chunks = updates
@@ -239,13 +241,13 @@ export function reconcileOptimistic(pending: Optimistic[], updates: ChatUpdate[]
   for (const p of [...pending].sort((a, b) => a.sentAt - b.sentAt)) {
     const trimmed = p.text.trim()
     const idx = chunks.findIndex(
-      (c, i) => !claimed.has(i) && c.text === trimmed && c.ts >= p.sentAt - OPTIMISTIC_EARLY_MS && c.ts <= p.sentAt + OPTIMISTIC_LATE_MS,
+      (c, i) => !claimed.has(i) && c.text === trimmed && c.ts >= p.sentAt - OPTIMISTIC_EARLY_MS,
     )
     if (idx >= 0) {
       claimed.add(idx)
       confirmed.push(p.localId)
     } else {
-      remaining.push({ ...p, unconfirmed: now - p.sentAt > OPTIMISTIC_LATE_MS })
+      remaining.push({ ...p, unconfirmed: now - p.sentAt > OPTIMISTIC_UNCONFIRMED_MS })
     }
   }
 

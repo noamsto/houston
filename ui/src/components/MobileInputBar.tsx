@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { sendImage, sendKey, sendText, type TerminalAddress } from '../api/terminal'
+import { sendImage, sendKey, sendText, terminalKey, type TerminalAddress } from '../api/terminal'
 import { composerMaxHeight } from './composerMaxHeight'
+import { StagedImageChip } from './StagedImageChip'
+import { useComposerDraft } from './useComposerDraft'
+import { readBase64, useStagedImage } from './useStagedImage'
 
 interface Props {
   address: TerminalAddress
@@ -42,14 +45,6 @@ type SpeechRecognitionLike = {
 const SpeechRecognitionCtor = (window as unknown as Record<string, unknown>).SpeechRecognition as
   | (new () => SpeechRecognitionLike)
   | undefined
-
-const readBase64 = (file: File) =>
-  new Promise<string>((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve((reader.result as string).replace(/^data:[^;]+;base64,/, ''))
-    reader.onerror = () => reject(reader.error)
-    reader.readAsDataURL(file)
-  })
 
 type QuickAction = { label: string; action: 'text' | 'special'; value: string; title?: string }
 
@@ -98,7 +93,8 @@ const errorStyle: React.CSSProperties = {
 }
 
 export function MobileInputBar({ address, choices, inputText, agent }: Props) {
-  const [text, setText] = useState('')
+  const [text, setText, clearIf] = useComposerDraft(terminalKey(address))
+  const { staged, stage, clear: clearStaged } = useStagedImage()
   const [listening, setListening] = useState(false)
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState<string | null>(null)
@@ -112,11 +108,19 @@ export function MobileInputBar({ address, choices, inputText, agent }: Props) {
 
   const handleSend = async () => {
     if (sendingRef.current) return
-    const line = text.trim()
+    const sent = text
+    const line = sent.trim()
     sendingRef.current = true
     setSending(true)
     setSendError(null)
-    const err = line ? await sendText(address, line) : await sendKey(address, 'Enter')
+    const err = staged
+      ? await readBase64(staged.file).then(
+          (data) => sendImage(address, line, { name: staged.file.name, type: staged.file.type, data }),
+          () => 'could not read file',
+        )
+      : line
+        ? await sendText(address, line)
+        : await sendKey(address, 'Enter')
     sendingRef.current = false
     setSending(false)
     if (err) {
@@ -124,7 +128,8 @@ export function MobileInputBar({ address, choices, inputText, agent }: Props) {
       return
     }
     // Keep anything typed while the request was in flight.
-    setText((cur) => (cur === text ? '' : cur))
+    clearIf(sent)
+    clearStaged()
     if (textareaRef.current) textareaRef.current.style.height = 'auto'
   }
 
@@ -182,31 +187,15 @@ export function MobileInputBar({ address, choices, inputText, agent }: Props) {
     el.style.overflowY = el.scrollHeight > max ? 'auto' : 'hidden'
   }
 
-  const handleFileAttach = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileAttach = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     // Reset so the same file can be selected again
     e.target.value = ''
-    if (!file || sendingRef.current) return
-
-    const sent = text
-    sendingRef.current = true
-    setSending(true)
-    setSendError(null)
-    const err = await readBase64(file).then(
-      (data) => sendImage(address, sent.trim(), { name: file.name, type: file.type, data }),
-      () => 'could not read file',
-    )
-    sendingRef.current = false
-    setSending(false)
-    if (err) {
-      setSendError(`attachment ${err} — pick the file again`)
-      return
-    }
-    setText((cur) => (cur === sent ? '' : cur))
-    if (textareaRef.current) textareaRef.current.style.height = 'auto'
+    if (file) stage(file)
   }
 
   const hasSpeech = !!SpeechRecognitionCtor
+  const canSend = !!text.trim() || !!staged
 
   return (
     <div
@@ -286,6 +275,12 @@ export function MobileInputBar({ address, choices, inputText, agent }: Props) {
         </div>
       )}
 
+      {staged && (
+        <div style={{ padding: '6px 8px 0' }}>
+          <StagedImageChip staged={staged} onRemove={clearStaged} disabled={sending} />
+        </div>
+      )}
+
       {/* Text input row */}
       <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, padding: 8 }}>
         <textarea
@@ -352,17 +347,17 @@ export function MobileInputBar({ address, choices, inputText, agent }: Props) {
         <input
           ref={fileInputRef}
           type="file"
-          onChange={(e) => void handleFileAttach(e)}
+          onChange={handleFileAttach}
           style={{ display: 'none' }}
         />
         <button
           onClick={() => fileInputRef.current?.click()}
           disabled={sending}
           style={{
-            background: sending ? 'var(--accent-working)' : 'var(--bg-surface)',
+            background: 'var(--bg-surface)',
             border: '1px solid var(--border)',
             borderRadius: 6,
-            color: sending ? '#fff' : 'var(--text-secondary)',
+            color: 'var(--text-secondary)',
             cursor: sending ? 'default' : 'pointer',
             fontSize: 16,
             width: 44,
@@ -371,11 +366,11 @@ export function MobileInputBar({ address, choices, inputText, agent }: Props) {
             alignItems: 'center',
             justifyContent: 'center',
             flexShrink: 0,
-            opacity: sending ? 0.7 : 1,
+            opacity: sending ? 0.6 : 1,
           }}
           title="Attach file"
         >
-          {sending ? '...' : '📎'}
+          📎
         </button>
 
         <button
@@ -384,10 +379,10 @@ export function MobileInputBar({ address, choices, inputText, agent }: Props) {
           title="Send"
           aria-label="Send"
           style={{
-            background: text.trim() ? 'var(--accent-working)' : 'var(--bg-surface)',
-            border: text.trim() ? 'none' : '1px solid var(--border)',
+            background: canSend ? 'var(--accent-working)' : 'var(--bg-surface)',
+            border: canSend ? 'none' : '1px solid var(--border)',
             borderRadius: 6,
-            color: text.trim() ? '#fff' : 'var(--text-secondary)',
+            color: canSend ? '#fff' : 'var(--text-secondary)',
             cursor: sending ? 'default' : 'pointer',
             opacity: sending ? 0.6 : 1,
             fontSize: 16,

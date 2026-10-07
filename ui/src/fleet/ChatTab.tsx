@@ -4,6 +4,9 @@ import { fetchTool } from '../api/chat'
 import type { ChatToolDetail } from '../api/chat'
 import { sendImage, sendKey, sendText } from '../api/terminal'
 import type { TerminalAddress } from '../api/terminal'
+import { StagedImageChip } from '../components/StagedImageChip'
+import { useComposerDraft } from '../components/useComposerDraft'
+import { readBase64, useStagedImage } from '../components/useStagedImage'
 import { useRunChat } from '../hooks/useRunChat'
 import { useStickyScroll } from '../hooks/useStickyScroll'
 import { buildItems, provisionalTool, reconcileOptimistic, toolRowLabel } from './chatModel'
@@ -19,14 +22,6 @@ const REVEAL_MS = 1000
 function prefersReducedMotion(): boolean {
   return typeof window !== 'undefined' && Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches)
 }
-
-const readBase64 = (file: File) =>
-  new Promise<string>((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve((reader.result as string).replace(/^data:[^;]+;base64,/, ''))
-    reader.onerror = () => reject(reader.error)
-    reader.readAsDataURL(file)
-  })
 
 function UserBubble({ item }: { item: UserItem }) {
   return (
@@ -228,7 +223,8 @@ function ChatItemRow({ item, runId, live, reducedMotion, revealed, onRevealed, o
 
 /** `onSend` resolves to an error reason, or null once the text was sent. */
 function Composer({ run, onSend }: { run: Run; onSend: (text: string) => Promise<string | null> }) {
-  const [text, setText] = useState('')
+  const [text, setText, clearIf] = useComposerDraft(`chat:${run.id}`)
+  const { staged, stage, clear } = useStagedImage()
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -261,13 +257,29 @@ function Composer({ run, onSend }: { run: Run; onSend: (text: string) => Promise
       setError(err)
       return
     }
-    if (isSend) setText((cur) => (cur.trim() === sent ? '' : cur))
+    if (isSend) {
+      clearIf(sent)
+      clear()
+    }
   }
 
   const handleSend = () => {
     const trimmed = text.trim()
+    if (staged) {
+      const { file } = staged
+      void attempt(async () => {
+        let data: string
+        try {
+          data = await readBase64(file)
+        } catch {
+          return 'could not read file'
+        }
+        return sendImage(address, trimmed, { name: file.name, type: file.type, data })
+      }, text)
+      return
+    }
     if (!trimmed) return
-    void attempt(() => onSend(trimmed), trimmed)
+    void attempt(() => onSend(trimmed), text)
   }
 
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -278,22 +290,14 @@ function Composer({ run, onSend }: { run: Run; onSend: (text: string) => Promise
       setError('busy — pick the file again')
       return
     }
-    const sent = text.trim()
-    void attempt(async () => {
-      let data: string
-      try {
-        data = await readBase64(file)
-      } catch {
-        return 'could not read file'
-      }
-      return sendImage(address, sent, { name: file.name, type: file.type, data })
-    }, sent)
+    stage(file)
   }
 
   return (
     <div className="chat-composer">
       {disabled && <div className="chat-composer-reason">No live terminal for this run</div>}
       {error && <div className="chat-composer-error" role="alert">{error}</div>}
+      {staged && <StagedImageChip staged={staged} onRemove={clear} disabled={sending} />}
       <div className="chat-composer-row">
         <button type="button" className="chat-composer-esc" disabled={disabled} onClick={() => void attempt(() => sendKey(address, 'Escape'), null)}>
           Esc

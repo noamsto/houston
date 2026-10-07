@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
+	"unicode/utf8"
 )
 
 func TestParseSessionLine(t *testing.T) {
@@ -207,4 +209,160 @@ func TestPaneJSONOmitsID(t *testing.T) {
 	if strings.Contains(string(b), "%1") || strings.Contains(strings.ToLower(string(b)), `"id"`) {
 		t.Errorf("marshalled pane %s exposes the id", b)
 	}
+}
+
+// recordingTmux returns a Client whose tmux appends every call's argv to a
+// log: each arg NUL-terminated, then a lone "\x01" arg as the call marker.
+func recordingTmux(t *testing.T) (*Client, func() [][]string) {
+	t.Helper()
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "calls.log")
+	script := "#!/usr/bin/env bash\n" +
+		"printf '%s\\0' \"$@\" $'\\001' >> " + strconv.Quote(logPath) + "\n"
+	path := filepath.Join(dir, "faketmux")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake tmux: %v", err)
+	}
+	calls := func() [][]string {
+		data, err := os.ReadFile(logPath)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			t.Fatalf("read call log: %v", err)
+		}
+		var out [][]string
+		var cur []string
+		for _, tok := range strings.Split(string(data), "\x00") {
+			switch tok {
+			case "":
+			case "\x01":
+				out = append(out, cur)
+				cur = nil
+			default:
+				cur = append(cur, tok)
+			}
+		}
+		return out
+	}
+	return &Client{tmuxPath: path}, calls
+}
+
+// decodeSentChunk undoes the `;` escaping tmux applies to a trailing
+// separator, and fails on a chunk tmux would silently truncate.
+func decodeSentChunk(t *testing.T, chunk string) string {
+	t.Helper()
+	if strings.HasSuffix(chunk, `\;`) {
+		return chunk[:len(chunk)-2] + ";"
+	}
+	if strings.HasSuffix(chunk, ";") {
+		t.Errorf("chunk ends in an unescaped ';' (tmux would drop it): %q", tail(chunk))
+	}
+	return chunk
+}
+
+func tail(s string) string {
+	if len(s) > 24 {
+		return "..." + s[len(s)-24:]
+	}
+	return s
+}
+
+func TestSendKeys(t *testing.T) {
+	const maxChunk = 8 << 10 // literal-text bytes per send-keys call, before ';' escaping
+	pane := Pane{ID: "%1"}
+
+	cases := []struct {
+		name string
+		text string
+	}{
+		{"trailing semicolon", "a;"},
+		{"trailing escaped semicolon", `a\;`},
+		{"double trailing semicolon", "x;;"},
+		{"literal -l", "-l"},
+		{"leading dash", "-1 is wrong"},
+		{"multi-line trailing semicolon", "a\nb;"},
+		{"semicolon at chunk boundary", strings.Repeat("a", maxChunk-1) + ";" + strings.Repeat("b", 12000)},
+		{"long text", strings.Repeat("0123456789", 2500)},
+		{"2-byte rune across boundary", strings.Repeat("a", maxChunk-1) + strings.Repeat("\u00e9", 5000)},
+		{"3-byte rune across boundary", strings.Repeat("a", maxChunk-1) + strings.Repeat("\u05d0", 5000) + ";"},
+		{"4-byte rune across boundary", strings.Repeat("a", maxChunk-2) + strings.Repeat("\U0001F600", 4000)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c, calls := recordingTmux(t)
+			if err := c.SendKeys(pane, tc.text, false); err != nil {
+				t.Fatalf("SendKeys() error: %v", err)
+			}
+			got := calls()
+			if len(got) == 0 {
+				t.Fatalf("no tmux calls recorded")
+			}
+			var sent strings.Builder
+			for i, args := range got {
+				if len(args) != 6 || args[0] != "send-keys" || args[1] != "-t" || args[2] != "%1" || args[3] != "-l" || args[4] != "--" {
+					t.Fatalf("call %d argv = %q, want send-keys -t %%1 -l -- <chunk>", i, args)
+				}
+				chunk := args[5]
+				if !utf8.ValidString(chunk) {
+					t.Errorf("call %d chunk is not valid UTF-8 (rune split across chunks)", i)
+				}
+				if len(chunk) > maxChunk+1 {
+					t.Errorf("call %d chunk is %d bytes, want <= %d", i, len(chunk), maxChunk+1)
+				}
+				sent.WriteString(decodeSentChunk(t, chunk))
+			}
+			if sent.String() != tc.text {
+				t.Errorf("delivered text differs from input (got %d bytes, want %d; tail %q vs %q)",
+					sent.Len(), len(tc.text), tail(sent.String()), tail(tc.text))
+			}
+			if len(tc.text) > maxChunk && len(got) < 2 {
+				t.Errorf("%d-byte text sent in %d call, want it split", len(tc.text), len(got))
+			}
+		})
+	}
+
+	t.Run("enter follows text after a settle gap", func(t *testing.T) {
+		c, calls := recordingTmux(t)
+		start := time.Now()
+		if err := c.SendKeys(pane, "hello", true); err != nil {
+			t.Fatalf("SendKeys() error: %v", err)
+		}
+		elapsed := time.Since(start)
+		got := calls()
+		if len(got) < 2 {
+			t.Fatalf("recorded %d calls, want text then Enter: %q", len(got), got)
+		}
+		last := got[len(got)-1]
+		if strings.Join(last, " ") != "send-keys -t %1 Enter" {
+			t.Errorf("last call = %q, want send-keys -t %%1 Enter", last)
+		}
+		t.Logf("SendKeys(enter=true) took %v", elapsed)
+		if elapsed < 50*time.Millisecond {
+			t.Errorf("SendKeys took %v, want >= 50ms between the text and Enter", elapsed)
+		}
+	})
+
+	t.Run("no enter means no Enter call", func(t *testing.T) {
+		c, calls := recordingTmux(t)
+		if err := c.SendKeys(pane, "hello", false); err != nil {
+			t.Fatalf("SendKeys() error: %v", err)
+		}
+		for _, args := range calls() {
+			if args[len(args)-1] == "Enter" {
+				t.Errorf("unexpected Enter call: %q", args)
+			}
+		}
+	})
+
+	t.Run("empty text still presses Enter", func(t *testing.T) {
+		c, calls := recordingTmux(t)
+		if err := c.SendKeys(pane, "", true); err != nil {
+			t.Fatalf("SendKeys() error: %v", err)
+		}
+		got := calls()
+		if len(got) == 0 || strings.Join(got[len(got)-1], " ") != "send-keys -t %1 Enter" {
+			t.Errorf("calls = %q, want a final Enter", got)
+		}
+	})
 }

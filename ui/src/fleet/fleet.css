@@ -856,6 +856,20 @@ button.chat-divider::after { content: ''; position: absolute; left: -6px; right:
 .chat-composer-attach:disabled,
 .chat-composer-send:disabled { opacity: 0.5; cursor: default; }
 
+.staged-chip {
+  display: flex; align-items: center; gap: 8px; min-width: 0; padding: 4px 4px 4px 6px;
+  border-radius: 8px; border: 1px solid var(--line); background: var(--bg-raised); color: var(--text);
+  font-size: 12px;
+}
+.staged-chip-thumb { flex: none; width: 36px; height: 36px; border-radius: 6px; object-fit: cover; }
+.staged-chip-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.staged-chip-remove {
+  flex: none; min-width: 32px; min-height: 32px; padding: 0; border: 0; border-radius: 6px;
+  background: none; color: var(--text-dim); font-size: 18px; line-height: 1; cursor: pointer;
+}
+.staged-chip-remove:disabled { opacity: 0.5; cursor: default; }
+.staged-chip-remove:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
 .chat-timeline :focus-visible,
 .chat-composer-textarea:focus-visible,
 .chat-composer-esc:focus-visible,

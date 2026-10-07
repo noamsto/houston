@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // ErrPaneNotFound indicates tmux ran and confirmed the pane is gone, as
@@ -406,17 +407,59 @@ func (c *Client) SendRawKeys(p Pane, text string) error {
 	return c.run("send-keys", "-t", p.Target(), "-H", hexBytes.String())
 }
 
+// sendChunkBytes keeps each send-keys argv well under tmux's ~16 KB
+// "command too long" limit. The 50 MiB input body cap bounds how many
+// spawns one SendKeys can make.
+const sendChunkBytes = 8 << 10
+
+// enterSettle separates the text from Enter: two back-to-back spawns reach a
+// TUI agent as one burst, which it treats as a paste, so Enter would become a
+// newline in its input box instead of submitting.
+const enterSettle = 75 * time.Millisecond
+
 func (c *Client) SendKeys(p Pane, keys string, enter bool) error {
-	// Use -l for literal text to avoid interpreting special characters
-	if err := c.run("send-keys", "-t", p.Target(), "-l", keys); err != nil {
-		return err
+	for _, chunk := range splitSendChunks(keys) {
+		// "--" stops tmux parsing text such as "-l" or "-1 x" as flags.
+		if err := c.run("send-keys", "-t", p.Target(), "-l", "--", escapeTrailingSemicolon(chunk)); err != nil {
+			return err
+		}
 	}
 
 	// Send Enter separately (not literal)
 	if enter {
+		if keys != "" {
+			time.Sleep(enterSettle)
+		}
 		return c.run("send-keys", "-t", p.Target(), "Enter")
 	}
 	return nil
+}
+
+// splitSendChunks cuts s into pieces of at most sendChunkBytes, never inside a rune.
+func splitSendChunks(s string) []string {
+	var chunks []string
+	for len(s) > sendChunkBytes {
+		n := sendChunkBytes
+		for i := 0; i < utf8.UTFMax-1 && !utf8.RuneStart(s[n]); i++ {
+			n--
+		}
+		chunks = append(chunks, s[:n])
+		s = s[n:]
+	}
+	if s != "" {
+		chunks = append(chunks, s)
+	}
+	return chunks
+}
+
+// escapeTrailingSemicolon protects an argv element ending in ";" from tmux
+// treating it as a command separator and dropping it; tmux turns a trailing
+// `\;` back into ";".
+func escapeTrailingSemicolon(chunk string) string {
+	if !strings.HasSuffix(chunk, ";") {
+		return chunk
+	}
+	return chunk[:len(chunk)-1] + `\;`
 }
 
 func (c *Client) SendSpecialKey(p Pane, key string) error {

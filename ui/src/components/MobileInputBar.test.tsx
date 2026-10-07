@@ -13,6 +13,7 @@ function lastJSONRequest(): { url: string; body: unknown } {
 }
 
 beforeEach(() => {
+  localStorage.clear()
   vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: true } as Response)))
 })
 
@@ -189,52 +190,117 @@ describe('MobileInputBar send failures', () => {
     await click(screen.getByRole('button', { name: '1. Yes' }))
     expect(screen.getByTestId('key-error').textContent).toContain('offline')
   })
+})
 
-  describe('file attach', () => {
-    async function attach() {
-      const input = document.querySelector('input[type="file"]') as HTMLInputElement
-      const file = new File(['x'], 'a.png', { type: 'image/png' })
-      await act(async () => {
-        fireEvent.change(input, { target: { files: [file] } })
-        await new Promise((r) => setTimeout(r, 20))
-      })
-    }
+const FIELD = 'Send a message...'
+const field = () => screen.getByPlaceholderText(FIELD) as HTMLTextAreaElement
+const sendBtn = () => screen.getByRole('button', { name: 'Send' })
 
-    it('keeps the text and shows the error when the upload fails', async () => {
-      vi.mocked(fetch).mockResolvedValue({ ok: false, status: 500 } as Response)
-      const field = typeAndSend('look at this')
-      await attach()
-      expect(field.value).toBe('look at this')
-      expect(screen.getByTestId('send-error').textContent).toContain('HTTP 500')
+describe('MobileInputBar durable draft', () => {
+  it('restores the draft after a remount with the same address', () => {
+    const { unmount } = render(<MobileInputBar address={runAddress} />)
+    fireEvent.change(field(), { target: { value: 'half-typed\nthought' } })
+    unmount()
+    render(<MobileInputBar address={runAddress} />)
+    expect(field().value).toBe('half-typed\nthought')
+  })
+
+  it('keeps drafts isolated per run', () => {
+    const { unmount } = render(<MobileInputBar address={runAddress} />)
+    fireEvent.change(field(), { target: { value: 'for run-1' } })
+    unmount()
+    render(<MobileInputBar address={{ kind: 'run', id: 'run-2' }} />)
+    expect(field().value).toBe('')
+  })
+
+  it('clears the draft after a successful send, including across a remount', async () => {
+    const { unmount } = render(<MobileInputBar address={runAddress} />)
+    fireEvent.change(field(), { target: { value: 'echo hi' } })
+    await click(sendBtn())
+    expect(field().value).toBe('')
+    unmount()
+    render(<MobileInputBar address={runAddress} />)
+    expect(field().value).toBe('')
+  })
+})
+
+describe('MobileInputBar failed sends keep the draft', () => {
+  const multi = 'line one\nline two\nline three'
+
+  it.each([
+    ['a non-ok response', () => vi.mocked(fetch).mockResolvedValue({ ok: false, status: 500 } as Response), 'HTTP 500'],
+    ['a timeout', () => vi.mocked(fetch).mockRejectedValue(new DOMException('x', 'TimeoutError')), 'timed out'],
+  ])('%s shows the alert and keeps the full text across a remount', async (_name, arrange, message) => {
+    arrange()
+    const { unmount } = render(<MobileInputBar address={runAddress} />)
+    fireEvent.change(field(), { target: { value: multi } })
+    await click(sendBtn())
+    expect(screen.getByTestId('send-error').textContent).toContain(message)
+    expect(field().value).toBe(multi)
+    unmount()
+    render(<MobileInputBar address={runAddress} />)
+    expect(field().value).toBe(multi)
+  })
+})
+
+describe('MobileInputBar staged attachment', () => {
+  const pick = (name = 'a.png') => {
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    fireEvent.change(input, { target: { files: [new File(['x'], name, { type: 'image/png' })] } })
+  }
+  const sendWithImage = async () => {
+    await act(async () => {
+      fireEvent.click(sendBtn())
+      await new Promise((r) => setTimeout(r, 20))
     })
+  }
 
-    it('keeps the text and shows offline when fetch rejects', async () => {
-      vi.mocked(fetch).mockRejectedValue(new TypeError('x'))
-      const field = typeAndSend('look at this')
-      await attach()
-      expect(field.value).toBe('look at this')
-      expect(screen.getByTestId('send-error').textContent).toContain('offline')
-    })
+  it('picking a file stages a chip and does not call fetch', () => {
+    render(<MobileInputBar address={runAddress} />)
+    pick()
+    expect(fetch).not.toHaveBeenCalled()
+    expect(screen.getByTestId('staged-image').textContent).toContain('a.png')
+  })
 
-    it('keeps text typed during the upload and blocks a concurrent Send', async () => {
-      let resolve!: (r: Response) => void
-      vi.mocked(fetch).mockReturnValue(new Promise<Response>((r) => { resolve = r }))
-      const field = typeAndSend('look at this')
-      await attach()
-      const send = screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement
-      expect(send.disabled).toBe(true)
-      fireEvent.change(field, { target: { value: 'next message' } })
-      await act(async () => resolve({ ok: true } as Response))
-      expect(field.value).toBe('next message')
-      expect(fetch).toHaveBeenCalledTimes(1)
-    })
+  it('x removes the chip and a following Send is Enter-only', async () => {
+    render(<MobileInputBar address={runAddress} />)
+    pick()
+    fireEvent.click(screen.getByRole('button', { name: 'Remove attachment' }))
+    expect(screen.queryByTestId('staged-image')).toBeNull()
+    await click(sendBtn())
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(lastJSONRequest().body).toEqual({ type: 'key', key: 'Enter' })
+  })
 
-    it('clears the text on success', async () => {
-      const field = typeAndSend('look at this')
-      await attach()
-      expect(field.value).toBe('')
-      expect(screen.queryByTestId('send-error')).toBeNull()
+  it('Send posts text and image once, then clears the chip and field', async () => {
+    render(<MobileInputBar address={runAddress} />)
+    fireEvent.change(field(), { target: { value: 'look at this' } })
+    pick()
+    await sendWithImage()
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(lastJSONRequest().body).toEqual({
+      type: 'image',
+      text: 'look at this',
+      images: [{ name: 'a.png', type: 'image/png', data: 'eA==' }],
     })
+    expect(screen.queryByTestId('staged-image')).toBeNull()
+    expect(field().value).toBe('')
+  })
+
+  it('a failed image send keeps the chip and the text, and retry delivers', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce({ ok: false, status: 500 } as Response)
+    render(<MobileInputBar address={runAddress} />)
+    fireEvent.change(field(), { target: { value: 'look at this' } })
+    pick()
+    await sendWithImage()
+    expect(screen.getByTestId('send-error').textContent).toContain('HTTP 500')
+    expect(screen.getByTestId('staged-image')).toBeTruthy()
+    expect(field().value).toBe('look at this')
+
+    await sendWithImage()
+    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(screen.queryByTestId('staged-image')).toBeNull()
+    expect(field().value).toBe('')
   })
 })
 
