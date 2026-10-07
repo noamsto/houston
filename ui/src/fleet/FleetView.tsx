@@ -44,6 +44,8 @@ export function FleetView({ runs, connected, now, onOpen }: FleetViewProps) {
       <nav className="fleet-filters" aria-label="filter runs">
         <button aria-pressed={filter === 'active'} className={filter === 'active' ? 'on' : ''} onClick={() => setFilter('active')}>Active</button>
         <button aria-pressed={filter === 'needs-you'} className={filter === 'needs-you' ? 'on' : ''} onClick={() => setFilter('needs-you')}>Needs you</button>
+        <button aria-pressed={filter === 'stuck'} className={filter === 'stuck' ? 'on' : ''} onClick={() => setFilter('stuck')}>Stuck</button>
+        <button aria-pressed={filter === 'done'} className={filter === 'done' ? 'on' : ''} onClick={() => setFilter('done')}>Done</button>
         <button aria-pressed={filter === 'all'} className={filter === 'all' ? 'on' : ''} onClick={() => setFilter('all')}>All</button>
       </nav>
 

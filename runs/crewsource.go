@@ -12,10 +12,14 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/noamsto/houston/tmux"
 )
 
-// CrewSource reads dispatcher's git-backed bus. It contributes the one thing
-// no other source can express: a worker blocked on a question addressed to you.
+// CrewSource reads dispatcher's git-backed bus. It contributes what no other
+// source can express: a worker's question, addressed to its dispatcher — it
+// surfaces to you only when the dispatcher is gone or has been silent for
+// crewDispatcherSilence — and the watchdog's verdict that a worker is stuck.
 //
 // It derives its own repo roots from the same ListWindowOptions call tmuxsource
 // uses, rather than taking them from the caller — that keeps construction free
@@ -176,20 +180,22 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 		paneSessions = paneHookSessions(s.sessions.Snapshot(), paneSetFrom(panes, time.Now()))
 	}
 
+	now := time.Now()
 	out := map[string]Run{}
 	for bus, branches := range s.scanRoots(rootList) {
 		project := ProjectFromCommonDir(filepath.Dir(bus))
 		for branch, r := range branches {
-			r.Project = project
-			r.Role = RoleWorker
-			r.Worktree = worktreeFor(bus, branch, wins, s.crewDir)
+			routed := routeCrewQuestion(r, r.State == StateBlocked && dispatcherLive(bus, r.Crew.Name, wins, panes), now)
+			routed.Project = project
+			routed.Role = RoleWorker
+			routed.Worktree = worktreeFor(bus, branch, wins, s.crewDir)
 			paneID, candidates := resolvePane(bus, branch, r.State, r.UpdatedAt, r.session, r.CrewSession, paneSessions, wins, panes, s.crewDir, s.procStart)
 			key := paneID
 			if candidates != 1 {
 				key = "crew/" + bus + "/" + branch
 				slog.Debug("crew source: no pane join", "bus", bus, "branch", branch, "candidates", candidates)
 			}
-			out[key] = r.Run
+			out[key] = routed
 		}
 	}
 	return out, true
@@ -320,39 +326,65 @@ type crewStatusBody struct {
 // own description: there is no worker text here to quote.
 const crewBlockedNoDetail = "Blocked, no detail given."
 
-// crewWatchdogPromptNote and crewWatchdogQuotaNote are the questions synthesised
-// for a watchdog blocked status whose reserved prefix names something a human
-// can clear at the pane. The watchdog's own script detail (e.g. "prompt:
-// interactive prompt in pane %326 — ...") is dispatcher-facing and
-// prefix-coded, so it never reaches user-facing copy.
+// The notes below are houston's own wording for what a watchdog status means:
+// the watchdog's script detail (e.g. "prompt: interactive prompt in pane %326
+// — ...") is dispatcher-facing and prefix-coded, so it never reaches
+// user-facing copy.
 const (
+	// crewWatchdogPromptNote is the question for a worker parked on a prompt a
+	// human clears at the pane.
 	crewWatchdogPromptNote = "Parked on a prompt in its pane — open the terminal to answer it."
-	crewWatchdogQuotaNote  = "Paused on a usage limit — it resumes when the limit resets; see its terminal."
+
+	crewWatchdogQuotaNote     = "Paused on a usage limit — it resumes when the limit resets; see its terminal."
+	crewWatchdogTurnStallNote = "Its turn stopped producing tokens — check its terminal."
+	crewWatchdogQuietNote     = "No visible progress for a while — the watchdog flagged it; check its terminal."
+	crewWatchdogStalledNote   = "Not progressing since launch — check its terminal."
+	crewWatchdogRunawayNote   = "Its output went off the rails — verify the pane, then kill and re-dispatch."
+	crewWatchdogUnreadNote    = "It has not read a reviewer verdict yet — its dispatcher can nudge it."
+	crewWatchdogBudgetNote    = "Paused on its token budget — see its terminal."
+
+	// crewWatchdogDeadNote is the stuck reason for a watchdog `failed` (dead:).
+	crewWatchdogDeadNote = "Its engine stopped — the watchdog marked it failed."
 )
 
-// watchdogNeedsHuman reports whether a watchdog status's reserved detail prefix
-// names something a human must clear at the pane. prompt: (an interactive
-// prompt) and quota: (a rate-limit or session-limit refusal) are actionable
-// there; every other prefix — turn-stall:, quiet:, stalled:, load: — is
-// liveness bookkeeping for the dispatcher, and a watchdog status is never a
-// worker question by construction. dead: is posted as `failed`, so it never
-// reaches the blocked branch. Requiring the colon keeps a detail that merely
-// begins with the word from misclassifying.
-func watchdogNeedsHuman(detail string) bool {
-	prefix, _, ok := strings.Cut(detail, ":")
-	if !ok {
-		return false
-	}
-	return prefix == "prompt" || prefix == "quota"
+// watchdogClass is what a watchdog blocked prefix means for the card.
+type watchdogClass struct {
+	needsYou bool   // a human clears it at the pane: a pane Question
+	note     string // the Question text, or the stuck reason
 }
 
-func watchdogActionableNote(detail string) string {
-	prefix, _, _ := strings.Cut(detail, ":")
-	if prefix == "quota" {
-		return crewWatchdogQuotaNote
-	}
-	return crewWatchdogPromptNote
+// watchdogPrefixes maps the reserved detail prefix of a watchdog blocked
+// status to its meaning. prompt: needs a human at the pane; the rest mean the
+// worker stopped making progress and may need a look (stuck). A prefix not
+// listed — load: (host load, engine-independent), or anything new — claims
+// nothing: the run reads running. dead: is posted as `failed`, so it never
+// reaches the blocked branch. Requiring the colon keeps a detail that merely
+// begins with the word from misclassifying.
+var watchdogPrefixes = map[string]watchdogClass{
+	"prompt":     {needsYou: true, note: crewWatchdogPromptNote},
+	"quota":      {note: crewWatchdogQuotaNote},
+	"turn-stall": {note: crewWatchdogTurnStallNote},
+	"quiet":      {note: crewWatchdogQuietNote},
+	"stalled":    {note: crewWatchdogStalledNote},
+	"runaway":    {note: crewWatchdogRunawayNote},
+	"unread":     {note: crewWatchdogUnreadNote},
+	"budget":     {note: crewWatchdogBudgetNote},
 }
+
+func watchdogClassOf(detail string) (watchdogClass, bool) {
+	prefix, _, ok := strings.Cut(detail, ":")
+	if !ok {
+		return watchdogClass{}, false
+	}
+	c, listed := watchdogPrefixes[prefix]
+	return c, listed
+}
+
+// crewDispatcherSilence is how long a dispatcher gets to answer a worker's
+// question before it surfaces as needs-you: a live dispatcher normally answers
+// within minutes, while one that is itself waiting on you leaves the question
+// for you.
+const crewDispatcherSilence = 15 * time.Minute
 
 // crewBranch is deltasFromCrewLog's per-branch fold result. session is the
 // s<epoch> of the worker id on the latest status record (0 when unknown) —
@@ -360,6 +392,10 @@ func watchdogActionableNote(detail string) string {
 type crewBranch struct {
 	Run
 	session int64
+	// blockedSince is the bus ts (ms) of the first worker-blocked status of the
+	// current episode: kept across re-stamps, restarted by any other status or
+	// a dispatcher reply, 0 when the branch is not asking its dispatcher.
+	blockedSince int64
 }
 
 // deltasFromCrewLog folds one bus log into the latest state per branch. The bus
@@ -424,6 +460,7 @@ func deltasFromCrewLog(rd io.Reader) map[string]crewBranch {
 		// a new session id.
 		if rec.Kind == "dispatch" || rec.Kind == "resume" {
 			r.CrewSession = rec.EngineSession
+			r.Crew.Sessions++
 		}
 		if rec.Kind == "msg" && strings.HasPrefix(rec.From, "dispatcher:") && rec.TS > dispatcherReplyTS[branch] {
 			dispatcherReplyTS[branch] = rec.TS
@@ -447,21 +484,37 @@ func deltasFromCrewLog(rd io.Reader) map[string]crewBranch {
 					r.PR = &PRRef{URL: body.PRURL, Number: prNumberFromURL(body.PRURL)}
 				}
 				r.Question = nil
-				if r.State == StateBlocked {
-					switch {
-					case body.Source != "watchdog":
-						r.Question = &Question{Text: crewBlockedNoDetail, Via: "crew"}
-						if body.Detail != "" {
-							r.Question.Text = body.Detail
+				r.Attention, r.AttentionNote = AttentionNone, ""
+				if r.State != StateBlocked || body.Source == "watchdog" {
+					r.blockedSince = 0
+				}
+				switch {
+				case r.State == StateFailed && body.Source == "watchdog":
+					r.AttentionNote = crewWatchdogDeadNote
+				case r.State != StateBlocked:
+				case body.Source != "watchdog":
+					r.Question = &Question{Text: crewBlockedNoDetail, Via: "crew"}
+					if body.Detail != "" {
+						r.Question.Text = body.Detail
+					}
+					// A re-stamp keeps the episode unless the dispatcher answered
+					// since it began.
+					if r.blockedSince == 0 || dispatcherReplyTS[branch] > r.blockedSince {
+						r.blockedSince = rec.TS
+					}
+				default:
+					// Liveness bookkeeping the dispatcher owns: it never raises a
+					// worker question, so the run reads running.
+					r.State = StateRunning
+					if c, ok := watchdogClassOf(body.Detail); ok {
+						if c.needsYou {
+							// Actionable at the pane: a human clears the prompt there, so
+							// the question routes to the terminal rather than the bus.
+							r.State = StateBlocked
+							r.Question = &Question{Text: c.note, Via: "pane"}
+						} else {
+							r.Attention, r.AttentionNote = AttentionStuck, c.note
 						}
-					case watchdogNeedsHuman(body.Detail):
-						// Actionable at the pane: a human clears the prompt there, so
-						// the question routes to the terminal rather than the bus.
-						r.Question = &Question{Text: watchdogActionableNote(body.Detail), Via: "pane"}
-					default:
-						// Liveness bookkeeping the dispatcher owns; nobody is addressed,
-						// so it must not raise houston's attention badge.
-						r.State = StateRunning
 					}
 				}
 			}
@@ -479,12 +532,55 @@ func deltasFromCrewLog(rd io.Reader) map[string]crewBranch {
 		if r.State == StateBlocked && dispatcherReplyTS[branch] > lastStatusTS[branch] {
 			r.State = ""
 			r.Question = nil
+			r.blockedSince = 0
 			r.Crew.Detail = ""
 			out[branch] = r
 		}
 	}
 
 	return out
+}
+
+// routeCrewQuestion decides whether a worker's question reaches the human. It
+// is addressed to the dispatcher, so while the dispatcher is live and has been
+// asked for less than crewDispatcherSilence the run reads running and the
+// question stays only in Crew.Detail. A watchdog prompt (pane) question is the
+// human's regardless. It returns a copy: b comes from the per-file parse cache,
+// shared across ticks.
+func routeCrewQuestion(b crewBranch, live bool, now time.Time) Run {
+	if b.State == StateBlocked && b.Question != nil && b.Question.Via == "crew" &&
+		live && now.Sub(time.UnixMilli(b.blockedSince)) < crewDispatcherSilence {
+		r := b.Run
+		r.State = StateRunning
+		r.Question = nil
+		return r
+	}
+	return b.Run
+}
+
+// dispatcherLive reports whether the crew's dispatcher is still there to
+// answer: <bus>/crews/<crewID>/pane names a listed pane carrying an engine
+// status, in a window stamped @crew_name dispatcher (which guards against a
+// pane id reused after a tmux restart). A crew with no pane file has no
+// dispatcher. crewID comes from a bus record, so it must stay a single path
+// element.
+func dispatcherLive(bus, crewID string, wins []tmux.WindowOptions, panes []tmux.PaneOptions) bool {
+	if crewID == "" || crewID == "." || crewID == ".." || filepath.Base(crewID) != crewID {
+		return false
+	}
+	raw, err := os.ReadFile(filepath.Join(bus, "crews", crewID, "pane")) //nolint:gosec // crewID is a single path element, checked above
+	if err != nil {
+		return false
+	}
+	id := strings.TrimSpace(string(raw))
+	byTarget := windowsByTarget(wins)
+	for _, p := range panes {
+		if p.PaneID != id {
+			continue
+		}
+		return (p.ClaudeStatus != "" || p.AgentScreen != "") && byTarget[p.Target].CrewName == dispatcherCrewName
+	}
+	return false
 }
 
 // sessionEpoch extracts <epoch> from a worker id "worker:<branch>#s<epoch>-<pid>".

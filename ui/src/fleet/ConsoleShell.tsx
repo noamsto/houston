@@ -16,6 +16,8 @@ import './fleet.css'
 const FILTER_LABEL: Record<Filter, string> = {
   active: 'Active',
   'needs-you': 'Needs you',
+  stuck: 'Stuck',
+  done: 'Done',
   all: 'All',
 }
 
@@ -35,6 +37,8 @@ export function ConsoleShell({ runs, connected, hasSnapshot, now }: ShellData) {
     () => ({
       active: filterRuns(runs, 'active', now).length,
       'needs-you': filterRuns(runs, 'needs-you', now).length,
+      stuck: filterRuns(runs, 'stuck', now).length,
+      done: filterRuns(runs, 'done', now).length,
       all: filterRuns(runs, 'all', now).length,
     }),
     [runs, now],
@@ -82,9 +86,9 @@ export function ConsoleShell({ runs, connected, hasSnapshot, now }: ShellData) {
   function chooseFilter(f: Filter): void {
     goTab('fleet')
     setFilter(f)
-    // Needs-you must show every blocked run, fresh or stale — a lingering
+    // These must show every matching run, fresh or stale — a lingering
     // crew filter would silently hide the ones that live in another crew.
-    if (f === 'needs-you') setCrew(null)
+    if (f === 'needs-you' || f === 'stuck' || f === 'done') setCrew(null)
   }
 
   function toggleCrew(name: string): void {
@@ -127,6 +131,22 @@ export function ConsoleShell({ runs, connected, hasSnapshot, now }: ShellData) {
             onClick={() => chooseFilter('needs-you')}
           >
             Needs you<span className="console-count">{counts['needs-you']}</span>
+          </button>
+          <button
+            type="button"
+            className="console-rail-item"
+            aria-pressed={section === 'fleet' && filter === 'stuck'}
+            onClick={() => chooseFilter('stuck')}
+          >
+            Stuck<span className="console-count">{counts.stuck}</span>
+          </button>
+          <button
+            type="button"
+            className="console-rail-item"
+            aria-pressed={section === 'fleet' && filter === 'done'}
+            onClick={() => chooseFilter('done')}
+          >
+            Done<span className="console-count">{counts.done}</span>
           </button>
           <button
             type="button"

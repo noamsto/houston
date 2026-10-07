@@ -32,6 +32,18 @@ func AllStates() []State {
 	}
 }
 
+// Attention is the second dimension next to State: how much a run wants a
+// human. needs-you holds exactly when State is blocked; stuck is stopped making
+// progress and may need a look; done is finished, awaiting review or cleanup.
+type Attention string
+
+const (
+	AttentionNone     Attention = ""
+	AttentionNeedsYou Attention = "needs-you"
+	AttentionStuck    Attention = "stuck"
+	AttentionDone     Attention = "done"
+)
+
 // NeedsAttention reports whether a human is required. Exactly one state says
 // yes: it drives the badge, the sort order and later the push notification, so
 // nothing else may claim it.
@@ -43,9 +55,11 @@ func FromHookState(s hook.State) State {
 		return StateThinking
 	case hook.StateToolRunning:
 		return StateRunning
-	case hook.StateWaiting, hook.StatePermission:
+	case hook.StatePermission:
 		return StateBlocked
-	case hook.StateIdle:
+	case hook.StateWaiting, hook.StateIdle:
+		// A turn end awaits the next prompt; nobody is blocked. A turn that
+		// ended on a question is promoted to blocked by runFromSessionView.
 		return StateIdle
 	case hook.StateCompacting:
 		return StateCompacting
@@ -80,14 +94,20 @@ func FromClaudeStatus(v string) State {
 	switch word {
 	case "processing":
 		return StateRunning
-	case "waiting", "denied":
+	case "waiting":
 		return StateBlocked
+	case "denied":
+		// Written on PermissionDenied, the auto-mode classifier's refusal; the
+		// turn continues.
+		return StateRunning
 	case "compacting":
 		return StateCompacting
 	case "error":
 		return StateFailed
 	case "done":
-		return StateDone
+		// Written on Stop: a turn end, the session is alive (SessionEnd
+		// clears the option).
+		return StateIdle
 	default:
 		// Covers "idle", "interrupted" and the empty string. Interrupting is
 		// something the user did deliberately, so it must not raise a badge.

@@ -41,6 +41,7 @@ export interface CrewRef {
   title?: string // task title from the dispatch record
   model?: string
   detail?: string // latest status detail — the live phase
+  sessions?: number // dispatch + resume rows seen for this worker
 }
 
 export interface TrailChip {
@@ -84,6 +85,10 @@ export interface Caps {
   chat?: boolean
 }
 
+// Mirror of runs.Attention (Go). Absent means nothing to flag. `needs-you` is
+// exactly state === 'blocked'; `stuck` and `done` are calmer, never urgent.
+export type Attention = 'needs-you' | 'stuck' | 'done'
+
 // Mirror of runs.Run.
 //
 // A removal arrives as an ordinary `update` event carrying only `id` and
@@ -94,6 +99,8 @@ export interface Run {
   host?: string
   agent: string
   state: RunState
+  attention?: Attention
+  attention_note?: string // houston-worded reason, set for stuck
   repo?: string
   project?: string // main repo name, stable across a repo's worktrees
   role?: 'dispatcher' | 'worker' // absent = solo

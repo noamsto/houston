@@ -1,13 +1,13 @@
-import type { Run } from '../api/runs'
+import type { Attention, Run } from '../api/runs'
 import { isFresh, needsYou } from './staleness'
 
 export interface CrewCounts {
-  blocked: number
-  running: number
-  review: number
+  working: number
+  needsYou: number
+  stuck: number
   done: number
-  failed: number
-  other: number
+  idle: number
+  ended: number
 }
 
 export interface CrewGroup {
@@ -25,20 +25,18 @@ function isLiveMember(run: Run, now: number): boolean {
   return (working && run.stale !== true && isFresh(run, now)) || needsYou(run, now)
 }
 
-function bucket(run: Run): keyof CrewCounts {
-  switch (run.state) {
-    case 'blocked':
-    case 'review':
-    case 'done':
-    case 'failed':
-      return run.state
-    case 'running':
-    case 'thinking':
-    case 'compacting':
-      return 'running'
-    default:
-      return 'other'
+export function crewAttention(run: Run): Attention | undefined {
+  return run.attention
+}
+
+// Flags are gated on freshness like Fleet's badge; unflagged runs bucket by state.
+function bucket(run: Run, now: number): keyof CrewCounts {
+  if (run.attention) {
+    if (!isFresh(run, now)) return 'ended'
+    return run.attention === 'needs-you' ? 'needsYou' : run.attention
   }
+  if (run.state === 'done') return 'ended'
+  return run.state === 'idle' ? 'idle' : 'working'
 }
 
 function rank(run: Run, now: number): number {
@@ -64,8 +62,8 @@ function buildGroup(name: string, runs: Run[], now: number): CrewGroup {
     const dr = rank(b, now) - rank(a, now)
     return dr !== 0 ? dr : b.updated_at - a.updated_at
   })
-  const counts: CrewCounts = { blocked: 0, running: 0, review: 0, done: 0, failed: 0, other: 0 }
-  for (const m of members) counts[bucket(m)]++
+  const counts: CrewCounts = { working: 0, needsYou: 0, stuck: 0, done: 0, idle: 0, ended: 0 }
+  for (const m of members) counts[bucket(m, now)]++
   return {
     name,
     project: soleProject(members),
@@ -103,12 +101,12 @@ export function groupCrews(runs: Run[], now: number): { live: CrewGroup[]; finis
 }
 
 const COUNT_LABELS: [keyof CrewCounts, string][] = [
-  ['blocked', 'blocked'],
-  ['running', 'running'],
-  ['review', 'review'],
+  ['working', 'working'],
+  ['needsYou', 'needs you'],
+  ['stuck', 'stuck'],
   ['done', 'done'],
-  ['failed', 'failed'],
-  ['other', 'other'],
+  ['idle', 'idle'],
+  ['ended', 'ended'],
 ]
 
 export function countsLabel(counts: CrewCounts): string {

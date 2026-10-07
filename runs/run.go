@@ -15,6 +15,13 @@ type Run struct {
 	Agent string `json:"agent"`
 	State State  `json:"state"`
 
+	// Attention and AttentionNote are computed at composition (composeLocked)
+	// and never merged: needs-you holds exactly when State is blocked. A source
+	// layer may publish them only as an opinion the composition reads — the
+	// crew layer's stuck verdict for a watchdog status.
+	Attention     Attention `json:"attention,omitempty"`
+	AttentionNote string    `json:"attention_note,omitempty"`
+
 	Repo     string `json:"repo,omitempty"`
 	Project  string `json:"project,omitempty"` // main repo name; a worktree resolves to its main repo
 	Role     string `json:"role,omitempty"`    // RoleDispatcher, RoleWorker, or "" for a solo run
@@ -104,6 +111,7 @@ type CrewRef struct {
 	Title    string `json:"title,omitempty"`    // Task title from the dispatch record. Crew bus only.
 	Model    string `json:"model,omitempty"`    // Model the worker was dispatched on. Crew bus only.
 	Detail   string `json:"detail,omitempty"`   // Latest status detail — the live phase. Crew bus only.
+	Sessions int    `json:"sessions,omitempty"` // Dispatch and resume rows seen for this worker. Crew bus only.
 }
 
 // Activity is what the run is doing right now.

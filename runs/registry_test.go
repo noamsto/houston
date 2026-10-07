@@ -491,6 +491,8 @@ func TestMergeIntoCoversEveryField(t *testing.T) {
 			continue // derived in composeLocked from layer presence, not merged
 		case "CrewSession":
 			continue // crew-layer evidence; composeLocked falls back to it only when no layer names a Session
+		case "Attention", "AttentionNote":
+			continue // computed in composeLocked from the layers, never merged
 		}
 		if v.Field(i).IsZero() {
 			t.Errorf("mergeInto drops %s — it will never reach the API", tp.Field(i).Name)
@@ -803,16 +805,17 @@ func TestTmuxMergeDoesNotMutateSourceRefs(t *testing.T) {
 func TestCrewBusFieldsMergeAndReachTheSignature(t *testing.T) {
 	r := NewRegistry(DefaultOrder)
 	r.Apply(Delta{Source: "tmux", Key: "%1", Run: Run{Agent: "claude", Crew: &CrewRef{Codename: "Ferris"}}})
-	r.Apply(Delta{Source: "crew", Key: "%1", Run: Run{Crew: &CrewRef{Name: "c", Title: "fix it", Model: "sonnet", Detail: "review"}}})
+	r.Apply(Delta{Source: "crew", Key: "%1", Run: Run{Crew: &CrewRef{Name: "c", Title: "fix it", Model: "sonnet", Detail: "review", Sessions: 2}}})
 
 	got := firstRun(t, r).Crew
-	if got.Title != "fix it" || got.Model != "sonnet" || got.Detail != "review" || got.Codename != "Ferris" {
+	if got.Title != "fix it" || got.Model != "sonnet" || got.Detail != "review" || got.Sessions != 2 || got.Codename != "Ferris" {
 		t.Errorf("Crew = %+v", got)
 	}
 
 	base := Run{Agent: "claude", Crew: &CrewRef{Name: "c"}}
 	for name, mod := range map[string]func(*CrewRef){
 		"title": func(c *CrewRef) { c.Title = "t" }, "model": func(c *CrewRef) { c.Model = "m" }, "detail": func(c *CrewRef) { c.Detail = "d" },
+		"sessions": func(c *CrewRef) { c.Sessions = 2 },
 	} {
 		changed := Run{Agent: "claude", Crew: &CrewRef{Name: "c"}}
 		mod(changed.Crew)
@@ -1121,5 +1124,162 @@ func TestShadowFollowsTheSessionTheWorkerCardShows(t *testing.T) {
 	}
 	if !ids["sess-s1"] || ids["sess-s3"] {
 		t.Fatalf("after fresh resume: %v, want sess-s1 shown and sess-s3 hidden", ids)
+	}
+}
+
+func TestComposeAttention(t *testing.T) {
+	type layer struct {
+		source string
+		run    Run
+	}
+	cases := []struct {
+		name      string
+		layers    []layer
+		wantAtt   Attention
+		wantNote  string
+		wantState State
+	}{
+		{"hooks blocked is needs-you", []layer{
+			{"hooks", Run{Agent: "claude", State: StateBlocked}},
+		}, AttentionNeedsYou, "", StateBlocked},
+		{"hooks idle alone is none", []layer{
+			{"hooks", Run{Agent: "claude", State: StateIdle}},
+		}, AttentionNone, "", StateIdle},
+		{"crew done under hooks idle is done", []layer{
+			{"crew", Run{Agent: "claude", State: StateDone}},
+			{"hooks", Run{Agent: "claude", State: StateIdle}},
+		}, AttentionDone, "", StateIdle},
+		{"crew review under hooks idle is done", []layer{
+			{"crew", Run{Agent: "claude", State: StateReview}},
+			{"hooks", Run{Agent: "claude", State: StateIdle}},
+		}, AttentionDone, "", StateIdle},
+		{"crew failed is stuck", []layer{
+			{"crew", Run{Agent: "claude", State: StateFailed}},
+		}, AttentionStuck, "", StateFailed},
+		{"crew stuck opinion survives hooks running", []layer{
+			{"crew", Run{Agent: "claude", State: StateRunning, Attention: AttentionStuck, AttentionNote: "x"}},
+			{"hooks", Run{Agent: "claude", State: StateRunning}},
+		}, AttentionStuck, "x", StateRunning},
+		{"tmux failed is stuck under hooks thinking", []layer{
+			{"tmux", Run{Agent: "claude", State: StateFailed}},
+			{"hooks", Run{Agent: "claude", State: StateThinking}},
+		}, AttentionStuck, tmuxFailedNote, StateThinking},
+		{"hooks-ended run alone is none", []layer{
+			{"hooks", Run{Agent: "claude", State: StateDone}},
+		}, AttentionNone, "", StateDone},
+		{"crew blocked with a question is needs-you", []layer{
+			{"crew", Run{Agent: "claude", State: StateBlocked, Question: &Question{Text: "go?", Via: "crew"}}},
+		}, AttentionNeedsYou, "", StateBlocked},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := NewRegistry(DefaultOrder)
+			for _, l := range tc.layers {
+				r.Apply(Delta{Source: l.source, Key: "%1", Run: l.run})
+			}
+			got := firstRun(t, r)
+			if got.Attention != tc.wantAtt || got.AttentionNote != tc.wantNote {
+				t.Errorf("Attention = %q/%q, want %q/%q", got.Attention, got.AttentionNote, tc.wantAtt, tc.wantNote)
+			}
+			if got.State != tc.wantState {
+				t.Errorf("State = %q, want %q", got.State, tc.wantState)
+			}
+		})
+	}
+}
+
+func TestAttentionAgreesWithNeedsAttention(t *testing.T) {
+	r := NewRegistry(DefaultOrder)
+	for i, s := range AllStates() {
+		r.Apply(Delta{Source: "hooks", Key: fmt.Sprintf("%%%d", i), Run: Run{Agent: "claude", State: s}})
+	}
+	r.Apply(Delta{Source: "crew", Key: "%q", Run: Run{Agent: "claude", State: StateBlocked, Question: &Question{Text: "go?", Via: "crew"}}})
+	r.Apply(Delta{Source: "hooks", Key: "%q", Run: Run{Agent: "claude", State: StateRunning}})
+
+	rows := r.Snapshot()
+	if len(rows) != len(AllStates())+1 {
+		t.Fatalf("%d rows, want %d", len(rows), len(AllStates())+1)
+	}
+	for _, run := range rows {
+		if got := run.Attention == AttentionNeedsYou; got != run.State.NeedsAttention() {
+			t.Errorf("%s: attention %q disagrees with State %q NeedsAttention()=%v", run.ID, run.Attention, run.State, run.State.NeedsAttention())
+		}
+	}
+}
+
+func TestRunSignatureSeesAttention(t *testing.T) {
+	base := Run{Agent: "claude", State: StateRunning}
+	stuck := base
+	stuck.Attention = AttentionStuck
+	noted := stuck
+	noted.AttentionNote = "x"
+
+	if runSignature(base) == runSignature(stuck) {
+		t.Error("an Attention change must change the signature")
+	}
+	if runSignature(stuck) == runSignature(noted) {
+		t.Error("an AttentionNote change must change the signature")
+	}
+}
+
+// TestComposeAttentionFromCrewLog feeds the crew layer from a real bus fold
+// (deltasFromCrewLog + routeCrewQuestion).
+func TestComposeAttentionFromCrewLog(t *testing.T) {
+	const (
+		statusTS = int64(1_700_000_000_000)
+		branch   = "fix/7"
+	)
+	busLog := func(status string) string {
+		return `{"ts":1000,"crew_id":"c1","kind":"dispatch","branch":"fix/7","engine":"claude"}` + "\n" +
+			fmt.Sprintf(`{"ts":%d,"crew_id":"c1","from":"worker:fix/7#s1","kind":"status","body":%s}`, statusTS, status) + "\n"
+	}
+	soon := time.UnixMilli(statusTS + 1000)
+
+	cases := []struct {
+		name      string
+		status    string
+		live      bool
+		hooks     State
+		wantAtt   Attention
+		wantNote  string
+		wantState State
+		wantVia   string
+	}{
+		{"watchdog dead under hooks thinking", `{"state":"failed","detail":"dead: engine process gone","source":"watchdog"}`,
+			false, StateThinking, AttentionStuck, crewWatchdogDeadNote, StateThinking, ""},
+		{"done under hooks idle", `{"state":"done"}`,
+			false, StateIdle, AttentionDone, "", StateIdle, ""},
+		{"pr_open under hooks idle", `{"state":"pr_open","pr_url":"https://github.com/x/y/pull/3"}`,
+			false, StateIdle, AttentionDone, "", StateIdle, ""},
+		{"worker question while the dispatcher is live", `{"state":"blocked","detail":"keep the legacy route?"}`,
+			true, StateRunning, AttentionNone, "", StateRunning, ""},
+		{"worker question with no dispatcher", `{"state":"blocked","detail":"keep the legacy route?"}`,
+			false, StateRunning, AttentionNeedsYou, "", StateBlocked, "crew"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b, ok := deltasFromCrewLog(strings.NewReader(busLog(tc.status)))[branch]
+			if !ok {
+				t.Fatalf("no fold result for %q", branch)
+			}
+			r := NewRegistry(DefaultOrder)
+			r.Apply(Delta{Source: "crew", Key: "%1", Run: routeCrewQuestion(b, tc.live, soon)})
+			r.Apply(Delta{Source: "hooks", Key: "%1", Run: Run{Agent: "claude", State: tc.hooks}})
+
+			got := firstRun(t, r)
+			if got.Attention != tc.wantAtt || got.AttentionNote != tc.wantNote {
+				t.Errorf("Attention = %q/%q, want %q/%q", got.Attention, got.AttentionNote, tc.wantAtt, tc.wantNote)
+			}
+			if got.State != tc.wantState {
+				t.Errorf("State = %q, want %q", got.State, tc.wantState)
+			}
+			if tc.wantVia == "" {
+				if got.Question != nil {
+					t.Errorf("Question = %+v, want none", got.Question)
+				}
+			} else if got.Question == nil || got.Question.Via != tc.wantVia {
+				t.Errorf("Question = %+v, want Via %q", got.Question, tc.wantVia)
+			}
+		})
 	}
 }

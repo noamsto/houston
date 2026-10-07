@@ -42,6 +42,7 @@ type SessionView struct {
 	UpdatedAt      int64       `json:"updated_at"`
 	Trail          []TrailChip `json:"trail,omitempty"`
 	Preview        string      `json:"preview,omitempty"`
+	Asks           string      `json:"asks,omitempty"` // the question the turn ended on; reset by later tool/user activity
 	InputTokens    int         `json:"input_tokens"`
 	OutputTokens   int         `json:"output_tokens"`
 	TranscriptPath string      `json:"transcript_path,omitempty"`
@@ -104,6 +105,7 @@ type Session struct {
 
 	trail   []TrailChip
 	preview []string
+	asks    string
 
 	lastTurn         int    // last turn whose trail was cleared (UserPromptSubmit bumps Turn)
 	lastBroadcastSig string // last broadcast view signature; skip duplicates
@@ -476,6 +478,7 @@ func (h *Hub) refreshTranscript(sessionID string) {
 	}
 	sess.view.Trail = append([]TrailChip(nil), sess.trail...)
 	sess.view.Preview = strings.Join(sess.preview, "\n")
+	sess.view.Asks = sess.asks
 	sess.view.Background = sess.bg.list(time.Now())
 	view := sess.view
 	h.mu.Unlock()
@@ -548,6 +551,8 @@ func viewSignature(v SessionView) string {
 	b.WriteByte('|')
 	b.WriteString(v.Agent)
 	b.WriteByte('|')
+	b.WriteString(v.Asks)
+	b.WriteByte('|')
 	b.WriteString(backgroundSignature(v.Background))
 	return b.String()
 }
@@ -581,6 +586,10 @@ func mergeStateIntoView(v *SessionView, s hook.SessionState) {
 	}
 }
 
+// eventTypePiToolCall is pi's tool-call content block, which parseLine passes
+// through under its own type name.
+const eventTypePiToolCall = "toolCall"
+
 // applyTranscriptEvent updates trail/preview/telemetry on sess from one event.
 // Called under h.mu.
 func applyTranscriptEvent(s *Session, ev TranscriptEvent) {
@@ -590,6 +599,7 @@ func applyTranscriptEvent(s *Session, ev TranscriptEvent) {
 
 	switch ev.Type {
 	case EventTypeToolUse:
+		s.asks = ""
 		if n := len(s.trail); n > 0 && !s.trail[n-1].Done {
 			s.trail[n-1].Done = true
 		}
@@ -598,6 +608,7 @@ func applyTranscriptEvent(s *Session, ev TranscriptEvent) {
 			s.trail = s.trail[len(s.trail)-maxTrail:]
 		}
 	case EventTypeToolResult:
+		s.asks = ""
 		for i := len(s.trail) - 1; i >= 0; i-- {
 			if !s.trail[i].Done {
 				s.trail[i].Done = true
@@ -611,13 +622,20 @@ func applyTranscriptEvent(s *Session, ev TranscriptEvent) {
 			s.preview = append(s.preview, "→ "+ev.Text)
 		}
 	case EventTypeText:
-		if ev.Role == "assistant" && ev.Text != "" {
-			s.preview = append(s.preview, ev.Text)
+		if ev.Role == "assistant" {
+			s.asks = questionTail(ev.Text)
+			if ev.Text != "" {
+				s.preview = append(s.preview, ev.Text)
+			}
+		} else {
+			s.asks = ""
 		}
 	case EventTypeThinking:
 		if ev.Text != "" {
 			s.preview = append(s.preview, "◆ "+ev.Text)
 		}
+	case eventTypePiToolCall:
+		s.asks = ""
 	}
 	if len(s.preview) > maxPreview {
 		s.preview = s.preview[len(s.preview)-maxPreview:]

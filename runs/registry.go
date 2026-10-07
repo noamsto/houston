@@ -224,7 +224,32 @@ func (r *Registry) composeLocked(key string) (Run, bool) {
 	if out.Question != nil {
 		out.State = StateBlocked
 	}
+	out.Attention, out.AttentionNote = attentionOf(out, bySource)
 	return out, true
+}
+
+const tmuxFailedNote = "Its last turn failed — check its terminal."
+
+// attentionOf derives the attention dimension from the composed run and its
+// layers. The tmux layer's failed verdict (lazytmux's `error`, written on
+// StopFailure and kept until the next prompt) is read from the layer because
+// the hooks layer has no StopFailure mapping and would otherwise hide it; the
+// crew layer's done/review likewise holds after hooks' idle wins State.
+func attentionOf(out Run, bySource map[string]Run) (Attention, string) {
+	if out.State == StateBlocked {
+		return AttentionNeedsYou, ""
+	}
+	crew := bySource["crew"]
+	tmuxFailed := bySource["tmux"].State == StateFailed
+	switch {
+	case crew.Attention == AttentionStuck, crew.State == StateFailed:
+		return AttentionStuck, crew.AttentionNote
+	case out.State == StateFailed || tmuxFailed:
+		return AttentionStuck, tmuxFailedNote
+	case out.State == StateReview, crew.State == StateDone, crew.State == StateReview:
+		return AttentionDone, ""
+	}
+	return AttentionNone, ""
 }
 
 // deriveCaps derives Caps from which layers are present for a key, not from
@@ -279,6 +304,8 @@ func idFor(key string) string {
 type signature struct {
 	agent, state, repo, project, role, branch, worktree string
 
+	attention, attentionNote string
+
 	issueID string
 
 	hasPR                                      bool
@@ -287,6 +314,7 @@ type signature struct {
 	hasCrew                                                bool
 	crewName, crewCodename, crewColor, crewTier, crewTitle string
 	crewModel, crewDetail                                  string
+	crewSessions                                           int
 
 	hasQuestion bool
 	qText, qVia string
@@ -308,24 +336,26 @@ type signature struct {
 // SSE event every tick too.
 func runSignature(r Run) signature {
 	s := signature{
-		agent:       r.Agent,
-		state:       string(r.State),
-		repo:        r.Repo,
-		project:     r.Project,
-		role:        r.Role,
-		branch:      r.Branch,
-		worktree:    r.Worktree,
-		actTool:     r.Activity.Tool,
-		actHint:     r.Activity.Hint,
-		actMessage:  r.Activity.Message,
-		actTask:     r.Activity.Task,
-		actPreview:  r.Activity.Preview,
-		session:     r.Session,
-		stale:       r.Stale,
-		capTerminal: r.Caps.Terminal,
-		capReply:    r.Caps.Reply,
-		capKill:     r.Caps.Kill,
-		capChat:     r.Caps.Chat,
+		agent:         r.Agent,
+		state:         string(r.State),
+		attention:     string(r.Attention),
+		attentionNote: r.AttentionNote,
+		repo:          r.Repo,
+		project:       r.Project,
+		role:          r.Role,
+		branch:        r.Branch,
+		worktree:      r.Worktree,
+		actTool:       r.Activity.Tool,
+		actHint:       r.Activity.Hint,
+		actMessage:    r.Activity.Message,
+		actTask:       r.Activity.Task,
+		actPreview:    r.Activity.Preview,
+		session:       r.Session,
+		stale:         r.Stale,
+		capTerminal:   r.Caps.Terminal,
+		capReply:      r.Caps.Reply,
+		capKill:       r.Caps.Kill,
+		capChat:       r.Caps.Chat,
 	}
 	for _, t := range r.Background {
 		s.background += t.ID + "\x00"
@@ -341,6 +371,7 @@ func runSignature(r Run) signature {
 		s.hasCrew = true
 		s.crewName, s.crewCodename, s.crewColor, s.crewTier = r.Crew.Name, r.Crew.Codename, r.Crew.Color, r.Crew.Tier
 		s.crewTitle, s.crewModel, s.crewDetail = r.Crew.Title, r.Crew.Model, r.Crew.Detail
+		s.crewSessions = r.Crew.Sessions
 	}
 	if r.Question != nil {
 		s.hasQuestion = true
@@ -474,6 +505,9 @@ func mergeInto(dst *Run, src Run) {
 		}
 		if src.Crew.Detail != "" {
 			dst.Crew.Detail = src.Crew.Detail
+		}
+		if src.Crew.Sessions != 0 {
+			dst.Crew.Sessions = src.Crew.Sessions
 		}
 	}
 	if src.Question != nil {

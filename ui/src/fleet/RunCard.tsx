@@ -1,5 +1,5 @@
 import type { Run } from '../api/runs'
-import { isFresh, isHistory, needsYou } from './staleness'
+import { isDone, isFresh, isHistory, isStuck, needsYou } from './staleness'
 import { agoLabel, nameLabel, subtitle } from './format'
 import { projectOf } from './fleetList'
 
@@ -35,12 +35,18 @@ export function RunCard({ run, now, onOpen, selected, crewLine }: RunCardProps) 
   // from time-stale (updated_at is old); a run can be both, either, or neither.
   const connStale = run.stale === true
 
+  const stuck = isStuck(run, now)
+  const done = isDone(run, now)
+
   const attentionClass = attention ? ' attention' : staleBlocked ? ' attention muted' : ''
+  const staleStuck = run.attention === 'stuck' && !stuck
+  const staleDone = run.attention === 'done' && !done
+  const calmClass = stuck ? ' stuck' : staleStuck ? ' stuck muted' : done ? ' done' : staleDone ? ' done muted' : ''
 
   return (
     <button
       type="button"
-      className={`run-card${attentionClass}${history ? ' history' : ''}${selected ? ' selected' : ''}`}
+      className={`run-card${attentionClass}${calmClass}${history ? ' history' : ''}${selected ? ' selected' : ''}`}
       aria-current={selected ? 'true' : undefined}
       onClick={() => onOpen?.(run)}
       style={{ '--run-accent': run.crew?.color } as React.CSSProperties}
@@ -62,8 +68,12 @@ export function RunCard({ run, now, onOpen, selected, crewLine }: RunCardProps) 
 
       {run.question && <div className="run-question">{run.question.text}</div>}
 
+      {run.attention === 'stuck' && run.attention_note && <div className="run-stuck-note">{run.attention_note}</div>}
+
       <div className="run-chips">
         {run.role && <span className={`run-role ${run.role}`}>{run.role}</span>}
+        {run.attention === 'stuck' && <span className="run-chip stuck">stuck</span>}
+        {run.attention === 'done' && <span className="run-chip done">done</span>}
         <span className="run-chip">{run.agent}</span>
         {run.issue && <span className="run-chip issue">{run.issue.id}</span>}
         {run.pr && <PRChip pr={run.pr} />}

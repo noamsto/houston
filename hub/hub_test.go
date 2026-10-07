@@ -436,3 +436,53 @@ func TestPruneEnded(t *testing.T) {
 		t.Errorf("raced-via-rename: want kept, stat err = %v", err)
 	}
 }
+
+// TestHubAsksFollowsTheLastAssistantText pins when SessionView.Asks is set and
+// reset: only the final line of the last assistant text, cleared by any later
+// tool or non-assistant activity, untouched by thinking or bookkeeping rows.
+func TestHubAsksFollowsTheLastAssistantText(t *testing.T) {
+	claude := func(role, block string) string {
+		return `{"type":"` + role + `","message":{"role":"` + role + `","content":[` + block + `]}}` + "\n"
+	}
+	pi := func(role, block string) string {
+		return `{"type":"message","message":{"role":"` + role + `","content":[` + block + `]}}` + "\n"
+	}
+	text := func(s string) string { return `{"type":"text","text":"` + s + `"}` }
+
+	steps := []struct {
+		name, line, want string
+	}{
+		{"assistant question", claude("assistant", text("Ready. Merge it?")), "Ready. Merge it?"},
+		{"tool_use resets", claude("assistant", `{"type":"tool_use","id":"tu_1","name":"Bash","input":{"command":"ls"}}`), ""},
+		{"tool_result keeps it empty", claude("user", `{"type":"tool_result","tool_use_id":"tu_1","content":"ok"}`), ""},
+		{"statement", claude("assistant", text("All green.")), ""},
+		{"question again", claude("assistant", text("A or B?")), "A or B?"},
+		{"bookkeeping row", `{"type":"system","subtype":"stop_hook_summary"}` + "\n", "A or B?"},
+		{"thinking block", claude("assistant", `{"type":"thinking","thinking":"hmm"}`), "A or B?"},
+		{"user text resets", claude("user", text("A")), ""},
+		{"pi toolCall in the same message resets", pi("assistant", text("Which?")+`,{"type":"toolCall","id":"c1","name":"bash","arguments":{}}`), ""},
+		{"pi question", pi("assistant", text("Pick one?")), "Pick one?"},
+		{"pi toolResult resets", pi("toolResult", text("ok")), ""},
+	}
+
+	path := filepath.Join(t.TempDir(), "t.jsonl")
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h := New(t.TempDir(), nil)
+	h.sessions["s1"] = &Session{transcriptPath: path}
+	for _, s := range steps {
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.WriteString(s.line); err != nil {
+			t.Fatal(err)
+		}
+		_ = f.Close()
+		h.refreshTranscript("s1")
+		if got := h.sessions["s1"].view.Asks; got != s.want {
+			t.Fatalf("after %s: Asks = %q, want %q", s.name, got, s.want)
+		}
+	}
+}

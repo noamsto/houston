@@ -282,7 +282,7 @@ func TestTmuxEnv(t *testing.T) {
 func TestDispatchNotificationMessageLivesOnlyUntilTheNextEvent(t *testing.T) {
 	for _, event := range []string{
 		EventSessionStart, EventUserPromptSubmit, EventPreToolUse, EventPostToolUse,
-		EventStop, EventSubagentStop, EventPreCompact, EventSessionEnd,
+		EventStop, EventPreCompact, EventSessionEnd,
 	} {
 		t.Run(event, func(t *testing.T) {
 			dir := t.TempDir()
@@ -302,6 +302,102 @@ func TestDispatchNotificationReplacesThePreviousMessage(t *testing.T) {
 	got := dispatch(t, dir, EventNotification, map[string]any{"session_id": "s", "message": "second"})
 	if got.LastMessage != "second" {
 		t.Errorf("LastMessage = %q, want second", got.LastMessage)
+	}
+}
+
+func TestDispatchSubagentStopKeepsTheTurn(t *testing.T) {
+	// SubagentStop fires while the main agent is still inside the Task tool.
+	dir := t.TempDir()
+	dispatch(t, dir, EventPreToolUse, map[string]any{"session_id": "s", "tool_name": "Task"})
+	got := dispatch(t, dir, EventSubagentStop, map[string]any{"session_id": "s"})
+	if got.State != StateToolRunning {
+		t.Errorf("State after SubagentStop = %q, want %q", got.State, StateToolRunning)
+	}
+	if got.Tool != "Task" {
+		t.Errorf("Tool after SubagentStop = %q, want Task", got.Tool)
+	}
+}
+
+func TestDispatchUnknownNotificationKeepsState(t *testing.T) {
+	t.Run("during a tool", func(t *testing.T) {
+		dir := t.TempDir()
+		dispatch(t, dir, EventPreToolUse, map[string]any{"session_id": "s", "tool_name": "Bash"})
+		got := dispatch(t, dir, EventNotification, map[string]any{
+			"session_id": "s", "notification_type": "auth_success", "message": "Signed in",
+		})
+		if got.State != StateToolRunning {
+			t.Errorf("State = %q, want %q", got.State, StateToolRunning)
+		}
+	})
+	t.Run("behind a permission prompt", func(t *testing.T) {
+		dir := t.TempDir()
+		dispatch(t, dir, EventNotification, map[string]any{
+			"session_id": "s", "notification_type": "permission_prompt", "message": "Allow Bash?",
+		})
+		got := dispatch(t, dir, EventNotification, map[string]any{
+			"session_id": "s", "notification_type": "auth_success", "message": "Signed in",
+		})
+		if got.State != StatePermission {
+			t.Errorf("State = %q, want %q", got.State, StatePermission)
+		}
+		if got.LastMessage != "Allow Bash?" {
+			t.Errorf("LastMessage = %q, want the permission prompt's", got.LastMessage)
+		}
+	})
+	t.Run("untyped first event", func(t *testing.T) {
+		dir := t.TempDir()
+		got := dispatch(t, dir, EventNotification, map[string]any{"session_id": "s", "message": "hello"})
+		if got.State != "" {
+			t.Errorf("State = %q, want empty", got.State)
+		}
+		if got.LastMessage != "hello" {
+			t.Errorf("LastMessage = %q, want hello", got.LastMessage)
+		}
+	})
+}
+
+func TestDispatchNotificationElicitationDialog(t *testing.T) {
+	dir := t.TempDir()
+	got := dispatch(t, dir, EventNotification, map[string]any{
+		"session_id": "s", "notification_type": "elicitation_dialog", "message": "Pick a server",
+	})
+	if got.State != StatePermission {
+		t.Errorf("State = %q, want %q", got.State, StatePermission)
+	}
+	if got.LastMessage != "Pick a server" {
+		t.Errorf("LastMessage = %q, want Pick a server", got.LastMessage)
+	}
+}
+
+func TestDispatchIdlePromptClearsADismissedPermission(t *testing.T) {
+	dir := t.TempDir()
+	dispatch(t, dir, EventUserPromptSubmit, map[string]any{"session_id": "s"})
+	dispatch(t, dir, EventPreToolUse, map[string]any{"session_id": "s", "tool_name": "Bash"})
+	dispatch(t, dir, EventNotification, map[string]any{
+		"session_id": "s", "notification_type": "permission_prompt", "message": "Allow Bash?",
+	})
+	got := dispatch(t, dir, EventNotification, map[string]any{
+		"session_id": "s", "notification_type": "idle_prompt", "message": "Claude is waiting for your input",
+	})
+	if got.State != StateWaiting {
+		t.Errorf("State = %q, want %q", got.State, StateWaiting)
+	}
+	if got.LastMessage != "Claude is waiting for your input" {
+		t.Errorf("LastMessage = %q, want the idle_prompt message", got.LastMessage)
+	}
+}
+
+func TestDispatchSubagentStopKeepsAPendingPermission(t *testing.T) {
+	dir := t.TempDir()
+	dispatch(t, dir, EventNotification, map[string]any{
+		"session_id": "s", "notification_type": "permission_prompt", "message": "Allow Bash?",
+	})
+	got := dispatch(t, dir, EventSubagentStop, map[string]any{"session_id": "s"})
+	if got.State != StatePermission {
+		t.Errorf("State = %q, want %q", got.State, StatePermission)
+	}
+	if got.LastMessage != "Allow Bash?" {
+		t.Errorf("LastMessage = %q, want the permission prompt's", got.LastMessage)
 	}
 }
 

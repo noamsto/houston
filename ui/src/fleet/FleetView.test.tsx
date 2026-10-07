@@ -69,3 +69,37 @@ describe('FleetView project grouping', () => {
     expect(container.querySelectorAll('.fleet-project-group').length).toBe(2)
   })
 })
+
+describe('FleetView attention filters', () => {
+  const mixed = [
+    run({ id: 'b-fresh', branch: 'blocked-fresh', state: 'blocked' }),
+    run({ id: 'b-stale', branch: 'blocked-stale', state: 'blocked', updated_at: nowSec - 2 * 3600 }),
+    run({ id: 's', branch: 'stuck-one', state: 'idle', attention: 'stuck', attention_note: 'no output for 20 min' }),
+    run({ id: 'e', branch: 'ended-one', state: 'done' }),
+  ]
+
+  it('counts only fresh blocked runs in the header badge', () => {
+    render(<FleetView runs={mixed} connected now={now} />)
+    expect(screen.getByRole('button', { name: '1 needs you' })).toBeTruthy()
+  })
+
+  it('offers Active, Needs you, Stuck, Done and All', () => {
+    const { container } = render(<FleetView runs={mixed} connected now={now} />)
+    const nav = container.querySelector('.fleet-filters') as HTMLElement
+    expect(Array.from(nav.querySelectorAll('button')).map((b) => b.textContent))
+      .toEqual(['Active', 'Needs you', 'Stuck', 'Done', 'All'])
+  })
+
+  it('Stuck shows only the stuck card', () => {
+    const { container } = render(<FleetView runs={mixed} connected now={now} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Stuck' }))
+    expect(cardOrder(container)).toEqual(['stuck-one'])
+  })
+
+  it('keeps a fresh ended run out of Active and in All', () => {
+    const { container } = render(<FleetView runs={mixed} connected now={now} />)
+    expect(cardOrder(container)).not.toContain('ended-one')
+    fireEvent.click(screen.getByRole('button', { name: 'All' }))
+    expect(cardOrder(container)).toContain('ended-one')
+  })
+})

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { FRESH_MS, isFresh, isHistory, needsYou } from './staleness'
+import { FRESH_MS, isDone, isEnded, isFresh, isHistory, isStuck, needsYou } from './staleness'
 import type { Run } from '../api/runs'
 
 const now = 1_800_000_000_000 // fixed ms
@@ -42,8 +42,21 @@ describe('staleness', () => {
     expect(isHistory(run({ state: 'failed', updated_at: agoSec(FRESH_MS + 1) }), now)).toBe(true)
   })
 
-  it('keeps a just-finished run out of history so it does not vanish mid-glance', () => {
-    expect(isHistory(run({ state: 'done', updated_at: agoSec(1000) }), now)).toBe(false)
+  it('treats a fresh ended run as history so it leaves Active at once', () => {
+    expect(isHistory(run({ state: 'done', updated_at: agoSec(1000) }), now)).toBe(true)
+  })
+
+  it('keeps a fresh run that finished its work but is awaiting review out of history', () => {
+    expect(isHistory(run({ state: 'done', attention: 'done', updated_at: agoSec(1000) }), now)).toBe(false)
+    expect(isHistory(run({ state: 'idle', attention: 'done', updated_at: agoSec(1000) }), now)).toBe(false)
+  })
+
+  it('keeps a fresh stuck run on a dead worker out of history', () => {
+    expect(isHistory(run({ state: 'done', attention: 'stuck', updated_at: agoSec(1000) }), now)).toBe(false)
+  })
+
+  it('ages a done-attention run into history once stale', () => {
+    expect(isHistory(run({ state: 'done', attention: 'done', updated_at: agoSec(2 * 60 * 60_000) }), now)).toBe(true)
   })
 
   it('never treats a running or thinking run as history', () => {
@@ -80,5 +93,27 @@ describe('staleness', () => {
   it('reports freshness from updated_at', () => {
     expect(isFresh(run({ updated_at: agoSec(1000) }), now)).toBe(true)
     expect(isFresh(run({ updated_at: agoSec(FRESH_MS + 1) }), now)).toBe(false)
+  })
+
+  it('isEnded marks a done run without done-attention', () => {
+    expect(isEnded(run({ state: 'done' }))).toBe(true)
+    expect(isEnded(run({ state: 'done', attention: 'done' }))).toBe(false)
+    expect(isEnded(run({ state: 'done', attention: 'stuck' }))).toBe(false)
+    expect(isEnded(run({ state: 'idle' }))).toBe(false)
+  })
+
+  it('isStuck and isDone respect freshness', () => {
+    const stale = agoSec(FRESH_MS + 60_000)
+    expect(isStuck(run({ attention: 'stuck' }), now)).toBe(true)
+    expect(isStuck(run({ attention: 'stuck', updated_at: stale }), now)).toBe(false)
+    expect(isStuck(run({ attention: 'done' }), now)).toBe(false)
+    expect(isDone(run({ attention: 'done' }), now)).toBe(true)
+    expect(isDone(run({ attention: 'done', updated_at: stale }), now)).toBe(false)
+    expect(isDone(run({ attention: 'stuck' }), now)).toBe(false)
+  })
+
+  it('needsYou ignores stuck and done attention', () => {
+    expect(needsYou(run({ state: 'idle', attention: 'stuck' }), now)).toBe(false)
+    expect(needsYou(run({ state: 'idle', attention: 'done' }), now)).toBe(false)
   })
 })
