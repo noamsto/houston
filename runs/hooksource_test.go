@@ -950,11 +950,11 @@ func TestHookSourceKeepsTheGridLeadPane(t *testing.T) {
 // waitingMsg is hub's LastMessage for a turn-end waiting state.
 const waitingMsg = "Claude is waiting for your input"
 
-// TestHookSourceDemotesTurnEndWaitingAgainstTmux is #143 root cause 2: the
-// hooks layer's turn-end waiting (idle_prompt, Stop) must not outrank the tmux
-// layer's idle/done verdict for the same pane. A permission prompt is a
-// distinct hook state and always stays blocked.
-func TestHookSourceDemotesTurnEndWaitingAgainstTmux(t *testing.T) {
+// TestHookSourceTurnEndIsNotNeedsYou: the hooks layer's turn-end waiting
+// (idle_prompt, Stop) never claims "needs you", whatever the tmux layer says
+// about the pane. A permission prompt is a distinct hook state and stays
+// blocked.
+func TestHookSourceTurnEndIsNotNeedsYou(t *testing.T) {
 	tests := []struct {
 		name      string
 		status    string
@@ -963,11 +963,11 @@ func TestHookSourceDemotesTurnEndWaitingAgainstTmux(t *testing.T) {
 		wantQuest bool
 		wantMsg   string
 	}{
-		{"idle demotes a turn-end waiting", "idle 100 0", hook.StateWaiting, StateIdle, false, ""},
-		{"done keeps a turn-end waiting blocked", "done 100 0", hook.StateWaiting, StateBlocked, true, waitingMsg},
-		{"waiting keeps a turn-end waiting blocked", "waiting 100 0", hook.StateWaiting, StateBlocked, true, waitingMsg},
-		{"processing keeps a turn-end waiting blocked", "processing 100 0", hook.StateWaiting, StateBlocked, true, waitingMsg},
-		{"no status keeps a turn-end waiting blocked", "", hook.StateWaiting, StateBlocked, true, waitingMsg},
+		{"idle pane", "idle 100 0", hook.StateWaiting, StateIdle, false, ""},
+		{"done pane", "done 100 0", hook.StateWaiting, StateIdle, false, ""},
+		{"waiting pane", "waiting 100 0", hook.StateWaiting, StateIdle, false, ""},
+		{"processing pane", "processing 100 0", hook.StateWaiting, StateIdle, false, ""},
+		{"no status", "", hook.StateWaiting, StateIdle, false, ""},
 		{"idle never demotes a permission prompt", "idle 100 0", hook.StatePermission, StateBlocked, true, waitingMsg},
 	}
 	for _, tt := range tests {
@@ -988,9 +988,31 @@ func TestHookSourceDemotesTurnEndWaitingAgainstTmux(t *testing.T) {
 				t.Errorf("Question present = %v, want %v (%+v)", got, tt.wantQuest, d.Run.Question)
 			}
 			if d.Run.Activity.Message != tt.wantMsg {
-				t.Errorf("Activity.Message = %q, want %q — a demoted run must not keep waiting-only text", d.Run.Activity.Message, tt.wantMsg)
+				t.Errorf("Activity.Message = %q, want %q — a turn-end run must not keep waiting-only text", d.Run.Activity.Message, tt.wantMsg)
 			}
 		})
+	}
+}
+
+// TestHookSourcePiTurnEndIsNotNeedsYou: a pi run that settled (Stop ->
+// waiting) on a pane lazytmux does not stamp (@agent_screen only) is idle,
+// not a question.
+func TestHookSourcePiTurnEndIsNotNeedsYou(t *testing.T) {
+	panes := &fakePanes{}
+	panes.setPanes(tmux.PaneOptions{PaneID: "%9", AgentScreen: "idle 100"})
+
+	st := blockedState()
+	st.State = hook.StateWaiting
+	st.Agent = "pi"
+	st.LastMessage = waitingMsg
+	out, _ := startHookSourceWith(t, panes, st, nil)
+
+	d := waitDelta(t, out, "pi run", func(d Delta) bool { return d.Key == "%9" })
+	if d.Run.State != StateIdle {
+		t.Errorf("State = %q, want %q", d.Run.State, StateIdle)
+	}
+	if d.Run.Question != nil {
+		t.Errorf("Question = %+v, want none", d.Run.Question)
 	}
 }
 

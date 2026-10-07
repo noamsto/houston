@@ -1164,6 +1164,54 @@ func TestScanStampsProjectAndWorkerRole(t *testing.T) {
 	}
 }
 
+// A worker's own "blocked" status posted to the bus is not a human prompt
+// while a live dispatcher owns the crew: the dispatcher answers it.
+func TestScanWorkerBlockedOnLiveDispatcherIsNotNeedsYou(t *testing.T) {
+	bus := t.TempDir()
+	statusTS := time.Now().Add(-60 * time.Second).UnixMilli()
+	events := `{"ts":1000,"crew_id":"c1","kind":"dispatch","branch":"fix/412","engine":"claude"}` + "\n" +
+		fmt.Sprintf(`{"ts":%d,"crew_id":"c1","from":"worker:fix/412#s1","kind":"status","body":{"state":"blocked","detail":"spec: which engine?"}}`, statusTS) + "\n"
+	if err := os.WriteFile(filepath.Join(bus, "events.jsonl"), []byte(events), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	crewDir := filepath.Join(bus, "crews", "c1")
+	if err := os.MkdirAll(crewDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(crewDir, "pane"), []byte("%1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := crewScanner(
+		map[string]string{"/wt/a": bus},
+		[]tmux.WindowOptions{
+			{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"},
+			{Session: "h", Window: 2, CrewName: "dispatcher"},
+		},
+		[]tmux.PaneOptions{
+			agentPane("%307", "h:1"),
+			{PaneID: "%1", Target: "h:2", ClaudeStatus: "idle 1 "},
+		},
+	)
+
+	got, ok := s.scan()
+	if !ok {
+		t.Fatal("scan reported failure")
+	}
+	r, found := got["%307"]
+	if !found {
+		t.Fatalf("no run under the pane key — keys %v", keysOf(got))
+	}
+	if r.State == StateBlocked {
+		t.Errorf("State = %q, want not blocked: the dispatcher is alive and owns the question", r.State)
+	}
+	if r.Question != nil {
+		t.Errorf("Question = %+v, want none", r.Question)
+	}
+	if r.Crew == nil || r.Crew.Detail != "spec: which engine?" {
+		t.Errorf("Crew = %+v, want Detail %q kept", r.Crew, "spec: which engine?")
+	}
+}
+
 func TestScanFallsBackWhenNoPaneJoins(t *testing.T) {
 	t.Run("the only pane is a shell", func(t *testing.T) {
 		bus := writeBus(t, "fix/412")
