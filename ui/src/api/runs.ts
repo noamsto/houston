@@ -106,6 +106,7 @@ export interface Run {
   role?: 'dispatcher' | 'worker' // absent = solo
   branch?: string
   worktree?: string
+  draft_key?: string // opaque id of the session behind a pane run; keys unsent composer drafts
   tmux?: TmuxRef
   issue?: IssueRef
   pr?: PRRef

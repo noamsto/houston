@@ -14,6 +14,7 @@ interface Props {
   runAgent?: string
   runState?: string
   suggestion?: string | null
+  draftKey?: string
 }
 
 // Web Speech API types (not in TS lib by default)
@@ -96,8 +97,8 @@ const errorStyle: React.CSSProperties = {
   padding: '6px 10px 0',
 }
 
-export function MobileInputBar({ address, choices, inputText, agent, runAgent, runState, suggestion }: Props) {
-  const [text, setText, clearIf] = useComposerDraft(terminalKey(address))
+export function MobileInputBar({ address, choices, inputText, agent, runAgent, runState, suggestion, draftKey }: Props) {
+  const [text, setText, clearIf] = useComposerDraft(draftKey ? `run:${draftKey}` : terminalKey(address))
   const { staged, stage, clear: clearStaged } = useStagedImage()
   const [listening, setListening] = useState(false)
   const [sending, setSending] = useState(false)

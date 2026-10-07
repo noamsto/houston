@@ -493,6 +493,8 @@ func TestMergeIntoCoversEveryField(t *testing.T) {
 			continue // crew-layer evidence; composeLocked falls back to it only when no layer names a Session
 		case "Attention", "AttentionNote":
 			continue // computed in composeLocked from the layers, never merged
+		case "DraftKey":
+			continue // derived in composeLocked from the merged Tmux ref and Session
 		}
 		if v.Field(i).IsZero() {
 			t.Errorf("mergeInto drops %s — it will never reach the API", tp.Field(i).Name)
@@ -1281,5 +1283,44 @@ func TestComposeAttentionFromCrewLog(t *testing.T) {
 				t.Errorf("Question = %+v, want Via %q", got.Question, tc.wantVia)
 			}
 		})
+	}
+}
+
+func TestDraftKey(t *testing.T) {
+	key := func(server, pane, session string) string {
+		return draftKeyOf(Run{Session: session, Tmux: &TmuxRef{PaneID: pane, Server: server}})
+	}
+	base := key("100", "%3", "sess-abc")
+	if base == "" {
+		t.Fatal("pane run has no draft key")
+	}
+	if got := key("100", "%3", "sess-abc"); got != base {
+		t.Errorf("key unstable: %q vs %q", got, base)
+	}
+	for name, got := range map[string]string{
+		"server":  key("101", "%3", "sess-abc"),
+		"pane":    key("100", "%4", "sess-abc"),
+		"session": key("100", "%3", "sess-xyz"),
+	} {
+		if got == base {
+			t.Errorf("key unchanged when %s changed", name)
+		}
+	}
+	if strings.Contains(base, "sess-abc") {
+		t.Errorf("key %q contains the raw session id", base)
+	}
+	if got := draftKeyOf(Run{Session: "sess-abc"}); got != "" {
+		t.Errorf("run without a pane got key %q, want empty", got)
+	}
+}
+
+func TestComposedRunCarriesDraftKey(t *testing.T) {
+	r := NewRegistry(DefaultOrder)
+	r.Apply(Delta{Source: "tmux", Key: "%1", Run: Run{Agent: "claude", Tmux: &TmuxRef{PaneID: "%1", Server: "9"}}})
+	r.Apply(Delta{Source: "hooks", Key: "%1", Run: Run{Agent: "claude", Session: "s1"}})
+	got := firstRun(t, r)
+	want := draftKeyOf(Run{Session: "s1", Tmux: &TmuxRef{PaneID: "%1", Server: "9"}})
+	if got.DraftKey != want {
+		t.Errorf("DraftKey = %q, want %q", got.DraftKey, want)
 	}
 }

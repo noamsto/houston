@@ -148,6 +148,7 @@ function RunDetailBody({ run, tab, streamConnected, now, onBack, backLabel }: { 
                   runAgent={run.agent}
                   runState={run.state}
                   suggestion={suggestion}
+                  draftKey={run.draft_key}
                 />
               </>
             )}

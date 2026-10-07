@@ -29,6 +29,19 @@ async function click(el: HTMLElement) {
 }
 
 describe('MobileInputBar composer', () => {
+  it('keeps a draft per session: the same session restores it, another on the same run id does not', () => {
+    const first = render(<MobileInputBar address={runAddress} draftKey="sess-a" />)
+    fireEvent.change(screen.getByPlaceholderText('Send a message...'), { target: { value: 'for agent A' } })
+    first.unmount()
+
+    const other = render(<MobileInputBar address={runAddress} draftKey="sess-b" />)
+    expect((screen.getByPlaceholderText('Send a message...') as HTMLTextAreaElement).value).toBe('')
+    other.unmount()
+
+    render(<MobileInputBar address={runAddress} draftKey="sess-a" />)
+    expect((screen.getByPlaceholderText('Send a message...') as HTMLTextAreaElement).value).toBe('for agent A')
+  })
+
   it('Send posts the typed text (server appends Enter) and clears the field', async () => {
     render(<MobileInputBar address={runAddress} />)
     const field = screen.getByPlaceholderText('Send a message...') as HTMLTextAreaElement
