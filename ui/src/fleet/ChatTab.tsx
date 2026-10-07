@@ -14,6 +14,7 @@ import type { AssistantItem, ChatItem, DividerItem, Optimistic, ToolCall, ToolsI
 import { kindGlyph, statusGlyph } from './chatGlyphs'
 import { ChatMarkdownLazy, ChatPlainText } from './chatMarkdownLazy'
 import { preloadChatMarkdown } from './chatMarkdownLoader'
+import { QuestionCard } from './QuestionCard'
 import { RunQuestion, RunStatusStrip } from './RunStatusStrip'
 
 const REVEAL_TICKS = 16
@@ -218,6 +219,7 @@ function ChatItemRow({ item, runId, live, reducedMotion, revealed, onRevealed, o
   if (item.kind === 'user') return <UserBubble item={item} />
   if (item.kind === 'divider') return <Divider item={item} />
   if (item.kind === 'tools') return <ToolsRow item={item} runId={runId} />
+  if (item.kind === 'question') return <QuestionCard item={item} runId={runId} />
   return <AssistantBubble item={item} live={live} reducedMotion={reducedMotion} revealed={revealed} onRevealed={onRevealed} onTick={onTick} />
 }
 

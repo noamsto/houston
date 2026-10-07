@@ -340,3 +340,24 @@ describe('provisionalTool', () => {
     expect(result).toEqual({ tool: 'Bash', hint: undefined })
   })
 })
+
+describe('buildItems AskUserQuestion', () => {
+  it('breaks the tools run: tool -> question -> tool yields three items', () => {
+    const items = buildItems([
+      toolCall('t1', 1, { _meta: { tool: 'Read' } }),
+      toolCall('q1', 2, { _meta: { tool: 'AskUserQuestion' } }),
+      toolCall('t2', 3, { _meta: { tool: 'Read' } }),
+    ])
+    expect(items.map((i) => i.kind)).toEqual(['tools', 'question', 'tools'])
+  })
+
+  it('folds a tool_call_update status into the question call', () => {
+    const items = buildItems([
+      toolCall('q1', 1, { _meta: { tool: 'AskUserQuestion' } }),
+      toolCallUpdate('u1', 2, 'q1', { status: 'completed' }),
+    ])
+    expect(items).toHaveLength(1)
+    const item = items[0]
+    expect(item.kind === 'question' && item.call.status).toBe('completed')
+  })
+})

@@ -213,6 +213,10 @@ func TestToolInputHint(t *testing.T) {
 		{"bash_no_description", "Bash", `{"command":"npm run build"}`, "npm run build"},
 		{"read_basename", "Read", `{"file_path":"/home/user/project/src/App.tsx"}`, "App.tsx"},
 		{"edit_basename", "Edit", `{"file_path":"/home/user/project/src/App.tsx"}`, "App.tsx"},
+		{"ask_header", "AskUserQuestion", `{"questions":[{"header":"Scope","question":"Which scope?"}]}`, "Scope"},
+		{"ask_question", "AskUserQuestion", `{"questions":[{"question":"Which scope?"}]}`, "Which scope?"},
+		{"ask_blank_header", "AskUserQuestion", `{"questions":[{"header":" ","question":"Which scope?"}]}`, "Which scope?"},
+		{"ask_empty", "AskUserQuestion", `{"questions":[]}`, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

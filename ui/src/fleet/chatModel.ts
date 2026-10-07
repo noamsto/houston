@@ -86,7 +86,14 @@ export interface ToolsItem {
   seq: number
 }
 
-export type ChatItem = UserItem | DividerItem | AssistantItem | ToolsItem
+export interface QuestionItem {
+  kind: 'question'
+  id: string
+  call: ToolCall
+  seq: number
+}
+
+export type ChatItem = UserItem | DividerItem | AssistantItem | ToolsItem | QuestionItem
 
 function isFailed(call: ToolCall): boolean {
   return call.status === 'failed'
@@ -180,6 +187,11 @@ export function buildItems(updates: ChatUpdate[]): ChatItem[] {
         seq: u.seq,
       }
       toolCallsById.set(call.toolCallId, call)
+      if (call.tool === 'AskUserQuestion') {
+        currentTools = null
+        items.push({ kind: 'question', id: u.id, call, seq: u.seq })
+        continue
+      }
       if (!currentTools) {
         currentTools = { kind: 'tools', id: u.id, calls: [], rows: [], seq: u.seq }
         items.push(currentTools)

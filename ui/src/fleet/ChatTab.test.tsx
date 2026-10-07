@@ -787,4 +787,114 @@ describe('ChatTab', () => {
 
     expect(container.querySelector('[data-id="live1"]')!.textContent).toBe(full)
   })
+
+  describe('AskUserQuestion', () => {
+    const input = {
+      questions: [
+        {
+          header: 'Scope', question: 'Which scope?', multiSelect: false,
+          options: [{ label: 'A', description: 'Small' }, { label: 'Z', description: 'Large' }],
+        },
+        {
+          header: 'Extras', question: 'Which extras?', multiSelect: true,
+          options: [{ label: 'B', description: 'Bee' }, { label: 'C', description: 'Sea' }, { label: 'D' }],
+        },
+      ],
+    }
+    const askCall = (extra: Partial<ChatUpdate> = {}) =>
+      toolCall('q1', 1, 'AskUserQuestion', { title: 'Scope', ...extra })
+
+    it('renders the questions and highlights the chosen answers once completed', async () => {
+      const { container } = await renderReady({}, {
+        page: page('e1', [askCall()]),
+        tool: {
+          toolCallId: 'q1', name: 'AskUserQuestion', input,
+          output: 'User has answered your questions: "Which scope?"="A", "Which extras?"="B, C". You can now continue with the user\'s answers in mind.',
+        },
+      })
+      await waitFor(() => expect(container.querySelectorAll('.chat-question-block')).toHaveLength(2))
+      expect(screen.getByText('Which scope?')).toBeTruthy()
+      expect(screen.getByText('Select all that apply')).toBeTruthy()
+      const chosen = Array.from(container.querySelectorAll('.chat-question-option.chosen .chat-question-option-label')).map((e) => e.textContent)
+      expect(chosen).toEqual(['A', 'B', 'C'])
+      expect(screen.queryByText(/answer in the terminal/i)).toBeNull()
+    })
+
+    it('shows the terminal hint while pending', async () => {
+      const { container } = await renderReady({}, {
+        page: page('e1', [askCall({ status: 'in_progress' })]),
+        tool: { toolCallId: 'q1', name: 'AskUserQuestion', input },
+      })
+      await waitFor(() => expect(container.querySelectorAll('.chat-question-block')).toHaveLength(2))
+      expect(screen.getByText(/answer in the terminal tab/i)).toBeTruthy()
+      expect(container.querySelector('.chat-question-option.chosen')).toBeNull()
+    })
+
+    it('falls back to the raw output when a label contains a comma', async () => {
+      const commaInput = { questions: [{ question: 'Pick?', options: [{ label: 'A, B' }, { label: 'C' }] }] }
+      const { container } = await renderReady({}, {
+        page: page('e1', [askCall()]),
+        tool: { toolCallId: 'q1', name: 'AskUserQuestion', input: commaInput, output: 'User has answered: "Pick?"="A, B".' },
+      })
+      await waitFor(() => expect(container.querySelector('.chat-tool-output')).not.toBeNull())
+      expect(container.querySelector('.chat-tool-output')!.textContent).toContain('"Pick?"="A, B"')
+      expect(container.querySelector('.chat-question-option.chosen')).toBeNull()
+    })
+
+    it('falls back to the plain title row when the input is omitted', async () => {
+      await renderReady({}, {
+        page: page('e1', [askCall()]),
+        tool: { toolCallId: 'q1', name: 'AskUserQuestion', inputOmitted: true },
+      })
+      const row = await screen.findByTestId('question-fallback')
+      expect(row.textContent).toContain('Scope')
+    })
+
+    it('fetches the answers when the pending call completes live', async () => {
+      const opts: FetchOpts = {
+        page: page('e1', [askCall({ status: 'in_progress' })]),
+        tool: { toolCallId: 'q1', name: 'AskUserQuestion', input },
+      }
+      const { container } = await renderReady({}, opts)
+      await waitFor(() => expect(screen.getByText(/answer in the terminal tab/i)).toBeTruthy())
+      opts.tool = {
+        toolCallId: 'q1', name: 'AskUserQuestion', input,
+        output: 'User has answered your questions: "Which scope?"="Z", "Which extras?"="D".',
+      }
+      act(() => {
+        fake.instances[0].emit('updates', [{ id: 'q1u', seq: 2, ts: 2, sessionUpdate: 'tool_call_update', toolCallId: 'q1', status: 'completed' }])
+      })
+      await waitFor(() => expect(container.querySelectorAll('.chat-question-option.chosen')).toHaveLength(2))
+      expect(screen.queryByText(/answer in the terminal tab/i)).toBeNull()
+    })
+
+    it('shows a failed call as not answered with its output', async () => {
+      const { container } = await renderReady({}, {
+        page: page('e1', [askCall({ status: 'failed' })]),
+        tool: { toolCallId: 'q1', name: 'AskUserQuestion', input, output: 'The user dismissed the question' },
+      })
+      await waitFor(() => expect(container.querySelector('.chat-question-declined')).not.toBeNull())
+      expect(container.querySelector('.chat-question-declined')!.textContent).toContain('Not answered')
+      expect(container.querySelector('.chat-question-declined')!.textContent).toContain('dismissed')
+    })
+
+    it('falls back to the raw output when a free-text answer contains a quote', async () => {
+      const { container } = await renderReady({}, {
+        page: page('e1', [askCall()]),
+        tool: { toolCallId: 'q1', name: 'AskUserQuestion', input: { questions: [{ question: 'Pick?', options: [{ label: 'A' }, { label: 'Z' }] }] }, output: 'User has answered: "Pick?"="say "hi"".' },
+      })
+      await waitFor(() => expect(container.querySelector('.chat-tool-output')).not.toBeNull())
+      expect(container.querySelector('.chat-question-other')).toBeNull()
+    })
+
+    it('does not split a single-select free-text answer on commas', async () => {
+      const { container } = await renderReady({}, {
+        page: page('e1', [askCall()]),
+        tool: { toolCallId: 'q1', name: 'AskUserQuestion', input: { questions: [{ question: 'Pick?', options: [{ label: 'A' }, { label: 'Z' }] }] }, output: 'User has answered: "Pick?"="A, but smaller".' },
+      })
+      await waitFor(() => expect(container.querySelector('.chat-question-other')).not.toBeNull())
+      expect(container.querySelector('.chat-question-option.chosen')).toBeNull()
+      expect(container.querySelector('.chat-question-other')!.textContent).toContain('A, but smaller')
+    })
+  })
 })
