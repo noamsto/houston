@@ -25,16 +25,11 @@ function isLiveMember(run: Run, now: number): boolean {
   return (working && run.stale !== true && isFresh(run, now)) || needsYou(run, now)
 }
 
-// What a card is flagged as: the server's verdict, nothing inferred. A run with
-// no attention is either working, idle, or ended (state done), and Fleet calls
-// that last one history, not "done".
 export function crewAttention(run: Run): Attention | undefined {
   return run.attention
 }
 
-// Flags are gated on freshness like Fleet's badge, so a stale question does not
-// keep lighting the header of a crew that is already under Finished. Unflagged
-// runs bucket by state alone, as Fleet does.
+// Flags are gated on freshness like Fleet's badge; unflagged runs bucket by state.
 function bucket(run: Run, now: number): keyof CrewCounts {
   if (run.attention) {
     if (!isFresh(run, now)) return 'ended'
