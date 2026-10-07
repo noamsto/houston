@@ -263,6 +263,7 @@ func TestSignatureCoversSessionAndChat(t *testing.T) {
 		after Run
 	}{
 		{"Session", Run{Agent: "claude", Session: "s"}},
+		{"DraftKey", Run{Agent: "claude", DraftKey: "k"}},
 		{"Caps.Chat", Run{Agent: "claude", Caps: Caps{Chat: true}}},
 		{"Background", Run{Agent: "claude", Background: []BackgroundTask{{ID: "b1", Kind: "shell"}}}},
 	} {
@@ -1317,10 +1318,24 @@ func TestDraftKey(t *testing.T) {
 func TestComposedRunCarriesDraftKey(t *testing.T) {
 	r := NewRegistry(DefaultOrder)
 	r.Apply(Delta{Source: "tmux", Key: "%1", Run: Run{Agent: "claude", Tmux: &TmuxRef{PaneID: "%1", Server: "9"}}})
-	r.Apply(Delta{Source: "hooks", Key: "%1", Run: Run{Agent: "claude", Session: "s1"}})
+	// The hooks ref has no Server: the key must still carry the tmux layer's.
+	r.Apply(Delta{Source: "hooks", Key: "%1", Run: Run{Agent: "claude", Session: "s1", Tmux: &TmuxRef{PaneID: "%1"}}})
 	got := firstRun(t, r)
 	want := draftKeyOf(Run{Session: "s1", Tmux: &TmuxRef{PaneID: "%1", Server: "9"}})
 	if got.DraftKey != want {
 		t.Errorf("DraftKey = %q, want %q", got.DraftKey, want)
+	}
+}
+
+func TestTmuxServerChangeReachesSubscribers(t *testing.T) {
+	r := NewRegistry(DefaultOrder)
+	sub := r.Subscribe()
+	defer r.Unsubscribe(sub)
+
+	r.Apply(Delta{Source: "tmux", Key: "%1", Run: Run{Agent: "claude", Tmux: &TmuxRef{PaneID: "%1", Server: "9"}}})
+	r.Apply(Delta{Source: "tmux", Key: "%1", Run: Run{Agent: "claude", Tmux: &TmuxRef{PaneID: "%1", Server: "10"}}})
+
+	if n := len(sub); n != 2 {
+		t.Fatalf("%d broadcasts, want 2 — a tmux restart that reuses the pane id must publish the new draft key", n)
 	}
 }

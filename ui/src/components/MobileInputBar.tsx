@@ -98,7 +98,7 @@ const errorStyle: React.CSSProperties = {
 }
 
 export function MobileInputBar({ address, choices, inputText, agent, runAgent, runState, suggestion, draftKey }: Props) {
-  const [text, setText, clearIf] = useComposerDraft(draftKey ? `run:${draftKey}` : terminalKey(address))
+  const [text, setText, clearIf] = useComposerDraft(draftKey !== undefined ? `run:${draftKey}` : terminalKey(address))
   const { staged, stage, clear: clearStaged } = useStagedImage()
   const [listening, setListening] = useState(false)
   const [sending, setSending] = useState(false)

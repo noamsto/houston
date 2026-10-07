@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 const KEY_PREFIX = 'houston-draft:'
-// Pane ids are reused after a tmux server restart, so an old draft must not
+// Keys without a session identity (a run id, or a pane whose session is not
+// known yet) can be inherited by a later agent, so an old draft must not
 // outlive the session it was typed for.
 const DRAFT_TTL_MS = 24 * 60 * 60_000
 
