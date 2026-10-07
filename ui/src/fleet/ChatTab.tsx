@@ -207,9 +207,10 @@ function ToolsRow({ item, runId }: { item: ToolsItem; runId: string }) {
   )
 }
 
-function ChatItemRow({ item, runId, live, reducedMotion, revealed, onRevealed, onTick }: {
+function ChatItemRow({ item, runId, canAnswer, live, reducedMotion, revealed, onRevealed, onTick }: {
   item: ChatItem
   runId: string
+  canAnswer: boolean
   live: boolean
   reducedMotion: boolean
   revealed: Set<string>
@@ -219,7 +220,7 @@ function ChatItemRow({ item, runId, live, reducedMotion, revealed, onRevealed, o
   if (item.kind === 'user') return <UserBubble item={item} />
   if (item.kind === 'divider') return <Divider item={item} />
   if (item.kind === 'tools') return <ToolsRow item={item} runId={runId} />
-  if (item.kind === 'question') return <QuestionCard item={item} runId={runId} />
+  if (item.kind === 'question') return <QuestionCard item={item} runId={runId} canAnswer={canAnswer} />
   return <AssistantBubble item={item} live={live} reducedMotion={reducedMotion} revealed={revealed} onRevealed={onRevealed} onTick={onTick} />
 }
 
@@ -429,6 +430,7 @@ export function ChatTab({ run, now }: { run: Run; now: number }) {
               key={item.id}
               item={item}
               runId={run.id}
+              canAnswer={run.caps.terminal && run.state !== 'done' && run.state !== 'failed'}
               live={liveIds.has(item.id)}
               reducedMotion={reducedMotion}
               revealed={revealedIds}

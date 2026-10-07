@@ -820,6 +820,20 @@ describe('ChatTab', () => {
       expect(screen.queryByText(/answer in the terminal/i)).toBeNull()
     })
 
+    it.each([
+      ['no terminal', { caps: { terminal: false, reply: false, kill: false, chat: true } }],
+      ['an ended run', { state: 'done' as const }],
+      ['a failed run', { state: 'failed' as const }],
+    ])('says not answered, with no terminal hint, for a pending question on %s', async (_name, over) => {
+      const { container } = await renderReady(over, {
+        page: page('e1', [askCall({ status: 'in_progress' })]),
+        tool: { toolCallId: 'q1', name: 'AskUserQuestion', input },
+      })
+      await waitFor(() => expect(container.querySelectorAll('.chat-question-block')).toHaveLength(2))
+      expect(screen.queryByText(/answer in the terminal/i)).toBeNull()
+      expect(container.querySelector('.chat-question-declined')!.textContent).toContain('Not answered')
+    })
+
     it('shows the terminal hint while pending', async () => {
       const { container } = await renderReady({}, {
         page: page('e1', [askCall({ status: 'in_progress' })]),
