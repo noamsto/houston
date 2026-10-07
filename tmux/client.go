@@ -96,7 +96,8 @@ type Client struct {
 	tmuxPath string
 
 	// sendLocks holds one *sync.Mutex per pane target; SendKeys keeps it across
-	// its text, settle and Enter so concurrent sends cannot interleave.
+	// its text, settle and Enter so concurrent text sends cannot interleave.
+	// Single keys (SendSpecialKey) deliberately skip it.
 	sendLocks sync.Map
 }
 

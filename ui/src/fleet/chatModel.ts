@@ -227,9 +227,9 @@ const OPTIMISTIC_QUEUE_MAX_MS = 30 * 60_000
  * became, by trimmed text within [sentAt-5s, sentAt+30min]. The upper bound is
  * generous because a message queued while the agent is mid-turn lands in the
  * transcript only when the turn ends, but finite so a much later identical
- * message ('yes') can't confirm a lost bubble. Each chunk matches at most one pending bubble; pending
- * bubbles claim a chunk oldest-sent first. Unmatched after 30s is flagged
- * unconfirmed, not dropped.
+ * message ('yes') can't confirm a lost bubble. Each chunk matches at most one
+ * pending bubble; pending bubbles claim a chunk oldest-sent first. Unmatched
+ * after 30s is flagged unconfirmed, not dropped.
  */
 export function reconcileOptimistic(pending: Optimistic[], updates: ChatUpdate[], now: number): ReconcileResult {
   const chunks = updates

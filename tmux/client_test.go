@@ -236,6 +236,9 @@ func loggingTmux(t *testing.T, failAt int) (*Client, func() []loggedCall) {
 	if err != nil {
 		t.Skip("bash not found")
 	}
+	if out, _ := exec.Command(bash, "-c", `printf %s "$EPOCHREALTIME"`).Output(); len(out) == 0 {
+		t.Skip("bash lacks EPOCHREALTIME (needs >= 5.0)")
+	}
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "calls.log")
 	counterPath := filepath.Join(dir, "counter")
