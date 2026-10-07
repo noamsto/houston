@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 )
@@ -93,6 +94,10 @@ func (p Pane) URLTarget() string {
 
 type Client struct {
 	tmuxPath string
+
+	// sendLocks holds one *sync.Mutex per pane target; SendKeys keeps it across
+	// its text, settle and Enter so concurrent sends cannot interleave.
+	sendLocks sync.Map
 }
 
 func NewClient() *Client {
@@ -418,6 +423,11 @@ const sendChunkBytes = 8 << 10
 const enterSettle = 75 * time.Millisecond
 
 func (c *Client) SendKeys(p Pane, keys string, enter bool) error {
+	mu, _ := c.sendLocks.LoadOrStore(p.Target(), new(sync.Mutex))
+	lock := mu.(*sync.Mutex)
+	lock.Lock()
+	defer lock.Unlock()
+
 	for _, chunk := range splitSendChunks(keys) {
 		// "--" stops tmux parsing text such as "-l" or "-1 x" as flags.
 		if err := c.run("send-keys", "-t", p.Target(), "-l", "--", escapeTrailingSemicolon(chunk)); err != nil {

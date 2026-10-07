@@ -252,6 +252,14 @@ describe('reconcileOptimistic', () => {
     expect(result).toEqual({ confirmed: ['p1'], remaining: [] })
   })
 
+  it('does not confirm a lost bubble from an identical message arriving beyond 30 minutes', () => {
+    const pending = [{ localId: 'p1', text: 'yes', sentAt: 10_000 }]
+    const updates = [userChunk('u1', 1, 'yes', { ts: 10_000 + 30 * 60_000 + 1 })]
+    const result = reconcileOptimistic(pending, updates, 10_000 + 31 * 60_000)
+    expect(result.confirmed).toEqual([])
+    expect(result.remaining).toEqual([{ localId: 'p1', text: 'yes', sentAt: 10_000, unconfirmed: true }])
+  })
+
   it('does not confirm past the 5s early boundary', () => {
     const pending = [{ localId: 'p1', text: 'hello', sentAt: 10_000 }]
     const updates = [userChunk('u1', 1, 'hello', { ts: 4_999 })]

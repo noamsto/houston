@@ -4,19 +4,25 @@ import { readBase64, useStagedImage } from './useStagedImage'
 
 const png = (name: string) => new File(['x'], name, { type: 'image/png' })
 
-let create: ReturnType<typeof vi.fn>
+type UrlFn = 'createObjectURL' | 'revokeObjectURL'
+const urlFns: UrlFn[] = ['createObjectURL', 'revokeObjectURL']
+
 let revoke: ReturnType<typeof vi.fn>
+let added: UrlFn[]
 
 beforeEach(() => {
   let n = 0
-  create = vi.fn(() => `blob:preview-${++n}`)
-  revoke = vi.fn()
-  vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: create, revokeObjectURL: revoke }))
+  // happy-dom may lack these; spyOn needs an existing property.
+  added = urlFns.filter((name) => typeof URL[name] !== 'function')
+  for (const name of added) Object.defineProperty(URL, name, { value: () => '', configurable: true, writable: true })
+  vi.spyOn(URL, 'createObjectURL').mockImplementation(() => `blob:preview-${++n}`)
+  revoke = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
 })
 
 afterEach(() => {
   cleanup()
-  vi.unstubAllGlobals()
+  vi.restoreAllMocks()
+  for (const name of added) delete (URL as Partial<typeof URL>)[name]
 })
 
 describe('useStagedImage', () => {
@@ -57,7 +63,7 @@ describe('useStagedImage', () => {
   })
 
   it('uses a null preview when createObjectURL is unavailable', () => {
-    vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: undefined, revokeObjectURL: undefined }))
+    Object.defineProperty(URL, 'createObjectURL', { value: undefined, configurable: true, writable: true })
     const { result, unmount } = renderHook(() => useStagedImage())
     const file = png('a.png')
     act(() => result.current.stage(file))

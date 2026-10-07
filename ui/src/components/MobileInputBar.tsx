@@ -191,7 +191,13 @@ export function MobileInputBar({ address, choices, inputText, agent }: Props) {
     const file = e.target.files?.[0]
     // Reset so the same file can be selected again
     e.target.value = ''
-    if (file) stage(file)
+    if (!file) return
+    // The in-flight send's success clears the staged file.
+    if (sendingRef.current) {
+      setSendError('busy — pick the file again')
+      return
+    }
+    stage(file)
   }
 
   const hasSpeech = !!SpeechRecognitionCtor

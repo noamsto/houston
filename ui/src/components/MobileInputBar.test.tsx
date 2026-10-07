@@ -224,6 +224,54 @@ describe('MobileInputBar durable draft', () => {
   })
 })
 
+describe('MobileInputBar send in flight', () => {
+  let resolve!: (r: Response) => void
+  const storedDraft = () => {
+    const raw = localStorage.getItem('houston-draft:run:run-1')
+    return raw === null ? null : (JSON.parse(raw) as { t: string }).t
+  }
+  beforeEach(() => {
+    vi.mocked(fetch).mockReturnValue(new Promise<Response>((r) => { resolve = r }))
+  })
+
+  it('a send that succeeds after the composer remounted leaves the new one empty', async () => {
+    const first = render(<MobileInputBar address={runAddress} />)
+    fireEvent.change(field(), { target: { value: 'deploy prod' } })
+    await click(sendBtn())
+    first.unmount()
+
+    render(<MobileInputBar address={runAddress} />)
+    expect(field().value).toBe('deploy prod')
+
+    await act(async () => resolve({ ok: true } as Response))
+    expect(field().value).toBe('')
+    expect(localStorage.getItem('houston-draft:run:run-1')).toBeNull()
+  })
+
+  it('keeps text typed while the send was in flight, in the field and in storage', async () => {
+    render(<MobileInputBar address={runAddress} />)
+    fireEvent.change(field(), { target: { value: 'hello' } })
+    await click(sendBtn())
+    fireEvent.change(field(), { target: { value: 'hello again' } })
+
+    await act(async () => resolve({ ok: true } as Response))
+    expect(field().value).toBe('hello again')
+    expect(storedDraft()).toBe('hello again')
+  })
+
+  it('picking a file while a send is in flight reports busy and stages nothing', async () => {
+    render(<MobileInputBar address={runAddress} />)
+    fireEvent.change(field(), { target: { value: 'hello' } })
+    await click(sendBtn())
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    fireEvent.change(input, { target: { files: [new File(['x'], 'a.png', { type: 'image/png' })] } })
+
+    expect(screen.getByTestId('send-error').textContent).toContain('busy — pick the file again')
+    expect(screen.queryByTestId('staged-image')).toBeNull()
+    await act(async () => resolve({ ok: true } as Response))
+  })
+})
+
 describe('MobileInputBar failed sends keep the draft', () => {
   const multi = 'line one\nline two\nline three'
 

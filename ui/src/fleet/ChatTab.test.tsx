@@ -379,6 +379,10 @@ describe('ChatTab', () => {
     const input = () => document.querySelector('input[type=file]') as HTMLInputElement
     const png = () => new File(['x'], 'shot.png', { type: 'image/png' })
     const pick = () => fireEvent.change(input(), { target: { files: [png()] } })
+    const storedDraft = () => {
+      const raw = localStorage.getItem('houston-draft:chat:r1')
+      return raw === null ? null : (JSON.parse(raw) as { t: string }).t
+    }
     const inputCalls = (fetchMock: ReturnType<typeof vi.fn>) =>
       fetchMock.mock.calls.filter((c: unknown[]) => String(c[0]).includes('/input')) as [string, RequestInit][]
 
@@ -398,10 +402,10 @@ describe('ChatTab', () => {
     it('drops the stored draft after a successful send', async () => {
       await renderReady({}, { page: page('e1', []) })
       fireEvent.change(textarea(), { target: { value: 'ping the server' } })
-      expect(localStorage.getItem('houston-draft:chat:r1')).toBe('ping the server')
+      expect(storedDraft()).toBe('ping the server')
       fireEvent.click(screen.getByRole('button', { name: 'Send' }))
       await waitFor(() => expect(textarea().value).toBe(''))
-      expect(localStorage.getItem('houston-draft:chat:r1')).toBeNull()
+      expect(storedDraft()).toBeNull()
     })
 
     it('a timed-out send keeps the full multi-line text, stored draft and no optimistic bubble', async () => {
@@ -417,7 +421,7 @@ describe('ChatTab', () => {
       await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('timed out'))
       expect(textarea().value).toBe(body)
       expect(document.querySelector('.chat-optimistic')).toBeNull()
-      expect(localStorage.getItem('houston-draft:chat:r1')).toBe(body)
+      expect(storedDraft()).toBe(body)
     })
 
     it('picking a file only stages it: no /input request, chip shown, × removes it', async () => {
@@ -611,6 +615,24 @@ describe('ChatTab', () => {
       fireEvent.change(textarea, { target: { value: 'hello again' } })
       await act(async () => d.pending[0].resolve(okResponse()))
       expect(textarea.value).toBe('hello again')
+    })
+
+    it('a send that succeeds after the composer remounted does not leave the sent text in the new one', async () => {
+      const first = await renderReady({}, { page: page('e1', []) })
+      const d = deferredInput()
+      first.fetchMock.mockImplementation(d.impl)
+      fireEvent.change(screen.getByPlaceholderText('Message…'), { target: { value: 'deploy prod' } })
+      fireEvent.click(sendBtn())
+      await waitFor(() => expect(d.pending).toHaveLength(1))
+      first.unmount()
+
+      render(<ChatTab run={run()} now={now} />)
+      const textarea = await screen.findByPlaceholderText('Message…') as HTMLTextAreaElement
+      expect(textarea.value).toBe('deploy prod')
+
+      await act(async () => d.pending[0].resolve(okResponse()))
+      expect(textarea.value).toBe('')
+      expect(localStorage.getItem('houston-draft:chat:r1')).toBeNull()
     })
 
     it('picking a file after a Send started (before the button disabled) reports busy', async () => {

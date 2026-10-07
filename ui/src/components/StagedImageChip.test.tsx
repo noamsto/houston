@@ -22,6 +22,15 @@ describe('StagedImageChip', () => {
     expect(container.querySelector('img')).toBeNull()
   })
 
+  it('shows only the name for a non-image file even with a preview url', () => {
+    const pdf = new File(['x'], 'doc.pdf', { type: 'application/pdf' })
+    const { container } = render(
+      <StagedImageChip staged={{ file: pdf, previewUrl: 'blob:p' }} onRemove={() => {}} />,
+    )
+    expect(container.querySelector('img')).toBeNull()
+    expect(screen.getByTestId('staged-image').textContent).toContain('doc.pdf')
+  })
+
   it('calls onRemove from the remove button', () => {
     const onRemove = vi.fn()
     render(<StagedImageChip staged={{ file, previewUrl: null }} onRemove={onRemove} />)
