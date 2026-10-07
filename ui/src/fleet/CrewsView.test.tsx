@@ -253,7 +253,7 @@ describe('CrewsView', () => {
   describe('card states', () => {
     it('shows an idle chip for an unflagged idle worker and prefers live tool activity over the bus detail', () => {
       const runs = [
-        run({ id: 'i', crew: { name: 'c', codename: 'Idler', detail: 'old line' }, state: 'idle' }),
+        run({ id: 'i', crew: { name: 'c', codename: 'Idler', detail: 'old line' }, state: 'idle', activity: { tool: 'Bash', hint: 'rm -rf build' } }),
         run({ id: 'w', crew: { name: 'c', codename: 'Busy', detail: 'old line' }, activity: { tool: 'Edit', hint: 'main.go' }, updated_at: nowSec - 1 }),
       ]
       const { container } = render(<CrewsView runs={runs} now={now} />)
@@ -261,6 +261,7 @@ describe('CrewsView', () => {
       const byName = (n: string) => Array.from(cards).find((c) => c.textContent?.includes(n))!
       expect(byName('Idler').querySelector('.crews-idle')?.textContent).toBe('idle')
       expect(byName('Busy').querySelector('.crews-phase')?.textContent).toBe('Edit · main.go')
+      expect(byName('Idler').querySelector('.crews-phase')?.textContent).toBe('old line')
     })
 
     it('mutes the border of a flagged card that stopped reporting', () => {

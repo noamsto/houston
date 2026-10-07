@@ -22,7 +22,9 @@ interface CrewRepo {
 function phase(run: Run): string {
   if (run.state === 'blocked') return run.activity.message || BLOCKED_FALLBACK
   const { tool, hint } = run.activity
-  if (tool) return hint ? `${tool} · ${hint}` : tool
+  // A tool lingers after a dismissed permission dialog, so it only counts while working.
+  const working = run.state === 'running' || run.state === 'thinking' || run.state === 'compacting'
+  if (working && tool) return hint ? `${tool} · ${hint}` : tool
   if (run.crew?.detail) return run.crew.detail
   return run.state
 }

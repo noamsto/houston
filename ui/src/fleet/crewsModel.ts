@@ -33,16 +33,12 @@ export function crewAttention(run: Run): Attention | undefined {
 }
 
 // Flags are gated on freshness like Fleet's badge, so a stale question does not
-// keep lighting the header of a crew that is already under Finished.
+// keep lighting the header of a crew that is already under Finished. Unflagged
+// runs bucket by state alone, as Fleet does.
 function bucket(run: Run, now: number): keyof CrewCounts {
-  if (!isFresh(run, now)) return 'ended'
-  switch (run.attention) {
-    case 'needs-you':
-      return 'needsYou'
-    case 'stuck':
-      return 'stuck'
-    case 'done':
-      return 'done'
+  if (run.attention) {
+    if (!isFresh(run, now)) return 'ended'
+    return run.attention === 'needs-you' ? 'needsYou' : run.attention
   }
   if (run.state === 'done') return 'ended'
   return run.state === 'idle' ? 'idle' : 'working'
