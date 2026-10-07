@@ -209,16 +209,17 @@ func apply(s *SessionState, event string, ev Event, now int64) {
 		clearTool()
 	case EventNotification:
 		// A permission or elicitation dialog blocks the turn until answered, so
-		// nothing later (an idle_prompt reminder, an informational type such as
-		// auth_success) may displace it or its message. Other types say nothing
-		// about the turn and leave the state alone.
+		// an informational type (auth_success) may not displace it or its
+		// message; those say nothing about the turn and leave the state alone.
+		// idle_prompt is the exception: a dialog the user denied or dismissed
+		// with Esc fires no PostToolUse or Stop (an interrupt fires neither),
+		// so idle_prompt is the only signal that heals the card. The cost, a
+		// dialog genuinely left open past idle_prompt reading idle, is the
+		// base behaviour.
 		switch ev.NotificationType {
 		case "permission_prompt", "elicitation_dialog":
 			s.State = StatePermission
 		case "idle_prompt":
-			if s.State == StatePermission {
-				return
-			}
 			s.State = StateWaiting
 		default:
 			if s.State == StatePermission {

@@ -364,19 +364,21 @@ func TestDispatchNotificationElicitationDialog(t *testing.T) {
 	}
 }
 
-func TestDispatchIdlePromptKeepsAPendingPermission(t *testing.T) {
+func TestDispatchIdlePromptClearsADismissedPermission(t *testing.T) {
 	dir := t.TempDir()
+	dispatch(t, dir, EventUserPromptSubmit, map[string]any{"session_id": "s"})
+	dispatch(t, dir, EventPreToolUse, map[string]any{"session_id": "s", "tool_name": "Bash"})
 	dispatch(t, dir, EventNotification, map[string]any{
 		"session_id": "s", "notification_type": "permission_prompt", "message": "Allow Bash?",
 	})
 	got := dispatch(t, dir, EventNotification, map[string]any{
 		"session_id": "s", "notification_type": "idle_prompt", "message": "Claude is waiting for your input",
 	})
-	if got.State != StatePermission {
-		t.Errorf("State = %q, want %q", got.State, StatePermission)
+	if got.State != StateWaiting {
+		t.Errorf("State = %q, want %q", got.State, StateWaiting)
 	}
-	if got.LastMessage != "Allow Bash?" {
-		t.Errorf("LastMessage = %q, want the permission prompt's", got.LastMessage)
+	if got.LastMessage != "Claude is waiting for your input" {
+		t.Errorf("LastMessage = %q, want the idle_prompt message", got.LastMessage)
 	}
 }
 

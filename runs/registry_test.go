@@ -1220,3 +1220,67 @@ func TestRunSignatureSeesAttention(t *testing.T) {
 		t.Error("an AttentionNote change must change the signature")
 	}
 }
+
+// TestComposeAttentionFromCrewLog feeds the crew layer from a real bus fold
+// (deltasFromCrewLog + routeCrewQuestion) rather than hand-built runs, so a
+// change to the fold or the router that the composer's inputs depend on shows
+// up here.
+func TestComposeAttentionFromCrewLog(t *testing.T) {
+	const (
+		statusTS = int64(1_700_000_000_000)
+		branch   = "fix/7"
+	)
+	busLog := func(status string) string {
+		return `{"ts":1000,"crew_id":"c1","kind":"dispatch","branch":"fix/7","engine":"claude"}` + "\n" +
+			fmt.Sprintf(`{"ts":%d,"crew_id":"c1","from":"worker:fix/7#s1","kind":"status","body":%s}`, statusTS, status) + "\n"
+	}
+	soon := time.UnixMilli(statusTS + 1000)
+
+	cases := []struct {
+		name      string
+		status    string
+		live      bool
+		hooks     State
+		wantAtt   Attention
+		wantNote  string
+		wantState State
+		wantVia   string
+	}{
+		{"watchdog dead under hooks thinking", `{"state":"failed","detail":"dead: engine process gone","source":"watchdog"}`,
+			false, StateThinking, AttentionStuck, crewWatchdogDeadNote, StateThinking, ""},
+		{"done under hooks idle", `{"state":"done"}`,
+			false, StateIdle, AttentionDone, "", StateIdle, ""},
+		{"pr_open under hooks idle", `{"state":"pr_open","pr_url":"https://github.com/x/y/pull/3"}`,
+			false, StateIdle, AttentionDone, "", StateIdle, ""},
+		{"worker question while the dispatcher is live", `{"state":"blocked","detail":"keep the legacy route?"}`,
+			true, StateRunning, AttentionNone, "", StateRunning, ""},
+		{"worker question with no dispatcher", `{"state":"blocked","detail":"keep the legacy route?"}`,
+			false, StateRunning, AttentionNeedsYou, "", StateBlocked, "crew"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b, ok := deltasFromCrewLog(strings.NewReader(busLog(tc.status)))[branch]
+			if !ok {
+				t.Fatalf("no fold result for %q", branch)
+			}
+			r := NewRegistry(DefaultOrder)
+			r.Apply(Delta{Source: "crew", Key: "%1", Run: routeCrewQuestion(b, tc.live, soon)})
+			r.Apply(Delta{Source: "hooks", Key: "%1", Run: Run{Agent: "claude", State: tc.hooks}})
+
+			got := firstRun(t, r)
+			if got.Attention != tc.wantAtt || got.AttentionNote != tc.wantNote {
+				t.Errorf("Attention = %q/%q, want %q/%q", got.Attention, got.AttentionNote, tc.wantAtt, tc.wantNote)
+			}
+			if got.State != tc.wantState {
+				t.Errorf("State = %q, want %q", got.State, tc.wantState)
+			}
+			if tc.wantVia == "" {
+				if got.Question != nil {
+					t.Errorf("Question = %+v, want none", got.Question)
+				}
+			} else if got.Question == nil || got.Question.Via != tc.wantVia {
+				t.Errorf("Question = %+v, want Via %q", got.Question, tc.wantVia)
+			}
+		})
+	}
+}
