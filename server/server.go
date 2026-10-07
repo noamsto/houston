@@ -441,6 +441,35 @@ type imageUpload struct {
 	Data string `json:"data"` // base64 encoded
 }
 
+// safeImageName reduces an upload's name to at most 64 bytes of
+// [A-Za-z0-9._-] that never starts with "-" or ".". The temp path is typed
+// into an agent's prompt, so it must carry no control characters or spaces.
+func safeImageName(name string) string {
+	var b strings.Builder
+	for _, r := range filepath.Base(name) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '_', r == '-':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	s := b.String()
+
+	stem, ext := s, filepath.Ext(s)
+	if len(ext) >= 2 && len(ext) <= 9 && len(ext) < len(s) {
+		stem = s[:len(s)-len(ext)]
+	} else {
+		ext = ""
+	}
+	if limit := 64 - len(ext); len(stem) > limit {
+		stem = stem[:limit]
+	}
+
+	rest := strings.TrimLeft(stem, "-.")
+	return strings.Repeat("_", len(stem)-len(rest)) + rest + ext
+}
+
 // saveImages writes each upload to /tmp and schedules its removal after an
 // hour. On failure it removes whatever it already wrote and returns the HTTP
 // status and message to report.
@@ -461,8 +490,7 @@ func saveImages(images []imageUpload) (paths []string, status int, err error) {
 		}
 
 		// Write image to temp file with sanitized filename
-		safeName := filepath.Base(img.Name)
-		tmpFile, err := os.CreateTemp("/tmp", "houston-*-"+strings.ReplaceAll(safeName, "*", "_"))
+		tmpFile, err := os.CreateTemp("/tmp", "houston-*-"+safeImageName(img.Name))
 		if err != nil {
 			slog.Error("failed to create temp file", "error", err, "index", i)
 			// Clean up any files created so far on error
