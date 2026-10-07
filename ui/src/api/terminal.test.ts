@@ -85,6 +85,11 @@ describe('error mapping', () => {
     expect(await sendKey(runAddr, 'Escape')).toBe('timed out')
   })
 
+  it('a timeout on sendText warns the text may have been partly sent', async () => {
+    vi.mocked(fetch).mockRejectedValue(new DOMException('The operation timed out.', 'TimeoutError'))
+    expect(await sendText(runAddr, 'x')).toEqual(expect.stringContaining('may have been partly sent'))
+  })
+
   it('502 with partial true warns the send may have been partly sent', async () => {
     vi.mocked(fetch).mockResolvedValue({
       ok: false,
