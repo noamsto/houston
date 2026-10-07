@@ -418,7 +418,11 @@ describe('ChatTab', () => {
       fireEvent.change(textarea(), { target: { value: body } })
       fireEvent.click(screen.getByRole('button', { name: 'Send' }))
 
-      await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('timed out'))
+      await waitFor(() =>
+        expect(screen.getByRole('alert').textContent).toBe(
+          'timed out — the text may have been partly sent; check the agent before resending',
+        ),
+      )
       expect(textarea().value).toBe(body)
       expect(document.querySelector('.chat-optimistic')).toBeNull()
       expect(storedDraft()).toBe(body)
