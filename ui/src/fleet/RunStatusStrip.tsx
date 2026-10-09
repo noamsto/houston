@@ -118,7 +118,13 @@ export function RunStatusStrip({ run, now }: { run: Run; now: number }) {
   )
 }
 
-export function RunQuestion({ run, onTerminal = false }: { run: Run; onTerminal?: boolean }) {
+/** `answeredHere`: this view already offers the answer, so the pane reply
+ *  shortcut would be a second, competing affordance. */
+export function RunQuestion({ run, onTerminal = false, answeredHere = false }: {
+  run: Run
+  onTerminal?: boolean
+  answeredHere?: boolean
+}) {
   if (!run.question) return null
   const blocked = run.state === 'blocked'
   const { via } = run.question
@@ -126,7 +132,7 @@ export function RunQuestion({ run, onTerminal = false }: { run: Run; onTerminal?
     <>
       <div className="run-detail-question">{run.question.text}</div>
       {blocked && via === 'crew' && <ReplyComposer runId={run.id} />}
-      {blocked && via === 'pane' && run.caps.terminal && !onTerminal && (
+      {blocked && via === 'pane' && run.caps.terminal && !onTerminal && !answeredHere && (
         <button
           type="button"
           className="run-detail-question-reply"

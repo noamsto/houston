@@ -1,0 +1,23 @@
+
+❯ Ask me two questions: "Which toppings do you want?"
+  (Cheese, Olives, Basil; pick any) and "Which color do you
+  prefer?" (Red, Blue).
+────────────────────────────────────────────────────────────
+←  ☒ Toppings  ☐ Color  ✔ Submit  →
+
+Which toppings do you want?
+
+  1. [ ] Cheese
+         Melty
+  2. [✔] Olives
+         Salty
+  3. [ ] Basil
+         Fresh
+❯ 4. [✔] 3 anchovies and a very long free text answer that
+         should wrap inside the field at sixty columns
+     Next
+────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · Tab/Arrow keys to navigate · ctrl+g to
+edit in Vim · Esc to cancel

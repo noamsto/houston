@@ -1,0 +1,22 @@
+
+❯ Ask me "Which color do you prefer?" with the options Red,
+  Blue and Green, header "Color".
+────────────────────────────────────────────────────────────
+ ☐ Color
+
+Which color do you prefer?
+
+❯ 1. Red
+     Warm
+  2. Blue
+     Cool
+  3. Green
+     Natural
+  4. Type something.
+────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel
+
+
+

@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Run } from '../api/runs'
 import { fetchTool } from '../api/chat'
 import type { ChatToolDetail } from '../api/chat'
@@ -6,7 +6,7 @@ import { sendImage, sendKey, sendText } from '../api/terminal'
 import type { TerminalAddress } from '../api/terminal'
 import { QuickCommands } from '../components/QuickCommands'
 import { StagedImageChip } from '../components/StagedImageChip'
-import { suggestedCommand } from '../components/quickCommands'
+import { isClaudeAgent, suggestedCommand } from '../components/quickCommands'
 import { useComposerDraft } from '../components/useComposerDraft'
 import { readBase64, useStagedImage } from '../components/useStagedImage'
 import { useRunChat } from '../hooks/useRunChat'
@@ -16,6 +16,7 @@ import type { AssistantItem, ChatItem, DividerItem, Optimistic, ToolCall, ToolsI
 import { kindGlyph, statusGlyph } from './chatGlyphs'
 import { ChatMarkdownLazy, ChatPlainText } from './chatMarkdownLazy'
 import { preloadChatMarkdown } from './chatMarkdownLoader'
+import { PermissionBar } from './PermissionBar'
 import { QuestionCard } from './QuestionCard'
 import { RunQuestion, RunStatusStrip } from './RunStatusStrip'
 
@@ -209,10 +210,11 @@ function ToolsRow({ item, runId }: { item: ToolsItem; runId: string }) {
   )
 }
 
-function ChatItemRow({ item, runId, canAnswer, live, reducedMotion, revealed, onRevealed, onTick }: {
+function ChatItemRow({ item, runId, canAnswer, answerable, live, reducedMotion, revealed, onRevealed, onTick }: {
   item: ChatItem
   runId: string
   canAnswer: boolean
+  answerable: boolean
   live: boolean
   reducedMotion: boolean
   revealed: Set<string>
@@ -222,7 +224,7 @@ function ChatItemRow({ item, runId, canAnswer, live, reducedMotion, revealed, on
   if (item.kind === 'user') return <UserBubble item={item} />
   if (item.kind === 'divider') return <Divider item={item} />
   if (item.kind === 'tools') return <ToolsRow item={item} runId={runId} />
-  if (item.kind === 'question') return <QuestionCard item={item} runId={runId} canAnswer={canAnswer} />
+  if (item.kind === 'question') return <QuestionCard item={item} runId={runId} canAnswer={canAnswer} answerable={answerable} onLayout={onTick} />
   return <AssistantBubble item={item} live={live} reducedMotion={reducedMotion} revealed={revealed} onRevealed={onRevealed} onTick={onTick} />
 }
 
@@ -346,11 +348,14 @@ function Composer({ run, suggestion, onSend }: { run: Run; suggestion: string | 
 export function ChatTab({ run, now }: { run: Run; now: number }) {
   const { status, updates, liveIds, more, loadEarlier, retry } = useRunChat(run.id, true)
   const items = useMemo(() => buildItems(updates), [updates])
+  const canAnswer = run.caps.terminal && run.state !== 'done' && run.state !== 'failed'
+  const answerable = canAnswer && isClaudeAgent(run.agent)
+  const [promptShown, setPromptShown] = useState(false)
   const suggestion = useMemo(() => suggestedCommand(updates), [updates])
   const [revealedIds, setRevealedIds] = useState<Set<string>>(new Set())
   const markRevealed = (id: string) => setRevealedIds((prev) => (prev.has(id) ? prev : new Set(prev).add(id)))
   const [revealVersion, setRevealVersion] = useState(0)
-  const bumpReveal = () => setRevealVersion((v) => v + 1)
+  const bumpReveal = useCallback(() => setRevealVersion((v) => v + 1), [])
   const reducedMotion = useMemo(() => prefersReducedMotion(), [])
   useEffect(() => { preloadChatMarkdown() }, [])
 
@@ -399,10 +404,15 @@ export function ChatTab({ run, now }: { run: Run; now: number }) {
     return err
   }
 
+  const questionPending = answerable && items.some(
+    (i) => i.kind === 'question' && i.call.status !== 'completed' && i.call.status !== 'failed',
+  )
+
   const header = (
     <>
       <RunStatusStrip run={run} now={now} />
-      <RunQuestion run={run} />
+      <RunQuestion run={run} answeredHere={promptShown || questionPending} />
+      <PermissionBar run={run} onPrompt={setPromptShown} />
     </>
   )
 
@@ -443,7 +453,8 @@ export function ChatTab({ run, now }: { run: Run; now: number }) {
               key={item.id}
               item={item}
               runId={run.id}
-              canAnswer={run.caps.terminal && run.state !== 'done' && run.state !== 'failed'}
+              canAnswer={canAnswer}
+              answerable={answerable}
               live={liveIds.has(item.id)}
               reducedMotion={reducedMotion}
               revealed={revealedIds}

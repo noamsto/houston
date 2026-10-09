@@ -36,9 +36,35 @@ type fakeRunPanes struct {
 	resolveErr    error
 	resolveServer string
 	sendErr       error
+	sendErrFrom   int // sendErr fails sends from this 0-based index on
 	resolved      []string
 	sent          []sentInput
 	lastCtx       context.Context
+
+	// A scripted screen: CapturePane shows frames[frame]. Keys delivered
+	// since the frame last changed collect in pending, and once
+	// next[frame+"|"+pending] names a frame the screen moves there. After
+	// the injectAfter-th delivered key the screen jumps to injectFrame
+	// instead, as if the session moved on.
+	frames         map[string]string
+	frame          string
+	next           map[string]string
+	pending        []string
+	delivered      int
+	injectAfter    int
+	injectFrame    string
+	captureErr     error
+	captureErrFrom int // captureErr fails captures from this 0-based index on
+	captures       int
+
+	// The pane is in copy mode once inMode is set, or after the
+	// modeAfter-th delivered key. modeErr fails every mode probe from the
+	// modeErrFrom-th (0-based) on.
+	inMode      bool
+	modeAfter   int
+	modeErr     error
+	modeErrFrom int
+	modeProbes  int
 }
 
 func (f *fakeRunPanes) ResolvePane(paneID string) (tmux.Pane, error) {
@@ -55,15 +81,56 @@ func (f *fakeRunPanes) SendKeys(ctx context.Context, p tmux.Pane, keys string, e
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.lastCtx = ctx
-	f.sent = append(f.sent, sentInput{pane: p, keys: keys, enter: enter})
-	return f.sendErr
+	return f.send(sentInput{pane: p, keys: keys, enter: enter}, "text:"+keys)
 }
 
 func (f *fakeRunPanes) SendSpecialKey(p tmux.Pane, key string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.sent = append(f.sent, sentInput{pane: p, keys: key, special: true})
-	return f.sendErr
+	return f.send(sentInput{pane: p, keys: key, special: true}, key)
+}
+
+func (f *fakeRunPanes) send(in sentInput, key string) error {
+	failing := len(f.sent) >= f.sendErrFrom
+	f.sent = append(f.sent, in)
+	if failing && f.sendErr != nil {
+		return f.sendErr
+	}
+	f.delivered++
+	if f.modeAfter > 0 && f.delivered == f.modeAfter {
+		f.inMode = true
+	}
+	if f.injectFrame != "" && f.delivered == f.injectAfter {
+		f.frame, f.pending = f.injectFrame, nil
+		return nil
+	}
+	f.pending = append(f.pending, key)
+	if to, ok := f.next[f.frame+"|"+strings.Join(f.pending, " ")]; ok {
+		f.frame, f.pending = to, nil
+	}
+	return nil
+}
+
+func (f *fakeRunPanes) CapturePane(tmux.Pane, int) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	failing := f.captures >= f.captureErrFrom
+	f.captures++
+	if failing && f.captureErr != nil {
+		return "", f.captureErr
+	}
+	return f.frames[f.frame], nil
+}
+
+func (f *fakeRunPanes) PaneInMode(tmux.Pane) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	failing := f.modeProbes >= f.modeErrFrom
+	f.modeProbes++
+	if failing && f.modeErr != nil {
+		return false, f.modeErr
+	}
+	return f.inMode, nil
 }
 
 func (f *fakeRunPanes) calls() (resolved int, sent []sentInput) {
@@ -170,6 +237,10 @@ func TestRunTerminalResolution(t *testing.T) {
 		{"input", func(id string) *http.Request {
 			return replyRequest("POST", "/api/runs/"+id+"/input", `{"type":"key","key":"Enter"}`)
 		}},
+		{"answer", func(id string) *http.Request {
+			return replyRequest("POST", "/api/runs/"+id+"/answer", choiceBody(1, strings.Repeat("0", 64)))
+		}},
+		{"prompt", func(id string) *http.Request { return replyRequest("GET", "/api/runs/"+id+"/prompt", "") }},
 	}
 
 	for _, route := range routes {

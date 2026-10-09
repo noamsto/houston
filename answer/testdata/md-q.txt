@@ -1,0 +1,17 @@
+
+❯ Ask whether go test should run with race on, keeping the
+  backticks and asterisks.
+────────────────────────────────────────────────────────────
+ ☐ Race
+
+Should `go test` run with **race** on?
+
+❯ 1. Yes `-race`
+     Slower
+  2. No
+     Faster
+  3. Type something.
+────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel

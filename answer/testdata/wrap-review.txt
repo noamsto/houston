@@ -1,0 +1,21 @@
+
+❯ Ask me which long label the release notes should use, and
+  which toppings I want.
+
+────────────────────────────────────────────────────────────
+←  ☒ Notes  ☒ Toppings  ✔ Submit  →
+
+Review your answers
+
+ │ ● Which of these deliberately long-winded and verbose
+ │   option labels should we pick for the release notes?
+   → A very long first option label that keeps going past
+   the edge
+ ● Which toppings do you want?
+   → Olives
+
+Ready to submit your answers?
+
+❯ 1. Submit answers
+  2. Cancel
+

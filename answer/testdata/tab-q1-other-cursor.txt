@@ -1,0 +1,19 @@
+
+❯ Ask me two questions: "Which color do you prefer?" (Red,
+  Blue) and "Which toppings do you want?" (Cheese, Olives,
+  Basil; pick any).
+────────────────────────────────────────────────────────────
+←  ☐ Color  ☐ Toppings  ✔ Submit  →
+
+Which color do you prefer?
+
+  1. Red
+     Warm
+  2. Blue
+     Cool
+❯ 3. Type something.
+────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · Tab/Arrow keys to navigate · ctrl+g to
+edit in Vim · Esc to cancel

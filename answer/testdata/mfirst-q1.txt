@@ -1,0 +1,21 @@
+
+❯ Ask me two questions: "Which toppings do you want?"
+  (Cheese, Olives, Basil; pick any) and "Which color do you
+  prefer?" (Red, Blue).
+────────────────────────────────────────────────────────────
+←  ☐ Toppings  ☐ Color  ✔ Submit  →
+
+Which toppings do you want?
+
+❯ 1. [ ] Cheese
+         Melty
+  2. [ ] Olives
+         Salty
+  3. [ ] Basil
+         Fresh
+  4. [ ] Type something
+     Next
+────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · Tab/Arrow keys to navigate · Esc to cancel

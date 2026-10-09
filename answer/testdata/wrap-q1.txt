@@ -1,0 +1,19 @@
+
+❯ Ask me which long label the release notes should use, and
+  which toppings I want.
+────────────────────────────────────────────────────────────
+←  ☐ Notes  ☐ Toppings  ✔ Submit  →
+
+│ Which of these deliberately long-winded and verbose option
+│ labels should we pick for the release notes?
+
+❯ 1. A very long first option label that keeps going past
+     the edge
+     First
+  2. Short
+     Second
+  3. Type something.
+────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · Tab/Arrow keys to navigate · Esc to cancel

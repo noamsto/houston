@@ -1,0 +1,20 @@
+
+❯ Ask me two questions: "Which color do you prefer?" (Red,
+  Blue) and "Which toppings do you want?" (Cheese, Olives,
+  Basil; pick any).
+
+────────────────────────────────────────────────────────────
+←  ☒ Color  ☒ Toppings  ✔ Submit  →
+
+Review your answers
+
+ ● Which color do you prefer?
+   → Blue
+ ● Which toppings do you want?
+   → Cheese, Basil
+
+Ready to submit your answers?
+
+❯ 1. Submit answers
+  2. Cancel
+

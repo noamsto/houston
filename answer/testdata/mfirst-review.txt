@@ -1,0 +1,21 @@
+
+❯ Ask me two questions: "Which toppings do you want?"
+  (Cheese, Olives, Basil; pick any) and "Which color do you
+  prefer?" (Red, Blue).
+
+────────────────────────────────────────────────────────────
+←  ☒ Toppings  ☒ Color  ✔ Submit  →
+
+Review your answers
+
+ ● Which toppings do you want?
+   → Olives, 3 anchovies and a very long free text answer
+   that should wrap inside the field at sixty columns
+ ● Which color do you prefer?
+   → 1 shade darker
+
+Ready to submit your answers?
+
+❯ 1. Submit answers
+  2. Cancel
+
