@@ -268,12 +268,15 @@ func parsePaneInfoLine(line string) (PaneInfo, bool) {
 // CaptureResult holds the captured pane output and detected mode
 type CaptureResult struct {
 	Output     string `json:"output"`
-	CursorX    int    `json:"cursor_x"`    // 0-indexed cursor column in visible area
-	CursorY    int    `json:"cursor_y"`    // 0-indexed cursor row in visible area
-	PaneWidth  int    `json:"pane_width"`  // visible columns in the pane
-	PaneHeight int    `json:"pane_height"` // visible rows in the pane
-	Mode       string `json:"mode"`        // "insert", "normal", or ""
-	StatusLine string `json:"status_line"` // Full status line with ANSI colors intact
+	CursorX    int    `json:"cursor_x"`     // 0-indexed cursor column in visible area
+	CursorY    int    `json:"cursor_y"`     // 0-indexed cursor row in visible area
+	PaneWidth  int    `json:"pane_width"`   // visible columns in the pane
+	PaneHeight int    `json:"pane_height"`  // visible rows in the pane
+	Mode       string `json:"mode"`         // "insert", "normal", or ""
+	StatusLine string `json:"status_line"`  // Full status line with ANSI colors intact
+	AltScreen  bool   `json:"alternate_on"` // the app is on the alternate screen
+	MouseSGR   bool   `json:"mouse_on"`     // the app tracks the mouse and wants SGR encoding
+	ModeKnown  bool   `json:"-"`            // AltScreen/MouseSGR were read; false when the query failed
 }
 
 func (c *Client) CapturePane(p Pane, lines int) (string, error) {
@@ -301,9 +304,13 @@ func (c *Client) CapturePaneWithMode(p Pane, lines int) (CaptureResult, error) {
 
 	// Get cursor position and pane dimensions so seeds can sync xterm.js cursor
 	var cursorX, cursorY, paneWidth, paneHeight int
-	if cursorOut, err := c.output("display-message", "-t", p.Target(), "-p", "#{cursor_x},#{cursor_y},#{pane_width},#{pane_height}"); err == nil {
+	var altScreen, mouseSGR, modeKnown bool
+	if cursorOut, err := c.output("display-message", "-t", p.Target(), "-p", "#{cursor_x},#{cursor_y},#{pane_width},#{pane_height},#{alternate_on},#{mouse_any_flag},#{mouse_sgr_flag}"); err == nil {
 		parts := strings.Split(strings.TrimSpace(string(cursorOut)), ",")
-		if len(parts) == 4 {
+		if len(parts) == 7 {
+			modeKnown = true
+			altScreen = parts[4] == "1"
+			mouseSGR = parts[5] == "1" && parts[6] == "1"
 			cursorX, _ = strconv.Atoi(parts[0])
 			cursorY, _ = strconv.Atoi(parts[1])
 			paneWidth, _ = strconv.Atoi(parts[2])
@@ -320,6 +327,9 @@ func (c *Client) CapturePaneWithMode(p Pane, lines int) (CaptureResult, error) {
 		PaneHeight: paneHeight,
 		Mode:       "", // Agent-specific; set by caller
 		StatusLine: "", // Agent-specific; set by caller
+		AltScreen:  altScreen,
+		MouseSGR:   mouseSGR,
+		ModeKnown:  modeKnown,
 	}, nil
 }
 

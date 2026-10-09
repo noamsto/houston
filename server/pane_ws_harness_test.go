@@ -32,6 +32,8 @@ type fakeTmux struct {
 	seed string
 
 	captureModeOutput string
+	altScreen         bool
+	mouseSGR          bool
 
 	panes   []tmux.PaneInfo
 	windows []tmux.Window
@@ -117,7 +119,7 @@ func (f *fakeTmux) CapturePaneWithMode(p tmux.Pane, lines int) (tmux.CaptureResu
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.captureModeN++
-	return tmux.CaptureResult{Output: f.captureModeOutput}, nil
+	return tmux.CaptureResult{Output: f.captureModeOutput, AltScreen: f.altScreen, MouseSGR: f.mouseSGR, ModeKnown: true}, nil
 }
 
 func (f *fakeTmux) ForceRedraw(p tmux.Pane) error {
@@ -199,6 +201,12 @@ func (f *fakeTmux) captureModeCalls() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.captureModeN
+}
+
+func (f *fakeTmux) setTermMode(alt, mouse bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.altScreen, f.mouseSGR = alt, mouse
 }
 
 func (f *fakeTmux) setWindowPaneCount(n int) {

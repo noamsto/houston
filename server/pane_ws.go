@@ -57,6 +57,11 @@ type WSMeta struct {
 	StatusLine string           `json:"status_line,omitempty"`
 	Activity   string           `json:"activity,omitempty"`
 	WindowName string           `json:"window_name,omitempty"`
+	// AlternateOn and MouseOn describe the pane's terminal mode: an app on the
+	// alternate screen has no tmux scrollback, and one tracking the mouse in
+	// SGR encoding scrolls itself from wheel events.
+	AlternateOn bool `json:"alternate_on,omitempty"`
+	MouseOn     bool `json:"mouse_on,omitempty"`
 }
 
 type WSInput struct {
@@ -401,6 +406,7 @@ func metaPollLoop(tm tmuxOps, registry *agents.Registry, pane tmux.Pane, done <-
 		}
 	}
 
+	var altOn, mouseOn bool
 	for {
 		select {
 		case <-ticker.C:
@@ -417,6 +423,11 @@ func metaPollLoop(tm tmuxOps, registry *agents.Registry, pane tmux.Pane, done <-
 				Activity:   parseResult.Activity,
 				WindowName: windowName,
 			}
+			// A failed mode query must not read as "mode off".
+			if capture.ModeKnown {
+				altOn, mouseOn = capture.AltScreen, capture.MouseSGR
+			}
+			meta.AlternateOn, meta.MouseOn = altOn, mouseOn
 			if len(parseResult.Choices) > 0 {
 				meta.Choices = parseResult.Choices
 			}
@@ -499,6 +510,8 @@ func metaEqual(a, b WSMeta) bool {
 		a.StatusLine == b.StatusLine &&
 		a.Activity == b.Activity &&
 		a.WindowName == b.WindowName &&
+		a.AlternateOn == b.AlternateOn &&
+		a.MouseOn == b.MouseOn &&
 		slices.Equal(a.Choices, b.Choices)
 }
 

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import type { Terminal } from '@xterm/xterm'
+import { cellAt, clampSteps, pxPerStep, scrollInput, takeSteps, type AltScrollMode } from '../lib/altScroll'
 
 // Discrete real font sizes zoom snaps to on pinch-end, clamped to [9, 24]px
 // per the "text can't be too small/blurry" requirement.
@@ -25,6 +26,13 @@ const PAN_EASE_MS = 180
 // same point, with neither leg leaving the drag slop.
 const DOUBLE_TAP_WINDOW_MS = 300
 const DOUBLE_TAP_MAX_DIST_PX = 24
+
+/** Where a vertical drag goes instead of xterm's own history, while the pane
+ *  is on the alternate screen: the app scrolls itself from what `send` gives it. */
+export interface AltScrollTarget {
+  mode: AltScrollMode
+  send: (data: string) => void
+}
 
 export function snapFontSize(target: number): number {
   const clamped = Math.min(MAX_FONT_SIZE, Math.max(MIN_FONT_SIZE, target))
@@ -117,6 +125,7 @@ export function useTouchGestures(
   onPinchEnd?: (fontSize: number) => void,
   onDoubleTap?: () => void,
   onDragEnd?: (info: { movedX: boolean; startedAtBottom: boolean }) => void,
+  altScrollRef?: React.RefObject<AltScrollTarget | null>,
 ) {
   const scaleRef = useRef(1)
   const translateXRef = useRef(0)
@@ -313,6 +322,19 @@ export function useTouchGestures(
         if (translateXRef.current !== txBefore) txChanged = true
         applyTransform()
 
+        const alt = altScrollRef?.current
+        if (alt) {
+          const term = termRef.current
+          const taken = takeSteps(scrollAcc, scrollStartY - y, pxPerStep(alt.mode))
+          scrollStartY = y
+          scrollAcc = taken.acc
+          if (taken.steps !== 0 && term) {
+                        const cell = cellAt(x, y, screen.getBoundingClientRect(), term.cols, term.rows)
+            alt.send(scrollInput(alt.mode, clampSteps(taken.steps), cell))
+          }
+          return
+        }
+
         // Read the real cell height fresh on every move rather than once
         // at effect setup — pinch-end zoom (below) mutates term.options
         // .fontSize and rescales termDimsRef at runtime, and a value
@@ -453,7 +475,7 @@ export function useTouchGestures(
         easeTimerRef.current = null
       }
     }
-  }, [enabled, innerRef, outerRef, termRef])
+  }, [enabled, innerRef, outerRef, termRef, altScrollRef])
 
   return {
     scaleRef,

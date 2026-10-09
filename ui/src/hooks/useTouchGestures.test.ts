@@ -8,6 +8,7 @@ import {
   decideDetach,
   snapFontSize,
   useTouchGestures,
+  type AltScrollTarget,
 } from './useTouchGestures'
 
 function touchEvent(type: string, touches: { clientX: number; clientY: number }[]) {
@@ -47,6 +48,8 @@ function setup(
     onDoubleTap?: () => void
     onDragEnd?: (info: { movedX: boolean; startedAtBottom: boolean }) => void
     buffer?: { viewportY: number; baseY: number }
+    cols?: number
+    alt?: { current: AltScrollTarget | null }
   },
 ) {
   const outer = document.createElement('div')
@@ -65,13 +68,14 @@ function setup(
     current: {
       options: termOptions,
       rows: opts?.rows,
+      cols: opts?.cols,
       scrollLines,
       buffer: opts?.buffer && { active: opts.buffer },
     } as unknown as Terminal,
   }
 
   const { result } = renderHook(() =>
-    useTouchGestures(innerRef, outerRef, termRef, true, onPinchEnd, opts?.onDoubleTap, opts?.onDragEnd),
+    useTouchGestures(innerRef, outerRef, termRef, true, onPinchEnd, opts?.onDoubleTap, opts?.onDragEnd, opts?.alt),
   )
   result.current.resetTransform(1, opts?.dims ?? { w: 960, h: 300 }, { scale: 1, tx: 0, ty: 0 })
 
@@ -501,5 +505,54 @@ describe('computeFitFontSize', () => {
   it('returns the floor instead of dividing by zero when total width is not yet known', () => {
     expect(computeFitFontSize(13, 0, 500)).toBe(9)
     expect(computeFitFontSize(13, -50, 500)).toBe(9)
+  })
+})
+
+describe('useTouchGestures alternate-screen scrolling', () => {
+  function altSetup(mode: 'wheel' | 'page') {
+    const send = vi.fn()
+    const alt = { current: { mode, send } as AltScrollTarget | null }
+    const ctx = setup({ fontSize: 13, lineHeight: 1.2 }, undefined, { rows: 10, cols: 80, alt })
+    stubDims(ctx.screenEl, { width: 800, height: 200 })
+    return { ...ctx, send, alt }
+  }
+
+  it('turns a finger drag up into SGR wheel-down at the cell under the finger', () => {
+    const { screenEl, send, scrollLines } = altSetup('wheel')
+    screenEl.dispatchEvent(touchEvent('touchstart', [{ clientX: 400, clientY: 100 }]))
+    screenEl.dispatchEvent(touchEvent('touchmove', [{ clientX: 400, clientY: 40 }]))
+    // 60px at 24px/notch = 2 notches; x=400/800 of 80 cols, y=40/200 of 10 rows.
+    expect(send).toHaveBeenCalledWith('\x1b[<65;41;3M\x1b[<65;41;3M')
+    expect(scrollLines).not.toHaveBeenCalled()
+  })
+
+  it('turns a drag down into wheel-up', () => {
+    const { screenEl, send } = altSetup('wheel')
+    screenEl.dispatchEvent(touchEvent('touchstart', [{ clientX: 0, clientY: 50 }]))
+    screenEl.dispatchEvent(touchEvent('touchmove', [{ clientX: 0, clientY: 100 }]))
+    expect(send).toHaveBeenCalledWith('\x1b[<64;1;6M\x1b[<64;1;6M')
+  })
+
+  it('sends nothing until a full notch of travel accumulates', () => {
+    const { screenEl, send } = altSetup('wheel')
+    screenEl.dispatchEvent(touchEvent('touchstart', [{ clientX: 0, clientY: 100 }]))
+    screenEl.dispatchEvent(touchEvent('touchmove', [{ clientX: 0, clientY: 90 }]))
+    expect(send).not.toHaveBeenCalled()
+  })
+
+  it('pages instead when the app has no mouse tracking', () => {
+    const { screenEl, send } = altSetup('page')
+    screenEl.dispatchEvent(touchEvent('touchstart', [{ clientX: 0, clientY: 200 }]))
+    screenEl.dispatchEvent(touchEvent('touchmove', [{ clientX: 0, clientY: 30 }]))
+    expect(send).toHaveBeenCalledWith('\x1b[6~')
+  })
+
+  it('still pans horizontally while scrolling the app', () => {
+    const { screenEl, send, result } = altSetup('wheel')
+    result.current.resetTransform(0.5, { w: 1600, h: 300 }, { scale: 1, tx: 0, ty: 0 })
+    screenEl.dispatchEvent(touchEvent('touchstart', [{ clientX: 300, clientY: 100 }]))
+    screenEl.dispatchEvent(touchEvent('touchmove', [{ clientX: 250, clientY: 60 }]))
+    expect(result.current.translateXRef.current).toBe(-50)
+    expect(send).toHaveBeenCalled()
   })
 })

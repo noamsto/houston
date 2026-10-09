@@ -825,6 +825,7 @@ type keysSegment struct {
 	isControl bool
 	control   byte   // raw control byte, sent by name
 	key       string // matched escape sequence, sent as a key name
+	raw       string // SGR mouse report, sent byte for byte with -H
 }
 
 // splitKeys decomposes mixed input into the send-keys calls SendKeys makes for
@@ -836,6 +837,11 @@ func splitKeys(text string) []keysSegment {
 	for i < len(text) {
 		b := text[i]
 		if b == 0x1b && i+1 < len(text) {
+			if n := matchSGRMouse(text[i:]); n > 0 {
+				segs = append(segs, keysSegment{raw: text[i : i+n]})
+				i += n
+				continue
+			}
 			// Escape sequence — try to match and send as key name
 			if seqLen, name := matchEscSeq(text[i:]); seqLen > 0 {
 				segs = append(segs, keysSegment{key: name})
@@ -879,6 +885,8 @@ func (cc *ControlClient) SendKeys(gen uint64, paneID, text string) error {
 	for i, seg := range segs {
 		var err error
 		switch {
+		case seg.raw != "":
+			err = cc.sendRaw(gen, paneID, seg.raw)
 		case seg.key != "":
 			err = cc.sendSpecialKeyGated(gen, paneID, seg.key)
 		case seg.isControl:
@@ -909,6 +917,45 @@ func isPrintable(s string) bool {
 func (cc *ControlClient) sendLiteral(gen uint64, paneID, text string) error {
 	escaped := strings.ReplaceAll(text, "'", "'\\''")
 	return cc.writeCommandGated(gen, fmt.Sprintf("send-keys -t %s -l '%s'", paneID, escaped), nil)
+}
+
+// sendRaw writes bytes to the pane unchanged. A mouse report must reach the
+// app as one ESC [ < ... sequence; splitting it into an Escape key and a
+// literal lets the app's escape timeout cut it in two.
+func (cc *ControlClient) sendRaw(gen uint64, paneID, raw string) error {
+	var hex strings.Builder
+	for i := 0; i < len(raw); i++ {
+		fmt.Fprintf(&hex, " %02x", raw[i])
+	}
+	return cc.writeCommandGated(gen, fmt.Sprintf("send-keys -t %s -H%s", paneID, hex.String()), nil)
+}
+
+// matchSGRMouse returns the length of an SGR mouse report (ESC [ < b ; x ; y
+// M or m) at the start of s, or 0.
+func matchSGRMouse(s string) int {
+	if !strings.HasPrefix(s, "\x1b[<") {
+		return 0
+	}
+	i, fields := 3, 0
+	for i < len(s) {
+		start := i
+		for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+			i++
+		}
+		if i == start || i-start > 5 || i >= len(s) {
+			return 0
+		}
+		fields++
+		switch {
+		case fields < 3 && s[i] == ';':
+			i++
+		case fields == 3 && (s[i] == 'M' || s[i] == 'm'):
+			return i + 1
+		default:
+			return 0
+		}
+	}
+	return 0
 }
 
 func (cc *ControlClient) sendControl(gen uint64, paneID string, b byte) error {
