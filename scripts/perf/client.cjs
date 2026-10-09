@@ -1,6 +1,15 @@
 // Client-side load loop for houston: a headless mobile Chromium against a
-// houston started by scripts/perf/startup.sh (or any houston on loopback),
-// reporting time-to-interactive per scenario.
+// houston, reporting time-to-interactive per scenario.
+//
+// This script WRITES into <status-dir>: it creates hook state files under
+// claude/ and appends lines to the transcript that <chat-run-id>'s state file
+// points at. <status-dir> must therefore be the state dir of a loadfixture
+// (go run -tags tools ./cmd/loadfixture -dir D, then D/state); it refuses to
+// start without the .loadfixture marker the generator writes there, and never
+// appends to a transcript outside the projects dir the marker names. The
+// target must be a houston you started by hand on that dir, for example
+//   HOME=D/home houston -status-dir D/state -addr 127.0.0.1:PORT -mode tmux -no-opencode
+// (startup.sh's private state dir is a copy and cannot be reused).
 //
 //   npm i --prefix /tmp/pw playwright-core
 //   NODE_PATH=/tmp/pw/node_modules CHROMIUM=$(command -v chromium) \
@@ -29,7 +38,6 @@
 const net = require('node:net')
 const fs = require('node:fs')
 const path = require('node:path')
-const { chromium } = require('playwright-core')
 
 const GAP_MS = 15000
 const QUIET_MS = 500
@@ -85,17 +93,37 @@ function proxy(target) {
   )
 }
 
+// fixtureProjects returns the projects dir a loadfixture state dir names in
+// its marker, or exits when statusDir is not a loadfixture state dir.
+function fixtureProjects(statusDir) {
+  try {
+    return fs.realpathSync(fs.readFileSync(path.join(statusDir, '.loadfixture'), 'utf8').trim())
+  } catch {
+    console.error(`${statusDir} is not a loadfixture state dir (no readable .loadfixture marker); refusing to write into it`)
+    process.exit(2)
+  }
+}
+
+function inside(dir, file) {
+  const rel = path.relative(dir, file)
+  return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel)
+}
+
 // say appends an assistant text line to a run's transcript, which the open
 // Chat tab should render.
-function say(statusDir, runId, text) {
-  const st = JSON.parse(fs.readFileSync(path.join(statusDir, 'claude', `${runId.replace(/^sess-/, '')}.json`), 'utf8'))
+function say(statusDir, projects, runId, text) {
+  const sid = runId.replace(/^sess-/, '')
+  if (!/^[0-9A-Za-z-]+$/.test(sid)) throw new Error(`bad run id ${runId}`)
+  const st = JSON.parse(fs.readFileSync(path.join(statusDir, 'claude', `${sid}.json`), 'utf8'))
+  const transcript = fs.realpathSync(st.transcript_path)
+  if (!inside(projects, transcript)) throw new Error(`transcript ${transcript} is outside the fixture projects dir ${projects}`)
   const rec = {
     type: 'assistant',
     uuid: `perf-${text}`,
     timestamp: new Date().toISOString(),
     message: { id: `msg-${text}`, role: 'assistant', content: [{ type: 'text', text }] },
   }
-  fs.appendFileSync(st.transcript_path, JSON.stringify(rec) + '\n')
+  fs.appendFileSync(transcript, JSON.stringify(rec) + '\n')
 }
 
 // spawn writes a hook state file for a brand-new session, which the hub
@@ -110,11 +138,29 @@ function spawn(statusDir, sid) {
 
 async function main() {
   const [port, statusDir, runId, chatRunId] = process.argv.slice(2)
-  const px = await proxy(Number(port))
+  if (!port || !statusDir || !chatRunId) {
+    console.error('usage: client.cjs <houston-port> <status-dir> <run-id> <chat-run-id>')
+    process.exit(2)
+  }
+  const projects = fixtureProjects(statusDir)
+  const { chromium } = require('playwright-core')
+  // Everything run() opens or creates, for the finally below.
+  const held = { px: null, browser: null, spawned: [] }
+  try {
+    return await run({ chromium, port, statusDir, projects, runId, chatRunId, held })
+  } finally {
+    await held.browser?.close().catch(() => {})
+    held.px?.close()
+    for (const f of held.spawned) fs.rmSync(f, { force: true })
+  }
+}
+
+async function run({ chromium, port, statusDir, projects, runId, chatRunId, held }) {
+  const px = (held.px = await proxy(Number(port)))
   const base = `http://127.0.0.1:${px.port}`
   const results = {}
 
-  const browser = await chromium.launch({ executablePath: process.env.CHROMIUM, headless: true })
+  const browser = (held.browser = await chromium.launch({ executablePath: process.env.CHROMIUM, headless: true }))
   const ctx = await browser.newContext({
     viewport: { width: 390, height: 844 },
     deviceScaleFactor: 3,
@@ -141,7 +187,7 @@ async function main() {
         this.addEventListener('open', () => rec.opens++)
         this.addEventListener('error', () => rec.errors++)
         for (const type of ['snapshot', 'update'])
-          this.addEventListener(type, (e) => rec.msgs.push({ type, at: performance.now(), data: e.data.length < 200000 ? e.data : '' }))
+          this.addEventListener(type, (e) => rec.msgs.push({ type, at: performance.now(), data: e.data }))
       }
     }
   })
@@ -204,7 +250,6 @@ async function main() {
     await p.waitForSelector(card)
   }
 
-  const spawned = []
   for (const mode of ['control', 'zombie', 'reset']) {
     // Fresh connections per scenario, so one cut cannot leak into the next.
     await p.goto(`${base}/#/fleet/${chatRunId}/chat`)
@@ -212,6 +257,7 @@ async function main() {
     await interactive(chat, 0)
     bytes.clear()
     await p.evaluate(() => {
+      for (const r of window.__es) r.msgs.length = 0
       window.__vis = 'hidden'
       document.dispatchEvent(new Event('visibilitychange'))
     })
@@ -225,9 +271,9 @@ async function main() {
       return performance.now()
     })
     const marker = `perf-${mode}-${Date.now()}`
-    spawned.push(spawn(statusDir, marker))
+    held.spawned.push(spawn(statusDir, marker))
     const said = `perf-marker-${mode}-${Date.now()}`
-    say(statusDir, chatRunId, said)
+    say(statusDir, projects, chatRunId, said)
     const chatLiveAt = p
       .waitForFunction(
         ({ t0, said }) => {
@@ -270,9 +316,6 @@ async function main() {
     }
   }
 
-  await browser.close()
-  px.close()
-  for (const f of spawned) fs.rmSync(f, { force: true })
   return results
 }
 

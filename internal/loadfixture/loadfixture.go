@@ -35,6 +35,9 @@ type Session struct {
 	Outstanding []string
 }
 
+// MarkerFile is written into a fixture's state dir.
+const MarkerFile = ".loadfixture"
+
 // Size distribution measured on a busy host: median 0.8 MB, p90 2.7 MB, max 19 MB.
 const (
 	medianBytes = 800_000
@@ -44,6 +47,8 @@ const (
 
 // Write generates opts.Sessions sessions: state files under
 // <stateDir>/claude/<id>.json, transcripts under <projectsDir>/<project>/<id>.jsonl.
+// <stateDir>/.loadfixture names the absolute projects dir: tools that write
+// into a state dir refuse any dir without it.
 func Write(stateDir, projectsDir string, opts Options) ([]Session, error) {
 	if opts.Sessions == 0 {
 		opts.Sessions = 250
@@ -57,6 +62,13 @@ func Write(stateDir, projectsDir string, opts Options) ([]Session, error) {
 	rnd := rand.New(rand.NewSource(opts.Seed)) //nolint:gosec // deterministic fixture, not security
 	claudeDir := filepath.Join(stateDir, "claude")
 	if err := os.MkdirAll(claudeDir, 0o755); err != nil { //nolint:gosec // test fixture dir
+		return nil, err
+	}
+	absProjects, err := filepath.Abs(projectsDir)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, MarkerFile), []byte(absProjects+"\n"), 0o644); err != nil { //nolint:gosec // test fixture
 		return nil, err
 	}
 	out := make([]Session, 0, opts.Sessions)

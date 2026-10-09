@@ -227,7 +227,8 @@ Synthetic load, never real session content:
 
 - `go run -tags tools ./cmd/loadfixture -dir D` writes a state dir
   (`D/state`) and Claude projects dir (`D/home/.claude/projects`) of synthetic
-  sessions and transcripts (`-sessions`, `-scale`, `-seed`). Run houston against
+  sessions and transcripts (`-sessions`, `-scale`, `-seed`), and a
+  `D/state/.loadfixture` marker naming the projects dir. Run houston against
   it with `HOME=D/home houston -status-dir D/state`.
 - `scripts/perf/startup.sh BIN D PORT [seconds] [mode]` runs an isolated
   instance on a copy of the fixture state and reports startup CPU/RSS, when all
@@ -235,12 +236,18 @@ Synthetic load, never real session content:
   and latency, and a reconnect storm (concurrent snapshots: wall time, server
   CPU). With `PPROF=<file>` it starts houston with `-debug` and saves a CPU
   profile of the storm there.
-- `scripts/perf/client.cjs PORT STATE_DIR RUN_ID CHAT_RUN_ID` drives headless
-  mobile Chromium (`playwright-core`, 4x CPU slowdown) through a local proxy
-  that can stall (no FIN/RST) or reset live connections, and reports
-  time-to-interactive for first load, reload and Chat, plus how long a sleep
-  and resume takes to deliver live runs and chat updates. Its header comment has
-  the invocation.
+- `NODE_PATH=<playwright-core install>/node_modules CHROMIUM=<chromium> node scripts/perf/client.cjs PORT STATE_DIR RUN_ID CHAT_RUN_ID`
+  drives headless mobile Chromium (`playwright-core`, 4x CPU slowdown) through
+  a local proxy that can stall (no FIN/RST) or reset live connections, and
+  reports time-to-interactive for first load, reload and Chat, plus how long a
+  sleep and resume takes to deliver live runs and chat updates. It **writes**
+  into `STATE_DIR` (hook state files under `claude/`) and appends lines to the
+  transcript of `CHAT_RUN_ID`'s state file, so `STATE_DIR` must be a
+  loadfixture `D/state`: the script refuses a dir without the `.loadfixture`
+  marker and any transcript outside the marker's projects dir. The target is a
+  houston started by hand on that dir (`HOME=D/home houston -status-dir D/state
+  -addr 127.0.0.1:PORT -mode tmux -no-opencode`); `startup.sh`'s private state
+  dir is not reusable. Its header comment has the invocation.
 
 ### Vite Proxy
 
@@ -499,8 +506,9 @@ no error ever firing, so the UI reopens streams itself
 stream when the page was hidden ≥ 10 s, or when a visible page has heard
 nothing (message or ping) for 60 s. `usePaneSocket` replaces its terminal
 socket on return after ≥ 10 s hidden at once, without waiting for the old
-socket's close, and ignores that socket's later events. Shorter hidden spells
-leave the connection alone.
+socket's close, and ignores that socket's later events. After a shorter hidden
+spell an open connection is left alone; the terminal socket still reconnects at
+once if it is not open.
 
 ## Chat
 
