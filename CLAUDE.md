@@ -221,6 +221,27 @@ Managed by `git-hooks.nix`. Auto-installed on `nix develop` / `direnv reload`.
 Run all hooks manually: `pre-commit run -a`
 Skip hooks: `git commit --no-verify`
 
+### Load measurement
+
+Synthetic load, never real session content:
+
+- `go run -tags tools ./cmd/loadfixture -dir D` writes a state dir
+  (`D/state`) and Claude projects dir (`D/home/.claude/projects`) of synthetic
+  sessions and transcripts (`-sessions`, `-scale`, `-seed`). Run houston against
+  it with `HOME=D/home houston -status-dir D/state`.
+- `scripts/perf/startup.sh BIN D PORT [seconds] [mode]` runs an isolated
+  instance on a copy of the fixture state and reports startup CPU/RSS, when all
+  sessions are listed, list and chat readiness, the `/api/runs` snapshot size
+  and latency, and a reconnect storm (concurrent snapshots: wall time, server
+  CPU). With `PPROF=<file>` it starts houston with `-debug` and saves a CPU
+  profile of the storm there.
+- `scripts/perf/client.cjs PORT STATE_DIR RUN_ID CHAT_RUN_ID` drives headless
+  mobile Chromium (`playwright-core`, 4x CPU slowdown) through a local proxy
+  that can stall (no FIN/RST) or reset live connections, and reports
+  time-to-interactive for first load, reload and Chat, plus how long a sleep
+  and resume takes to deliver live runs and chat updates. Its header comment has
+  the invocation.
+
 ### Vite Proxy
 
 The Vite dev server (`ui/vite.config.ts`) proxies `/api` to `http://localhost:9090`. Change the target port if your Go backend runs on a different port.
@@ -343,8 +364,8 @@ branch/crew enrichment and terminal caps. `runs/crewjoin.go`'s `resolvePane`
 accepts agent-detect's `@agent_screen` panes too, so a pi crew worker's bus
 record joins its pane (see "Crew-layer pane join").
 
-The hub's transcript parser is Claude's: a pi session file yields preview text
-but no trail/tokens.
+The hub's transcript parser is Claude's: a pi session file yields no
+trail/tokens.
 
 `SessionState.PID` is the hook's parent process — under hookyard that is the
 router, not the agent — and isn't read anywhere in houston.
@@ -353,7 +374,7 @@ router, not the agent — and isn't read anywhere in houston.
 
 A Claude Code run's outstanding background shells and monitors ride on `Run.Background` (`[{id, kind: "shell"|"monitor", hint, since}]`), shown as a `N bg` chip on the Fleet card and a list in the Chat status strip (`RunStatusStrip`). They are informational: they never change `State`. A turn that ended with a shell still running keeps its hook/tmux verdict (`idle`/`blocked`), because `State` describes the agent's turn, `blocked` is reserved for a human being required, and `running` would claim the agent is working.
 
-- **Source is the transcript**, folded by `hub/background.go`'s `bgTracker` inside the hub's existing 2 s tail. It starts at byte 0 on every houston start, so it is restart-safe with no persisted state, and needs no tmux capture. Hooks were rejected (no event fires on completion or on a UI/timeout kill, and the hookyard manifest would need new subscriptions); the pane's `N shell still running` text was rejected (a capture per poll, no per-task detail, nothing for monitors).
+- **Source is the transcript**, folded by `hub/background.go`'s `bgTracker` inside the hub's existing 2 s tail. It folds from byte 0 on every houston start, so it is restart-safe with no persisted state, and needs no tmux capture. The first read of a transcript (`hub/initialread.go`) does not parse every line: it parses only a tail (256 KiB, doubled until it holds enough to determine trail, asks and token counts; once the tail would pass half the file, the whole file is read instead) and folds background tasks over the bytes before it with a pre-pass that decodes only lines containing a substring a tracker input must contain (`run_in_background`, `Monitor`, `TaskStop`, `KillShell`, `task-notification`, or the id of a still-pending start/stop), then applies the tail's events in file order; the result equals a full replay. Hooks were rejected (no event fires on completion or on a UI/timeout kill, and the hookyard manifest would need new subscriptions); the pane's `N shell still running` text was rejected (a capture per poll, no per-task detail, nothing for monitors).
 - **Start**: a `Bash` tool_use with `run_in_background: true`, or a `Monitor` tool_use, whose non-error tool_result names the task id (`with ID: <id>` / `(task <id>,`). A failed launch is never tracked.
 - **End**: a `<task-notification>` carrying a `<status>` (completed/failed/killed/stopped), matched by every `<task-id>` and `<tool-use-id>` in it (a resume's orphan summary lists many ids), read from either the `user` record or the `queue-operation` enqueue copy; or a non-error `TaskStop` result. A notification with no `<status>` is a monitor's per-event line and ends nothing.
 - A non-persistent `Monitor` times out (`timeout_ms`) with no transcript marker, so the tracker expires it itself (`list(now)`; the hub re-checks on every 2 s tick even when the file did not grow). Shells have no such lifetime.
@@ -465,6 +486,22 @@ the allowlist that bounds it lives there, not on the socket:
   helpers.
   `/input` is unchecked: it types whatever it is given. Answering a question or permission dialog goes through `POST /api/runs/:id/answer` instead, which verifies the pane first (see "Answering from Chat").
 
+## Stream liveness
+
+Both SSE streams, `/api/runs/stream` and the chat stream, send a named
+`ping` event (`event: ping`, empty data — not a comment, so `EventSource`
+listeners see it) every 25 s. On the runs stream a ping tick owed a resync
+(a dropped update for that subscriber) sends a full `snapshot` instead.
+
+A phone that slept leaves EventSource and WebSocket connections half-open with
+no error ever firing, so the UI reopens streams itself
+(`ui/src/hooks/streamLiveness.ts`): `useRuns` and `useRunChat` reopen their
+stream when the page was hidden ≥ 10 s, or when a visible page has heard
+nothing (message or ping) for 60 s. `usePaneSocket` replaces its terminal
+socket on return after ≥ 10 s hidden at once, without waiting for the old
+socket's close, and ignores that socket's later events. Shorter hidden spells
+leave the connection alone.
+
 ## Chat
 
 A run's Chat tab renders the agent's own session transcript as a
@@ -498,6 +535,11 @@ conversation. Design and measured per-engine mapping:
   (safe for concurrent use). That is what makes `seq` = the update's ordinal
   from byte 0: the hub ring (`hub/chat.go`, 500 per session) and a scroll-back
   re-read of the file land on the same seqs, across houston restarts too.
+  The ring is built lazily: a session has none until its first chat page,
+  stream, epoch or subscribe call, which reads the transcript into it (the
+  tool route reads the file directly and builds nothing); from then on the
+  hub's 2 s tick maintains it. A late-built ring is identical to
+  one built at start, so seqs and epochs are unaffected.
 - **Epoch**: every cursor is `<epoch>.<seq>`, epoch = a hash of (session id,
   transcript path, hash of the file's first line, ring generation); the raw
   session id never reaches the wire. The generation bumps when the reader
@@ -524,7 +566,8 @@ conversation. Design and measured per-engine mapping:
   → SSE `updates` batches with `id: <epoch>.<last seq>` (`Last-Event-ID` wins
   over `after`, so a native EventSource reconnect resumes with no gap), `reset`
   then EOF on an epoch mismatch, a cursor the ring can't serve, the run's
-  Session changing (checked every 2 s), or the session going away;
+  Session changing (checked every 2 s), or the session going away; an idle
+  stream gets a named `ping` event every 25 s (see "Stream liveness");
   `GET /api/runs/{id}/chat/tool/{callId}` → name/input/output/diff, each of
   output/oldText/newText capped at 16 KiB (`truncated`), an input over 16 KiB
   omitted rather than cut (`inputOmitted`, since a cut would no longer be
@@ -802,6 +845,9 @@ derive — a reverse proxy, custom DNS — add it with `-hostname` (repeatable).
 
 `-no-auth` disables the **token** only. Origin and Host checking still apply:
 turning off authentication shouldn't make the server cross-origin drivable.
+
+`/api/debug/pprof/` (`net/http/pprof`) is registered only under `-debug`, and
+sits behind the same token and Host gates as the rest of `/api/`.
 
 This model is the primary defense; the following are additional layers:
 1. Default bind: `127.0.0.1:9090` (localhost only)
