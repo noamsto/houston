@@ -835,6 +835,51 @@ func TestChatPathChangeKeepsTheRingPrimed(t *testing.T) {
 	})
 }
 
+// A chat caller can reach a session before its transcript exists: the ring
+// is primed empty, and the tick fills it once the file appears.
+func TestChatPrimedBeforeTheTranscriptExists(t *testing.T) {
+	const sid = "chat-lazy-f"
+	dir := t.TempDir()
+	transcript := filepath.Join(t.TempDir(), sid+".jsonl")
+	writeState(t, dir, hook.SessionState{SessionID: sid, TranscriptPath: transcript, State: hook.StateThinking, Since: 1, UpdatedAt: time.Now().Unix()})
+	f := &chatFixture{t: t, dir: dir, transcript: transcript, h: NewWithOptions(dir, Options{ClaudeProjectsDir: "-"}, silentLog())}
+	f.state.SessionID = sid
+	startHub(t, f.h)
+	waitUntil(t, "session loaded", func() bool { return findSession(f.h, sid) != nil })
+
+	if _, err := f.h.ChatEpoch(sid); err != nil {
+		t.Fatalf("ChatEpoch: %v", err)
+	}
+	c := f.chatState()
+	f.h.mu.RLock()
+	primed := c != nil && c.primed
+	f.h.mu.RUnlock()
+	if !primed {
+		t.Fatal("ring not primed while the transcript is missing")
+	}
+	ch, unsub, err := f.h.ChatSubscribe(sid)
+	if err != nil {
+		t.Fatalf("ChatSubscribe: %v", err)
+	}
+	defer unsub()
+
+	if err := os.WriteFile(transcript, []byte(humans(1, 2)), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+	f.h.refreshTranscript(sid)
+	select {
+	case <-ch:
+	default:
+		t.Fatal("subscriber not notified once the transcript appeared")
+	}
+	wantSeqs(t, "ring after tick", f.ring(), 1, 2)
+	ups, ok, err := f.h.ChatSince(sid, f.epoch(), 0)
+	if err != nil || !ok {
+		t.Fatalf("ChatSince = ok %v err %v", ok, err)
+	}
+	wantSeqs(t, "since 0", ups, 1, 2)
+}
+
 func appendLines(t *testing.T, path, lines string) {
 	t.Helper()
 	fh, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)

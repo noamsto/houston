@@ -41,9 +41,15 @@ func readInitial(path string) (bg bgTracker, tail []TranscriptEvent, end int64, 
 
 	// Past half the file, a tail plus a pre-pass costs more than one full read.
 	for t := int64(initialTail); 2*t < size; t *= 2 {
-		var start int64
-		if start, err = lineStartFrom(f, size-t, size); err != nil {
+		var (
+			start int64
+			found bool
+		)
+		if start, found, err = lineStartFrom(f, size-t, size); err != nil {
 			return bg, nil, 0, err
+		}
+		if !found {
+			continue
 		}
 		if tail, end, err = ReadTranscriptFrom(path, start); err != nil {
 			return bg, nil, 0, err
@@ -78,9 +84,11 @@ func tailSuffices(evs []TranscriptEvent) bool {
 	return toolUses >= maxTrail && asks && in && out
 }
 
-// lineStartFrom returns the first line start at or after pos (0 < pos), or
-// size when no line starts there.
-func lineStartFrom(f *os.File, pos, size int64) (int64, error) {
+// lineStartFrom returns the first line start in [pos, size] (0 < pos). found
+// is false when no newline ends in [pos-1, size): size is then mid-record
+// whenever the last line is still being written, so a tail read from it would
+// start inside that record once it lands.
+func lineStartFrom(f *os.File, pos, size int64) (start int64, found bool, err error) {
 	p := pos - 1
 	r := bufio.NewReaderSize(io.NewSectionReader(f, p, size-p), 64<<10)
 	for {
@@ -88,12 +96,12 @@ func lineStartFrom(f *os.File, pos, size int64) (int64, error) {
 		p += int64(len(chunk))
 		switch {
 		case err == nil:
-			return p, nil
+			return p, true, nil
 		case errors.Is(err, bufio.ErrBufferFull):
 		case errors.Is(err, io.EOF):
-			return size, nil
+			return 0, false, nil
 		default:
-			return 0, err
+			return 0, false, err
 		}
 	}
 }

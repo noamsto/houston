@@ -111,10 +111,16 @@ func filler(t *testing.T, size int64) string {
 
 func TestHubRestartListsBackgroundStartedBeforeTheTail(t *testing.T) {
 	persistentMonitor := `{"command":"tail -f log","description":"watch log","persistent":true}`
+	monitorTurn := bgStartLine("tu_mon", "Monitor", persistentMonitor, "2026-01-01T00:00:01Z") +
+		bgResultLine("tu_mon", "Monitor started (task bmon1, persistent)", false)
 	firstTurn := bgStartLine("tu_sh", "Bash", shellInput, "2026-01-01T00:00:00Z") +
 		bgResultLine("tu_sh", fmt.Sprintf(shellResult, "bsh1"), false) +
-		bgStartLine("tu_mon", "Monitor", persistentMonitor, "2026-01-01T00:00:01Z") +
-		bgResultLine("tu_mon", "Monitor started (task bmon1, persistent)", false)
+		monitorTurn
+	// Both shell lines outgrow foldBackground's 64 KiB read buffer.
+	pad := strings.Repeat("x", 200_000)
+	longTurn := bgStartLine("tu_sh", "Bash", fmt.Sprintf(`{"command":"sleep 300","description":%q,"run_in_background":true}`, pad), "2026-01-01T00:00:00Z") +
+		bgResultLine("tu_sh", fmt.Sprintf(shellResult, "bsh1")+" "+pad, false) +
+		monitorTurn
 	shellDone := bgNotificationUserLine(notificationText([]string{"bsh1"}, "tu_sh", "completed"))
 
 	for _, tc := range []struct {
@@ -124,6 +130,7 @@ func TestHubRestartListsBackgroundStartedBeforeTheTail(t *testing.T) {
 	}{
 		{"both outstanding", firstTurn, []string{"bmon1", "bsh1"}},
 		{"shell finished before the tail", firstTurn + shellDone, []string{"bmon1"}},
+		{"lines over the read buffer", longTurn, []string{"bmon1", "bsh1"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -150,6 +157,62 @@ func TestHubRestartListsBackgroundStartedBeforeTheTail(t *testing.T) {
 			if !slices.Equal(ids, tc.want) {
 				t.Fatalf("background = %v, want %v", ids, tc.want)
 			}
+		})
+	}
+}
+
+// longRecord is an assistant text line longer than initialTail, so no line
+// starts in the last initialTail bytes of a file it ends.
+func longRecord() string {
+	return fmt.Sprintf(`{"type":"assistant","timestamp":"2026-01-01T00:02:00Z","message":{"role":"assistant","content":[{"type":"text","text":%q}],"usage":{"input_tokens":7,"output_tokens":3}}}`, strings.Repeat("y", 2*initialTail)+" Shall I go on?") + "\n"
+}
+
+// A line start lineStartFrom reports must stay one when the record being
+// written past it at the Stat lands: readInitial reopens the file to read the
+// tail, so a start inside that record would drop it.
+func TestLineStartSurvivesTheLastRecordLanding(t *testing.T) {
+	head := filler(t, 6*initialTail)
+	record := longRecord()
+	cut := len(record) - 100
+	path := writeJSONL(t, head+record[:cut])
+
+	f, err := os.Open(path) //nolint:gosec // test temp file
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	fi, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	start, found, err := lineStartFrom(f, fi.Size()-initialTail, fi.Size())
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendLines(t, path, record[cut:]+filler(t, 2*initialTail))
+	if !found {
+		return
+	}
+	tail, _, err := ReadTranscriptFrom(path, start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(tail, func(ev TranscriptEvent) bool { return ev.Offset == int64(len(head)) }) {
+		t.Fatalf("lineStartFrom reported %d as a line start; the tail read from it skips the record at %d", start, len(head))
+	}
+}
+
+func TestReadInitialLongLastRecordEqualsFullReplay(t *testing.T) {
+	for _, tc := range []struct{ name, trim string }{
+		{"newline-terminated", ""},
+		{"newline not yet written", "\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeJSONL(t, filler(t, 6*initialTail)+strings.TrimSuffix(longRecord(), tc.trim))
+			if tailOffset(t, path) == 0 {
+				t.Fatal("read whole; want a tail")
+			}
+			requireReplayEqual(t, path)
 		})
 	}
 }
