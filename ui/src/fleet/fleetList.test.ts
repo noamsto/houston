@@ -66,11 +66,11 @@ describe('filterRuns', () => {
     expect(filterRuns([live], 'active', now).map((r) => r.id)).toEqual(['live-review'])
   })
 
-  it('active sort puts fresh blocked first then updated_at desc', () => {
+  it('active sort puts fresh blocked first then newest-started first', () => {
     const runs = [
-      run({ id: 'old-running', state: 'running', updated_at: nowSec - 100 }),
-      run({ id: 'fresh-blocked', state: 'blocked', updated_at: nowSec - 200 }),
-      run({ id: 'new-running', state: 'running', updated_at: nowSec }),
+      run({ id: 'old-running', state: 'running', since: 100 }),
+      run({ id: 'fresh-blocked', state: 'blocked', since: 50 }),
+      run({ id: 'new-running', state: 'running', since: 200 }),
     ]
     const result = filterRuns(runs, 'active', now)
     expect(result.map((r) => r.id)).toEqual(['fresh-blocked', 'new-running', 'old-running'])
@@ -80,8 +80,8 @@ describe('filterRuns', () => {
     const runs = [
       run({ id: 'plain' }),
       run({ id: 'stale-stuck', attention: 'stuck', updated_at: nowSec - 2 * HOUR }),
-      run({ id: 'older-stuck', attention: 'stuck', updated_at: nowSec - 50 }),
-      run({ id: 'fresh-stuck', attention: 'stuck' }),
+      run({ id: 'older-stuck', attention: 'stuck', since: 10 }),
+      run({ id: 'fresh-stuck', attention: 'stuck', since: 20 }),
       run({ id: 'done', attention: 'done' }),
     ]
     expect(filterRuns(runs, 'stuck', now).map((r) => r.id)).toEqual(['fresh-stuck', 'older-stuck', 'stale-stuck'])
@@ -107,14 +107,14 @@ describe('filterRuns', () => {
     expect(filterRuns(runs, 'all', now).map((r) => r.id).sort()).toEqual(['ended', 'finished', 'running'])
   })
 
-  it('sorts fresh needs-you > stuck > done > rest, ties by recency', () => {
+  it('sorts fresh needs-you > stuck > done > rest, ties by start time', () => {
     const runs = [
-      run({ id: 'rest-new', updated_at: nowSec }),
-      run({ id: 'done-old', state: 'done', attention: 'done', updated_at: nowSec - 30 }),
-      run({ id: 'done-new', state: 'done', attention: 'done', updated_at: nowSec - 10 }),
-      run({ id: 'stuck', attention: 'stuck', updated_at: nowSec - 40 }),
-      run({ id: 'blocked', state: 'blocked', updated_at: nowSec - 50 }),
-      run({ id: 'rest-old', updated_at: nowSec - 60 }),
+      run({ id: 'rest-new', since: 60 }),
+      run({ id: 'done-old', state: 'done', attention: 'done', since: 30 }),
+      run({ id: 'done-new', state: 'done', attention: 'done', since: 40 }),
+      run({ id: 'stuck', attention: 'stuck', since: 50 }),
+      run({ id: 'blocked', state: 'blocked', since: 10 }),
+      run({ id: 'rest-old', since: 20 }),
     ]
     expect(filterRuns(runs, 'active', now).map((r) => r.id)).toEqual([
       'blocked', 'stuck', 'done-new', 'done-old', 'rest-new', 'rest-old',
@@ -122,6 +122,28 @@ describe('filterRuns', () => {
     expect(filterRuns(runs, 'all', now).map((r) => r.id)).toEqual([
       'blocked', 'stuck', 'done-new', 'done-old', 'rest-new', 'rest-old',
     ])
+  })
+
+  it('keeps a run in place when its updated_at changes', () => {
+    const mk = (u: number) => [
+      run({ id: 'a', since: 100, updated_at: nowSec }),
+      run({ id: 'b', since: 200, updated_at: u }),
+    ]
+    expect(filterRuns(mk(nowSec - 50), 'active', now).map((r) => r.id)).toEqual(['b', 'a'])
+    expect(filterRuns(mk(nowSec), 'active', now).map((r) => r.id)).toEqual(['b', 'a'])
+  })
+
+  it('moves a run when its rank changes', () => {
+    const base = [run({ id: 'a', since: 100 }), run({ id: 'b', since: 200 })]
+    expect(filterRuns(base, 'active', now).map((r) => r.id)).toEqual(['b', 'a'])
+    const blocked = [run({ id: 'a', since: 100, state: 'blocked' }), base[1]]
+    expect(filterRuns(blocked, 'active', now).map((r) => r.id)).toEqual(['a', 'b'])
+  })
+
+  it('orders equal keys deterministically by id', () => {
+    const runs = [run({ id: 'z' }), run({ id: 'a' }), run({ id: 'm' })]
+    expect(filterRuns(runs, 'active', now).map((r) => r.id)).toEqual(['a', 'm', 'z'])
+    expect(filterRuns([...runs].reverse(), 'active', now).map((r) => r.id)).toEqual(['a', 'm', 'z'])
   })
 
   it('ranks a stale stuck run as rest', () => {

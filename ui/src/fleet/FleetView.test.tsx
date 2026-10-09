@@ -18,9 +18,9 @@ function run(p: Partial<Run> = {}): Run {
 
 const runs = [
   run({ id: 'w1', project: 'houston', branch: 'w-one', role: 'worker', state: 'blocked' }),
-  run({ id: 'o1', project: 'other', branch: 'o-one' }),
-  run({ id: 'd', project: 'houston', branch: 'main', role: 'dispatcher' }),
-  run({ id: 'w2', project: 'houston', branch: 'w-two', role: 'worker' }),
+  run({ id: 'o1', since: 3, project: 'other', branch: 'o-one' }),
+  run({ id: 'd', since: 2, project: 'houston', branch: 'main', role: 'dispatcher' }),
+  run({ id: 'w2', since: 1, project: 'houston', branch: 'w-two', role: 'worker' }),
 ]
 
 afterEach(() => {
