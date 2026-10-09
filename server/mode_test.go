@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -80,6 +81,22 @@ func TestTmuxModeUnregistersDispatcherRoutes(t *testing.T) {
 	}
 	if got := decodeMode(t, modeRequest(t, h, "GET", "/api/mode", "")); got != "tmux" {
 		t.Fatalf("mode %q, want tmux", got)
+	}
+}
+
+func TestTmuxModeNeverRunsDispatchModels(t *testing.T) {
+	s := newFullServer(t, Config{StatusDir: t.TempDir(), Mode: mode.Tmux})
+	s.dispatchModels = func(context.Context, string) (dispatchModelSet, error) {
+		t.Error("dispatch --models ran in tmux mode")
+		return dispatchModelSet{}, nil
+	}
+	h := s.Handler()
+	for _, r := range []struct{ method, path string }{
+		{"GET", "/api/dispatch/options"},
+		{"POST", "/api/dispatch"},
+		{"POST", "/api/dispatch/dispatcher"},
+	} {
+		modeRequest(t, h, r.method, r.path, "{}")
 	}
 }
 
