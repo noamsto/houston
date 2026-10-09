@@ -135,21 +135,16 @@ export function usePaneSocket(path: string | null, callbacks: PaneSocketCallback
     const untrackHidden = trackHidden((hiddenMs) => {
       if (endedRef.current) return
       const ws = wsRef.current
-      if (ws && hiddenMs >= RESYNC_AFTER_HIDDEN_MS) {
+      if (ws && hiddenMs < RESYNC_AFTER_HIDDEN_MS && ws.readyState === WebSocket.OPEN) return
+      if (ws) {
         ws.onopen = ws.onclose = ws.onmessage = ws.onerror = null
         ws.close()
         wsRef.current = null
         setConnected(false)
-        clearTimeout(reconnectTimer)
-        retriesRef.current = 0
-        connect()
-        return
       }
-      if (ws?.readyState !== WebSocket.OPEN) {
-        clearTimeout(reconnectTimer)
-        retriesRef.current = 0
-        connect()
-      }
+      clearTimeout(reconnectTimer)
+      retriesRef.current = 0
+      connect()
     })
 
     return () => {

@@ -11,7 +11,7 @@ const CHECK_EVERY_MS = 5_000
  * duration (ms) each time the page becomes visible after being hidden.
  */
 export function trackHidden(onVisible: (hiddenMs: number) => void): () => void {
-  let hiddenAt: number | null = null
+  let hiddenAt: number | null = document.visibilityState === 'hidden' ? Date.now() : null
   const onChange = () => {
     if (document.visibilityState === 'hidden') {
       hiddenAt ??= Date.now()

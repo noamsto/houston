@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { watchLiveness } from './streamLiveness'
+import { trackHidden, watchLiveness } from './streamLiveness'
 
 function setVisibility(state: DocumentVisibilityState) {
   Object.defineProperty(document, 'visibilityState', { value: state, configurable: true })
@@ -83,5 +83,20 @@ describe('watchLiveness', () => {
     vi.advanceTimersByTime(20_000)
     setVisibility('visible')
     expect(onStale).not.toHaveBeenCalled()
+  })
+})
+
+describe('trackHidden', () => {
+  it('counts a spell that began before it was mounted', () => {
+    setVisibility('hidden')
+    const onVisible = vi.fn()
+    const untrack = trackHidden(onVisible)
+
+    vi.advanceTimersByTime(15_000)
+    setVisibility('visible')
+
+    expect(onVisible).toHaveBeenCalledTimes(1)
+    expect(onVisible.mock.calls[0][0]).toBeGreaterThanOrEqual(15_000)
+    untrack()
   })
 })

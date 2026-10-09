@@ -212,10 +212,11 @@ describe('useRunChat', () => {
       await act(async () => { await vi.advanceTimersByTimeAsync(ms) })
     }
 
-    it('hidden 15 s then visible: refetches the newest page and opens a new stream', async () => {
+    it('hidden 15 s then visible: resumes the stream from the cursor without refetching or dropping history', async () => {
       fetchMock.mockResolvedValue(jsonResponse(page('e1', [upd(1)])))
-      renderHook(() => useRunChat('r1', true))
+      const { result } = renderHook(() => useRunChat('r1', true))
       await advance(0)
+      act(() => { fake.instances[0].emit('updates', [upd(2)]) })
       expect(fake.instances.length).toBe(1)
       expect(fetchMock).toHaveBeenCalledTimes(1)
 
@@ -225,9 +226,28 @@ describe('useRunChat', () => {
       await advance(0)
 
       expect(fake.instances[0].closed).toBe(true)
-      expect(fetchMock).toHaveBeenCalledTimes(2)
       expect(fake.instances.length).toBe(2)
       expect(fake.instances[1].closed).toBe(false)
+      expect(fake.instances[1].url).toBe('/api/runs/r1/chat/stream?after=e1.2')
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      expect(result.current.status).toBe('ready')
+      expect(result.current.updates.map((u) => u.seq)).toEqual([1, 2])
+    })
+
+    it('keeps the status ready when the network is still down on return', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(page('e1', [upd(1)])))
+      const { result } = renderHook(() => useRunChat('r1', true))
+      await advance(0)
+      fetchMock.mockRejectedValue(new TypeError('network down'))
+
+      setVisibility('hidden')
+      await advance(15_000)
+      setVisibility('visible')
+      await advance(10_000)
+
+      expect(fake.instances.length).toBe(2)
+      expect(fake.instances[1].closed).toBe(false)
+      expect(result.current.status).toBe('ready')
     })
 
     it('a quiet open stream reconnects once per stale episode, not every check', async () => {
@@ -240,6 +260,7 @@ describe('useRunChat', () => {
       expect(fake.instances.length).toBe(2)
       await advance(10_000)
       expect(fake.instances.length).toBe(3)
+      expect(fetchMock).toHaveBeenCalledTimes(1)
     })
 
     it('pings keep a quiet stream alive', async () => {

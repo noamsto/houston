@@ -71,10 +71,12 @@ export function useRunChat(runId: string, enabled: boolean): UseRunChatResult {
 
     const liveness = watchLiveness(() => {
       // No stream yet means a load, retry window or terminal state is already
-      // in charge; a second concurrent load would only race it.
-      if (cancelled || esRef.current === null) return
-      closeStream()
-      void loadNewest()
+      // in charge; a second concurrent load would only race it. Resuming from
+      // the cursor keeps the loaded history, and a new EventSource retries
+      // network errors itself; the server answers `reset` if it can't serve it.
+      const epoch = epochRef.current
+      if (cancelled || esRef.current === null || epoch === null) return
+      openStream(epoch, lastSeqOf(updatesRef.current))
     })
 
     function closeStream() {

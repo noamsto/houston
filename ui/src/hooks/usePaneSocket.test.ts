@@ -132,6 +132,23 @@ describe('usePaneSocket', () => {
       expect(FakeWebSocket.instances).toHaveLength(2)
     })
 
+    it('detaches and closes a CONNECTING socket on a short hidden spell, leaving exactly one live socket', () => {
+      renderHook(() => usePaneSocket('/api/runs/r1/terminal', noopCallbacks))
+      const connecting = FakeWebSocket.instances[0]
+      expect(connecting.readyState).toBe(FakeWebSocket.CONNECTING)
+
+      act(() => { hide() })
+      act(() => { vi.advanceTimersByTime(3_000) })
+      act(() => { show() })
+
+      expect(FakeWebSocket.instances).toHaveLength(2)
+      expect(connecting.readyState).toBe(FakeWebSocket.CLOSED)
+      expect(connecting.onopen).toBeNull()
+      expect(connecting.onclose).toBeNull()
+      expect(connecting.onmessage).toBeNull()
+      expect(connecting.onerror).toBeNull()
+    })
+
     it('keeps an OPEN socket after the page was hidden only 5 s', () => {
       renderHook(() => usePaneSocket('/api/runs/r1/terminal', noopCallbacks))
       const ws = FakeWebSocket.instances[0]
