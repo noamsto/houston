@@ -1091,3 +1091,18 @@ func TestEndRunClearsBackground(t *testing.T) {
 		t.Errorf("Background = %+v, want cleared", r.Background)
 	}
 }
+
+func TestRunFromSessionViewCarriesContextAndSpend(t *testing.T) {
+	spend := 1.5
+	_, r := runFromSessionView(hub.SessionView{SessionID: "abc", ContextUsed: 142000, ContextLimit: 200000, SpendUSD: &spend}, "")
+	if r.Context == nil || r.Context.Used != 142000 || r.Context.Limit != 200000 {
+		t.Errorf("Context = %+v", r.Context)
+	}
+	if r.SpendUSD == nil || *r.SpendUSD != 1.5 {
+		t.Errorf("SpendUSD = %v", r.SpendUSD)
+	}
+	_, r = runFromSessionView(hub.SessionView{SessionID: "abc"}, "")
+	if r.Context != nil || r.SpendUSD != nil {
+		t.Errorf("unset view produced Context=%v SpendUSD=%v", r.Context, r.SpendUSD)
+	}
+}

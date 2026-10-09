@@ -45,6 +45,9 @@ type SessionView struct {
 	Asks           string      `json:"asks,omitempty"` // the question the turn ended on; reset by later tool/user activity
 	InputTokens    int         `json:"input_tokens"`
 	OutputTokens   int         `json:"output_tokens"`
+	ContextUsed    int         `json:"context_used,omitempty"`  // latest assistant message: uncached + cached input
+	ContextLimit   int         `json:"context_limit,omitempty"` // 0 when the model's window is unknown
+	SpendUSD       *float64    `json:"spend_usd,omitempty"`     // pi only: sum of recorded per-message cost
 	TranscriptPath string      `json:"transcript_path,omitempty"`
 	Agent          string      `json:"agent"`
 
@@ -106,6 +109,7 @@ type Session struct {
 	trail   []TrailChip
 	preview []string
 	asks    string
+	spend   *float64 // running sum of recorded per-message cost
 
 	lastTurn         int    // last turn whose trail was cleared (UserPromptSubmit bumps Turn)
 	lastBroadcastSig string // last broadcast view signature; skip duplicates
@@ -547,6 +551,14 @@ func viewSignature(v SessionView) string {
 	b.WriteByte('|')
 	b.WriteString(strconv.Itoa(v.OutputTokens))
 	b.WriteByte('|')
+	b.WriteString(strconv.Itoa(v.ContextUsed))
+	b.WriteByte('|')
+	b.WriteString(strconv.Itoa(v.ContextLimit))
+	b.WriteByte('|')
+	if v.SpendUSD != nil {
+		b.WriteString(strconv.FormatFloat(*v.SpendUSD, 'g', -1, 64))
+	}
+	b.WriteByte('|')
 	b.WriteString(strconv.Itoa(len(v.Preview)))
 	b.WriteByte('|')
 	b.WriteString(v.Agent)
@@ -647,6 +659,20 @@ func applyTranscriptEvent(s *Session, ev TranscriptEvent) {
 	}
 	if ev.OutputTokens > 0 {
 		s.view.OutputTokens = ev.OutputTokens
+	}
+	// Context is the latest assistant message's, not a maximum: it shrinks
+	// after a compaction.
+	if ev.ContextTokens > 0 {
+		s.view.ContextUsed = ev.ContextTokens
+		s.view.ContextLimit = contextLimit(ev.Model, ev.ContextTokens)
+	}
+	if ev.CostUSD != nil {
+		total := *ev.CostUSD
+		if s.spend != nil {
+			total += *s.spend
+		}
+		s.spend = &total
+		s.view.SpendUSD = &total
 	}
 }
 

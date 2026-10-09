@@ -68,6 +68,11 @@ export interface BackgroundTask {
   since?: number // unix seconds
 }
 
+export interface ContextUsage {
+  used: number
+  limit?: number // absent when the model's window is unknown
+}
+
 export interface Question {
   text: string
   via: string // "pane" | "crew" (legacy "watchdog" is no longer produced)
@@ -114,6 +119,8 @@ export interface Run {
   activity: Activity
   question?: Question
   tokens: Tokens
+  context?: ContextUsage // Claude Code and pi: how full the context window is
+  spend_usd?: number // pi only: sum of the cost pi recorded per message
   background?: BackgroundTask[] // outstanding background shells/monitors (Claude only)
   since?: number
   updated_at: number

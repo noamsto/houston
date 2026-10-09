@@ -44,6 +44,12 @@ type Run struct {
 	Question *Question `json:"question,omitempty"`
 	Tokens   Tokens    `json:"tokens"`
 
+	// Context and SpendUSD come from the transcript. SpendUSD is pi only: it
+	// is the sum of the cost pi recorded per message, and nothing is priced
+	// for other engines.
+	Context  *Context `json:"context,omitempty"`
+	SpendUSD *float64 `json:"spend_usd,omitempty"`
+
 	// Background lists the background shells and monitors a Claude Code run
 	// has started and not yet seen finish. Informational: it never changes
 	// State.
@@ -156,6 +162,13 @@ type Question struct {
 	// synthesized informational note; watchdog statuses no longer produce a
 	// Question, so only the UI still recognizes it for compatibility.
 	Via string `json:"via"`
+}
+
+// Context is how full the model's context window is. Limit is absent when the
+// model's window is unknown.
+type Context struct {
+	Used  int `json:"used"`
+	Limit int `json:"limit,omitempty"`
 }
 
 type Tokens struct {

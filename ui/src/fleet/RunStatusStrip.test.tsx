@@ -169,3 +169,34 @@ describe('RunStatusStrip background tasks', () => {
     expect(screen.getByRole('button', { expanded: false })).toBeTruthy()
   })
 })
+
+describe('RunStatusStrip context meter', () => {
+  it('shows used / limit with a percentage bar when the limit is known', () => {
+    render(<RunStatusStrip run={run({ context: { used: 142_000, limit: 200_000 } })} now={now} />)
+    expect(screen.getByText('142k / 200k ctx')).toBeTruthy()
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('71')
+  })
+
+  it('formats a 1M window', () => {
+    render(<RunStatusStrip run={run({ context: { used: 250_000, limit: 1_000_000 } })} now={now} />)
+    expect(screen.getByText('250k / 1M ctx')).toBeTruthy()
+  })
+
+  it('shows used tokens without a bar when the limit is unknown', () => {
+    render(<RunStatusStrip run={run({ context: { used: 6500 } })} now={now} />)
+    expect(screen.getByText('7k ctx')).toBeTruthy()
+    expect(screen.queryByRole('progressbar')).toBeNull()
+  })
+
+  it('shows pi spend', () => {
+    render(<RunStatusStrip run={run({ agent: 'pi', context: { used: 6500 }, spend_usd: 0.75 })} now={now} />)
+    expect(screen.getByText('$0.75')).toBeTruthy()
+  })
+
+  it('shows no spend without spend_usd and nothing without context', () => {
+    const { container, rerender } = render(<RunStatusStrip run={run({ context: { used: 1000, limit: 200_000 } })} now={now} />)
+    expect(container.querySelector('.run-status-spend')).toBeNull()
+    rerender(<RunStatusStrip run={run()} now={now} />)
+    expect(container.querySelector('.run-status-ctx')).toBeNull()
+  })
+})
