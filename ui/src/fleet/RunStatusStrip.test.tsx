@@ -188,6 +188,16 @@ describe('RunStatusStrip context meter', () => {
     expect(screen.queryByRole('progressbar')).toBeNull()
   })
 
+  it('rounds just under 1M up to M, not 1000k', () => {
+    render(<RunStatusStrip run={run({ context: { used: 999_700, limit: 1_000_000 } })} now={now} />)
+    expect(screen.getByText('1M / 1M ctx')).toBeTruthy()
+  })
+
+  it('shows spend even without context', () => {
+    render(<RunStatusStrip run={run({ agent: 'pi', spend_usd: 0.1 })} now={now} />)
+    expect(screen.getByText('$0.10')).toBeTruthy()
+  })
+
   it('shows pi spend', () => {
     render(<RunStatusStrip run={run({ agent: 'pi', context: { used: 6500 }, spend_usd: 0.75 })} now={now} />)
     expect(screen.getByText('$0.75')).toBeTruthy()

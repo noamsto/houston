@@ -49,15 +49,17 @@ function BackgroundTasks({ tasks, now }: { tasks: Task[]; now: number }) {
 }
 
 function tokensLabel(n: number) {
-  return n >= 1_000_000 ? `${+(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : `${n}`
+  const k = Math.round(n / 1000)
+  return k >= 1000 ? `${+(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${k}k` : `${n}`
 }
 
-function ContextMeter({ used, limit, spend }: { used: number; limit?: number; spend?: number }) {
+function ContextMeter({ context, spend }: { context?: Run['context']; spend?: number }) {
+  const { used = 0, limit } = context ?? {}
   const pct = limit ? Math.min(100, Math.round((used / limit) * 100)) : null
   const label = limit ? `${tokensLabel(used)} / ${tokensLabel(limit)} ctx` : `${tokensLabel(used)} ctx`
   return (
     <div className="run-status-line run-status-ctx">
-      <span className="run-status-ctx-label">{label}</span>
+      {context && <span className="run-status-ctx-label">{label}</span>}
       {pct !== null && (
         <span
           className="run-status-ctx-bar"
@@ -103,7 +105,7 @@ export function RunStatusStrip({ run, now }: { run: Run; now: number }) {
           <span>{agoLabel(run.updated_at, now)}</span>
         </span>
       </div>
-      {run.context && <ContextMeter used={run.context.used} limit={run.context.limit} spend={run.spend_usd} />}
+      {(run.context || run.spend_usd !== undefined) && <ContextMeter context={run.context} spend={run.spend_usd} />}
       {!!run.background?.length && <BackgroundTasks tasks={run.background} now={now} />}
       {crew && (crewInfo || detail || (crew.codename && run.role !== 'dispatcher')) && (
         <div className="run-status-line run-status-crew">
