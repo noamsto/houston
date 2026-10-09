@@ -192,4 +192,81 @@ describe('useRunChat', () => {
     expect(fetchMock).not.toHaveBeenCalled()
     expect(fake.instances.length).toBe(0)
   })
+
+  describe('liveness', () => {
+    function setVisibility(state: DocumentVisibilityState) {
+      Object.defineProperty(document, 'visibilityState', { value: state, configurable: true })
+      document.dispatchEvent(new Event('visibilitychange'))
+    }
+
+    beforeEach(() => {
+      vi.useFakeTimers()
+    })
+
+    afterEach(() => {
+      setVisibility('visible')
+      vi.useRealTimers()
+    })
+
+    async function advance(ms: number) {
+      await act(async () => { await vi.advanceTimersByTimeAsync(ms) })
+    }
+
+    it('hidden 15 s then visible: refetches the newest page and opens a new stream', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(page('e1', [upd(1)])))
+      renderHook(() => useRunChat('r1', true))
+      await advance(0)
+      expect(fake.instances.length).toBe(1)
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+
+      setVisibility('hidden')
+      await advance(15_000)
+      setVisibility('visible')
+      await advance(0)
+
+      expect(fake.instances[0].closed).toBe(true)
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+      expect(fake.instances.length).toBe(2)
+      expect(fake.instances[1].closed).toBe(false)
+    })
+
+    it('a quiet open stream reconnects once per stale episode, not every check', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(page('e1', [upd(1)])))
+      renderHook(() => useRunChat('r1', true))
+      await advance(0)
+      act(() => { fake.instances[0].open() })
+
+      await advance(125_000)
+      expect(fake.instances.length).toBe(2)
+      await advance(10_000)
+      expect(fake.instances.length).toBe(3)
+    })
+
+    it('pings keep a quiet stream alive', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(page('e1', [upd(1)])))
+      renderHook(() => useRunChat('r1', true))
+      await advance(0)
+
+      for (let i = 0; i < 6; i++) {
+        await advance(25_000)
+        act(() => { fake.instances[0].emit('ping', null) })
+      }
+      expect(fake.instances.length).toBe(1)
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not reconnect while the first page fetch is pending', async () => {
+      fetchMock.mockReturnValue(new Promise<Response>(() => {}))
+      renderHook(() => useRunChat('r1', true))
+
+      await advance(130_000)
+      setVisibility('hidden')
+      await advance(15_000)
+      setVisibility('visible')
+      await advance(0)
+
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      expect(fake.instances.length).toBe(0)
+    })
+  })
 })

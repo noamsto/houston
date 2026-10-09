@@ -20,6 +20,7 @@ class FakeWebSocket {
   onopen: (() => void) | null = null
   onclose: ((e: { code: number; reason: string }) => void) | null = null
   onmessage: ((e: { data: string }) => void) | null = null
+  onerror: (() => void) | null = null
   url: string
 
   constructor(url: string) {
@@ -99,5 +100,48 @@ describe('usePaneSocket', () => {
 
     expect(FakeWebSocket.instances).toHaveLength(2)
     expect(result.current.ended).toBeNull()
+  })
+
+  describe('zombie sockets', () => {
+    afterEach(() => { setVisibility('visible') })
+
+    function hide() {
+      setVisibility('hidden')
+      document.dispatchEvent(new Event('visibilitychange'))
+    }
+    function show() {
+      setVisibility('visible')
+      document.dispatchEvent(new Event('visibilitychange'))
+    }
+
+    it('replaces an OPEN socket at once after the page was hidden 15 s, ignoring the old one later', () => {
+      renderHook(() => usePaneSocket('/api/runs/r1/terminal', noopCallbacks))
+      const zombie = FakeWebSocket.instances[0]
+      const staleOnClose = zombie.onclose
+      act(() => { zombie.readyState = FakeWebSocket.OPEN; zombie.onopen?.() })
+
+      act(() => { hide() })
+      act(() => { vi.advanceTimersByTime(15_000) })
+      act(() => { show() })
+
+      expect(FakeWebSocket.instances).toHaveLength(2)
+      expect(zombie.onclose).toBeNull()
+
+      act(() => { staleOnClose?.({ code: 1006, reason: '' }) })
+      act(() => { vi.advanceTimersByTime(10_000) })
+      expect(FakeWebSocket.instances).toHaveLength(2)
+    })
+
+    it('keeps an OPEN socket after the page was hidden only 5 s', () => {
+      renderHook(() => usePaneSocket('/api/runs/r1/terminal', noopCallbacks))
+      const ws = FakeWebSocket.instances[0]
+      act(() => { ws.readyState = FakeWebSocket.OPEN; ws.onopen?.() })
+
+      act(() => { hide() })
+      act(() => { vi.advanceTimersByTime(5_000) })
+      act(() => { show() })
+
+      expect(FakeWebSocket.instances).toHaveLength(1)
+    })
   })
 })

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChatUnavailable, chatStreamURL, fetchChatPage } from '../api/chat'
 import type { ChatUpdate } from '../api/chat'
 import { mergeUpdates } from '../fleet/chatModel'
+import { watchLiveness } from './streamLiveness'
 
 export type ChatStatus = 'loading' | 'ready' | 'unavailable' | 'error'
 
@@ -68,6 +69,14 @@ export function useRunChat(runId: string, enabled: boolean): UseRunChatResult {
       earlierRef.current = null
     }
 
+    const liveness = watchLiveness(() => {
+      // No stream yet means a load, retry window or terminal state is already
+      // in charge; a second concurrent load would only race it.
+      if (cancelled || esRef.current === null) return
+      closeStream()
+      void loadNewest()
+    })
+
     function closeStream() {
       esRef.current?.close()
       esRef.current = null
@@ -79,8 +88,12 @@ export function useRunChat(runId: string, enabled: boolean): UseRunChatResult {
       esRef.current = es
       let highWaterSeq = seq
 
+      es.addEventListener('open', () => liveness.seen())
+      es.addEventListener('ping', () => liveness.seen())
+
       es.addEventListener('updates', (ev: MessageEvent<string>) => {
         if (cancelled) return
+        liveness.seen()
         let incoming: ChatUpdate[]
         try {
           incoming = JSON.parse(ev.data) as ChatUpdate[]
@@ -102,6 +115,7 @@ export function useRunChat(runId: string, enabled: boolean): UseRunChatResult {
 
       es.addEventListener('reset', () => {
         if (cancelled) return
+        liveness.seen()
         closeStream()
         void loadNewest()
       })
@@ -143,6 +157,7 @@ export function useRunChat(runId: string, enabled: boolean): UseRunChatResult {
     return () => {
       cancelled = true
       controller.abort()
+      liveness.stop()
       newGeneration()
       clearTimeout(retryTimer)
       closeStream()

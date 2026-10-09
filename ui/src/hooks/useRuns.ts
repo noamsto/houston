@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { Run } from '../api/runs'
+import { watchLiveness } from './streamLiveness'
 
 /**
  * applyEvent folds one streamed Run into the map, returning a new map.
@@ -21,7 +22,8 @@ export function applyEvent(runs: Map<string, Run>, r: Run): Map<string, Run> {
  * Subscribes to /api/runs/stream. The server sends one `snapshot` event on
  * connect and one `update` per composed change; it also re-sends a full
  * `snapshot` when it detects this subscriber missed an update, so a snapshot
- * arriving mid-stream is a resync and replaces the map wholesale.
+ * arriving mid-stream is a resync and replaces the map wholesale. A stream
+ * that goes silent or was hidden for a while is reopened (see streamLiveness).
  */
 export function useRuns() {
   const [runs, setRuns] = useState<Map<string, Run>>(new Map())
@@ -29,33 +31,56 @@ export function useRuns() {
   const [hasSnapshot, setHasSnapshot] = useState(false)
 
   useEffect(() => {
-    const es = new EventSource('/api/runs/stream')
+    let es: EventSource | null = null
 
-    es.addEventListener('open', () => setConnected(true))
+    const liveness = watchLiveness(() => {
+      es?.close()
+      setConnected(false)
+      open()
+    })
 
-    es.addEventListener('snapshot', (ev: MessageEvent<string>) => {
-      try {
-        const arr = JSON.parse(ev.data) as Run[]
-        setRuns(new Map(arr.map((r) => [r.id, r])))
+    function open() {
+      const source = new EventSource('/api/runs/stream')
+      es = source
+
+      source.addEventListener('open', () => {
+        liveness.seen()
         setConnected(true)
-        setHasSnapshot(true)
-      } catch (e) {
-        console.error('runs snapshot parse failed', e)
-      }
-    })
+      })
 
-    es.addEventListener('update', (ev: MessageEvent<string>) => {
-      try {
-        const r = JSON.parse(ev.data) as Run
-        setRuns((prev) => applyEvent(prev, r))
-      } catch (e) {
-        console.error('runs update parse failed', e)
-      }
-    })
+      source.addEventListener('ping', () => liveness.seen())
 
-    es.onerror = () => setConnected(false) // EventSource retries on its own
+      source.addEventListener('snapshot', (ev: MessageEvent<string>) => {
+        liveness.seen()
+        try {
+          const arr = JSON.parse(ev.data) as Run[]
+          setRuns(new Map(arr.map((r) => [r.id, r])))
+          setConnected(true)
+          setHasSnapshot(true)
+        } catch (e) {
+          console.error('runs snapshot parse failed', e)
+        }
+      })
 
-    return () => es.close()
+      source.addEventListener('update', (ev: MessageEvent<string>) => {
+        liveness.seen()
+        try {
+          const r = JSON.parse(ev.data) as Run
+          setRuns((prev) => applyEvent(prev, r))
+        } catch (e) {
+          console.error('runs update parse failed', e)
+        }
+      })
+
+      source.onerror = () => setConnected(false) // EventSource retries on its own
+    }
+
+    open()
+
+    return () => {
+      liveness.stop()
+      es?.close()
+    }
   }, [])
 
   return { runs: Array.from(runs.values()), connected, hasSnapshot }

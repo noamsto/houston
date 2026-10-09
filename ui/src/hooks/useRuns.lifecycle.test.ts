@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, renderHook } from '@testing-library/react'
 import { useRuns } from './useRuns'
 import { installFakeEventSource } from '../testing/fakeEventSource'
@@ -131,5 +131,76 @@ describe('useRuns lifecycle', () => {
       instance.emit('update', r1)
     })
     expect(result.current.runs).toEqual([r1])
+  })
+
+  describe('liveness', () => {
+    function setVisibility(state: DocumentVisibilityState) {
+      Object.defineProperty(document, 'visibilityState', { value: state, configurable: true })
+      document.dispatchEvent(new Event('visibilitychange'))
+    }
+
+    beforeEach(() => {
+      vi.useFakeTimers()
+    })
+
+    afterEach(() => {
+      setVisibility('visible')
+      vi.useRealTimers()
+    })
+
+    it('stays on one EventSource while pings keep arriving', () => {
+      renderHook(useRunsProbe)
+      act(() => { fake.instances[0].open() })
+
+      for (let t = 25; t <= 70; t += 25) {
+        act(() => { vi.advanceTimersByTime(25_000) })
+        act(() => { fake.instances[0].emit('ping', null) })
+      }
+      act(() => { vi.advanceTimersByTime(20_000) })
+
+      expect(fake.instances.length).toBe(1)
+      expect(fake.instances[0].closed).toBe(false)
+    })
+
+    it('replaces a silent EventSource after 60 s without any event', () => {
+      const { result } = renderHook(useRunsProbe)
+      const first = fake.instances[0]
+      act(() => { first.open() })
+      expect(result.current.connected).toBe(true)
+
+      act(() => { vi.advanceTimersByTime(65_000) })
+
+      expect(first.closed).toBe(true)
+      expect(fake.instances.length).toBe(2)
+      expect(fake.instances[1].url).toBe('/api/runs/stream')
+      expect(fake.instances[1].closed).toBe(false)
+      expect(result.current.connected).toBe(false)
+    })
+
+    it('reopens after the page was hidden 15 s, and the new snapshot replaces the map', () => {
+      const { result } = renderHook(useRunsProbe)
+      const first = fake.instances[0]
+      act(() => { first.emit('snapshot', [run('old')]) })
+
+      act(() => { setVisibility('hidden') })
+      act(() => { vi.advanceTimersByTime(15_000) })
+      act(() => { setVisibility('visible') })
+
+      expect(first.closed).toBe(true)
+      expect(fake.instances.length).toBe(2)
+      act(() => { fake.instances[1].emit('snapshot', [run('new')]) })
+      expect(result.current.runs.map((r) => r.id)).toEqual(['new'])
+    })
+
+    it('stops watching and closes the current source on unmount', () => {
+      const { unmount } = renderHook(useRunsProbe)
+      act(() => { vi.advanceTimersByTime(65_000) })
+      expect(fake.instances.length).toBe(2)
+
+      unmount()
+      expect(fake.instances[1].closed).toBe(true)
+      act(() => { vi.advanceTimersByTime(300_000) })
+      expect(fake.instances.length).toBe(2)
+    })
   })
 })
