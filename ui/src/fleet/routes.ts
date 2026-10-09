@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import type { Mode } from '../api/mode'
 
 export type DetailTab = 'chat' | 'terminal'
 
@@ -97,25 +98,43 @@ export function tabHash(tab: ShellTab): string {
   return `#/${tab}`
 }
 
+export function tabsFor(mode: Mode | null): ShellTab[] {
+  return mode === 'dispatcher' ? ['fleet', 'crews', 'workspace', 'dispatch'] : ['fleet', 'workspace']
+}
+
 /** A detail or other non-tab hash leaves the tab as it was, so the tab under
  *  a run-detail overlay is the one Back returns to. `closeDetail` is for the
  *  mobile overlay, which a tab tap must dismiss; the desktop detail is a
- *  persistent pane, so with a run selected a tab switch is state-only. */
-export function useShellTab(): [ShellTab, (tab: ShellTab, closeDetail?: boolean) => void] {
+ *  persistent pane, so with a run selected a tab switch is state-only.
+ *  A tab the mode lacks reads as Fleet and its hash is rewritten in place;
+ *  while the mode is unknown the hash is left alone, so a reload on #/crews
+ *  still lands there once the mode arrives. */
+export function useShellTab(mode: Mode | null): [ShellTab, (tab: ShellTab, closeDetail?: boolean) => void] {
   const [tab, setTab] = useState<ShellTab>(() => parseTabRoute(window.location.hash) ?? 'fleet')
   useEffect(() => {
+    const redirectToFleet = () => window.history.replaceState(window.history.state, '', tabHash('fleet'))
     const onHash = () => {
       const next = parseTabRoute(window.location.hash)
-      if (next) setTab(next)
+      if (next && mode !== null && !tabsFor(mode).includes(next)) {
+        redirectToFleet()
+        setTab('fleet')
+      } else if (next) {
+        setTab(next)
+      }
+    }
+    if (mode !== null) {
+      const current = parseTabRoute(window.location.hash)
+      if (current && !tabsFor(mode).includes(current)) redirectToFleet()
     }
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
-  }, [])
+  }, [mode])
   const goTab = useCallback((next: ShellTab, closeDetail = false) => {
     setTab(next)
     if (closeDetail || parseDetailRoute(window.location.hash) === null) {
       window.location.hash = tabHash(next)
     }
   }, [])
-  return [tab, goTab]
+  const shown = mode !== null && !tabsFor(mode).includes(tab) ? 'fleet' : tab
+  return [shown, goTab]
 }

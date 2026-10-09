@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/noamsto/houston/mode"
 	"github.com/noamsto/houston/tmux"
 )
 
@@ -20,18 +21,20 @@ type lister interface {
 
 // TmuxSource reads the enrichment lazytmux already computes and parks in tmux
 // user-options: branch, worktree, linked issue, PR state and crew membership.
-// Houston never recomputes any of it.
+// Houston never recomputes any of it. In tmux mode the crew membership is
+// dropped: the windows' @crew_name/@crew_color are ignored.
 type TmuxSource struct {
 	client   lister
 	every    time.Duration
 	projects *projectResolver
+	crew     bool
 }
 
-func NewTmuxSource(c lister, every time.Duration) *TmuxSource {
+func NewTmuxSource(c lister, every time.Duration, m mode.Mode) *TmuxSource {
 	if every <= 0 {
 		every = 2 * time.Second
 	}
-	return &TmuxSource{client: c, every: every, projects: newProjectResolver()}
+	return &TmuxSource{client: c, every: every, projects: newProjectResolver(), crew: m != mode.Tmux}
 }
 
 func (s *TmuxSource) Name() string { return "tmux" }
@@ -54,6 +57,9 @@ func (s *TmuxSource) Run(ctx context.Context, out chan<- Delta) error {
 		// A transient tmux error is not evidence that every pane vanished:
 		// skip the tick entirely rather than emitting Gone for everything seen.
 		if winErr == nil && paneErr == nil {
+			if !s.crew {
+				wins = tmux.WithoutCrew(wins)
+			}
 			now := map[string]bool{}
 			for _, d := range deltasFromTmux(wins, panes, s.projects.project) {
 				now[d.Key] = true

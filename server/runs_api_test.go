@@ -14,6 +14,7 @@ import (
 
 	"github.com/noamsto/houston/hook"
 	"github.com/noamsto/houston/hub"
+	"github.com/noamsto/houston/mode"
 	"github.com/noamsto/houston/runs"
 )
 
@@ -189,7 +190,7 @@ func TestRunsStreamDeliversARemoval(t *testing.T) {
 func TestRunsRoutesAreBehindTheAuthGate(t *testing.T) {
 	// A new route registered outside apiMux would reopen the hole closed in #4.
 	dir := t.TempDir()
-	s := newFullServer(t, Config{StatusDir: dir, AuthEnabled: true})
+	s := newFullServer(t, Config{StatusDir: dir, AuthEnabled: true, Mode: mode.Dispatcher})
 
 	req := httptest.NewRequest("GET", "http://127.0.0.1/api/runs", nil)
 	req.Host = "127.0.0.1"

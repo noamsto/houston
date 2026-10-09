@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+
+	"github.com/noamsto/houston/mode"
+	"github.com/noamsto/houston/tmux"
 )
 
 // handleWorkspace returns the full tmux tree across every reachable session,
@@ -23,6 +26,9 @@ func (s *Server) handleWorkspace(w http.ResponseWriter, _ *http.Request) {
 		slog.Error("workspace: list window options failed", "error", err)
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
+	}
+	if s.mode == mode.Tmux {
+		wins = tmux.WithoutCrew(wins)
 	}
 	panes, err := s.wsTmux.ListPaneOptions()
 	if err != nil {

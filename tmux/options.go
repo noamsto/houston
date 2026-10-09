@@ -80,6 +80,20 @@ func (p PaneOptions) IsRolePane() bool {
 	return p.CrewRole != "" && p.CrewRole != CrewRoleLead
 }
 
+// WithoutCrew returns a copy of wins with the crew fields cleared: tmux mode
+// ignores crew enrichment.
+func WithoutCrew(wins []WindowOptions) []WindowOptions {
+	if wins == nil {
+		return nil
+	}
+	out := make([]WindowOptions, len(wins))
+	for i, w := range wins {
+		w.CrewName, w.CrewColor = "", ""
+		out[i] = w
+	}
+	return out
+}
+
 func (c *Client) ListWindowOptions() ([]WindowOptions, error) {
 	out, err := c.output("list-windows", "-a", "-F", windowOptionsFormat)
 	if err != nil {

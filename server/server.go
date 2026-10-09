@@ -23,6 +23,7 @@ import (
 	"github.com/noamsto/houston/agents/claude"
 	"github.com/noamsto/houston/agents/generic"
 	"github.com/noamsto/houston/hub"
+	"github.com/noamsto/houston/mode"
 	"github.com/noamsto/houston/opencode"
 	"github.com/noamsto/houston/parser"
 	"github.com/noamsto/houston/runs"
@@ -67,6 +68,7 @@ func getAgentState(agent agents.Agent, panePath, terminalOutput string) parser.R
 }
 
 type Server struct {
+	mode       mode.Mode
 	tmux       *tmux.Client
 	controlMgr *tmux.ControlManager
 	registry   *agents.Registry
@@ -197,9 +199,17 @@ type Config struct {
 
 	// RepoRoots confine which directories the repo registry accepts.
 	RepoRoots []string
+
+	// Mode is Dispatcher or Tmux, resolved by the caller; New rejects
+	// anything else.
+	Mode mode.Mode
 }
 
 func New(cfg Config) (*Server, error) {
+	if cfg.Mode != mode.Dispatcher && cfg.Mode != mode.Tmux {
+		return nil, fmt.Errorf("server: mode must be resolved, got %q", cfg.Mode)
+	}
+
 	registry := agents.NewRegistry(
 		claude.New(),
 		amp.New(),
@@ -216,6 +226,7 @@ func New(cfg Config) (*Server, error) {
 		slog.Warn("dispatcher launch unavailable: cannot resolve houston's executable", "error", err)
 	}
 	s := &Server{
+		mode:           cfg.Mode,
 		cancel:         cancel,
 		pumpDone:       make(chan struct{}),
 		tmux:           tmuxClient,
@@ -259,7 +270,7 @@ func New(cfg Config) (*Server, error) {
 		}
 	}()
 
-	reg := runs.NewRegistry(runs.DefaultOrder)
+	reg := runs.NewRegistry(runs.Order(cfg.Mode))
 	s.runs = reg
 
 	deltas := make(chan runs.Delta, 256)
@@ -271,12 +282,7 @@ func New(cfg Config) (*Server, error) {
 		}
 	}()
 
-	for _, src := range []runs.Source{
-		runs.NewHookSource(s.hub, tmuxClient),
-		runs.NewTmuxSource(tmuxClient, 2*time.Second),
-		runs.NewCrewSource(tmuxClient, s.hub, 3*time.Second),
-		runs.NewConnectionSource(s.controlMgr, tmuxClient, 2*time.Second),
-	} {
+	for _, src := range runSources(cfg.Mode, s.hub, tmuxClient, s.controlMgr) {
 		s.sourcesWG.Add(1)
 		go func(src runs.Source) {
 			defer s.sourcesWG.Done()
@@ -332,6 +338,19 @@ func New(cfg Config) (*Server, error) {
 	return s, nil
 }
 
+// runSources lists the run sources for m in the registry's layer order; tmux
+// mode has no crew bus.
+func runSources(m mode.Mode, h *hub.Hub, c *tmux.Client, cm *tmux.ControlManager) []runs.Source {
+	srcs := []runs.Source{
+		runs.NewHookSource(h, c),
+		runs.NewTmuxSource(c, 2*time.Second, m),
+	}
+	if m != mode.Tmux {
+		srcs = append(srcs, runs.NewCrewSource(c, h, 3*time.Second))
+	}
+	return append(srcs, runs.NewConnectionSource(cm, c, 2*time.Second))
+}
+
 // Close stops every background goroutine New started and waits for them, so
 // nothing is still writing under StatusDir once it returns. Safe to call more
 // than once.
@@ -384,20 +403,25 @@ func (s *Server) Handler() http.Handler {
 	apiMux.HandleFunc("/api/opencode/session/", s.handleAPIOpenCodeSession)
 	apiMux.HandleFunc("/api/runs", s.handleRunsSnapshot)
 	apiMux.HandleFunc("/api/runs/stream", s.handleRunsStream)
-	apiMux.HandleFunc("POST /api/runs/{id}/reply", s.handleRunReply)
 	apiMux.HandleFunc("GET /api/runs/{id}/terminal", s.handleRunTerminal)
 	apiMux.HandleFunc("POST /api/runs/{id}/input", s.handleRunInput)
 	apiMux.HandleFunc("GET /api/runs/{id}/chat", s.handleRunChat)
 	apiMux.HandleFunc("GET /api/runs/{id}/chat/stream", s.handleRunChatStream)
 	apiMux.HandleFunc("GET /api/runs/{id}/chat/tool/{callId}", s.handleRunChatTool)
 	apiMux.HandleFunc("GET /api/workspace", s.handleWorkspace)
-	apiMux.HandleFunc("POST /api/dispatch", s.handleDispatch)
-	apiMux.HandleFunc("GET /api/dispatch/options", s.handleDispatchOptions)
-	apiMux.HandleFunc("POST /api/dispatch/dispatcher", s.handleDispatcherLaunch)
-	apiMux.HandleFunc("GET /api/repos", s.handleReposList)
-	apiMux.HandleFunc("POST /api/repos", s.handleReposAdd)
-	apiMux.HandleFunc("DELETE /api/repos", s.handleReposRemove)
-	apiMux.HandleFunc("GET /api/repos/candidates", s.handleRepoCandidates)
+	apiMux.HandleFunc("GET /api/mode", s.handleMode)
+	// Tmux mode leaves the command-executing routes (crew reply, dispatch,
+	// launch, repo registry) unregistered, so they 404.
+	if s.mode != mode.Tmux {
+		apiMux.HandleFunc("POST /api/runs/{id}/reply", s.handleRunReply)
+		apiMux.HandleFunc("POST /api/dispatch", s.handleDispatch)
+		apiMux.HandleFunc("GET /api/dispatch/options", s.handleDispatchOptions)
+		apiMux.HandleFunc("POST /api/dispatch/dispatcher", s.handleDispatcherLaunch)
+		apiMux.HandleFunc("GET /api/repos", s.handleReposList)
+		apiMux.HandleFunc("POST /api/repos", s.handleReposAdd)
+		apiMux.HandleFunc("DELETE /api/repos", s.handleReposRemove)
+		apiMux.HandleFunc("GET /api/repos/candidates", s.handleRepoCandidates)
+	}
 	mux.Handle("/api/", s.auth.middleware(apiMux))
 
 	// The host gate wraps everything, including "/", so a rebound domain is

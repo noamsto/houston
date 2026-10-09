@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/noamsto/houston/mode"
 	"github.com/noamsto/houston/runs"
 	"github.com/noamsto/houston/tmux"
 )
@@ -129,6 +130,53 @@ func TestHandleWorkspaceJoinsRunAndBuckets(t *testing.T) {
 	}
 }
 
+func TestHandleWorkspaceCrewCodenameByMode(t *testing.T) {
+	for _, tc := range []struct {
+		mode mode.Mode
+		want string
+	}{
+		{"", "moss"},
+		{mode.Dispatcher, "moss"},
+		{mode.Tmux, ""},
+	} {
+		t.Run(string(tc.mode), func(t *testing.T) {
+			s := &Server{
+				mode: tc.mode,
+				runs: runs.NewRegistry(runs.DefaultOrder),
+				wsTmux: &fakeWorkspaceLister{
+					wins: []tmux.WindowOptions{
+						{Session: "houston", Window: 0, Name: "win0", Active: true, GitRoot: "/repo/main", CrewName: "moss"},
+					},
+					panes: []tmux.PaneOptions{
+						{PaneID: "%1", Target: "houston:0", Command: "node", Index: 0, Active: true},
+					},
+				},
+				wsRepos: &fakeRepoClassifier{
+					main:     map[string]bool{"/repo/main": true},
+					projects: map[string]string{"/repo/main": "houston"},
+				},
+			}
+
+			rec := httptest.NewRecorder()
+			s.handleWorkspace(rec, httptest.NewRequest("GET", "/api/workspace", nil))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status %d, want 200 — body %s", rec.Code, rec.Body.String())
+			}
+
+			var got Workspace
+			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+				t.Fatalf("decode: %v — body %s", err, rec.Body.String())
+			}
+			if len(got.Projects) != 1 || len(got.Projects[0].MainCheckout) != 1 {
+				t.Fatalf("got %+v, want one main-checkout window", got)
+			}
+			if c := got.Projects[0].MainCheckout[0].CrewCodename; c != tc.want {
+				t.Fatalf("crew_codename %q, want %q", c, tc.want)
+			}
+		})
+	}
+}
+
 func TestHandleWorkspaceTmuxErrorIs502(t *testing.T) {
 	reg := runs.NewRegistry(runs.DefaultOrder)
 	s := &Server{
@@ -148,7 +196,7 @@ func TestHandleWorkspaceTmuxErrorIs502(t *testing.T) {
 func TestWorkspaceRouteIsBehindTheAuthGate(t *testing.T) {
 	// A new route registered outside apiMux would reopen the hole closed in #4.
 	dir := t.TempDir()
-	s := newFullServer(t, Config{StatusDir: dir, AuthEnabled: true})
+	s := newFullServer(t, Config{StatusDir: dir, AuthEnabled: true, Mode: mode.Dispatcher})
 
 	req := httptest.NewRequest("GET", "http://127.0.0.1/api/workspace", nil)
 	req.Host = "127.0.0.1"

@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 
 	"github.com/noamsto/houston/chat"
+	"github.com/noamsto/houston/mode"
 )
 
 // Delta is one source's view of one run. A source publishes only the fields it
@@ -30,6 +31,14 @@ type Source interface {
 // synchronously with the event they describe; tmux options lose because they
 // are a periodic scrape.
 var DefaultOrder = []string{"tmux", "crew", "hooks"}
+
+// Order is the precedence for a mode; tmux mode has no crew layer.
+func Order(m mode.Mode) []string {
+	if m == mode.Tmux {
+		return []string{"tmux", "hooks"}
+	}
+	return DefaultOrder
+}
 
 // sub is one subscriber's channel plus whether an update was dropped since the
 // last check. dropped is atomic because the hot fan-out path in Apply only

@@ -1,5 +1,6 @@
 import { useRuns } from '../hooks/useRuns'
 import { useIsDesktop } from '../hooks/useMediaQuery'
+import { useMode } from '../hooks/useMode'
 import { useNow } from './useNow'
 import { ConsoleShell } from './ConsoleShell'
 import { MobileShell } from './MobileShell'
@@ -12,6 +13,7 @@ export function Shell() {
   const { runs, connected, hasSnapshot } = useRuns()
   const now = useNow()
   const isDesktop = useIsDesktop()
+  const mode = useMode()
   const Layout = isDesktop ? ConsoleShell : MobileShell
-  return <Layout runs={runs} connected={connected} hasSnapshot={hasSnapshot} now={now} />
+  return <Layout runs={runs} connected={connected} hasSnapshot={hasSnapshot} now={now} mode={mode} />
 }

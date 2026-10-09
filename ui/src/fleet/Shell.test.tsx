@@ -9,6 +9,7 @@ const now = 1_800_000_000_000 // fixed ms
 vi.mock('./useWorkspace', () => ({
   useWorkspace: () => ({ workspace: null, error: null, loading: false }),
 }))
+vi.mock('../hooks/useMode', () => ({ useMode: () => 'dispatcher' }))
 // DispatchView is kept mounted like Crews/Workspace in both shells, so it
 // fetches on mount — never a real fetch in tests.
 vi.mock('../api/dispatch', () => ({

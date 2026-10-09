@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/noamsto/houston/hook"
+	"github.com/noamsto/houston/mode"
 	"github.com/noamsto/houston/server"
 	"github.com/noamsto/houston/terminal"
 )
@@ -190,6 +191,7 @@ func runServer() {
 	noOpenCode := flag.Bool("no-opencode", false, "Disable OpenCode integration")
 
 	noAuth := flag.Bool("no-auth", false, "disable API authentication (NOT recommended)")
+	modeFlag := flag.String("mode", "auto", "auto|dispatcher|tmux: dispatcher mode needs dispatch and crew on PATH; auto picks")
 
 	var hostnames stringList
 	flag.Var(&hostnames, "hostname", "additional Host value to accept (repeatable; for reverse proxies or custom DNS)")
@@ -207,6 +209,13 @@ func runServer() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: logLevel,
 	})))
+
+	requested, err := mode.Parse(*modeFlag)
+	if err != nil {
+		log.Fatalf("invalid -mode: %v", err)
+	}
+	m, why := mode.Resolve(context.Background(), requested, server.ModeProbe())
+	slog.Info("houston mode", "mode", m, "requested", requested, "reason", why)
 
 	if *statusDir == "" {
 		*statusDir = resolveStateDir()
@@ -251,6 +260,7 @@ func runServer() {
 		AllowedOrigins:  allowedOrigins,
 		AllowedHosts:    hostnames,
 		RepoRoots:       repoRoots,
+		Mode:            m,
 	})
 	if err != nil {
 		log.Fatalf("failed to create server: %v", err)
