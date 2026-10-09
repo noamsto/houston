@@ -78,16 +78,7 @@ func (f *chatFixture) poke() {
 
 func (f *chatFixture) appendAndPoke(lines string) {
 	f.t.Helper()
-	fh, err := os.OpenFile(f.transcript, os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		f.t.Fatalf("open transcript: %v", err)
-	}
-	if _, err := fh.WriteString(lines); err != nil {
-		f.t.Fatalf("append transcript: %v", err)
-	}
-	if err := fh.Close(); err != nil {
-		f.t.Fatalf("close transcript: %v", err)
-	}
+	appendLines(f.t, f.transcript, lines)
 	f.poke()
 }
 
@@ -555,7 +546,7 @@ func TestChatHeadChangeNotifiesWithoutUpdates(t *testing.T) {
 	if err := os.WriteFile(f.transcript, []byte(`{"type":"summary"}`+"\n"), 0o644); err != nil {
 		t.Fatalf("write first line: %v", err)
 	}
-	f.h.refreshChat("chat-h1")
+	f.h.refreshChat("chat-h1", false)
 
 	if known := f.epoch(); known == empty {
 		t.Fatalf("epoch %s unchanged once the first line became known", known)
@@ -690,5 +681,170 @@ func TestChatPiSession(t *testing.T) {
 	}
 	if u.Status != chat.StatusCompleted || u.Meta["tool"] != "read" {
 		t.Errorf("ChatTool = %+v", u)
+	}
+}
+
+// chatState returns the session's chat state, nil when none was created.
+func (f *chatFixture) chatState() *chatState {
+	f.h.mu.RLock()
+	defer f.h.mu.RUnlock()
+	if sess := f.h.sessions[f.state.SessionID]; sess != nil {
+		return sess.chat
+	}
+	return nil
+}
+
+// Loading a session and ticking must not build its chat ring: only a chat
+// caller pays for the transcript's chat read.
+func TestChatRingNotBuiltByLoadOrTick(t *testing.T) {
+	f := newChatFixture(t, "chat-lazy-a", "", humans(1, 3))
+	f.h.refreshAllTranscripts()
+	if c := f.chatState(); c != nil {
+		t.Fatalf("chat state built by load/tick: %d updates in the ring", len(c.ring))
+	}
+}
+
+// lazyFixture is a loaded, ticked session whose chat ring nobody opened yet.
+func lazyFixture(t *testing.T, sid, body string) *chatFixture {
+	t.Helper()
+	f := newChatFixture(t, sid, "", body)
+	f.h.refreshAllTranscripts()
+	if c := f.chatState(); c != nil {
+		t.Fatalf("%s: chat state built before any chat call", sid)
+	}
+	return f
+}
+
+// eagerEpoch is the epoch an eagerly built ring would carry: generation 0.
+func (f *chatFixture) eagerEpoch() string {
+	return chatEpoch(f.state.SessionID, f.transcript, firstLineHash(f.transcript), 0)
+}
+
+// A lazily built ring is the eager one: same seqs (ordinals from byte 0),
+// same updates, same epoch.
+func TestChatPageBuildsTheRingLazily(t *testing.T) {
+	const n = 120
+	f := lazyFixture(t, "chat-lazy-b", humans(1, n))
+
+	p, err := f.h.ChatPage("chat-lazy-b", 0, 50)
+	if err != nil {
+		t.Fatalf("ChatPage: %v", err)
+	}
+	wantSeqs(t, "first page", p.Updates, n-49, n)
+	if p.Epoch != f.eagerEpoch() {
+		t.Errorf("epoch = %s, want %s", p.Epoch, f.eagerEpoch())
+	}
+	all, _, _, err := chat.For("claude").Read(f.transcript, chat.Cursor{})
+	if err != nil {
+		t.Fatalf("read transcript: %v", err)
+	}
+	for _, u := range p.Updates {
+		want := all[u.Seq-1]
+		want.Seq = u.Seq
+		if got, wantJSON := mustJSON(t, u), mustJSON(t, want); got != wantJSON {
+			t.Errorf("seq %d = %s, want %s", u.Seq, got, wantJSON)
+		}
+	}
+}
+
+func mustJSON(t *testing.T, v any) string {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	return string(b)
+}
+
+func TestChatEntriesPrimeAsTheFirstCall(t *testing.T) {
+	t.Run("ChatEpoch", func(t *testing.T) {
+		f := lazyFixture(t, "chat-lazy-epoch", humans(1, 3))
+		e, err := f.h.ChatEpoch("chat-lazy-epoch")
+		if err != nil || e != f.eagerEpoch() {
+			t.Fatalf("ChatEpoch = %s, %v; want %s", e, err, f.eagerEpoch())
+		}
+		ups, ok, err := f.h.ChatSince("chat-lazy-epoch", e, 0)
+		if err != nil || !ok {
+			t.Fatalf("ChatSince = ok %v err %v", ok, err)
+		}
+		wantSeqs(t, "since 0", ups, 1, 3)
+	})
+	t.Run("ChatSince", func(t *testing.T) {
+		f := lazyFixture(t, "chat-lazy-since", humans(1, 3))
+		ups, ok, err := f.h.ChatSince("chat-lazy-since", f.eagerEpoch(), 0)
+		if err != nil || !ok {
+			t.Fatalf("ChatSince = ok %v err %v", ok, err)
+		}
+		wantSeqs(t, "since 0", ups, 1, 3)
+	})
+	t.Run("ChatSubscribe", func(t *testing.T) {
+		f := lazyFixture(t, "chat-lazy-sub", humans(1, 3))
+		ch, unsub, err := f.h.ChatSubscribe("chat-lazy-sub")
+		if err != nil {
+			t.Fatalf("ChatSubscribe: %v", err)
+		}
+		defer unsub()
+		wantSeqs(t, "ring after subscribe", f.ring(), 1, 3)
+
+		appendLines(t, f.transcript, humans(4, 4))
+		f.h.refreshTranscript("chat-lazy-sub")
+		select {
+		case <-ch:
+		default:
+			t.Fatal("subscriber not notified by the tick after priming")
+		}
+		wantSeqs(t, "ring after tick", f.ring(), 1, 4)
+	})
+}
+
+// The tick keeps a primed ring current.
+func TestChatTickGrowsAPrimedRing(t *testing.T) {
+	f := lazyFixture(t, "chat-lazy-d", humans(1, 3))
+	epoch, err := f.h.ChatEpoch("chat-lazy-d")
+	if err != nil {
+		t.Fatalf("ChatEpoch: %v", err)
+	}
+	appendLines(t, f.transcript, humans(4, 5))
+	f.h.refreshTranscript("chat-lazy-d")
+
+	ups, ok, err := f.h.ChatSince("chat-lazy-d", epoch, 3)
+	if err != nil || !ok {
+		t.Fatalf("ChatSince = ok %v err %v", ok, err)
+	}
+	wantSeqs(t, "since 3", ups, 4, 5)
+}
+
+// A restart keeps the ring primed, so the tick re-reads a moved transcript
+// without waiting for another chat call.
+func TestChatPathChangeKeepsTheRingPrimed(t *testing.T) {
+	f := lazyFixture(t, "chat-lazy-e", humans(1, 3))
+	if _, err := f.h.ChatEpoch("chat-lazy-e"); err != nil {
+		t.Fatalf("ChatEpoch: %v", err)
+	}
+	next := filepath.Join(t.TempDir(), "next.jsonl")
+	if err := os.WriteFile(next, []byte(humans(1, 2)), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+	f.state.TranscriptPath = next
+	f.poke()
+	waitUntil(t, "ring re-read from the new path", func() bool {
+		c := f.chatState()
+		f.h.mu.RLock()
+		defer f.h.mu.RUnlock()
+		return c != nil && c.path == next && c.total == 2
+	})
+}
+
+func appendLines(t *testing.T, path, lines string) {
+	t.Helper()
+	fh, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("open transcript: %v", err)
+	}
+	if _, err := fh.WriteString(lines); err != nil {
+		t.Fatalf("append transcript: %v", err)
+	}
+	if err := fh.Close(); err != nil {
+		t.Fatalf("close transcript: %v", err)
 	}
 }

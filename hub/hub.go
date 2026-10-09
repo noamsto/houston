@@ -456,7 +456,7 @@ func (h *Hub) refreshAllTranscripts() {
 func (h *Hub) refreshTranscript(sessionID string) {
 	// Ahead of the trail read's early return: the trail reader can be caught
 	// up while the chat reader is not.
-	h.refreshChat(sessionID)
+	h.refreshChat(sessionID, false)
 
 	h.mu.Lock()
 	sess, ok := h.sessions[sessionID]
