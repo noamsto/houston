@@ -1350,3 +1350,51 @@ func TestTmuxServerChangeReachesSubscribers(t *testing.T) {
 		t.Fatalf("%d broadcasts, want 2 — a tmux restart that reuses the pane id must publish the new draft key", n)
 	}
 }
+
+func TestSignatureCoversTelemetryTrailAndTurn(t *testing.T) {
+	base := func() Run {
+		return Run{
+			Agent:    "claude",
+			State:    StateRunning,
+			Tokens:   Tokens{Input: 10, Output: 5},
+			Activity: Activity{Turn: 1, Trail: []TrailChip{{Tool: "Edit", Hint: "a.go"}, {Tool: "Bash", Hint: "ls"}}},
+		}
+	}
+	tests := []struct {
+		name   string
+		mutate func(*Run)
+		want   int
+	}{
+		{"tokens input", func(r *Run) { r.Tokens.Input++ }, 2},
+		{"trail chip done", func(r *Run) { r.Activity.Trail[1].Done = true }, 2},
+		{"trail chip error", func(r *Run) { r.Activity.Trail[1].Done, r.Activity.Trail[1].IsError = true, true }, 2},
+		{"turn", func(r *Run) { r.Activity.Turn++ }, 2},
+		{"identical", func(*Run) {}, 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := NewRegistry(DefaultOrder)
+			sub := r.Subscribe()
+			defer r.Unsubscribe(sub)
+
+			r.Apply(Delta{Source: "hooks", Key: "%1", Run: base()})
+			next := base()
+			tt.mutate(&next)
+			r.Apply(Delta{Source: "hooks", Key: "%1", Run: next})
+
+			if n := len(sub); n != tt.want {
+				t.Fatalf("%d broadcasts, want %d", n, tt.want)
+			}
+		})
+	}
+}
+
+func TestRunJSONHasNoPreview(t *testing.T) {
+	b, err := json.Marshal(Run{Activity: Activity{Tool: "Bash", Trail: []TrailChip{{Tool: "Bash"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "preview") {
+		t.Fatalf("run JSON carries a preview field: %s", b)
+	}
+}

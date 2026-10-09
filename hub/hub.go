@@ -16,7 +16,7 @@ import (
 	"github.com/noamsto/houston/hook"
 )
 
-// TrailChip is a single tool-call breadcrumb rendered above a card preview.
+// TrailChip is a single tool-call breadcrumb rendered on a card.
 type TrailChip struct {
 	Tool    string `json:"tool"`
 	Hint    string `json:"hint"`
@@ -41,7 +41,6 @@ type SessionView struct {
 	Since          int64       `json:"since,omitempty"`
 	UpdatedAt      int64       `json:"updated_at"`
 	Trail          []TrailChip `json:"trail,omitempty"`
-	Preview        string      `json:"preview,omitempty"`
 	Asks           string      `json:"asks,omitempty"` // the question the turn ended on; reset by later tool/user activity
 	InputTokens    int         `json:"input_tokens"`
 	OutputTokens   int         `json:"output_tokens"`
@@ -106,11 +105,10 @@ type Session struct {
 	transcriptPath   string
 	transcriptOffset int64
 
-	trail   []TrailChip
-	preview []string
-	asks    string
-	spend   *float64 // running sum of recorded per-message cost
-	maxCtx  int      // highest context seen; a window below it cannot be the real one
+	trail  []TrailChip
+	asks   string
+	spend  *float64 // running sum of recorded per-message cost
+	maxCtx int      // highest context seen; a window below it cannot be the real one
 
 	lastTurn         int    // last turn whose trail was cleared (UserPromptSubmit bumps Turn)
 	lastBroadcastSig string // last broadcast view signature; skip duplicates
@@ -488,7 +486,6 @@ func (h *Hub) refreshTranscript(sessionID string) {
 		applyTranscriptEvent(sess, ev)
 	}
 	sess.view.Trail = append([]TrailChip(nil), sess.trail...)
-	sess.view.Preview = strings.Join(sess.preview, "\n")
 	sess.view.Asks = sess.asks
 	sess.view.Background = sess.bg.list(time.Now())
 	view := sess.view
@@ -539,9 +536,16 @@ func (h *Hub) broadcastIfChanged(sess *Session, v SessionView) {
 	h.broadcast(v)
 }
 
+func flagDigit(b bool) string {
+	if b {
+		return "1"
+	}
+	return "0"
+}
+
 func viewSignature(v SessionView) string {
 	var b strings.Builder
-	b.Grow(128 + len(v.Preview))
+	b.Grow(128 + 24*len(v.Trail))
 	b.WriteString(string(v.State))
 	b.WriteByte('|')
 	b.WriteString(v.Tool)
@@ -552,7 +556,12 @@ func viewSignature(v SessionView) string {
 	b.WriteByte('|')
 	b.WriteString(strconv.Itoa(v.Turn))
 	b.WriteByte('|')
-	b.WriteString(strconv.Itoa(len(v.Trail)))
+	for _, c := range v.Trail {
+		b.WriteString(c.Tool + "\x00" + c.Hint + "\x00")
+		b.WriteString(flagDigit(c.Done))
+		b.WriteString(flagDigit(c.IsError))
+		b.WriteByte(1)
+	}
 	b.WriteByte('|')
 	b.WriteString(strconv.Itoa(v.InputTokens))
 	b.WriteByte('|')
@@ -566,8 +575,6 @@ func viewSignature(v SessionView) string {
 		b.WriteString(strconv.FormatFloat(*v.SpendUSD, 'g', -1, 64))
 	}
 	b.WriteByte('|')
-	b.WriteString(strconv.Itoa(len(v.Preview)))
-	b.WriteByte('|')
 	b.WriteString(v.Agent)
 	b.WriteByte('|')
 	b.WriteString(v.Asks)
@@ -577,7 +584,7 @@ func viewSignature(v SessionView) string {
 }
 
 // mergeStateIntoView copies hook-owned fields into the view without clobbering
-// transcript-owned ones (trail, preview, token counts).
+// transcript-owned ones (trail, token counts).
 func mergeStateIntoView(v *SessionView, s hook.SessionState) {
 	v.SessionID = s.SessionID
 	v.CWD = s.CWD
@@ -609,12 +616,11 @@ func mergeStateIntoView(v *SessionView, s hook.SessionState) {
 // through under its own type name.
 const eventTypePiToolCall = "toolCall"
 
-// applyTranscriptEvent updates trail/preview/telemetry on sess from one event.
+// applyTranscriptEvent updates trail/telemetry on sess from one event.
 // Called under h.mu.
 func applyTranscriptEvent(s *Session, ev TranscriptEvent) {
 	s.bg.apply(ev)
 	const maxTrail = 8
-	const maxPreview = 40
 
 	switch ev.Type {
 	case EventTypeToolUse:
@@ -637,27 +643,14 @@ func applyTranscriptEvent(s *Session, ev TranscriptEvent) {
 				break
 			}
 		}
-		if ev.Text != "" {
-			s.preview = append(s.preview, "→ "+ev.Text)
-		}
 	case EventTypeText:
 		if ev.Role == "assistant" {
 			s.asks = questionTail(ev.Text)
-			if ev.Text != "" {
-				s.preview = append(s.preview, ev.Text)
-			}
 		} else {
 			s.asks = ""
 		}
-	case EventTypeThinking:
-		if ev.Text != "" {
-			s.preview = append(s.preview, "◆ "+ev.Text)
-		}
 	case eventTypePiToolCall:
 		s.asks = ""
-	}
-	if len(s.preview) > maxPreview {
-		s.preview = s.preview[len(s.preview)-maxPreview:]
 	}
 
 	// Roll up token usage (last observed wins; Claude reports running totals).

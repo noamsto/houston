@@ -329,9 +329,15 @@ type signature struct {
 	hasQuestion bool
 	qText, qVia string
 
-	actTool, actHint, actMessage, actTask, actPreview string
+	actTool, actHint, actMessage, actTask string
 
 	session, draftKey string
+
+	tokens Tokens
+	turn   int
+	// trail digests the chips, including Done/IsError, which change without
+	// the chip count changing.
+	trail string
 
 	// background encodes the task list as a string; the struct must stay comparable.
 	background string
@@ -362,7 +368,8 @@ func runSignature(r Run) signature {
 		actHint:       r.Activity.Hint,
 		actMessage:    r.Activity.Message,
 		actTask:       r.Activity.Task,
-		actPreview:    r.Activity.Preview,
+		tokens:        r.Tokens,
+		turn:          r.Activity.Turn,
 		session:       r.Session,
 		draftKey:      r.DraftKey,
 		stale:         r.Stale,
@@ -380,6 +387,14 @@ func runSignature(r Run) signature {
 	if r.SpendUSD != nil {
 		s.spend = *r.SpendUSD
 	}
+	var trail strings.Builder
+	for _, c := range r.Activity.Trail {
+		trail.WriteString(c.Tool + "\x00" + c.Hint + "\x00")
+		trail.WriteString(flagDigit(c.Done))
+		trail.WriteString(flagDigit(c.IsError))
+		trail.WriteByte(1)
+	}
+	s.trail = trail.String()
 	if r.Issue != nil {
 		s.issueID = r.Issue.ID
 	}
@@ -398,6 +413,13 @@ func runSignature(r Run) signature {
 		s.qText, s.qVia = r.Question.Text, r.Question.Via
 	}
 	return s
+}
+
+func flagDigit(b bool) string {
+	if b {
+		return "1"
+	}
+	return "0"
 }
 
 // mergeInto copies every set field of src over dst. A zero field means "this
@@ -547,9 +569,6 @@ func mergeInto(dst *Run, src Run) {
 	}
 	if len(src.Activity.Trail) > 0 {
 		dst.Activity.Trail = append([]TrailChip(nil), src.Activity.Trail...)
-	}
-	if src.Activity.Preview != "" {
-		dst.Activity.Preview = src.Activity.Preview
 	}
 	if src.Activity.Turn != 0 {
 		dst.Activity.Turn = src.Activity.Turn

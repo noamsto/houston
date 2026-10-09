@@ -113,7 +113,7 @@ func TestHubPicksUpNewSessionAfterStart(t *testing.T) {
 	}
 }
 
-func TestHubIngestsTranscriptTrailAndPreview(t *testing.T) {
+func TestHubIngestsTranscriptTrail(t *testing.T) {
 	dir := t.TempDir()
 
 	// Write a transcript containing one tool_use + tool_result.
@@ -484,5 +484,58 @@ func TestHubAsksFollowsTheLastAssistantText(t *testing.T) {
 		if got := h.sessions["s1"].view.Asks; got != s.want {
 			t.Fatalf("after %s: Asks = %q, want %q", s.name, got, s.want)
 		}
+	}
+}
+
+// A tool_result that carries no text changes nothing but the last chip's
+// Done/IsError, and must still reach subscribers.
+func TestHubBroadcastsTrailChipDoneFlip(t *testing.T) {
+	dir := t.TempDir()
+
+	transcript := filepath.Join(t.TempDir(), "t.jsonl")
+	toolUse := `{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu_1","name":"Edit","input":{"file_path":"x.go"}}]}}` + "\n"
+	if err := os.WriteFile(transcript, []byte(toolUse), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+	state := hook.SessionState{
+		SessionID:      "flip-1",
+		TranscriptPath: transcript,
+		State:          hook.StateToolRunning,
+		Tool:           "Edit",
+		UpdatedAt:      time.Now().Unix(),
+	}
+	writeState(t, dir, state)
+
+	h := NewWithOptions(dir, Options{ClaudeProjectsDir: "-"}, silentLog())
+	startHub(t, h)
+	waitForTrail(t, h, "flip-1", 1)
+
+	sub := h.Subscribe()
+	defer h.Unsubscribe(sub)
+
+	// Settle the dedupe signature on the view that already holds the chip, so
+	// the flip below is judged against it.
+	state.Since = 1
+	writeState(t, dir, state)
+	for got := recv(t, sub, 2*time.Second); len(got.Trail) != 1; got = recv(t, sub, 2*time.Second) {
+	}
+	drain(sub, 200*time.Millisecond)
+
+	toolResult := `{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu_1","content":""}]}}` + "\n"
+	f, err := os.OpenFile(transcript, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("open transcript: %v", err)
+	}
+	if _, err := f.WriteString(toolResult); err != nil {
+		t.Fatalf("append transcript: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close transcript: %v", err)
+	}
+	h.refreshTranscript("flip-1")
+
+	got := recv(t, sub, 2*time.Second)
+	if len(got.Trail) != 1 || !got.Trail[0].Done {
+		t.Fatalf("broadcast trail = %+v, want one done chip", got.Trail)
 	}
 }

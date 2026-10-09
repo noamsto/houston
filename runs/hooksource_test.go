@@ -233,7 +233,7 @@ func TestEndRunClearsWhatOnlyALiveRunHas(t *testing.T) {
 		UpdatedAt: 60,
 		Repo:      "houston",
 		Question:  &Question{Text: "Allow?", Via: "pane"},
-		Activity:  Activity{Tool: "Bash", Hint: "ls", Message: "Allow?", Preview: "keep"},
+		Activity:  Activity{Tool: "Bash", Hint: "ls", Message: "Allow?", Turn: 3},
 	})
 	if r.State != StateDone {
 		t.Errorf("State = %q, want done", r.State)
@@ -241,7 +241,7 @@ func TestEndRunClearsWhatOnlyALiveRunHas(t *testing.T) {
 	if r.Question != nil || r.Activity.Tool != "" || r.Activity.Hint != "" || r.Activity.Message != "" {
 		t.Errorf("run still carries live-only fields: %+v", r)
 	}
-	if r.Since != 50 || r.UpdatedAt != 60 || r.Repo != "houston" || r.Activity.Preview != "keep" {
+	if r.Since != 50 || r.UpdatedAt != 60 || r.Repo != "houston" || r.Activity.Turn != 3 {
 		t.Errorf("endRun dropped last-known data: %+v", r)
 	}
 }

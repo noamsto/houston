@@ -381,7 +381,7 @@ func paneForeign(v hub.SessionView, ps paneSet) bool {
 }
 
 // endRun marks r finished while keeping what it last showed (repo, branch,
-// transcript preview), so it ages into history instead of vanishing.
+// transcript trail), so it ages into history instead of vanishing.
 func endRun(r Run) Run {
 	r.State = StateDone
 	r.Question = nil
@@ -415,7 +415,6 @@ func runFromSessionView(v hub.SessionView, project string) (string, Run) {
 			Tool:    v.Tool,
 			Hint:    v.ToolInputHint,
 			Message: v.LastMessage,
-			Preview: v.Preview,
 			Turn:    v.Turn,
 		},
 	}
