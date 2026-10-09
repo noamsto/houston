@@ -54,9 +54,11 @@ while :; do
 	if [ -z "$listed" ] && [ "$(get "http://127.0.0.1:$port/api/runs" | grep -o '"id":"sess-' | wc -l)" -ge "$want" ]; then
 		listed=$t
 	fi
-	if [ -z "$chatted" ] && [ "$(get -o /dev/null -w '%{http_code}' "$chat")" = 200 ]; then
-		chatted="$t (cold $(get -o /dev/null -w '%{time_total}' "$chat")s"
-		chatted+=", warm $(get -o /dev/null -w '%{time_total}' "$chat")s)"
+	if [ -z "$chatted" ]; then
+		read -r code took < <(get -o /dev/null -w '%{http_code} %{time_total}' "$chat") || true
+		if [ "$code" = 200 ]; then
+			chatted="$t (cold ${took}s, warm $(get -o /dev/null -w '%{time_total}' "$chat")s)"
+		fi
 	fi
 	if [ -z "$lastchat" ] && [ "$(get "$last" | grep -c '"seq"')" -gt 0 ]; then
 		lastchat=$t
