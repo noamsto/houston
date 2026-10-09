@@ -39,36 +39,8 @@ var (
 	dispatchPlans   = []string{"required", "provided"}
 
 	// dispatchEngineOrder is the options endpoint's display order — a JSON
-	// object (dispatchModels) has none of its own.
+	// object has none of its own.
 	dispatchEngineOrder = []string{"claude", "codex", "cursor", "pi"}
-
-	// dispatchModels is the union of dispatch's own tier-map rows per engine;
-	// update it when that map changes. Tier↔model fit is left to dispatch.
-	dispatchModels = map[string][]string{
-		"claude": {"opus", "sonnet", "haiku", "fable"},
-		"codex":  {"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"},
-		"cursor": {"kimi-k3-high", "cursor-grok-4.6-high", "cursor-grok-4.6-medium", "cursor-grok-4.6-low", "composer-2.5"},
-		"pi": {
-			"openrouter/deepseek/deepseek-v4-pro",
-			"openrouter/deepseek/deepseek-v4.1-flash",
-			"openrouter/deepseek/deepseek-v4-flash",
-		},
-	}
-
-	// dispatchTierModels is the default model per engine+tier, mirroring
-	// dispatch's own tier-map rows — the form's starting point only; tier↔model
-	// fit is still dispatch's call, not enforced here. Keep in step with
-	// dispatchModels when dispatch's tier map changes.
-	dispatchTierModels = map[string]map[string]string{
-		"claude": {"trivial": "haiku", "standard": "sonnet", "deep": "opus"},
-		"codex":  {"trivial": "gpt-5.6-luna", "standard": "gpt-5.6-terra", "deep": "gpt-5.6-sol"},
-		"cursor": {"trivial": "cursor-grok-4.6-low", "standard": "cursor-grok-4.6-medium", "deep": "kimi-k3-high"},
-		"pi": {
-			"trivial":  "openrouter/deepseek/deepseek-v4-flash",
-			"standard": "openrouter/deepseek/deepseek-v4.1-flash",
-			"deep":     "openrouter/deepseek/deepseek-v4-pro",
-		},
-	}
 )
 
 var (
@@ -135,6 +107,9 @@ type dispatchOptions struct {
 	// narrowed to the ones houston knows and in display order.
 	DispatcherEngines      []string `json:"dispatcher_engines"`
 	DispatcherEnginesError string   `json:"dispatcher_engines_error,omitempty"`
+	// DispatchModelsError is why the models above are houston's built-in
+	// fallback rather than dispatch's own tier map.
+	DispatchModelsError string `json:"dispatch_models_error,omitempty"`
 }
 
 // dispatchResponse covers every documented response shape: an error alone, a
@@ -163,7 +138,7 @@ func (e *dispatchError) Error() string { return e.msg }
 // validateDispatch trims the title, defaults plan, and checks every field
 // against a closed enum or an anchored regex. Repo and crew membership are
 // checked by the handler.
-func validateDispatch(req dispatchRequest) (dispatchRequest, *dispatchError) {
+func validateDispatch(req dispatchRequest, models dispatchModelSet) (dispatchRequest, *dispatchError) {
 	out := req
 	out.Title = strings.TrimSpace(req.Title)
 	if out.Plan == "" {
@@ -179,11 +154,11 @@ func validateDispatch(req dispatchRequest) (dispatchRequest, *dispatchError) {
 	if !slices.Contains(dispatchPlans, out.Plan) {
 		return out, &dispatchError{"plan", http.StatusBadRequest, "plan must be one of " + strings.Join(dispatchPlans, ", ")}
 	}
-	models, ok := dispatchModels[out.Engine]
+	engineModels, ok := models.Engines[out.Engine]
 	if !ok {
-		return out, &dispatchError{"engine", http.StatusBadRequest, "engine must be one of " + strings.Join(dispatchEngineOrder, ", ")}
+		return out, &dispatchError{"engine", http.StatusBadRequest, "engine must be one of " + strings.Join(slices.DeleteFunc(slices.Clone(dispatchEngineOrder), func(e string) bool { _, ok := models.Engines[e]; return !ok }), ", ")}
 	}
-	if !slices.Contains(models, out.Model) {
+	if !slices.Contains(engineModels, out.Model) {
 		return out, &dispatchError{"model", http.StatusBadRequest, "model is not valid for engine " + out.Engine}
 	}
 
@@ -360,9 +335,17 @@ func (s *Server) handleDispatchOptions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	serverPath := s.dispatchServerPath(r.Context(), "dispatch options")
+	models, modelsErr := s.dispatchModelSet(r.Context(), serverPath)
+	modelsErrText := ""
+	if modelsErr != nil {
+		slog.Warn("dispatch options: model lookup failed, using built-in models", "error", modelsErr)
+		modelsErrText = modelsErr.Error()
+	}
+
 	engines := []string{}
 	enginesErr := ""
-	listed, err := s.dispatchEngines(r.Context(), s.dispatchServerPath(r.Context(), "dispatch options"))
+	listed, err := s.dispatchEngines(r.Context(), serverPath)
 	if err != nil {
 		slog.Warn("dispatch options: engine lookup failed", "error", err)
 		enginesErr = err.Error()
@@ -379,12 +362,13 @@ func (s *Server) handleDispatchOptions(w http.ResponseWriter, r *http.Request) {
 		Tiers:                  dispatchTiers,
 		Efforts:                dispatchEfforts,
 		Plans:                  dispatchPlans,
-		Engines:                dispatchModels,
+		Engines:                models.Engines,
 		EngineOrder:            dispatchEngineOrder,
-		TierModels:             dispatchTierModels,
+		TierModels:             models.TierModels,
 		RepoRoots:              s.repoReg.Roots(),
 		DispatcherEngines:      engines,
 		DispatcherEnginesError: enginesErr,
+		DispatchModelsError:    modelsErrText,
 	})
 }
 
@@ -423,7 +407,12 @@ func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	valid, derr := validateDispatch(req)
+	serverPath := s.dispatchServerPath(r.Context(), "dispatch")
+	models, modelsErr := s.dispatchModelSet(r.Context(), serverPath)
+	if modelsErr != nil {
+		slog.Warn("dispatch: model lookup failed, using built-in models", "error", modelsErr)
+	}
+	valid, derr := validateDispatch(req, models)
 	if derr != nil {
 		dlog.field = derr.field
 		dlog.status = derr.code
@@ -503,7 +492,7 @@ func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 	}
 	argv = append(argv, valid.Title)
 
-	res := s.dispatchRunner(ctx, dispatchExec{Dir: repo.Path, Argv: argv, Spec: valid.Spec, ServerPath: s.dispatchServerPath(ctx, "dispatch")})
+	res := s.dispatchRunner(ctx, dispatchExec{Dir: repo.Path, Argv: argv, Spec: valid.Spec, ServerPath: serverPath})
 	dlog.exitCode = res.ExitCode
 
 	switch {

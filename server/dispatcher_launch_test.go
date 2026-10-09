@@ -65,7 +65,7 @@ func TestValidateDispatcherRejections(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			req := validDispatcherRequest()
 			tc.mutate(&req)
-			_, derr := validateDispatcher(req, engines)
+			_, derr := validateDispatcher(req, engines, builtinDispatchModels)
 			if derr == nil {
 				t.Fatal("expected a validation error")
 			}
@@ -81,7 +81,7 @@ func TestValidateDispatcherAccepts(t *testing.T) {
 	req.Model, req.Effort = "", ""
 	req.Tasks = []string{"line one\nline two", "", "  \n ", "ship 👨\u200d👩\u200d👧 \u200fשלום", "@notes.md", "/review"}
 
-	got, derr := validateDispatcher(req, []string{"claude"})
+	got, derr := validateDispatcher(req, []string{"claude"}, builtinDispatchModels)
 	if derr != nil {
 		t.Fatalf("unexpected error: %v", derr)
 	}

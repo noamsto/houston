@@ -104,6 +104,7 @@ func newDispatchServer(t *testing.T, runner dispatchRunner, repos func() ([]disp
 		hosts:             deriveHosts(nil, allowed),
 		repoReg:           newRepoRegistry(filepath.Join(t.TempDir(), "repos.json"), nil, gitCommonDir),
 		dispatchEngines:   func(context.Context, string) ([]string, error) { return []string{"claude"}, nil },
+		dispatchModels:    func(context.Context, string) (dispatchModelSet, error) { return builtinDispatchModels, nil },
 		tmuxRun:           serverPathTmux,
 		dispatchRunner:    runner,
 		dispatchRepos:     repos,
@@ -578,18 +579,23 @@ func TestDispatchNewCrewCollision(t *testing.T) {
 	}
 }
 
-// TestDispatchTierModelsConsistent keeps dispatchTierModels in step with
-// dispatchModels: every default must itself be a valid model for its engine.
-func TestDispatchTierModelsConsistent(t *testing.T) {
+// TestBuiltinDispatchModelsConsistent keeps the fallback tier defaults in step
+// with its model lists: every default must itself be a valid literal model.
+func TestBuiltinDispatchModelsConsistent(t *testing.T) {
 	for _, engine := range dispatchEngineOrder {
 		for _, tier := range dispatchTiers {
-			model, ok := dispatchTierModels[engine][tier]
+			model, ok := builtinDispatchModels.TierModels[engine][tier]
 			if !ok || model == "" {
-				t.Errorf("dispatchTierModels[%q][%q] missing", engine, tier)
+				t.Errorf("TierModels[%q][%q] missing", engine, tier)
 				continue
 			}
-			if !slices.Contains(dispatchModels[engine], model) {
-				t.Errorf("dispatchTierModels[%q][%q] = %q not in dispatchModels[%q]", engine, tier, model, engine)
+			if !slices.Contains(builtinDispatchModels.Engines[engine], model) {
+				t.Errorf("TierModels[%q][%q] = %q not in Engines[%q]", engine, tier, model, engine)
+			}
+		}
+		for _, m := range builtinDispatchModels.Engines[engine] {
+			if !dispatchLiteralModelRe.MatchString(m) {
+				t.Errorf("builtin model %q is not a literal id", m)
 			}
 		}
 	}
@@ -999,5 +1005,151 @@ func TestDispatchServerPathFallsBackWithWarning(t *testing.T) {
 	}
 	if n := strings.Count(logs.String(), "tmux server PATH unavailable"); n != 2 {
 		t.Errorf("%d fallback warnings, want one per request (2):\n%s", n, logs)
+	}
+}
+
+const dispatchModelsJSONFixture = `{"engines":{
+ "claude":{"tiers":{
+   "trivial":{"default":"sonnet","models":["opus","claude-opus-*","sonnet","haiku"],"regex":["^claude-.*$"]},
+   "standard":{"default":null,"models":["claude-sonnet-*","sonnet","opus"]},
+   "deep":{"default":"claude-opus-*","models":["opus","fable"]}},
+  "models":["opus","claude-opus-*","sonnet","haiku","claude-sonnet-*","fable","-bad","a b","x[y]","w?"]},
+ "pi":{"tiers":{"deep":{"default":"openrouter/m/one","models":["openrouter/m/one"]}},"models":["openrouter/m/one"]},
+ "bogus":{"tiers":{},"models":["x"]}}}`
+
+func TestParseDispatchModelsLiteralOnly(t *testing.T) {
+	got, err := parseDispatchModels([]byte(dispatchModelsJSONFixture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"opus", "sonnet", "haiku", "fable"}; !slices.Equal(got.Engines["claude"], want) {
+		t.Errorf("claude models = %q, want %q", got.Engines["claude"], want)
+	}
+	if want := []string{"openrouter/m/one"}; !slices.Equal(got.Engines["pi"], want) {
+		t.Errorf("pi models = %q, want %q", got.Engines["pi"], want)
+	}
+	if _, ok := got.Engines["bogus"]; ok {
+		t.Error("unknown engine kept")
+	}
+	if _, ok := got.Engines["codex"]; ok {
+		t.Error("absent engine invented")
+	}
+	tm := got.TierModels["claude"]
+	if tm["trivial"] != "sonnet" {
+		t.Errorf("trivial default = %q, want sonnet", tm["trivial"])
+	}
+	if tm["standard"] != "sonnet" { // null default → first literal in the tier
+		t.Errorf("standard default = %q, want sonnet (first literal)", tm["standard"])
+	}
+	if tm["deep"] != "opus" { // glob default → first literal in the tier
+		t.Errorf("deep default = %q, want opus (first literal)", tm["deep"])
+	}
+}
+
+func TestParseDispatchModelsGarbage(t *testing.T) {
+	for _, raw := range []string{"", "not json", `{"engines":`, `{}`, `{"engines":{"bogus":{}}}`, `{"engines":{"claude":{"tiers":{"deep":{"models":["*"]}}}}}`} {
+		if _, err := parseDispatchModels([]byte(raw)); err == nil {
+			t.Errorf("parse(%q) succeeded, want error", raw)
+		}
+	}
+}
+
+func fakeModels(set dispatchModelSet, err error, calls *int) func(context.Context, string) (dispatchModelSet, error) {
+	return func(_ context.Context, serverPath string) (dispatchModelSet, error) {
+		if calls != nil {
+			*calls++
+		}
+		return set, err
+	}
+}
+
+func TestHandleDispatchOptionsUsesDispatchModels(t *testing.T) {
+	set, err := parseDispatchModels([]byte(dispatchModelsJSONFixture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	s := newDispatchServer(t, nil, stubDispatchRepos(nil, nil))
+	s.dispatchModels = fakeModels(set, nil, &calls)
+
+	opts := getDispatchOptions(t, s)
+	if calls != 1 {
+		t.Errorf("dispatch --models ran %d times for one request, want 1", calls)
+	}
+	if !slices.Equal(opts.Engines["claude"], []string{"opus", "sonnet", "haiku", "fable"}) {
+		t.Errorf("engines.claude = %q", opts.Engines["claude"])
+	}
+	if opts.TierModels["claude"]["deep"] != "opus" {
+		t.Errorf("tier_models.claude.deep = %q", opts.TierModels["claude"]["deep"])
+	}
+	if opts.DispatchModelsError != "" {
+		t.Errorf("dispatch_models_error = %q, want empty", opts.DispatchModelsError)
+	}
+}
+
+func TestHandleDispatchOptionsModelsFallback(t *testing.T) {
+	s := newDispatchServer(t, nil, stubDispatchRepos(nil, nil))
+	s.dispatchModels = fakeModels(dispatchModelSet{}, errors.New("dispatch --models --json: exit status 2"), nil)
+
+	opts := getDispatchOptions(t, s)
+	if !strings.Contains(opts.DispatchModelsError, "exit status 2") {
+		t.Errorf("dispatch_models_error = %q, want the failure", opts.DispatchModelsError)
+	}
+	if !slices.Equal(opts.Engines["claude"], builtinDispatchModels.Engines["claude"]) {
+		t.Errorf("engines.claude = %q, want the built-in list", opts.Engines["claude"])
+	}
+	if opts.TierModels["claude"]["trivial"] != "sonnet" {
+		t.Errorf("tier_models.claude.trivial = %q, want sonnet", opts.TierModels["claude"]["trivial"])
+	}
+}
+
+func TestHandleDispatchValidatesAgainstDispatchModels(t *testing.T) {
+	set, err := parseDispatchModels([]byte(dispatchModelsJSONFixture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := newDispatchTestRepo(t, "1700000000-123")
+	for _, tc := range []struct {
+		model string
+		want  int
+	}{
+		{"fable", http.StatusOK}, // listed literal
+		{"claude-opus-*", 400},   // glob entry
+		{"claude-opus-4", 400},   // would match the glob, not listed
+		{"x[y]", 400},
+		{"w?", 400},
+		{"-bad", 400},
+		{"^claude-.*$", 400}, // regex entry
+	} {
+		t.Run(tc.model, func(t *testing.T) {
+			stub := &stubDispatchRunner{result: dispatchResult{Stdout: "worker_id: w\nbranch: b\n"}}
+			s := newDispatchServer(t, stub.run, stubDispatchRepos([]dispatchRepo{repo}, nil))
+			s.dispatchModels = fakeModels(set, nil, nil)
+			req := validDispatchRequest(repo, "new")
+			req.Model = tc.model
+			rec := doDispatch(t, s, dispatchHTTPRequest("POST", dispatchRequestJSON(t, req)))
+			if rec.Code != tc.want {
+				t.Fatalf("status %d, want %d (body %s)", rec.Code, tc.want, rec.Body.String())
+			}
+			if tc.want != http.StatusOK && stub.count() != 0 {
+				t.Errorf("runner called %d times for a refused model", stub.count())
+			}
+		})
+	}
+}
+
+func TestHandleDispatchFallbackValidation(t *testing.T) {
+	repo := newDispatchTestRepo(t, "1700000000-123")
+	stub := &stubDispatchRunner{result: dispatchResult{Stdout: "worker_id: w\nbranch: b\n"}}
+	s := newDispatchServer(t, stub.run, stubDispatchRepos([]dispatchRepo{repo}, nil))
+	s.dispatchModels = fakeModels(dispatchModelSet{}, errors.New("boom"), nil)
+	req := validDispatchRequest(repo, "new")
+	req.Model = "cursor-grok-4.6-high" // wrong engine under the built-ins
+	if rec := doDispatch(t, s, dispatchHTTPRequest("POST", dispatchRequestJSON(t, req))); rec.Code != 400 {
+		t.Fatalf("status %d, want 400 (body %s)", rec.Code, rec.Body.String())
+	}
+	req.Model = "haiku"
+	if rec := doDispatch(t, s, dispatchHTTPRequest("POST", dispatchRequestJSON(t, req))); rec.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
 }

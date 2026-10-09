@@ -317,3 +317,38 @@ func TestExecDispatchEnginesSeesServerPath(t *testing.T) {
 		t.Errorf("engines = %q without the server PATH, want none", got)
 	}
 }
+
+func TestExecDispatchModels(t *testing.T) {
+	t.Run("parses output", func(t *testing.T) {
+		installFakeDispatch(t, `[ "$*" = "--models --json" ] || exit 2
+echo '{"engines":{"claude":{"tiers":{"deep":{"default":"opus","models":["opus","claude-*"]}},"models":["opus","claude-*"]}}}'
+`)
+		got, err := execDispatchModels(context.Background(), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(got.Engines["claude"], []string{"opus"}) || got.TierModels["claude"]["deep"] != "opus" {
+			t.Errorf("got %+v", got)
+		}
+	})
+	for name, body := range map[string]string{
+		"older dispatch": "echo 'usage: dispatch <trivial|standard|deep>' >&2\nexit 2\n",
+		"garbage":        "echo 'not json'\n",
+		"empty":          "exit 0\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			installFakeDispatch(t, body)
+			if _, err := execDispatchModels(context.Background(), ""); err == nil {
+				t.Error("want an error")
+			}
+		})
+	}
+	t.Run("timeout", func(t *testing.T) {
+		installFakeDispatch(t, "exec sleep 30\n")
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancel()
+		if _, err := execDispatchModels(ctx, ""); err == nil {
+			t.Error("want an error")
+		}
+	})
+}

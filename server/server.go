@@ -119,6 +119,8 @@ type Server struct {
 	// lists the engines the host's dispatch can launch.
 	repoReg         *repoRegistry
 	dispatchEngines func(ctx context.Context, serverPath string) ([]string, error)
+	// dispatchModels reads dispatch's tier map; see dispatchModelSet.
+	dispatchModels func(ctx context.Context, serverPath string) (dispatchModelSet, error)
 	// dispatchSlot caps in-flight dispatches at one: dispatch mutates the
 	// repo (worktrees, branches, the crew bus, GitHub issues), and running
 	// two at once against one repo is not something it is designed for.
@@ -245,6 +247,7 @@ func New(cfg Config) (*Server, error) {
 			return listDispatchRepos(tmuxClient, gitCommonDir, repoReg.ValidPaths())
 		},
 		dispatchEngines: execDispatchEngines,
+		dispatchModels:  execDispatchModels,
 		dispatchSlot:    make(chan struct{}, 1),
 		dispatchTimeout: dispatchTimeout,
 		dispatchNewCrewID: func() string {

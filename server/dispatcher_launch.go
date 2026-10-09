@@ -88,7 +88,7 @@ func normalizeTask(s string) string {
 
 // validateDispatcher normalizes the tasks, drops empty ones, and checks every
 // field. Repo membership is checked by the handler.
-func validateDispatcher(req dispatcherRequest, engines []string) (dispatcherRequest, *dispatchError) {
+func validateDispatcher(req dispatcherRequest, engines []string, models dispatchModelSet) (dispatcherRequest, *dispatchError) {
 	out := req
 
 	var enabled []string
@@ -103,7 +103,7 @@ func validateDispatcher(req dispatcherRequest, engines []string) (dispatcherRequ
 		}
 		return out, &dispatchError{"engine", http.StatusBadRequest, "engine must be one of " + strings.Join(enabled, ", ")}
 	}
-	if out.Model != "" && !slices.Contains(dispatchModels[out.Engine], out.Model) {
+	if out.Model != "" && !slices.Contains(models.Engines[out.Engine], out.Model) {
 		return out, &dispatchError{"model", http.StatusBadRequest, "model is not valid for engine " + out.Engine}
 	}
 	if out.Effort != "" && !slices.Contains(dispatchEfforts, out.Effort) {
@@ -387,7 +387,11 @@ func (s *Server) handleDispatcherLaunch(w http.ResponseWriter, r *http.Request) 
 		reply(http.StatusBadGateway, dispatcherResponse{Error: "could not list dispatcher engines: " + err.Error()})
 		return
 	}
-	valid, derr := validateDispatcher(req, engines)
+	models, modelsErr := s.dispatchModelSet(r.Context(), serverPath)
+	if modelsErr != nil {
+		slog.Warn("dispatcher launch: model lookup failed, using built-in models", "error", modelsErr)
+	}
+	valid, derr := validateDispatcher(req, engines, models)
 	if derr != nil {
 		llog.field = derr.field
 		reply(derr.code, dispatcherResponse{Error: derr.msg})

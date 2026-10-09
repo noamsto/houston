@@ -572,9 +572,7 @@ execution from an HTTP request, so the handler is closed by construction:
   malformed is 400. dispatch's own refusals (tier↔model map, budget) come back
   as 422 with its stderr verbatim. The new run then appears in Fleet through
   the crew source — nothing else to wire.
-- The model allowlist (`dispatchModels`) and per-tier defaults
-  (`dispatchTierModels`) are Go constants; keep both in step with dispatch's
-  tier map when models change.
+- The model allowlist and per-tier defaults come from `dispatch --models --json` (`dispatchModelSet`, `server/dispatch_models.go`), run like `dispatch --engines` (`dispatchEnv`, tmux server PATH, 10 s timeout) once per options GET, `POST /api/dispatch` and `POST /api/dispatch/dispatcher`, never cached. Only literal ids are kept: any entry outside `dispatchLiteralModelRe` (globs `*?[`, a leading `-`, spaces) and every `regex` list is dropped, so POST validation stays a string-equality allowlist. `tier_models` is the tier's `default`, else the first literal model in that tier. If the command fails (older dispatch without `--models`, non-zero exit, timeout, unparseable or empty output), `builtinDispatchModels` (the literal entries of dispatch's `modelMap`) is used for options and validation, and the options response carries `dispatch_models_error`. Update the built-ins when the tier map changes; they are only a fallback.
 - houston's own `PATH` must reach `tmux` and `dispatch` (exec resolves
   `dispatch` there; a 502 means it could not be started), and a tmux server
   must be running. dispatch and `dispatch --engines` run with
