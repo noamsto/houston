@@ -156,7 +156,7 @@ func validateDispatch(req dispatchRequest, models dispatchModelSet) (dispatchReq
 	}
 	engineModels, ok := models.Engines[out.Engine]
 	if !ok {
-		return out, &dispatchError{"engine", http.StatusBadRequest, "engine must be one of " + strings.Join(dispatchEngineOrder, ", ")}
+		return out, &dispatchError{"engine", http.StatusBadRequest, "engine must be one of " + strings.Join(slices.DeleteFunc(slices.Clone(dispatchEngineOrder), func(e string) bool { _, ok := models.Engines[e]; return !ok }), ", ")}
 	}
 	if !slices.Contains(engineModels, out.Model) {
 		return out, &dispatchError{"model", http.StatusBadRequest, "model is not valid for engine " + out.Engine}
