@@ -51,6 +51,14 @@ type TranscriptEvent struct {
 	CacheReadTokens  int
 	CacheWriteTokens int
 
+	// Model, ContextTokens and CostUSD ride on the last event of an assistant
+	// message that carries usage. ContextTokens is everything the model read
+	// for that message (uncached + cached input); CostUSD is pi's recorded
+	// per-message cost, nil for engines that record none.
+	Model         string
+	ContextTokens int
+	CostUSD       *float64
+
 	// Background is the kind ("shell" or "monitor") of a tool_use that starts
 	// a background task; StopTask is the task id a TaskStop tool_use targets.
 	Background     string
@@ -81,6 +89,7 @@ type jsonlRecord struct {
 type anthropicMsg struct {
 	Role    string          `json:"role"`
 	Content json.RawMessage `json:"content"`
+	Model   string          `json:"model,omitempty"`
 	Usage   *usage          `json:"usage,omitempty"`
 }
 
@@ -101,6 +110,18 @@ type usage struct {
 	OutputTokens             int `json:"output_tokens"`
 	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+
+	// pi's shape: input/output are uncached, cacheRead/cacheWrite the cached
+	// parts, cost.total the message's recorded dollars.
+	PiInput      int      `json:"input"`
+	PiOutput     int      `json:"output"`
+	PiCacheRead  int      `json:"cacheRead"`
+	PiCacheWrite int      `json:"cacheWrite"`
+	PiCost       *piCosts `json:"cost,omitempty"`
+}
+
+type piCosts struct {
+	Total *float64 `json:"total"`
 }
 
 // ReadTranscriptFrom reads JSONL events from byteOffset and returns the new
@@ -226,12 +247,23 @@ func parseLine(line string, offset int64) []TranscriptEvent {
 		out = append(out, ev)
 	}
 
-	if rec.Message.Usage != nil && len(out) > 0 {
+	if u := rec.Message.Usage; u != nil {
+		if len(out) == 0 {
+			// An aborted pi message has usage but no content blocks.
+			ev := base
+			ev.Role = rec.Message.Role
+			out = append(out, ev)
+		}
 		last := &out[len(out)-1]
-		last.InputTokens = rec.Message.Usage.InputTokens
-		last.OutputTokens = rec.Message.Usage.OutputTokens
-		last.CacheReadTokens = rec.Message.Usage.CacheReadInputTokens
-		last.CacheWriteTokens = rec.Message.Usage.CacheCreationInputTokens
+		last.InputTokens = u.InputTokens + u.PiInput
+		last.OutputTokens = u.OutputTokens + u.PiOutput
+		last.CacheReadTokens = u.CacheReadInputTokens + u.PiCacheRead
+		last.CacheWriteTokens = u.CacheCreationInputTokens + u.PiCacheWrite
+		last.ContextTokens = last.InputTokens + last.CacheReadTokens + last.CacheWriteTokens
+		last.Model = rec.Message.Model
+		if u.PiCost != nil {
+			last.CostUSD = u.PiCost.Total
+		}
 	}
 	return out
 }

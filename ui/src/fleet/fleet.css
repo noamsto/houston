@@ -317,6 +317,11 @@
 .run-status-crew { color: var(--text-dim); font-size: 12px; }
 .run-status-codename { flex: none; font-weight: 600; color: var(--text-strong); }
 .run-status-engine { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.run-status-ctx { color: var(--text-dim); font-size: 12px; font-variant-numeric: tabular-nums; }
+.run-status-ctx-label { flex: none; }
+.run-status-ctx-bar { flex: 1 1 0; min-width: 40px; max-width: 160px; height: 4px; border-radius: 2px; background: var(--bg-sunken); overflow: hidden; }
+.run-status-ctx-fill { display: block; height: 100%; background: var(--text-faint); }
+.run-status-spend { flex: none; margin-left: auto; color: var(--text-faint); }
 .run-status-detail { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .run-detail-question {
   flex: none; padding: 10px 12px; border-radius: 8px;

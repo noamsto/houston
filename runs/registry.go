@@ -336,6 +336,9 @@ type signature struct {
 	// background encodes the task list as a string; the struct must stay comparable.
 	background string
 
+	ctxUsed, ctxLimit int
+	spend             float64
+
 	stale, capTerminal, capReply, capKill, capChat bool
 }
 
@@ -370,6 +373,12 @@ func runSignature(r Run) signature {
 	}
 	for _, t := range r.Background {
 		s.background += t.ID + "\x00"
+	}
+	if r.Context != nil {
+		s.ctxUsed, s.ctxLimit = r.Context.Used, r.Context.Limit
+	}
+	if r.SpendUSD != nil {
+		s.spend = *r.SpendUSD
 	}
 	if r.Issue != nil {
 		s.issueID = r.Issue.ID
@@ -555,6 +564,12 @@ func mergeInto(dst *Run, src Run) {
 	}
 	if src.Tokens.Output != 0 {
 		dst.Tokens.Output = src.Tokens.Output
+	}
+	if src.Context != nil {
+		dst.Context = src.Context
+	}
+	if src.SpendUSD != nil {
+		dst.SpendUSD = src.SpendUSD
 	}
 	if src.Since != 0 {
 		dst.Since = src.Since

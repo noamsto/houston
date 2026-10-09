@@ -419,6 +419,10 @@ func runFromSessionView(v hub.SessionView, project string) (string, Run) {
 			Turn:    v.Turn,
 		},
 	}
+	if v.ContextUsed > 0 {
+		r.Context = &Context{Used: v.ContextUsed, Limit: v.ContextLimit}
+	}
+	r.SpendUSD = v.SpendUSD
 	for _, c := range v.Trail {
 		r.Activity.Trail = append(r.Activity.Trail, TrailChip{
 			Tool: c.Tool, Hint: c.Hint, Done: c.Done, IsError: c.IsError,
