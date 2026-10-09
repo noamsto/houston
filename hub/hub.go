@@ -468,7 +468,19 @@ func (h *Hub) refreshTranscript(sessionID string) {
 	offset := sess.transcriptOffset
 	h.mu.Unlock()
 
-	events, newOffset, err := ReadTranscriptFrom(path, offset)
+	var (
+		events    []TranscriptEvent
+		newOffset int64
+		err       error
+		initial   *bgTracker
+	)
+	if offset == 0 {
+		var bg bgTracker
+		bg, events, newOffset, err = readInitial(path)
+		initial = &bg
+	} else {
+		events, newOffset, err = ReadTranscriptFrom(path, offset)
+	}
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
 			h.log.Debug("read transcript", "path", path, "err", err)
@@ -481,17 +493,30 @@ func (h *Hub) refreshTranscript(sessionID string) {
 	}
 
 	h.mu.Lock()
+	if initial != nil {
+		// Read outside the lock: another read may have landed meanwhile.
+		if sess.transcriptOffset != 0 || sess.transcriptPath != path {
+			h.mu.Unlock()
+			return
+		}
+		sess.bg = *initial
+	}
 	sess.transcriptOffset = newOffset
 	for _, ev := range events {
 		applyTranscriptEvent(sess, ev)
 	}
-	sess.view.Trail = append([]TrailChip(nil), sess.trail...)
-	sess.view.Asks = sess.asks
-	sess.view.Background = sess.bg.list(time.Now())
+	sess.syncTranscriptView(time.Now())
 	view := sess.view
 	h.mu.Unlock()
 
 	h.broadcastIfChanged(sess, view)
+}
+
+// syncTranscriptView copies the transcript-derived state into the view.
+func (s *Session) syncTranscriptView(now time.Time) {
+	s.view.Trail = append([]TrailChip(nil), s.trail...)
+	s.view.Asks = s.asks
+	s.view.Background = s.bg.list(now)
 }
 
 // expireBackground drops monitors whose timeout has passed. Nothing is written
@@ -612,6 +637,9 @@ func mergeStateIntoView(v *SessionView, s hook.SessionState) {
 	}
 }
 
+// maxTrail is how many trail chips a session keeps.
+const maxTrail = 8
+
 // eventTypePiToolCall is pi's tool-call content block, which parseLine passes
 // through under its own type name.
 const eventTypePiToolCall = "toolCall"
@@ -620,7 +648,6 @@ const eventTypePiToolCall = "toolCall"
 // Called under h.mu.
 func applyTranscriptEvent(s *Session, ev TranscriptEvent) {
 	s.bg.apply(ev)
-	const maxTrail = 8
 
 	switch ev.Type {
 	case EventTypeToolUse:
@@ -654,6 +681,8 @@ func applyTranscriptEvent(s *Session, ev TranscriptEvent) {
 	}
 
 	// Roll up token usage (last observed wins; Claude reports running totals).
+	// A field added to this roll-up must join readInitial's tailSuffices, or a
+	// first read from the tail can miss it.
 	if ev.InputTokens > 0 {
 		s.view.InputTokens = ev.InputTokens
 	}
