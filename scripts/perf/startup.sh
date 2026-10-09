@@ -7,7 +7,10 @@
 #     times), and when the last-scanned run's chat first has updates,
 #   - CPU seconds and RSS at 10/30/60 s and the end, and when the CPU settles,
 #   - the size and latency of a /api/runs snapshot once settled (the payload
-#     the runs stream sends on every (re)connect).
+#     the runs stream sends on every (re)connect),
+#   - a reconnect storm: 10 rounds of 50 concurrent snapshots, wall time and
+#     server CPU-seconds. With PPROF=<file> (binary built from a tree with
+#     -debug pprof) a CPU profile of the storm is saved there.
 #
 #   go run -tags tools ./cmd/loadfixture -dir /tmp/fx
 #   scripts/perf/startup.sh ./houston /tmp/fx 9391 [seconds] [mode]
@@ -19,7 +22,9 @@ cp -r "$fx/state/." "$state/"
 log=$(mktemp)
 
 start=$(date +%s.%N)
-HOME="$fx/home" "$bin" -addr "127.0.0.1:$port" -status-dir "$state" -no-opencode -mode "$mode" >"$log" 2>&1 &
+debug=()
+[ -n "${PPROF:-}" ] && debug=(-debug)
+HOME="$fx/home" "$bin" -addr "127.0.0.1:$port" -status-dir "$state" -no-opencode -mode "$mode" "${debug[@]}" >"$log" 2>&1 &
 pid=$!
 trap 'kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; rm -rf "$state" "$log"' EXIT INT TERM
 
@@ -75,3 +80,21 @@ echo "largest run's chat answered after: ${chatted:-never}s"
 echo "last-scanned run's chat had updates after: ${lastchat:-never}s"
 echo "cpu settled by: ${settled:-never}s"
 echo "snapshot: $(get -o /dev/null -w '%{size_download} bytes in %{time_total}s' "http://127.0.0.1:$port/api/runs")"
+
+prof=""
+if [ -n "${PPROF:-}" ]; then
+	get -o "$PPROF" "http://127.0.0.1:$port/api/debug/pprof/profile?seconds=5" &
+	prof=$!
+	sleep 0.2
+fi
+c0=$(cpu) w0=$(date +%s.%N)
+for _ in $(seq 10); do
+	pids=()
+	for _ in $(seq 50); do
+		get -o /dev/null "http://127.0.0.1:$port/api/runs" &
+		pids+=($!)
+	done
+	wait "${pids[@]}"
+done
+echo "storm (10x50 snapshots): $(awk -v a="$w0" -v b="$(date +%s.%N)" 'BEGIN {printf "%.2f", b - a}')s wall, $(awk -v a="$c0" -v b="$(cpu)" 'BEGIN {printf "%.2f", b - a}') CPU-s"
+[ -n "$prof" ] && wait "$prof" && echo "storm profile: $PPROF"

@@ -4,7 +4,11 @@
 //
 //   npm i --prefix /tmp/pw playwright-core
 //   NODE_PATH=/tmp/pw/node_modules CHROMIUM=$(command -v chromium) \
-//     node scripts/perf/client.cjs <houston-port> <status-dir> <chat-run-id>
+//     node scripts/perf/client.cjs <houston-port> <status-dir> <run-id> <chat-run-id>
+//
+// <run-id> is the run whose Chat tab is timed (the largest transcript);
+// <chat-run-id> is a second run whose Chat tab the page sits on through the
+// resume scenarios.
 //
 // The browser reaches houston through a local TCP proxy, so the resume
 // scenarios can cut its live connections the way a phone does when it sleeps.
@@ -12,19 +16,22 @@
 //   firstLoad  fresh context, navigate to #/fleet
 //   reload     same context, page.reload()
 //   chat       navigate to the run's Chat tab
-//   resume-control  page frozen and hidden for GAP_MS, then visible again
+//   resume-control  page (on <chat-run-id>'s Chat tab) frozen and hidden for
+//                   GAP_MS, then visible again
 //   resume-zombie   the same, while every open connection silently stops
 //                   passing data (no FIN/RST), as a sleeping phone's do
 //   resume-reset    the same, but the connections are reset
 // "tti" = the awaited element is rendered and the main thread has had no long
-// task for QUIET_MS. For the resume scenarios "liveMs" is how long a state
-// change made on the server right after the resume takes to reach the page.
+// task for QUIET_MS. For the resume scenarios "liveMs" is how long a session
+// started on the server right after the resume takes to reach the page's
+// runs stream, and "chatLiveMs" how long a transcript line appended right
+// after the resume takes to render in the open Chat tab.
 const net = require('node:net')
 const fs = require('node:fs')
 const path = require('node:path')
 const { chromium } = require('playwright-core')
 
-const GAP_MS = 5000
+const GAP_MS = 15000
 const QUIET_MS = 500
 const LIVE_TIMEOUT_MS = 60000
 
@@ -78,19 +85,31 @@ function proxy(target) {
   )
 }
 
-// bump rewrites a session's hook state file with a new turn, which the hub
-// picks up over fsnotify and publishes as a run update.
-function bump(statusDir, runId, turn) {
-  const file = path.join(statusDir, 'claude', `${runId.replace(/^sess-/, '')}.json`)
-  const st = JSON.parse(fs.readFileSync(file, 'utf8'))
-  st.turn = turn
-  st.state = turn % 2 ? 'thinking' : 'waiting'
-  st.updated_at = Math.floor(Date.now() / 1000)
-  fs.writeFileSync(file, JSON.stringify(st))
+// say appends an assistant text line to a run's transcript, which the open
+// Chat tab should render.
+function say(statusDir, runId, text) {
+  const st = JSON.parse(fs.readFileSync(path.join(statusDir, 'claude', `${runId.replace(/^sess-/, '')}.json`), 'utf8'))
+  const rec = {
+    type: 'assistant',
+    uuid: `perf-${text}`,
+    timestamp: new Date().toISOString(),
+    message: { id: `msg-${text}`, role: 'assistant', content: [{ type: 'text', text }] },
+  }
+  fs.appendFileSync(st.transcript_path, JSON.stringify(rec) + '\n')
+}
+
+// spawn writes a hook state file for a brand-new session, which the hub
+// picks up over fsnotify and every houston version publishes as a run update
+// naming that session. Returns the file, for cleanup.
+function spawn(statusDir, sid) {
+  const file = path.join(statusDir, 'claude', `${sid}.json`)
+  const now = Math.floor(Date.now() / 1000)
+  fs.writeFileSync(file, JSON.stringify({ version: 1, session_id: sid, state: 'waiting', since: now, updated_at: now, agent: 'claude' }))
+  return file
 }
 
 async function main() {
-  const [port, statusDir, runId] = process.argv.slice(2)
+  const [port, statusDir, runId, chatRunId] = process.argv.slice(2)
   const px = await proxy(Number(port))
   const base = `http://127.0.0.1:${px.port}`
   const results = {}
@@ -185,11 +204,12 @@ async function main() {
     await p.waitForSelector(card)
   }
 
-  let turn = 1000
+  const spawned = []
   for (const mode of ['control', 'zombie', 'reset']) {
     // Fresh connections per scenario, so one cut cannot leak into the next.
+    await p.goto(`${base}/#/fleet/${chatRunId}/chat`)
     await p.reload()
-    await interactive(card, 0)
+    await interactive(chat, 0)
     bytes.clear()
     await p.evaluate(() => {
       window.__vis = 'hidden'
@@ -204,9 +224,23 @@ async function main() {
       document.dispatchEvent(new Event('visibilitychange'))
       return performance.now()
     })
-    turn++
-    bump(statusDir, runId, turn)
-    const marker = `"turn":${turn}`
+    const marker = `perf-${mode}-${Date.now()}`
+    spawned.push(spawn(statusDir, marker))
+    const said = `perf-marker-${mode}-${Date.now()}`
+    say(statusDir, chatRunId, said)
+    const chatLiveAt = p
+      .waitForFunction(
+        ({ t0, said }) => {
+          const hit = [...document.querySelectorAll('.chat-bubble')].some((b) => b.textContent.includes(said))
+          return hit ? performance.now() - t0 : false
+        },
+        { t0, said },
+        { timeout: LIVE_TIMEOUT_MS, polling: 50 },
+      )
+      .then(
+        (h) => h.jsonValue(),
+        () => null,
+      )
     const liveAt = await p
       .waitForFunction(
         ({ t0, marker }) => {
@@ -225,9 +259,11 @@ async function main() {
       )
     // Main-thread cost of catching up: long tasks from the resume until the
     // page has been quiet for QUIET_MS.
-    const quiet = await interactive(card, t0)
+    const chatMs = await chatLiveAt
+    const quiet = await interactive(chat, t0)
     results[`resume-${mode}`] = {
       liveMs: liveAt === null ? `not within ${LIVE_TIMEOUT_MS / 1000}s` : Math.round(liveAt - t0),
+      chatLiveMs: chatMs === null ? `not within ${LIVE_TIMEOUT_MS / 1000}s` : Math.round(chatMs),
       longTasks: quiet.longTasks,
       longMs: quiet.longMs,
       snapshotBytes: bytes.get('/api/runs/stream') ?? null,
@@ -236,6 +272,7 @@ async function main() {
 
   await browser.close()
   px.close()
+  for (const f of spawned) fs.rmSync(f, { force: true })
   return results
 }
 
