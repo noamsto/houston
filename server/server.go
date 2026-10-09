@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"net/http/pprof"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -99,10 +100,12 @@ type Server struct {
 
 	// chat serves a run's chat transcript; the hub in production. chatPing
 	// and chatCheck override the stream's keep-alive and session-check
-	// intervals when non-zero.
+	// intervals when non-zero; runsPing does the same for the runs stream's
+	// keep-alive.
 	chat      chatSource
 	chatPing  time.Duration
 	chatCheck time.Duration
+	runsPing  time.Duration
 
 	// replyRunner delivers a crew answer. It exists so a test can observe that
 	// no command ran, which no assertion about the response alone can prove.
@@ -153,6 +156,8 @@ type Server struct {
 
 	auth  *authGate
 	hosts *hostGate
+
+	debug bool
 
 	// Background goroutines started by New run on ctx; Close cancels it and
 	// waits for them.
@@ -212,6 +217,9 @@ type Config struct {
 	// Mode is Dispatcher or Tmux, resolved by the caller; New rejects
 	// anything else.
 	Mode mode.Mode
+
+	// Debug registers /api/debug/pprof/ behind the auth and host gates.
+	Debug bool
 }
 
 func New(cfg Config) (*Server, error) {
@@ -267,6 +275,7 @@ func New(cfg Config) (*Server, error) {
 		launchSlot:      make(chan struct{}, 1),
 		launchCheck:     3 * time.Second,
 		launchPoll:      200 * time.Millisecond,
+		debug:           cfg.Debug,
 	}
 	s.chat = s.hub
 
@@ -433,6 +442,15 @@ func (s *Server) Handler() http.Handler {
 		apiMux.HandleFunc("POST /api/repos", s.handleReposAdd)
 		apiMux.HandleFunc("DELETE /api/repos", s.handleReposRemove)
 		apiMux.HandleFunc("GET /api/repos/candidates", s.handleRepoCandidates)
+	}
+	if s.debug {
+		pm := http.NewServeMux()
+		pm.HandleFunc("/debug/pprof/", pprof.Index)
+		pm.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+		pm.HandleFunc("/debug/pprof/profile", pprof.Profile)
+		pm.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+		pm.HandleFunc("/debug/pprof/trace", pprof.Trace)
+		apiMux.Handle("/api/debug/pprof/", http.StripPrefix("/api", pm))
 	}
 	mux.Handle("/api/", s.auth.middleware(apiMux))
 
