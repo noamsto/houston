@@ -12,6 +12,14 @@ function rank(r: Run, now: number): number {
   return 0
 }
 
+// Newest-started first, then id: neither moves while a run lives, so a run's
+// output never reshuffles the list.
+function stableOrder(a: Run, b: Run): number {
+  const bySince = (b.since ?? 0) - (a.since ?? 0)
+  if (bySince !== 0) return bySince
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+}
+
 export function filterRuns(runs: Run[], filter: Filter, now: number): Run[] {
   // Needs-you shows every blocked run, not just fresh ones — the badge
   // and the sort answer "how many need me now", this filter answers
@@ -28,14 +36,14 @@ export function filterRuns(runs: Run[], filter: Filter, now: number): Run[] {
       const af = isFresh(a, now) ? 1 : 0
       const bf = isFresh(b, now) ? 1 : 0
       if (af !== bf) return bf - af
-      return b.updated_at - a.updated_at
+      return stableOrder(a, b)
     }
     // Stale blocked runs deliberately stay out of the ranked buckets — see
     // RunCard's muted attention border for how they stay findable in place.
     const ar = rank(a, now)
     const br = rank(b, now)
     if (ar !== br) return br - ar
-    return b.updated_at - a.updated_at
+    return stableOrder(a, b)
   })
 }
 
