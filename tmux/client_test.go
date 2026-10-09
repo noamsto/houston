@@ -684,3 +684,21 @@ func TestSendKeysCancelBeforeEmptyEnter(t *testing.T) {
 		t.Fatalf("recorded %d calls, want 0: %v", len(got), got)
 	}
 }
+
+func TestParsePaneInMode(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want bool
+	}{
+		{"0", false},
+		{"0\n", false},
+		{"1", true},
+		{"2", true},
+		{"", true},
+		{"garbage", true},
+	} {
+		if got := parsePaneInMode(tc.in); got != tc.want {
+			t.Errorf("parsePaneInMode(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}

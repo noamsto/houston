@@ -572,7 +572,15 @@ func (c *Client) PaneInMode(p Pane) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return strings.TrimSpace(string(out)) == "1", nil
+	return parsePaneInMode(string(out)), nil
+}
+
+// parsePaneInMode reads #{pane_in_mode}, a count of stacked modes (view-mode
+// under copy-mode reports 2). An unreadable value counts as in mode so the
+// caller refuses to type rather than send keys a mode would swallow.
+func parsePaneInMode(s string) bool {
+	n, err := strconv.Atoi(strings.TrimSpace(s))
+	return err != nil || n > 0
 }
 
 // WindowPaneCount returns the number of panes in the pane's window.
