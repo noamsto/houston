@@ -1,4 +1,5 @@
 import type { Run } from '../api/runs'
+import type { Mode } from '../api/mode'
 import { needsYou } from './staleness'
 import { FleetView } from './FleetView'
 import { CrewsView } from './CrewsView'
@@ -13,10 +14,12 @@ export interface ShellData {
   connected: boolean
   hasSnapshot: boolean
   now: number
+  mode: Mode | null
 }
 
-export function MobileShell({ runs, connected, hasSnapshot, now }: ShellData) {
-  const [tab, goTab] = useShellTab()
+export function MobileShell({ runs, connected, hasSnapshot, now, mode }: ShellData) {
+  const [tab, goTab] = useShellTab(mode)
+  const dispatcherMode = mode === 'dispatcher'
   const attention = runs.some((r) => needsYou(r, now))
 
   const detail = useDetailRoute()
@@ -39,17 +42,21 @@ export function MobileShell({ runs, connected, hasSnapshot, now }: ShellData) {
           />
         </div>
         {/* Kept mounted like FleetView, so a half-typed reply survives a tab switch. */}
-        <div hidden={tab !== 'crews'}>
-          <CrewsView
-            runs={runs}
-            now={now}
-            onOpen={(r) => { window.location.hash = runHash(r.id) }}
-          />
-        </div>
+        {dispatcherMode && (
+          <div hidden={tab !== 'crews'}>
+            <CrewsView
+              runs={runs}
+              now={now}
+              onOpen={(r) => { window.location.hash = runHash(r.id) }}
+            />
+          </div>
+        )}
         {/* Kept mounted like Crews, so a half-typed dispatch form survives a tab switch. */}
-        <div hidden={tab !== 'dispatch'}>
-          <DispatchView runs={runs} />
-        </div>
+        {dispatcherMode && (
+          <div hidden={tab !== 'dispatch'}>
+            <DispatchView runs={runs} />
+          </div>
+        )}
         {tab === 'workspace' && <WorkspaceView onOpen={(id) => { window.location.hash = runHash(id) }} />}
         {/* A stacked overlay, not a `hidden`-swapped replacement of `.fleet` —
             `hidden` maps to display:none, which would collapse `.fleet`'s own
@@ -74,15 +81,19 @@ export function MobileShell({ runs, connected, hasSnapshot, now }: ShellData) {
           Fleet
           {attention && tab !== 'fleet' && <span className="dot" role="status" aria-label="runs need you" />}
         </button>
-        <button className={tab === 'crews' ? 'on' : ''} aria-current={tab === 'crews' ? 'true' : undefined} onClick={() => goTab('crews', true)}>
-          <span className="glyph" aria-hidden>◆</span>Crews
-        </button>
+        {dispatcherMode && (
+          <button className={tab === 'crews' ? 'on' : ''} aria-current={tab === 'crews' ? 'true' : undefined} onClick={() => goTab('crews', true)}>
+            <span className="glyph" aria-hidden>◆</span>Crews
+          </button>
+        )}
         <button className={tab === 'workspace' ? 'on' : ''} aria-current={tab === 'workspace' ? 'true' : undefined} onClick={() => goTab('workspace', true)}>
           <span className="glyph" aria-hidden>▣</span>Workspace
         </button>
-        <button className={tab === 'dispatch' ? 'on' : ''} aria-current={tab === 'dispatch' ? 'true' : undefined} onClick={() => goTab('dispatch', true)}>
-          <span className="glyph" aria-hidden>✦</span>Dispatch
-        </button>
+        {dispatcherMode && (
+          <button className={tab === 'dispatch' ? 'on' : ''} aria-current={tab === 'dispatch' ? 'true' : undefined} onClick={() => goTab('dispatch', true)}>
+            <span className="glyph" aria-hidden>✦</span>Dispatch
+          </button>
+        )}
       </nav>
     </div>
   )

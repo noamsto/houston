@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/noamsto/houston/mode"
 	"github.com/noamsto/houston/opencode"
 )
 
@@ -19,7 +20,7 @@ import (
 // merely cancelling its context and moving on. The gate closes only from a
 // test-owned timer, so this can't pass by coincidence.
 func TestClose_JoinsOpenCodeScanGoroutine(t *testing.T) {
-	s, err := New(Config{StatusDir: t.TempDir()})
+	s, err := New(Config{StatusDir: t.TempDir(), Mode: mode.Dispatcher})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -78,6 +79,7 @@ func TestClose_ClosesOpenCodeManager(t *testing.T) {
 		StatusDir:       t.TempDir(),
 		OpenCodeEnabled: true,
 		OpenCodeURL:     "http://127.0.0.1:1", // unreachable; the periodic loops don't matter here
+		Mode:            mode.Dispatcher,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

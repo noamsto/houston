@@ -1,6 +1,10 @@
 package server
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/noamsto/houston/mode"
+)
 
 // TestClose_ClosesControlManager proves Server.Close invokes controlMgr.Close,
 // closing every tmux -C control-client child process it opened.
@@ -11,7 +15,7 @@ func TestClose_ClosesControlManager(t *testing.T) {
 
 	session, _, _ := newTrapSession(t)
 
-	s, err := New(Config{StatusDir: t.TempDir()})
+	s, err := New(Config{StatusDir: t.TempDir(), Mode: mode.Dispatcher})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

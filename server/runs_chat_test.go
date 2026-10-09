@@ -23,6 +23,7 @@ import (
 	"github.com/noamsto/houston/chat"
 	"github.com/noamsto/houston/hook"
 	"github.com/noamsto/houston/hub"
+	"github.com/noamsto/houston/mode"
 	"github.com/noamsto/houston/runs"
 )
 
@@ -804,7 +805,7 @@ func TestRunChatToolFlagsAreIndependent(t *testing.T) {
 // --- auth ---
 
 func TestRunChatRoutesAreBehindTheAuthGate(t *testing.T) {
-	s := newFullServer(t, Config{StatusDir: t.TempDir(), AuthEnabled: true})
+	s := newFullServer(t, Config{StatusDir: t.TempDir(), AuthEnabled: true, Mode: mode.Dispatcher})
 	for _, path := range []string{"/api/runs/x/chat", "/api/runs/x/chat/stream", "/api/runs/x/chat/tool/y"} {
 		req := httptest.NewRequest("GET", "http://127.0.0.1"+path, nil)
 		req.Host = "127.0.0.1"

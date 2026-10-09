@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/noamsto/houston/mode"
 	"github.com/noamsto/houston/tmux"
 )
 
@@ -187,7 +188,7 @@ func TestTmuxSourceRun(t *testing.T) {
 		{wins: nil, panes: nil}, // tick 4: pane genuinely gone
 	}}
 
-	src := NewTmuxSource(f, 5*time.Millisecond)
+	src := NewTmuxSource(f, 5*time.Millisecond, mode.Dispatcher)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -236,6 +237,65 @@ func TestTmuxSourceRun(t *testing.T) {
 	cancel()
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run returned %v, want context.Canceled", err)
+	}
+}
+
+func TestTmuxSourceModeCrewEnrichment(t *testing.T) {
+	tests := []struct {
+		name     string
+		mode     mode.Mode
+		wantCrew bool
+	}{
+		{"dispatcher", mode.Dispatcher, true},
+		{"tmux", mode.Tmux, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := &fakeLister{steps: []fakeStep{{
+				wins: []tmux.WindowOptions{{Session: "s", Window: 1, CrewName: "dispatcher", CrewColor: "colour99"}},
+				panes: []tmux.PaneOptions{
+					{PaneID: "%1", Target: "s:1", ClaudeStatus: "processing 1 ", CrewRole: "lead"},
+					{PaneID: "%2", Target: "s:1", ClaudeStatus: "processing 1 ", CrewRole: "spec-critic"},
+				},
+			}}}
+			// A long interval keeps the run to one tick, so the channel holds
+			// everything the tick emitted by the time Run blocks on the ticker.
+			src := NewTmuxSource(f, time.Hour, tt.mode)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			out := make(chan Delta, 16)
+			done := make(chan error, 1)
+			go func() { done <- src.Run(ctx, out) }()
+
+			var d Delta
+			select {
+			case d = <-out:
+			case <-time.After(time.Second):
+				t.Fatal("timed out waiting for a delta")
+			}
+			if d.Key != "%1" {
+				t.Fatalf("Key = %q, want the lead pane %%1", d.Key)
+			}
+			select {
+			case extra := <-out:
+				t.Fatalf("unexpected extra delta %+v — the role pane must stay skipped", extra)
+			case <-time.After(50 * time.Millisecond):
+			}
+
+			if tt.wantCrew {
+				if d.Run.Role != RoleDispatcher || d.Run.Crew == nil || d.Run.Crew.Codename != "dispatcher" {
+					t.Errorf("Role = %q, Crew = %+v, want dispatcher role and crew", d.Run.Role, d.Run.Crew)
+				}
+			} else if d.Run.Role != "" || d.Run.Crew != nil {
+				t.Errorf("Role = %q, Crew = %+v, want neither in tmux mode", d.Run.Role, d.Run.Crew)
+			}
+
+			cancel()
+			if err := <-done; !errors.Is(err, context.Canceled) {
+				t.Fatalf("Run returned %v, want context.Canceled", err)
+			}
+		})
 	}
 }
 

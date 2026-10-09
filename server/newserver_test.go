@@ -1,6 +1,10 @@
 package server
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/noamsto/houston/mode"
+)
 
 // newFullServer builds a Server via New and registers Close as cleanup.
 // t.Cleanup is LIFO, so call it after t.TempDir(): Close then runs before the
@@ -20,7 +24,7 @@ func newFullServer(t *testing.T, cfg Config) *Server {
 }
 
 func TestCloseStopsBackgroundGoroutines(t *testing.T) {
-	s, err := New(Config{StatusDir: t.TempDir()})
+	s, err := New(Config{StatusDir: t.TempDir(), Mode: mode.Dispatcher})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

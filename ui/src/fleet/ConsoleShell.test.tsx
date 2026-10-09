@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { ConsoleShell } from './ConsoleShell'
+import { fetchDispatchOptions } from '../api/dispatch'
 import type { Run } from '../api/runs'
 
 const now = 1_800_000_000_000 // fixed ms
@@ -16,7 +17,7 @@ vi.mock('../hooks/usePaneSocket', () => ({
 // render of this shell — never a real fetch in tests.
 vi.mock('../api/dispatch', () => ({
   NEW_CREW: 'new',
-  fetchDispatchOptions: () => Promise.resolve({
+  fetchDispatchOptions: vi.fn(() => Promise.resolve({
     repos: [{ path: '/repo', name: 'repo', crews: ['1-1'] }],
     tiers: ['trivial', 'standard', 'deep'],
     efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -24,7 +25,7 @@ vi.mock('../api/dispatch', () => ({
     engines: { claude: ['opus', 'sonnet', 'haiku', 'fable'] },
     engine_order: ['claude'],
     tier_models: { claude: { trivial: 'haiku', standard: 'sonnet', deep: 'opus' } },
-  }),
+  })),
   submitDispatch: vi.fn(),
 }))
 
@@ -50,7 +51,7 @@ afterEach(() => {
 
 describe('ConsoleShell layout', () => {
   it('renders the three regions and an empty detail state with an empty hash', () => {
-    render(<ConsoleShell runs={[]} connected hasSnapshot now={now} />)
+    render(<ConsoleShell runs={[]} connected hasSnapshot now={now} mode="dispatcher" />)
     expect(screen.getByLabelText('rail')).toBeTruthy()
     expect(screen.getByLabelText('list')).toBeTruthy()
     const detail = screen.getByLabelText('detail')
@@ -63,7 +64,7 @@ describe('ConsoleShell layout', () => {
       run({ id: 'a', repo: 'repo-a', branch: 'branch-a' }),
       run({ id: 'b', repo: 'repo-b', branch: 'branch-b' }),
     ]
-    render(<ConsoleShell runs={runs} connected hasSnapshot now={now} />)
+    render(<ConsoleShell runs={runs} connected hasSnapshot now={now} mode="dispatcher" />)
 
     const detail = screen.getByLabelText('detail')
     expect(within(detail).getByText('branch-b')).toBeTruthy()
@@ -77,7 +78,7 @@ describe('ConsoleShell layout', () => {
       run({ id: 'a', repo: 'repo-a', branch: 'branch-a' }),
       run({ id: 'b', repo: 'repo-b', branch: 'branch-b' }),
     ]
-    render(<ConsoleShell runs={runs} connected hasSnapshot now={now} />)
+    render(<ConsoleShell runs={runs} connected hasSnapshot now={now} mode="dispatcher" />)
 
     const list = screen.getByLabelText('fleet list')
     fireEvent.click(cardFor(list, 'branch-a'))
@@ -98,7 +99,7 @@ describe('ConsoleShell layout', () => {
       run({ id: 'stale-done', state: 'done', updated_at: nowSec - 2 * 3600 }),
       run({ id: 'running', state: 'running' }),
     ]
-    render(<ConsoleShell runs={runs} connected hasSnapshot now={now} />)
+    render(<ConsoleShell runs={runs} connected hasSnapshot now={now} mode="dispatcher" />)
 
     const rail = screen.getByLabelText('rail')
     expect(within(rail).getByRole('button', { name: '1 needs you' })).toBeTruthy()
@@ -114,7 +115,7 @@ describe('ConsoleShell layout', () => {
       run({ id: 'done-a', state: 'done', attention: 'done' }),
       run({ id: 'ended', state: 'done' }),
     ]
-    render(<ConsoleShell runs={runs} connected hasSnapshot now={now} />)
+    render(<ConsoleShell runs={runs} connected hasSnapshot now={now} mode="dispatcher" />)
 
     const rail = screen.getByLabelText('rail')
     expect(within(rail).getByRole('button', { name: /^Stuck/ }).querySelector('.console-count')?.textContent).toBe('2')
@@ -136,7 +137,7 @@ describe('ConsoleShell layout', () => {
       }),
       run({ id: 'live', crew: { name: 'LIVE' } }),
     ]
-    render(<ConsoleShell runs={runs} connected hasSnapshot now={now} />)
+    render(<ConsoleShell runs={runs} connected hasSnapshot now={now} mode="dispatcher" />)
 
     const rail = screen.getByLabelText('rail')
     expect(within(rail).queryByTitle('DEAD')).toBeNull()
@@ -151,7 +152,7 @@ describe('ConsoleShell layout', () => {
       run({ id: 'y2', crew: { name: 'Y' }, repo: 'r-y2', branch: 'b-y2' }),
       run({ id: 'n1', repo: 'r-n1', branch: 'b-n1' }),
     ]
-    render(<ConsoleShell runs={runs} connected hasSnapshot now={now} />)
+    render(<ConsoleShell runs={runs} connected hasSnapshot now={now} mode="dispatcher" />)
 
     const rail = screen.getByLabelText('rail')
     fireEvent.click(within(rail).getByTitle('X'))
@@ -180,7 +181,7 @@ describe('ConsoleShell layout', () => {
       run({ id: 'y-stale', crew: { name: 'Y' }, state: 'blocked', updated_at: nowSec - 2 * 3600 }),
       run({ id: 'n-stale', state: 'blocked', updated_at: nowSec - 2 * 3600 }),
     ]
-    render(<ConsoleShell runs={runs} connected hasSnapshot now={now} />)
+    render(<ConsoleShell runs={runs} connected hasSnapshot now={now} mode="dispatcher" />)
 
     const rail = screen.getByLabelText('rail')
     const list = screen.getByLabelText('fleet list')
@@ -203,7 +204,7 @@ describe('ConsoleShell layout', () => {
 
   it('switches the list column between Fleet, Crews, Workspace and Dispatch', async () => {
     const runs = [run({ id: 'a' })]
-    render(<ConsoleShell runs={runs} connected hasSnapshot now={now} />)
+    render(<ConsoleShell runs={runs} connected hasSnapshot now={now} mode="dispatcher" />)
 
     const rail = screen.getByLabelText('rail')
 
@@ -223,14 +224,14 @@ describe('ConsoleShell layout', () => {
 
   it('opens on the Dispatch section for a dispatch link', () => {
     window.location.hash = '#/dispatch?repo=%2Frepo&crew=new'
-    render(<ConsoleShell runs={[]} connected hasSnapshot now={now} />)
+    render(<ConsoleShell runs={[]} connected hasSnapshot now={now} mode="dispatcher" />)
 
     const rail = screen.getByLabelText('rail')
     expect(within(rail).getByRole('button', { name: 'Dispatch' }).getAttribute('aria-pressed')).toBe('true')
   })
 
   it('switches to Dispatch when the hash becomes a dispatch link', () => {
-    render(<ConsoleShell runs={[]} connected hasSnapshot now={now} />)
+    render(<ConsoleShell runs={[]} connected hasSnapshot now={now} mode="dispatcher" />)
     const rail = screen.getByLabelText('rail')
     expect(within(rail).getByRole('button', { name: 'Dispatch' }).getAttribute('aria-pressed')).toBe('false')
 
@@ -250,14 +251,14 @@ describe('ConsoleShell project grouping', () => {
   ]
 
   it('shows the project chip in the default flat list', () => {
-    render(<ConsoleShell runs={runs} connected hasSnapshot now={now} />)
+    render(<ConsoleShell runs={runs} connected hasSnapshot now={now} mode="dispatcher" />)
     const list = screen.getByLabelText('fleet list')
     expect(list.querySelectorAll('.fleet-project-group').length).toBe(0)
     expect(cardFor(list, 'w-one').querySelector('.run-project')?.textContent).toBe('houston')
   })
 
   it('groups by project with counts and dispatcher before its workers', () => {
-    render(<ConsoleShell runs={runs} connected hasSnapshot now={now} />)
+    render(<ConsoleShell runs={runs} connected hasSnapshot now={now} mode="dispatcher" />)
     const list = screen.getByLabelText('fleet list')
     fireEvent.click(within(list).getByRole('button', { name: 'Group by project' }))
 
@@ -270,7 +271,7 @@ describe('ConsoleShell project grouping', () => {
   })
 
   it('keeps the dispatcher crew summary complete while a crew narrows the list', () => {
-    render(<ConsoleShell runs={runs} connected hasSnapshot now={now} />)
+    render(<ConsoleShell runs={runs} connected hasSnapshot now={now} mode="dispatcher" />)
     fireEvent.click(within(screen.getByLabelText('rail')).getByTitle('X'))
     const list = screen.getByLabelText('fleet list')
     expect(within(list).queryByText('w-two')).toBeNull()
@@ -283,7 +284,7 @@ describe('ConsoleShell tab routes', () => {
 
   it('keeps the detail pane when a rail filter is chosen', () => {
     window.location.hash = '#/fleet/b'
-    render(<ConsoleShell runs={runs} connected hasSnapshot now={now} />)
+    render(<ConsoleShell runs={runs} connected hasSnapshot now={now} mode="dispatcher" />)
 
     fireEvent.click(within(screen.getByLabelText('rail')).getByRole('button', { name: /^All/ }))
 
@@ -293,7 +294,7 @@ describe('ConsoleShell tab routes', () => {
 
   it('switches the list to Crews while the detail stays open', () => {
     window.location.hash = '#/fleet/b'
-    render(<ConsoleShell runs={runs} connected hasSnapshot now={now} />)
+    render(<ConsoleShell runs={runs} connected hasSnapshot now={now} mode="dispatcher" />)
 
     const crewsButton = within(screen.getByLabelText('rail')).getByRole('button', { name: 'Crews' })
     fireEvent.click(crewsButton)
@@ -304,7 +305,7 @@ describe('ConsoleShell tab routes', () => {
 
   it('the detail back button returns to the current section', () => {
     window.location.hash = '#/fleet/b'
-    render(<ConsoleShell runs={runs} connected hasSnapshot now={now} />)
+    render(<ConsoleShell runs={runs} connected hasSnapshot now={now} mode="dispatcher" />)
     fireEvent.click(within(screen.getByLabelText('rail')).getByRole('button', { name: 'Crews' }))
 
     fireEvent.click(
@@ -314,5 +315,61 @@ describe('ConsoleShell tab routes', () => {
     )
 
     expect(window.location.hash).toBe('#/crews')
+  })
+})
+
+describe('ConsoleShell modes', () => {
+  beforeEach(() => {
+    vi.mocked(fetchDispatchOptions).mockClear()
+  })
+
+  it('tmux mode has no Crews or Dispatch and never loads dispatch options', async () => {
+    render(<ConsoleShell runs={[]} connected hasSnapshot now={now} mode="tmux" />)
+    await act(async () => {})
+
+    const rail = within(screen.getByLabelText('rail'))
+    expect(rail.queryByRole('button', { name: 'Crews' })).toBeNull()
+    expect(rail.queryByRole('button', { name: 'Dispatch' })).toBeNull()
+    expect(rail.getByRole('button', { name: /^Active/ })).toBeTruthy()
+    expect(rail.getByRole('button', { name: 'Workspace' })).toBeTruthy()
+    expect(fetchDispatchOptions).not.toHaveBeenCalled()
+  })
+
+  it.each(['#/dispatch', '#/dispatch?repo=/r&crew=new'])('tmux mode redirects %s to Fleet', (hash) => {
+    window.location.hash = hash
+    render(<ConsoleShell runs={[]} connected hasSnapshot now={now} mode="tmux" />)
+
+    expect(window.location.hash).toBe('#/fleet')
+    expect(screen.getByLabelText('fleet list').hasAttribute('hidden')).toBe(false)
+    expect(screen.queryByLabelText('Title')).toBeNull()
+  })
+
+  it.each(['#/crews', '#/dispatch?repo=/r&crew=new'])('tmux mode sends a later hashchange to %s back to Fleet', async (hash) => {
+    render(<ConsoleShell runs={[]} connected hasSnapshot now={now} mode="tmux" />)
+
+    await act(async () => {
+      window.location.hash = hash
+      window.dispatchEvent(new HashChangeEvent('hashchange'))
+    })
+
+    expect(window.location.hash).toBe('#/fleet')
+    expect(screen.getByLabelText('fleet list').hasAttribute('hidden')).toBe(false)
+  })
+
+  it('an unknown mode leaves #/crews alone and mounts no Crews pane, then redirects once tmux is known', () => {
+    window.location.hash = '#/crews'
+    const { rerender } = render(<ConsoleShell runs={[]} connected hasSnapshot now={now} mode={null} />)
+    expect(window.location.hash).toBe('#/crews')
+    expect(fetchDispatchOptions).not.toHaveBeenCalled()
+
+    rerender(<ConsoleShell runs={[]} connected hasSnapshot now={now} mode="tmux" />)
+    expect(window.location.hash).toBe('#/fleet')
+  })
+
+  it('dispatcher mode stays on #/dispatch', () => {
+    window.location.hash = '#/dispatch'
+    render(<ConsoleShell runs={[]} connected hasSnapshot now={now} mode="dispatcher" />)
+
+    expect(window.location.hash).toBe('#/dispatch')
   })
 })

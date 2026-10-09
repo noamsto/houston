@@ -1,7 +1,7 @@
 import { act, cleanup, renderHook } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
-  dispatchHash, parseDetailRoute, parseDispatchRoute, parseTabRoute, tabHash, useDetailRoute, useDispatchRoute, useShellTab,
+  dispatchHash, parseDetailRoute, parseDispatchRoute, parseTabRoute, tabHash, tabsFor, useDetailRoute, useDispatchRoute, useShellTab,
 } from './routes'
 
 afterEach(() => {
@@ -122,6 +122,16 @@ describe('parseTabRoute', () => {
   })
 })
 
+describe('tabsFor', () => {
+  it('lists every tab in dispatcher mode', () => {
+    expect(tabsFor('dispatcher')).toEqual(['fleet', 'crews', 'workspace', 'dispatch'])
+  })
+
+  it.each(['tmux', null] as const)('lists only Fleet and Workspace for %s', (mode) => {
+    expect(tabsFor(mode)).toEqual(['fleet', 'workspace'])
+  })
+})
+
 describe('tabHash', () => {
   it('builds the hash for a tab', () => {
     expect(tabHash('fleet')).toBe('#/fleet')
@@ -132,7 +142,7 @@ describe('tabHash', () => {
 describe('useShellTab', () => {
   it('starts from the hash and follows hashchange', () => {
     window.location.hash = '#/workspace'
-    const { result } = renderHook(() => useShellTab())
+    const { result } = renderHook(() => useShellTab('dispatcher'))
     expect(result.current[0]).toBe('workspace')
 
     act(() => { window.location.hash = '#/crews' })
@@ -144,14 +154,14 @@ describe('useShellTab', () => {
 
   it('keeps the tab across a detail hash', () => {
     window.location.hash = '#/crews'
-    const { result } = renderHook(() => useShellTab())
+    const { result } = renderHook(() => useShellTab('dispatcher'))
 
     act(() => { window.location.hash = '#/fleet/pane-1/activity' })
     expect(result.current[0]).toBe('crews')
   })
 
   it('goTab writes the hash when no detail is open', () => {
-    const { result } = renderHook(() => useShellTab())
+    const { result } = renderHook(() => useShellTab('dispatcher'))
     act(() => result.current[1]('crews'))
     expect(result.current[0]).toBe('crews')
     expect(window.location.hash).toBe('#/crews')
@@ -159,7 +169,7 @@ describe('useShellTab', () => {
 
   it('goTab is state-only with a detail open unless closeDetail', () => {
     window.location.hash = '#/fleet/pane-1/activity'
-    const { result } = renderHook(() => useShellTab())
+    const { result } = renderHook(() => useShellTab('dispatcher'))
 
     act(() => result.current[1]('crews'))
     expect(result.current[0]).toBe('crews')
@@ -168,5 +178,19 @@ describe('useShellTab', () => {
     act(() => result.current[1]('workspace', true))
     expect(result.current[0]).toBe('workspace')
     expect(window.location.hash).toBe('#/workspace')
+  })
+
+  it('reads a tab the mode lacks as Fleet and rewrites the hash', () => {
+    window.location.hash = '#/crews'
+    const { result } = renderHook(() => useShellTab('tmux'))
+    expect(result.current[0]).toBe('fleet')
+    expect(window.location.hash).toBe('#/fleet')
+  })
+
+  it('leaves a dispatcher-only hash alone while the mode is unknown', () => {
+    window.location.hash = '#/crews'
+    const { result } = renderHook(() => useShellTab(null))
+    expect(result.current[0]).toBe('crews')
+    expect(window.location.hash).toBe('#/crews')
   })
 })

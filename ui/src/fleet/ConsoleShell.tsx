@@ -21,8 +21,9 @@ const FILTER_LABEL: Record<Filter, string> = {
   all: 'All',
 }
 
-export function ConsoleShell({ runs, connected, hasSnapshot, now }: ShellData) {
-  const [section, goTab] = useShellTab()
+export function ConsoleShell({ runs, connected, hasSnapshot, now, mode }: ShellData) {
+  const [section, goTab] = useShellTab(mode)
+  const dispatcherMode = mode === 'dispatcher'
   const [filter, setFilter] = useState<Filter>('active')
   const [crew, setCrew] = useState<string | null>(null)
   const [grouped, setGrouped] = useGroupByProject()
@@ -191,9 +192,13 @@ export function ConsoleShell({ runs, connected, hasSnapshot, now }: ShellData) {
 
         <div>
           <h2>Views</h2>
-          <button type="button" className="console-rail-item" aria-pressed={section === 'crews'} onClick={() => goTab('crews')}>Crews</button>
+          {dispatcherMode && (
+            <button type="button" className="console-rail-item" aria-pressed={section === 'crews'} onClick={() => goTab('crews')}>Crews</button>
+          )}
           <button type="button" className="console-rail-item" aria-pressed={section === 'workspace'} onClick={() => goTab('workspace')}>Workspace</button>
-          <button type="button" className="console-rail-item" aria-pressed={section === 'dispatch'} onClick={() => goTab('dispatch')}>Dispatch</button>
+          {dispatcherMode && (
+            <button type="button" className="console-rail-item" aria-pressed={section === 'dispatch'} onClick={() => goTab('dispatch')}>Dispatch</button>
+          )}
         </div>
 
       </nav>
@@ -235,17 +240,21 @@ export function ConsoleShell({ runs, connected, hasSnapshot, now }: ShellData) {
           </div>
         </div>
 
-        <div hidden={section !== 'crews'} className="console-pane">
-          <CrewsView runs={runs} now={now} onOpen={open} />
-        </div>
+        {dispatcherMode && (
+          <div hidden={section !== 'crews'} className="console-pane">
+            <CrewsView runs={runs} now={now} onOpen={open} />
+          </div>
+        )}
 
         {section === 'workspace' && (
           <WorkspaceView onOpen={(id) => { window.location.hash = runHash(id) }} />
         )}
 
-        <div hidden={section !== 'dispatch'} className="console-pane">
-          <DispatchView runs={runs} />
-        </div>
+        {dispatcherMode && (
+          <div hidden={section !== 'dispatch'} className="console-pane">
+            <DispatchView runs={runs} />
+          </div>
+        )}
       </section>
 
       <section className="console-detail" aria-label="detail">

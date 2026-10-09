@@ -6,6 +6,8 @@ import (
 	"os"
 	"testing"
 	"testing/fstest"
+
+	"github.com/noamsto/houston/mode"
 )
 
 // If this fails, a rebound page can obtain the real token by fetching "/".
@@ -44,7 +46,7 @@ func TestUnknownHostGetsNoCookieAndIsRefused(t *testing.T) {
 // discarded here, not the probing itself.)
 func TestHandlerRefusesUnknownHostEndToEnd(t *testing.T) {
 	dir := t.TempDir()
-	s := newFullServer(t, Config{StatusDir: dir, AuthEnabled: true, UIFS: fstest.MapFS{}})
+	s := newFullServer(t, Config{StatusDir: dir, AuthEnabled: true, UIFS: fstest.MapFS{}, Mode: mode.Dispatcher})
 	s.hosts = newHostGate([]string{"houston-host"}, nil, nil)
 
 	req := httptest.NewRequest("GET", "http://evil.example/", nil)

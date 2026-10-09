@@ -5,6 +5,23 @@ import (
 	"testing"
 )
 
+func TestWithoutCrew(t *testing.T) {
+	in := []WindowOptions{{Session: "s", Window: 1, Branch: "main", CrewName: "ash", CrewColor: "colour99"}}
+	got := WithoutCrew(in)
+	if got[0].CrewName != "" || got[0].CrewColor != "" {
+		t.Errorf("crew fields = %q/%q, want cleared", got[0].CrewName, got[0].CrewColor)
+	}
+	if got[0].Session != "s" || got[0].Branch != "main" {
+		t.Errorf("other fields changed: %+v", got[0])
+	}
+	if in[0].CrewName != "ash" || in[0].CrewColor != "colour99" {
+		t.Errorf("input mutated: %+v", in[0])
+	}
+	if WithoutCrew(nil) != nil {
+		t.Error("nil in must give nil out")
+	}
+}
+
 func TestParseWindowOptions(t *testing.T) {
 	// Real output shape, including the common all-empty-options case.
 	out := "lazytmux\x1f2\x1ffeat/320-relay\x1f#320\x1f565\x1fmauve\x1fopen\x1fpassing\x1fMERGEABLE\x1f\x1f\x1fcolour168\x1frelay\x1f1\n" +

@@ -10,7 +10,18 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/noamsto/houston/mode"
 )
+
+func TestOrderByMode(t *testing.T) {
+	if got := Order(mode.Tmux); !reflect.DeepEqual(got, []string{"tmux", "hooks"}) {
+		t.Errorf("Order(tmux) = %v, want [tmux hooks] with no crew layer", got)
+	}
+	if got := Order(mode.Dispatcher); !reflect.DeepEqual(got, DefaultOrder) {
+		t.Errorf("Order(dispatcher) = %v, want DefaultOrder %v", got, DefaultOrder)
+	}
+}
 
 func TestPrecedenceHooksBeatTmux(t *testing.T) {
 	r := NewRegistry(DefaultOrder)

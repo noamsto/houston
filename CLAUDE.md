@@ -45,6 +45,19 @@ After installing the plugin, restart your OpenCode instances.
 
 Houston scans ports 4096-4100 by default. Use `--no-opencode` to disable.
 
+## Modes
+
+houston runs in one of two modes, chosen by `-mode auto|dispatcher|tmux` (default `auto`) and resolved once at startup, never re-detected. The result is logged as `houston mode` with `mode`, `requested` and `reason` (never the PATH value).
+
+- **`auto`** (`mode.Resolve`, production probe `server.ModeProbe`) picks dispatcher mode when both `dispatch` and `crew` resolve (`mode.OnPath`: an executable regular file; an empty PATH element never means the cwd) on the tmux server's global PATH joined ahead of houston's own — the PATH `dispatch` runs with (`dispatchEnv`). If the tmux server PATH can't be read (server unreachable, no global PATH), only houston's PATH is searched. Otherwise tmux mode. `exec` resolves `dispatch` on houston's own PATH, so a host with `dispatch` only on the tmux server's PATH still gets dispatcher mode and dispatch's 502 "could not be started".
+- `server.Config.Mode` must be `mode.Dispatcher` or `mode.Tmux`; `server.New` errors otherwise.
+- **Dispatcher mode** is everything described below.
+- **Tmux mode** is plain tmux plus hooks monitoring:
+  - `POST /api/runs/:id/reply`, `POST /api/dispatch`, `GET /api/dispatch/options`, `POST /api/dispatch/dispatcher`, `GET|POST|DELETE /api/repos` and `GET /api/repos/candidates` are not registered (404): the command-execution surface is gone, not hidden.
+  - No `CrewSource` (`runSources`); the registry order `runs.Order` is tmux, hooks, so nothing reads `<git-common-dir>/crew`.
+  - The tmux layer ignores `@crew_name`/`@crew_color` (`tmux.WithoutCrew`): no `role`, no codename or colour, no dispatcher worker-count line, and the Workspace response carries no `crew_codename`. Role-grid panes (`@crew_role` other than `lead`) are still skipped in both modes.
+- `GET /api/mode` → `{"mode":"dispatcher"|"tmux"}` in both modes, behind the auth gate. The UI (`useMode`) fetches it once and retries every 5 s on failure; until it is known only Fleet and Workspace show, so in dispatcher mode Crews and Dispatch appear a moment after load. In tmux mode those two tabs are absent (`tabsFor`) and `#/crews` / `#/dispatch` (with any query) are rewritten in place to `#/fleet` (`useShellTab(mode)`); while the mode is unknown such a hash is left alone.
+
 ## Architecture
 
 ```
@@ -60,18 +73,20 @@ Houston scans ports 4096-4100 by default. Use `--no-opencode` to disable.
 │                  Go HTTP Server                       │
 │                                                       │
 │  JSON API:                                            │
+│  GET  /api/mode               - Mode (both modes)     │
 │  GET  /api/runs*              - Run list + SSE stream │
-│  POST /api/runs/:id/reply     - Reply to a run        │
+│  POST /api/runs/:id/reply     - Reply to a run (D)    │
 │  WS   /api/runs/:id/terminal  - Run terminal I/O      │
 │  POST /api/runs/:id/input     - Send text/key/image   │
 │  GET  /api/runs/:id/chat*     - Chat page, SSE, tool  │
-│  GET  /api/dispatch/options  - Dispatch form choices  │
-│  POST /api/dispatch          - Start a worker         │
-│  POST /api/dispatch/dispatcher - New dispatcher       │
-│  GET  /api/repos             - Repo registry          │
-│  POST|DELETE /api/repos      - Add/forget a repo      │
-│  GET  /api/repos/candidates  - Repo picker            │
-│  GET  /*                     - Serve React SPA        │
+│  GET  /api/dispatch/options   - Dispatch form (D)     │
+│  POST /api/dispatch           - Start a worker (D)    │
+│  POST /api/dispatch/dispatcher - New dispatcher (D)   │
+│  GET  /api/repos              - Repo registry (D)     │
+│  POST|DELETE /api/repos       - Add/forget a repo (D) │
+│  GET  /api/repos/candidates   - Repo picker (D)       │
+│  GET  /*                      - Serve React SPA       │
+│  (D) = dispatcher mode only; 404 in tmux mode         │
 │                                                       │
 │  React SPA embedded via go:embed at compile time      │
 └──────────────────────────────────────────────────────┘
@@ -126,6 +141,7 @@ houston/
 ├── agents/              # Agent type detection (claude-code, amp)
 ├── chat/                # Standalone ACP transcript readers (stdlib only)
 ├── hub/                 # Session discovery + transcript tracking + chat ring
+├── mode/                # Dispatcher vs tmux mode resolution (stdlib only)
 ├── runs/                # Run registry (tmux/hook/crew sources)
 ├── hook/                # Claude hook install/doctor/state
 ├── contrib/             # OpenCode plugin
@@ -228,7 +244,7 @@ already verified in `TerminalPane.tsx` / `useTouchGestures.ts`.
 
 ## Navigation
 
-Every shell tab is a hash route — `#/fleet`, `#/crews`, `#/workspace`, `#/dispatch` (`ui/src/fleet/routes.ts`, `useShellTab`) — so Back/Forward move between tabs and reload restores the tab. A run detail (`#/fleet/<id>/<tab>`) keeps the tab it was opened from, and its back button returns there. On mobile a tab tap always writes the hash (closing the detail overlay); on desktop the detail is a persistent pane, so a rail switch while a run is selected is state-only (no history entry, not restored on reload).
+Every shell tab is a hash route — `#/fleet`, `#/crews`, `#/workspace`, `#/dispatch` (`ui/src/fleet/routes.ts`, `useShellTab`) — so Back/Forward move between tabs and reload restores the tab. A run detail (`#/fleet/<id>/<tab>`) keeps the tab it was opened from, and its back button returns there. On mobile a tab tap always writes the hash (closing the detail overlay); on desktop the detail is a persistent pane, so a rail switch while a run is selected is state-only (no history entry, not restored on reload). `#/crews` and `#/dispatch` exist only in dispatcher mode; tmux mode rewrites them to `#/fleet`.
 
 ## Hook ingestion
 
@@ -344,7 +360,7 @@ A Claude Code run's outstanding background shells and monitors ride on `Run.Back
 Every run can carry `project` and `role` (`runs/project.go`, `runs/tmuxsource.go`, `runs/crewsource.go`).
 
 - **`project`** is the main repo's name: `git rev-parse --git-common-dir` of the window's `@git_root`, so a linked worktree resolves to its main repo rather than its own directory name. Crew-bus runs derive it from the bus directory (`<common>/crew`) with no extra git call. Hook-only runs (no tmux window) get no `project`; the UI falls back to `repo`, which `repoAndBranch` already strips of the worktree leaf.
-- **`role`** is `dispatcher` when the window's `@crew_name` is the literal `dispatcher` (the dispatcher launcher, `adapters/core/dispatcher.sh`, sets it), `worker` for any other non-empty `@crew_name` and for every crew-bus run, and absent for a solo session. A dispatcher started any other way reads as solo. `worker` never overwrites `dispatcher` when layers merge.
+- **`role`** is `dispatcher` when the window's `@crew_name` is the literal `dispatcher` (the dispatcher launcher, `adapters/core/dispatcher.sh`, sets it), `worker` for any other non-empty `@crew_name` and for every crew-bus run, and absent for a solo session. A dispatcher started any other way reads as solo. `worker` never overwrites `dispatcher` when layers merge. Tmux mode sets no `role`: the tmux layer ignores `@crew_name` and there is no crew bus.
 - Hook-only runs (`runs/hooksource.go`) resolve `project` from the state file's `cwd` via the git common dir, and only when git actually names it — the first non-empty `Project` across layers wins, so a hook `cd` never overrides the tmux layer's.
 - **Ghost hook runs:** a hook state file whose pane is missing from a *successful* `ListPaneOptions` is published as `done` (kept in history, `caps.terminal` false); a failed listing never ends anything. Hook activity newer than that verdict marks the session alive elsewhere (another tmux server) and it is never ended again.
 - `hub` prunes an ended hook state file `hub.DefaultPruneTTL` (24h) after its last update; a file whose last-written state is not `ended` — including a ghost session's — is never pruned by this pass.
@@ -508,6 +524,8 @@ conversation. Design and measured per-engine mapping:
   ACP JSONL for eyeballing.
 
 ## Dispatch
+
+The Dispatch tab and every route in this section exist only in dispatcher mode (see "Modes").
 
 The Dispatch tab starts a worker by running the host's `dispatch` CLI
 (`server/dispatch.go`, `server/dispatch_exec.go`), or a new dispatcher through

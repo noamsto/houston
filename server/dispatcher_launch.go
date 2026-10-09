@@ -624,7 +624,13 @@ func launchEnv(environ []string, crewID string) []string {
 
 // tmuxServerPath is the tmux server's global PATH. The value is never logged.
 func (s *Server) tmuxServerPath(ctx context.Context) (string, error) {
-	out, err := s.tmuxRun(ctx, []string{"show-environment", "-g", "PATH"})
+	return serverGlobalPath(ctx, s.tmuxRun)
+}
+
+// serverGlobalPath reads the tmux server's global PATH through run. The value
+// is never logged.
+func serverGlobalPath(ctx context.Context, run tmuxRunner) (string, error) {
+	out, err := run(ctx, []string{"show-environment", "-g", "PATH"})
 	if err != nil {
 		if strings.Contains(err.Error(), "unknown variable") {
 			return "", errNoServerPath
