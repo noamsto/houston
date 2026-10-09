@@ -19,4 +19,8 @@ export interface WSMeta {
   status_line?: string
   activity?: string
   window_name?: string
+  // The app is on the alternate screen (no tmux scrollback)
+  alternate_on?: boolean
+  // The app tracks the mouse in SGR encoding
+  mouse_on?: boolean
 }

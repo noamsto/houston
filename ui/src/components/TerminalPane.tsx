@@ -14,10 +14,12 @@ import {
   computeFollowCursorTranslateX,
   decideDetach,
   useTouchGestures,
+  type AltScrollTarget,
 } from '../hooks/useTouchGestures'
 import { darkTheme, lightTheme } from '../lib/xterm'
 import { mobileFitScale } from '../lib/mobileFitScale'
 import { desktopFillScale } from '../lib/desktopFillScale'
+import { altScrollMode, cellAt, clampSteps, pxPerStep, scrollInput, takeSteps, wheelDeltaPx } from '../lib/altScroll'
 import { PaneHeader } from './PaneHeader'
 import { MobileInputBar } from './MobileInputBar'
 import { ColumnScrubber } from './ColumnScrubber'
@@ -113,6 +115,10 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
   // needs values the hook itself returns.
   const handleDragEndRef = useRef<(info: { movedX: boolean; startedAtBottom: boolean }) => void>(() => {})
 
+  // Set while the pane's app is on the alternate screen: scroll input goes to
+  // the app instead of xterm's (empty) history. Filled in once sendInput exists.
+  const altScrollRef = useRef<AltScrollTarget | null>(null)
+
   const {
     scaleRef,
     minScaleRef,
@@ -129,6 +135,7 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
     innerRef, outerRef, termRef, !isDesktop && termMounted, setFontSize,
     () => handleDoubleTapRef.current(),
     (info) => handleDragEndRef.current(info),
+    altScrollRef,
   )
 
   // Desktop only: fills the container via the same transform refs the mobile
@@ -407,6 +414,39 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
       termRef.current?.focus()
     }
   }, [isFocused, isDesktop])
+
+  useEffect(() => {
+    const mode = altScrollMode(meta)
+    altScrollRef.current = mode ? { mode, send: sendInput } : null
+  }, [meta, sendInput])
+
+  // Desktop wheel: forwarded to the app while it is on the alternate screen;
+  // otherwise xterm scrolls its own history as before.
+  useEffect(() => {
+    if (!isDesktop || !termMounted) return
+    const inner = innerRef.current
+    if (!inner) return
+    let acc = 0
+    let lastDir = 0
+    const onWheel = (e: WheelEvent) => {
+      const alt = altScrollRef.current
+      const term = termRef.current
+      const screen = inner.querySelector('.xterm-screen')
+      if (!alt || !term || !screen || e.ctrlKey || e.shiftKey) return
+      if (Math.abs(e.deltaX) >= Math.abs(e.deltaY)) return
+      e.preventDefault()
+      e.stopPropagation()
+      if (lastDir !== 0 && Math.sign(e.deltaY) !== lastDir) acc = 0
+      lastDir = Math.sign(e.deltaY)
+      const taken = takeSteps(acc, wheelDeltaPx(e, screen.clientHeight), pxPerStep(alt.mode))
+      acc = taken.acc
+      if (taken.steps === 0) return
+      const cell = cellAt(e.clientX, e.clientY, screen.getBoundingClientRect(), term.cols, term.rows)
+      alt.send(scrollInput(alt.mode, clampSteps(taken.steps), cell))
+    }
+    inner.addEventListener('wheel', onWheel, { capture: true, passive: false })
+    return () => inner.removeEventListener('wheel', onWheel, { capture: true })
+  }, [isDesktop, termMounted])
 
   // Show cursor for non-AI agents (regular shells, etc.)
   const agent = meta?.agent
