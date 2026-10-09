@@ -1,0 +1,27 @@
+
+❯ Ask me "Which color do you prefer?" with the options Red,
+  Blue and Green, header "Color".
+
+● User answered Claude's questions:
+  ⎿  · Which color do you prefer? → Blue
+
+● You prefer Blue.
+
+❯ Now ask me "Which color should the logo be?", same options.
+────────────────────────────────────────────────────────────
+ ☐ Logo
+
+Which color should the logo be?
+
+❯ 1. Red
+     Warm
+  2. Blue
+     Cool
+  3. Green
+     Natural
+  4. Type something.
+────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel
+

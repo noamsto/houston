@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/noamsto/houston/runs"
 	"github.com/noamsto/houston/tmux"
 )
 
@@ -23,6 +24,7 @@ type runPaneOps interface {
 	ResolvePane(paneID string) (tmux.Pane, error)
 	SendKeys(ctx context.Context, p tmux.Pane, keys string, enter bool) error
 	SendSpecialKey(p tmux.Pane, key string) error
+	CapturePane(p tmux.Pane, lines int) (string, error)
 }
 
 // terminalKeys mirrors MobileInputBar's quick actions plus the choice ordinals
@@ -46,21 +48,21 @@ type runInput struct {
 // runPane resolves a run to the live tmux pane it runs in, writing the refusal
 // itself when there is none. The pane id is re-resolved against tmux on every
 // request because the registry's view is only as fresh as its last poll.
-func (s *Server) runPane(w http.ResponseWriter, r *http.Request) (tmux.Pane, bool) {
+func (s *Server) runPane(w http.ResponseWriter, r *http.Request) (runs.Run, tmux.Pane, bool) {
 	id := r.PathValue("id")
 	if s.runs == nil {
 		terminalRefusal(w, id, http.StatusServiceUnavailable, "run registry not started")
-		return tmux.Pane{}, false
+		return runs.Run{}, tmux.Pane{}, false
 	}
 
 	run, ok := s.findRun(id)
 	if !ok {
 		terminalRefusal(w, id, http.StatusNotFound, "no such run")
-		return tmux.Pane{}, false
+		return runs.Run{}, tmux.Pane{}, false
 	}
 	if !run.Caps.Terminal || run.Tmux == nil || run.Tmux.PaneID == "" {
 		terminalRefusal(w, id, http.StatusConflict, "run has no terminal")
-		return tmux.Pane{}, false
+		return runs.Run{}, tmux.Pane{}, false
 	}
 
 	pane, err := s.runPanes.ResolvePane(run.Tmux.PaneID)
@@ -68,18 +70,18 @@ func (s *Server) runPane(w http.ResponseWriter, r *http.Request) (tmux.Pane, boo
 		if errors.Is(err, tmux.ErrPaneNotFound) {
 			slog.Debug("resolve run pane failed", "id", id, "pane_id", run.Tmux.PaneID, "error", err)
 			terminalRefusal(w, id, http.StatusConflict, "terminal pane is gone")
-			return tmux.Pane{}, false
+			return runs.Run{}, tmux.Pane{}, false
 		}
 		slog.Warn("resolve run pane failed", "id", id, "pane_id", run.Tmux.PaneID, "error", err)
 		terminalRefusal(w, id, http.StatusServiceUnavailable, "tmux unavailable")
-		return tmux.Pane{}, false
+		return runs.Run{}, tmux.Pane{}, false
 	}
 	if tmux.ServerMismatch(run.Tmux.Server, pane.Server) {
 		slog.Info("resolve run pane refused: server mismatch", "id", id, "pane_id", run.Tmux.PaneID, "run_server", run.Tmux.Server, "pane_server", pane.Server)
 		terminalRefusal(w, id, http.StatusConflict, "terminal pane belongs to a different tmux server")
-		return tmux.Pane{}, false
+		return runs.Run{}, tmux.Pane{}, false
 	}
-	return pane, true
+	return run, pane, true
 }
 
 func terminalRefusal(w http.ResponseWriter, id string, code int, detail string) {
@@ -93,7 +95,7 @@ func terminalRefusal(w http.ResponseWriter, id string, code int, detail string) 
 //
 // Resolution failures are plain HTTP errors, returned before the upgrade.
 func (s *Server) handleRunTerminal(w http.ResponseWriter, r *http.Request) {
-	pane, ok := s.runPane(w, r)
+	_, pane, ok := s.runPane(w, r)
 	if !ok {
 		return
 	}
@@ -116,7 +118,7 @@ func (s *Server) handleRunTerminal(w http.ResponseWriter, r *http.Request) {
 //	  {"type":"image","text":"...","images":[{...}]}   temp-file paths + text, then Enter
 //	→ 204
 func (s *Server) handleRunInput(w http.ResponseWriter, r *http.Request) {
-	pane, ok := s.runPane(w, r)
+	_, pane, ok := s.runPane(w, r)
 	if !ok {
 		return
 	}

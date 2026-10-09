@@ -1,0 +1,39 @@
+
+❯ Ask me "Which color do you prefer?" with the options Red,
+  Blue and Green, header "Color".
+────────────────────────────────────────────────────────────
+ ☐ Color
+
+Which color do you prefer?
+
+❯ 1. Red
+     Warm
+  2. Blue
+     Cool
+  3. Green
+     Natural
+  4. Type something.
+────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel
+
+● User answered Claude's questions:
+  ⎿  · Which color do you prefer? → Blue
+
+● Painting the fence blue.
+  ⎿  $ touch blue.txt
+
+────────────────────────────────────────────────────────────
+ Bash command
+ Create blue.txt
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ touch blue.txt
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ This command requires approval
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. No
+
+ Esc to cancel · Tab to amend

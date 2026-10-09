@@ -1,0 +1,14 @@
+
+❯ Ask me "Which color do you prefer?" with the options Red,
+  Blue and Green, header "Color".
+
+● User answered Claude's questions:
+  ⎿  · Which color do you prefer? → Blue
+
+● You prefer Blue.
+
+
+────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────
+  -- INSERT --

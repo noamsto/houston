@@ -89,6 +89,13 @@ type Server struct {
 	// runs composes the hook, tmux and crew sources into one Run per key.
 	runs     *runs.Registry
 	runPanes runPaneOps
+	// answerPoll and answerWait override how often and how long an answer
+	// waits for the pane to reach its next step, when non-zero. answerLocks
+	// holds one *sync.Mutex per pane target, so two answers never interleave
+	// keys in one pane.
+	answerPoll  time.Duration
+	answerWait  time.Duration
+	answerLocks sync.Map
 
 	// chat serves a run's chat transcript; the hub in production. chatPing
 	// and chatCheck override the stream's keep-alive and session-check
@@ -405,6 +412,8 @@ func (s *Server) Handler() http.Handler {
 	apiMux.HandleFunc("/api/runs/stream", s.handleRunsStream)
 	apiMux.HandleFunc("GET /api/runs/{id}/terminal", s.handleRunTerminal)
 	apiMux.HandleFunc("POST /api/runs/{id}/input", s.handleRunInput)
+	apiMux.HandleFunc("POST /api/runs/{id}/answer", s.handleRunAnswer)
+	apiMux.HandleFunc("GET /api/runs/{id}/prompt", s.handleRunPrompt)
 	apiMux.HandleFunc("GET /api/runs/{id}/chat", s.handleRunChat)
 	apiMux.HandleFunc("GET /api/runs/{id}/chat/stream", s.handleRunChatStream)
 	apiMux.HandleFunc("GET /api/runs/{id}/chat/tool/{callId}", s.handleRunChatTool)

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { ChatTab } from './ChatTab'
 import type { Run } from '../api/runs'
+import type { Prompt } from '../api/answer'
 import type { ChatPage, ChatToolDetail, ChatUpdate } from '../api/chat'
 import { installFakeEventSource } from '../testing/fakeEventSource'
 import type { FakeEventSourceHandle } from '../testing/fakeEventSource'
@@ -51,6 +52,8 @@ interface FetchOpts {
   page: ChatPage
   earlier?: ChatPage
   tool?: ChatToolDetail
+  answer?: { status: number; body?: string }
+  prompt?: Prompt
 }
 
 function installFetch(opts: FetchOpts): ReturnType<typeof vi.fn> {
@@ -59,6 +62,15 @@ function installFetch(opts: FetchOpts): ReturnType<typeof vi.fn> {
     if (url.includes('before=')) return Promise.resolve(jsonResponse(opts.earlier ?? opts.page))
     if (url.includes('/chat')) return Promise.resolve(jsonResponse(opts.page))
     if (url.includes('/input')) return Promise.resolve(okResponse())
+    if (url.includes('/prompt')) {
+      return Promise.resolve(opts.prompt ? jsonResponse(opts.prompt) : ({ status: 404, ok: false, text: async () => '' } as Response))
+    }
+    if (url.includes('/answer')) {
+      const { status, body = '' } = opts.answer ?? { status: 204 }
+      return Promise.resolve({
+        status, ok: status < 300, text: async () => body, json: async () => JSON.parse(body),
+      } as Response)
+    }
     throw new Error(`unexpected fetch: ${url}`)
   })
   vi.stubGlobal('fetch', mock)
@@ -862,14 +874,133 @@ describe('ChatTab', () => {
       expect(container.querySelector('.chat-question-declined')!.textContent).toContain('Not answered')
     })
 
-    it('shows the terminal hint while pending', async () => {
-      const { container } = await renderReady({}, {
+    it('shows the terminal hint while pending for an agent houston cannot answer for', async () => {
+      const { container } = await renderReady({ agent: 'pi' }, {
         page: page('e1', [askCall({ status: 'in_progress' })]),
         tool: { toolCallId: 'q1', name: 'AskUserQuestion', input },
       })
       await waitFor(() => expect(container.querySelectorAll('.chat-question-block')).toHaveLength(2))
       expect(screen.getByText(/answer in the terminal tab/i)).toBeTruthy()
       expect(container.querySelector('.chat-question-option.chosen')).toBeNull()
+    })
+
+    describe('answering', () => {
+      const pending = (answer?: FetchOpts['answer']): FetchOpts => ({
+        page: page('e1', [askCall({ status: 'in_progress' })]),
+        tool: { toolCallId: 'q1', name: 'AskUserQuestion', input },
+        answer,
+      })
+      const answerCalls = (fetchMock: ReturnType<typeof vi.fn>) =>
+        fetchMock.mock.calls.filter(([url]) => String(url).includes('/answer')) as [string, RequestInit][]
+      const sendBtn = () => screen.getByRole('button', { name: 'Send answer' }) as HTMLButtonElement
+      const toolFetches = (fetchMock: ReturnType<typeof vi.fn>) =>
+        fetchMock.mock.calls.filter(([url]) => String(url).includes('/chat/tool/')).length
+
+      it('replaces the terminal hint with a picker whose options are radios and checkboxes', async () => {
+        await renderReady({}, pending())
+        await screen.findByText('Which scope?')
+        expect(screen.queryByText(/answer in the terminal/i)).toBeNull()
+        expect(screen.getAllByRole('radio').map((e) => e.getAttribute('aria-checked'))).toEqual(['false', 'false', 'false'])
+        expect(screen.getAllByRole('checkbox')).toHaveLength(4)
+      })
+
+      it('keeps Send disabled until every question is answered, then posts the staged answers', async () => {
+        const { fetchMock } = await renderReady({}, pending())
+        await screen.findByText('Which scope?')
+        expect(sendBtn().disabled).toBe(true)
+        fireEvent.click(screen.getByRole('radio', { name: /Z/ }))
+        expect(screen.getByRole('radio', { name: /Z/ }).getAttribute('aria-checked')).toBe('true')
+        expect(sendBtn().disabled).toBe(true)
+        expect(answerCalls(fetchMock)).toHaveLength(0)
+        fireEvent.click(screen.getByRole('checkbox', { name: /^D/ }))
+        expect(sendBtn().disabled).toBe(false)
+        fireEvent.click(sendBtn())
+        await screen.findByText('Sent — waiting for Claude')
+        const calls = answerCalls(fetchMock)
+        expect(calls).toHaveLength(1)
+        expect(calls[0][0]).toBe('/api/runs/r1/answer')
+        expect(JSON.parse(String(calls[0][1].body))).toEqual({
+          kind: 'question', toolCallId: 'q1',
+          answers: [{ question: 0, options: [1] }, { question: 1, options: [2] }],
+        })
+        expect(sendBtn().disabled).toBe(true)
+        expect(screen.getAllByRole('radio').every((e) => (e as HTMLButtonElement).disabled)).toBe(true)
+      })
+
+      it('posts multi-select options together with trimmed Other text', async () => {
+        const { fetchMock } = await renderReady({}, pending())
+        await screen.findByText('Which scope?')
+        fireEvent.click(screen.getByRole('radio', { name: /A/ }))
+        fireEvent.click(screen.getByRole('checkbox', { name: /^B/ }))
+        const others = screen.getAllByRole('checkbox', { name: 'Other' })
+        fireEvent.click(others[0])
+        expect(sendBtn().disabled).toBe(true) // Other on with blank text
+        fireEvent.change(screen.getByLabelText('Other answer: Which extras?'), { target: { value: '  my own  ' } })
+        expect(sendBtn().disabled).toBe(false)
+        fireEvent.click(sendBtn())
+        await screen.findByText('Sent — waiting for Claude')
+        expect(JSON.parse(String(answerCalls(fetchMock)[0][1].body)).answers).toEqual([
+          { question: 0, options: [0] },
+          { question: 1, options: [0], text: 'my own' },
+        ])
+      })
+
+      it('single-select Other clears the chosen option', async () => {
+        const { fetchMock } = await renderReady({}, pending())
+        await screen.findByText('Which scope?')
+        fireEvent.click(screen.getByRole('radio', { name: /A/ }))
+        fireEvent.click(screen.getByRole('radio', { name: 'Other' }))
+        expect(screen.getByRole('radio', { name: /A/ }).getAttribute('aria-checked')).toBe('false')
+        fireEvent.change(screen.getByLabelText('Other answer: Which scope?'), { target: { value: 'neither' } })
+        fireEvent.click(screen.getByRole('checkbox', { name: /^B/ }))
+        fireEvent.click(sendBtn())
+        await screen.findByText('Sent — waiting for Claude')
+        expect(JSON.parse(String(answerCalls(fetchMock)[0][1].body)).answers[0]).toEqual({ question: 0, options: [], text: 'neither' })
+      })
+
+      it('a 409 shows the moved message, re-fetches the tool and keeps the picker usable', async () => {
+        const { fetchMock } = await renderReady({}, pending({ status: 409, body: 'prompt changed' }))
+        await screen.findByText('Which scope?')
+        fireEvent.click(screen.getByRole('radio', { name: /A/ }))
+        fireEvent.click(screen.getByRole('checkbox', { name: /^B/ }))
+        const before = toolFetches(fetchMock)
+        fireEvent.click(sendBtn())
+        await screen.findByText('The session moved on — refresh')
+        await waitFor(() => expect(toolFetches(fetchMock)).toBe(before + 1))
+        expect(screen.queryByRole('link')).toBeNull()
+        expect(sendBtn().disabled).toBe(false)
+      })
+
+      it('a partial 409 offers the Terminal tab and locks the picker', async () => {
+        await renderReady({}, pending({ status: 409, body: '{"partial":true}' }))
+        await screen.findByText('Which scope?')
+        fireEvent.click(screen.getByRole('radio', { name: /A/ }))
+        fireEvent.click(screen.getByRole('checkbox', { name: /^B/ }))
+        fireEvent.click(sendBtn())
+        const link = await screen.findByRole('link', { name: 'Terminal tab' })
+        expect(link.getAttribute('href')).toBe('#/fleet/r1/terminal')
+        expect(screen.getByText(/part of the answer went in/i)).toBeTruthy()
+        expect(sendBtn().disabled).toBe(true)
+      })
+
+      it('shows the server text on an error and keeps the staging', async () => {
+        await renderReady({}, pending({ status: 429, body: 'busy' }))
+        await screen.findByText('Which scope?')
+        fireEvent.click(screen.getByRole('radio', { name: /A/ }))
+        fireEvent.click(screen.getByRole('checkbox', { name: /^B/ }))
+        fireEvent.click(sendBtn())
+        await screen.findByText('busy')
+        expect(sendBtn().disabled).toBe(false)
+        expect(screen.getByRole('radio', { name: /A/ }).getAttribute('aria-checked')).toBe('true')
+      })
+
+      it('offers no picker for an agent houston cannot answer for', async () => {
+        await renderReady({ agent: 'pi' }, pending())
+        await screen.findByText('Which scope?')
+        expect(screen.getByText(/answer in the terminal tab/i)).toBeTruthy()
+        expect(screen.queryByRole('button', { name: 'Send answer' })).toBeNull()
+        expect(screen.queryByRole('radio')).toBeNull()
+      })
     })
 
     it('falls back to the raw output when a label contains a comma', async () => {
@@ -898,7 +1029,7 @@ describe('ChatTab', () => {
         tool: { toolCallId: 'q1', name: 'AskUserQuestion', input },
       }
       const { container } = await renderReady({}, opts)
-      await waitFor(() => expect(screen.getByText(/answer in the terminal tab/i)).toBeTruthy())
+      await screen.findByRole('button', { name: 'Send answer' })
       opts.tool = {
         toolCallId: 'q1', name: 'AskUserQuestion', input,
         output: 'User has answered your questions: "Which scope?"="Z", "Which extras?"="D".',
@@ -908,6 +1039,7 @@ describe('ChatTab', () => {
       })
       await waitFor(() => expect(container.querySelectorAll('.chat-question-option.chosen')).toHaveLength(2))
       expect(screen.queryByText(/answer in the terminal tab/i)).toBeNull()
+      expect(screen.queryByRole('button', { name: 'Send answer' })).toBeNull()
     })
 
     it('shows a failed call as not answered with its output', async () => {
@@ -970,5 +1102,184 @@ describe('ChatTab quick commands', () => {
   it('is absent for a non-claude run', async () => {
     await renderReady({ state: 'idle', agent: 'pi' }, { page: page('e1', [textUpdate('a1', 1, fenced('/compact'))]) })
     expect(screen.queryByRole('button', { name: 'Commands' })).toBeNull()
+  })
+})
+
+describe('ChatTab permission bar', () => {
+  const dialog: Prompt = {
+    question: 'Do you want to proceed?',
+    choices: ['Yes', 'Yes, and don\'t ask again', 'No'],
+    detail: 'rm -rf build\nls',
+    frame: 'f1',
+  }
+  const withPrompt = (extra: Partial<FetchOpts> = {}): FetchOpts => ({ page: page('e1', []), prompt: dialog, ...extra })
+  const barText = 'Do you want to proceed?'
+  const promptFetches = (m: ReturnType<typeof vi.fn>) => m.mock.calls.filter(([u]) => String(u).includes('/prompt')).length
+  const answerCalls = (m: ReturnType<typeof vi.fn>) =>
+    m.mock.calls.filter(([u]) => String(u).includes('/answer')) as [string, RequestInit][]
+
+  it('shows the question, detail and one numbered button per choice when blocked', async () => {
+    await renderReady({ state: 'blocked' }, withPrompt())
+    await screen.findByText(barText)
+    expect(screen.getByRole('button', { name: '1. Yes' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: "2. Yes, and don't ask again" })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '3. No' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /rm -rf build/ }).getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('expands the detail on tap', async () => {
+    await renderReady({ state: 'blocked' }, withPrompt())
+    const detail = await screen.findByRole('button', { name: /rm -rf build/ })
+    fireEvent.click(detail)
+    expect(detail.getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('shows for an idle run with a prompt', async () => {
+    await renderReady({ state: 'idle' }, withPrompt())
+    await screen.findByText(barText)
+  })
+
+  it('is hidden when the prompt route says 404', async () => {
+    const { fetchMock } = await renderReady({ state: 'blocked' }, { page: page('e1', []) })
+    await waitFor(() => expect(promptFetches(fetchMock)).toBe(1))
+    expect(screen.queryByText(barText)).toBeNull()
+  })
+
+  it.each([
+    ['a non-claude agent', { state: 'blocked' as const, agent: 'pi' }],
+    ['no terminal', { state: 'blocked' as const, caps: { terminal: false, reply: false, kill: false, chat: true } }],
+    ['a running run', { state: 'running' as const }],
+  ])('is hidden and never polls for %s', async (_name, over) => {
+    const { fetchMock } = await renderReady(over, withPrompt())
+    expect(screen.queryByText(barText)).toBeNull()
+    expect(promptFetches(fetchMock)).toBe(0)
+  })
+
+  it('hides when the run leaves blocked and idle', async () => {
+    const { rerender, run: r } = await renderReady({ state: 'blocked' }, withPrompt())
+    await screen.findByText(barText)
+    rerender(<ChatTab run={{ ...r, state: 'running' }} now={now} />)
+    expect(screen.queryByText(barText)).toBeNull()
+  })
+
+  it('polls every 2 s while active and stops when the run leaves blocked', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    const { rerender, fetchMock, run: r } = await renderReady({ state: 'blocked' }, withPrompt())
+    await waitFor(() => expect(promptFetches(fetchMock)).toBe(1))
+    await act(async () => { vi.advanceTimersByTime(2000) })
+    expect(promptFetches(fetchMock)).toBe(2)
+    rerender(<ChatTab run={{ ...r, state: 'running' }} now={now} />)
+    await act(async () => { vi.advanceTimersByTime(6000) })
+    expect(promptFetches(fetchMock)).toBe(2)
+  })
+
+  it('posts the tapped ordinal with the frame, then hides until the frame changes', async () => {
+    const { fetchMock } = await renderReady({ state: 'blocked' }, withPrompt({ answer: { status: 204 } }))
+    fireEvent.click(await screen.findByRole('button', { name: '2. Yes, and don\'t ask again' }))
+    await waitFor(() => expect(screen.queryByText(barText)).toBeNull())
+    const calls = answerCalls(fetchMock)
+    expect(calls).toHaveLength(1)
+    expect(calls[0][0]).toBe('/api/runs/r1/answer')
+    expect(JSON.parse(String(calls[0][1].body))).toEqual({ kind: 'choice', ordinal: 2, frame: 'f1' })
+  })
+
+  it('stays hidden while the answered frame is still on screen, and shows an identical dialog after it went away', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    await renderReady({ state: 'blocked' }, withPrompt({ answer: { status: 204 } }))
+    let current: Prompt | null = dialog
+    const base = globalThis.fetch
+    vi.stubGlobal('fetch', vi.fn((url: string) => {
+      if (!url.includes('/prompt')) return base(url)
+      return Promise.resolve(current ? jsonResponse(current) : ({ status: 404, ok: false, text: async () => '' } as Response))
+    }))
+    fireEvent.click(await screen.findByRole('button', { name: '1. Yes' }))
+    await waitFor(() => expect(screen.queryByText(barText)).toBeNull())
+
+    await act(async () => { vi.advanceTimersByTime(2000) })
+    expect(screen.queryByText(barText)).toBeNull()
+
+    current = null
+    await act(async () => { vi.advanceTimersByTime(2000) })
+    expect(screen.queryByText(barText)).toBeNull()
+
+    current = dialog
+    await act(async () => { vi.advanceTimersByTime(2000) })
+    expect(screen.getByText(barText)).toBeTruthy()
+  })
+
+  it('disables every choice while the answer is in flight', async () => {
+    await renderReady({ state: 'blocked' }, withPrompt())
+    let release: (r: Response) => void = () => {}
+    const base = globalThis.fetch
+    vi.stubGlobal('fetch', vi.fn((url: string) =>
+      url.includes('/answer') ? new Promise<Response>((res) => { release = res }) : base(url)))
+    fireEvent.click(await screen.findByRole('button', { name: '1. Yes' }))
+    await waitFor(() => expect((screen.getByRole('button', { name: '3. No' }) as HTMLButtonElement).disabled).toBe(true))
+    expect((screen.getByRole('button', { name: '1. Yes' }) as HTMLButtonElement).disabled).toBe(true)
+    await act(async () => { release({ status: 204, ok: true, text: async () => '' } as Response) })
+  })
+
+  it('a 409 shows the moved message and re-fetches the prompt', async () => {
+    const { fetchMock } = await renderReady({ state: 'blocked' }, withPrompt({ answer: { status: 409, body: 'moved' } }))
+    fireEvent.click(await screen.findByRole('button', { name: '1. Yes' }))
+    await screen.findByText('The session moved on — refresh')
+    await waitFor(() => expect(promptFetches(fetchMock)).toBe(2))
+    expect((screen.getByRole('button', { name: '1. Yes' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('shows an answer error and re-enables the choices', async () => {
+    await renderReady({ state: 'blocked' }, withPrompt({ answer: { status: 500, body: 'boom' } }))
+    fireEvent.click(await screen.findByRole('button', { name: '1. Yes' }))
+    await screen.findByText('boom')
+    expect((screen.getByRole('button', { name: '1. Yes' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('keeps the composer usable while the bar shows', async () => {
+    await renderReady({ state: 'blocked' }, withPrompt())
+    await screen.findByText(barText)
+    const textarea = screen.getByPlaceholderText('Message…') as HTMLTextAreaElement
+    expect(textarea.disabled).toBe(false)
+  })
+
+  describe('header Reply in Terminal', () => {
+    const blocked = { state: 'blocked' as const, question: { text: 'Allow it?', via: 'pane' as const } }
+    const replyBtn = () => screen.queryByRole('button', { name: 'Reply in Terminal' })
+
+    it('is hidden while the bar shows, the question text stays', async () => {
+      await renderReady(blocked, withPrompt())
+      await screen.findByText(barText)
+      expect(replyBtn()).toBeNull()
+      expect(screen.getByText('Allow it?')).toBeTruthy()
+    })
+
+    it('is present when there is no prompt', async () => {
+      const { fetchMock } = await renderReady(blocked, { page: page('e1', []) })
+      await waitFor(() => expect(promptFetches(fetchMock)).toBe(1))
+      expect(replyBtn()).toBeTruthy()
+    })
+
+    it('is hidden while an answerable AskUserQuestion card is pending', async () => {
+      const { container } = await renderReady(blocked, {
+        page: page('e1', [toolCall('q1', 1, 'AskUserQuestion', { status: 'in_progress' })]),
+        tool: {
+          toolCallId: 'q1', name: 'AskUserQuestion',
+          input: { questions: [{ question: 'Which?', options: [{ label: 'A' }] }] },
+        },
+      })
+      await waitFor(() => expect(container.querySelector('.chat-question-block')).not.toBeNull())
+      expect(replyBtn()).toBeNull()
+    })
+
+    it('stays for a pending question card on a run houston cannot answer for', async () => {
+      const { container } = await renderReady({ ...blocked, agent: 'pi' }, {
+        page: page('e1', [toolCall('q1', 1, 'AskUserQuestion', { status: 'in_progress' })]),
+        tool: {
+          toolCallId: 'q1', name: 'AskUserQuestion',
+          input: { questions: [{ question: 'Which?', options: [{ label: 'A' }] }] },
+        },
+      })
+      await waitFor(() => expect(container.querySelector('.chat-question-block')).not.toBeNull())
+      expect(replyBtn()).toBeTruthy()
+    })
   })
 })
