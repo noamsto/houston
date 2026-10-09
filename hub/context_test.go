@@ -65,3 +65,13 @@ func TestContextLimit(t *testing.T) {
 		}
 	}
 }
+
+func TestContextLimitDroppedForGoodAfterPassingWindow(t *testing.T) {
+	s := &Session{}
+	for _, used := range []int{150_000, 250_000, 30_000} { // grew past 200k, then compacted
+		applyTranscriptEvent(s, TranscriptEvent{Model: "claude-opus-4-1", ContextTokens: used})
+	}
+	if s.view.ContextUsed != 30_000 || s.view.ContextLimit != 0 {
+		t.Errorf("used=%d limit=%d, want 30000 and no limit", s.view.ContextUsed, s.view.ContextLimit)
+	}
+}

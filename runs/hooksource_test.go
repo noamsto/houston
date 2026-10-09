@@ -1106,3 +1106,17 @@ func TestRunFromSessionViewCarriesContextAndSpend(t *testing.T) {
 		t.Errorf("unset view produced Context=%v SpendUSD=%v", r.Context, r.SpendUSD)
 	}
 }
+
+func TestRunSignatureSeesContextAndSpend(t *testing.T) {
+	spend := 1.0
+	base := Run{}
+	for name, r := range map[string]Run{
+		"used":  {Context: &Context{Used: 1}},
+		"limit": {Context: &Context{Limit: 1}},
+		"spend": {SpendUSD: &spend},
+	} {
+		if runSignature(base) == runSignature(r) {
+			t.Errorf("%s change did not alter the signature", name)
+		}
+	}
+}

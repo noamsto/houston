@@ -110,6 +110,7 @@ type Session struct {
 	preview []string
 	asks    string
 	spend   *float64 // running sum of recorded per-message cost
+	maxCtx  int      // highest context seen; a window below it cannot be the real one
 
 	lastTurn         int    // last turn whose trail was cleared (UserPromptSubmit bumps Turn)
 	lastBroadcastSig string // last broadcast view signature; skip duplicates
@@ -422,6 +423,12 @@ func (h *Hub) loadStateFile(path string) {
 		sess.lastTurn = s.Turn
 		sess.trail = []TrailChip{}
 	}
+	if sess.transcriptPath != s.TranscriptPath {
+		// The tail's offset and running totals belong to the old file.
+		sess.transcriptOffset = 0
+		sess.spend, sess.maxCtx = nil, 0
+		sess.view.ContextUsed, sess.view.ContextLimit, sess.view.SpendUSD = 0, 0, nil
+	}
 	sess.transcriptPath = s.TranscriptPath
 	if sess.chat != nil {
 		sess.chat.setPath(s.TranscriptPath)
@@ -663,8 +670,9 @@ func applyTranscriptEvent(s *Session, ev TranscriptEvent) {
 	// Context is the latest assistant message's, not a maximum: it shrinks
 	// after a compaction.
 	if ev.ContextTokens > 0 {
+		s.maxCtx = max(s.maxCtx, ev.ContextTokens)
 		s.view.ContextUsed = ev.ContextTokens
-		s.view.ContextLimit = contextLimit(ev.Model, ev.ContextTokens)
+		s.view.ContextLimit = contextLimit(ev.Model, s.maxCtx)
 	}
 	if ev.CostUSD != nil {
 		total := *ev.CostUSD
