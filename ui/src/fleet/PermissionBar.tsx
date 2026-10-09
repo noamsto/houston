@@ -5,10 +5,14 @@ import type { Run } from '../api/runs'
 import { isClaudeAgent } from '../components/quickCommands'
 
 const POLL_MS = 2000
+// A real answer closes the dialog well within this many polls, so a frame still
+// on screen after them is the same dialog left open or shown again.
+const ANSWERED_POLLS = 3
 
-function PromptDialog({ runId, prompt, onAnswered, onMoved }: {
+function PromptDialog({ runId, prompt, onSending, onAnswered, onMoved }: {
   runId: string
   prompt: Prompt
+  onSending: () => void
   onAnswered: () => void
   onMoved: () => void
 }) {
@@ -19,11 +23,11 @@ function PromptDialog({ runId, prompt, onAnswered, onMoved }: {
   const answer = async (ordinal: number) => {
     setBusy(true)
     setStatus('')
+    onSending()
     const res = await answerChoice(runId, ordinal, prompt.frame)
     if ('ok' in res) return onAnswered()
     setBusy(false)
     if ('error' in res) return setStatus(res.error)
-    setStatus('The session moved on — refresh')
     onMoved()
   }
 
@@ -59,20 +63,31 @@ function PromptDialog({ runId, prompt, onAnswered, onMoved }: {
 export function PermissionBar({ run, onPrompt }: { run: Run; onPrompt: (shown: boolean) => void }) {
   const active = isClaudeAgent(run.agent) && run.caps.terminal && (run.state === 'blocked' || run.state === 'idle')
   const [prompt, setPrompt] = useState<Prompt | null>(null)
-  const [answered, setAnswered] = useState<string | null>(null)
+  const [answered, setAnswered] = useState<{ frame: string; polls: number } | null>(null)
+  // Lives here, not in the dialog: the re-fetch after a 409 finds the dialog
+  // gone or replaced, which would unmount or reset the dialog's own status.
+  const [moved, setMoved] = useState(false)
   const refetch = useRef<() => void>(() => {})
 
   useEffect(() => {
     if (!active) return
     let cancelled = false
+    let inFlight = false
     const load = async () => {
+      if (inFlight) return
+      inFlight = true
       try {
         const next = await fetchPrompt(run.id)
         if (cancelled) return
         setPrompt(next)
-        if (next === null) setAnswered(null)
+        setAnswered((a) => {
+          if (!a || next === null || next.frame !== a.frame || a.polls + 1 >= ANSWERED_POLLS) return null
+          return { ...a, polls: a.polls + 1 }
+        })
       } catch {
         // keep the last value
+      } finally {
+        inFlight = false
       }
     }
     refetch.current = load
@@ -85,17 +100,32 @@ export function PermissionBar({ run, onPrompt }: { run: Run; onPrompt: (shown: b
     }
   }, [run.id, active])
 
-  const shown = active && prompt !== null && prompt.frame !== answered
+  const shown = active && prompt !== null && prompt.frame !== answered?.frame
   useEffect(() => { onPrompt(shown) }, [shown, onPrompt])
 
-  if (!shown) return null
   return (
-    <PromptDialog
-      key={prompt.frame}
-      runId={run.id}
-      prompt={prompt}
-      onAnswered={() => setAnswered(prompt.frame)}
-      onMoved={() => refetch.current()}
-    />
+    <>
+      {moved && (
+        <div className="permission-bar-notice" role="status">
+          <span>The session moved on — refresh</span>
+          <button type="button" className="permission-bar-dismiss" aria-label="Dismiss" onClick={() => setMoved(false)}>
+            <span aria-hidden="true">×</span>
+          </button>
+        </div>
+      )}
+      {shown && (
+        <PromptDialog
+          key={prompt.frame}
+          runId={run.id}
+          prompt={prompt}
+          onSending={() => setMoved(false)}
+          onAnswered={() => setAnswered({ frame: prompt.frame, polls: 0 })}
+          onMoved={() => {
+            setMoved(true)
+            refetch.current()
+          }}
+        />
+      )}
+    </>
   )
 }

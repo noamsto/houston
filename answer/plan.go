@@ -17,7 +17,14 @@ const maxOptions = 8
 type Question struct {
 	Text        string
 	MultiSelect bool
-	Options     []string // option labels, in order
+	Options     []Option
+}
+
+// Option is one choice of a Question. Its row shows the label with the
+// description under it.
+type Option struct {
+	Label       string
+	Description string
 }
 
 // ParseQuestions decodes the input of an AskUserQuestion tool call.
@@ -27,7 +34,8 @@ func ParseQuestions(raw json.RawMessage) ([]Question, error) {
 			Question    string `json:"question"`
 			MultiSelect bool   `json:"multiSelect"`
 			Options     []struct {
-				Label string `json:"label"`
+				Label       string `json:"label"`
+				Description string `json:"description"`
 			} `json:"options"`
 		} `json:"questions"`
 	}
@@ -39,11 +47,11 @@ func ParseQuestions(raw json.RawMessage) ([]Question, error) {
 	}
 	qs := make([]Question, 0, len(in.Questions))
 	for _, q := range in.Questions {
-		labels := make([]string, 0, len(q.Options))
+		opts := make([]Option, 0, len(q.Options))
 		for _, o := range q.Options {
-			labels = append(labels, o.Label)
+			opts = append(opts, Option(o))
 		}
-		qs = append(qs, Question{Text: q.Question, MultiSelect: q.MultiSelect, Options: labels})
+		qs = append(qs, Question{Text: q.Question, MultiSelect: q.MultiSelect, Options: opts})
 	}
 	return qs, nil
 }
@@ -161,8 +169,8 @@ func validate(q Question, a Answer) error {
 	if len(q.Options) == 0 || len(q.Options) > maxOptions {
 		return fmt.Errorf("%d options, want 1..%d", len(q.Options), maxOptions)
 	}
-	for _, l := range q.Options {
-		if Normalize(l) == "" {
+	for _, o := range q.Options {
+		if Normalize(o.Label) == "" {
 			return errors.New("empty option label")
 		}
 	}

@@ -9,16 +9,25 @@ import (
 )
 
 var (
-	colorPlain = Question{Text: "Which color do you prefer?", Options: []string{"Red", "Blue", "Green"}}
-	colorTab   = Question{Text: "Which color do you prefer?", Options: []string{"Red", "Blue"}}
-	toppings   = Question{Text: "Which toppings do you want?", MultiSelect: true, Options: []string{"Cheese", "Olives", "Basil"}}
+	colorPlain = Question{Text: "Which color do you prefer?", Options: opts("Red", "Warm", "Blue", "Cool", "Green", "Natural")}
+	colorTab   = Question{Text: "Which color do you prefer?", Options: opts("Red", "Warm", "Blue", "Cool")}
+	toppings   = Question{Text: "Which toppings do you want?", MultiSelect: true, Options: opts("Cheese", "Melty", "Olives", "Salty", "Basil", "Fresh")}
 	notes      = Question{
 		Text:    "Which of these deliberately long-winded and verbose option labels should we pick for the release notes?",
-		Options: []string{"A very long first option label that keeps going past the edge", "Short"},
+		Options: opts("A very long first option label that keeps going past the edge", "First", "Short", "Second"),
 	}
-	race = Question{Text: "Should `go test` run with **race** on?", Options: []string{"Yes `-race`", "No"}}
-	logo = Question{Text: "Which color should the logo be?", Options: []string{"Red", "Blue", "Green"}}
+	race = Question{Text: "Should `go test` run with **race** on?", Options: opts("Yes `-race`", "Slower", "No", "Faster")}
+	logo = Question{Text: "Which color should the logo be?", Options: opts("Red", "Warm", "Blue", "Cool", "Green", "Natural")}
 )
+
+// opts pairs up labels and descriptions: label, description, label, ….
+func opts(pairs ...string) []Option {
+	var out []Option
+	for i := 0; i < len(pairs); i += 2 {
+		out = append(out, Option{Label: pairs[i], Description: pairs[i+1]})
+	}
+	return out
+}
 
 func fixture(t *testing.T, name string) string {
 	t.Helper()
@@ -197,5 +206,48 @@ func TestDialogLinesIgnoresInputBox(t *testing.T) {
 		if _, ok := dialogLines(fixture(t, name)); ok {
 			t.Errorf("dialogLines(%s) found a question dialog", name)
 		}
+	}
+}
+
+// An option row must spell its label and description exactly.
+func TestQuestionCheckOptionRowsExactly(t *testing.T) {
+	with := func(q Question, k int, o Option) []Question {
+		q.Options = append([]Option(nil), q.Options...)
+		q.Options[k] = o
+		return []Question{q}
+	}
+	tests := []struct {
+		name    string
+		qs      []Question
+		tabbed  bool
+		capture string
+	}{
+		{"label is a prefix of the row", []Question{colorPlain}, false,
+			strings.Replace(fixture(t, "plain-q"), "❯ 1. Red\n", "❯ 1. Red-team the prod DB\n", 1)},
+		{"another description", with(colorPlain, 0, Option{Label: "Red", Description: "Hot"}), false, fixture(t, "plain-q")},
+		{"description missing from the call", with(colorPlain, 0, Option{Label: "Red"}), false, fixture(t, "plain-q")},
+		{"multi-select label is a prefix", with(toppings, 1, Option{Label: "Olive", Description: "Salty"}), true, fixture(t, "smulti-q")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if newSpec(tt.qs, 0, tt.tabbed).check(tabState{cursor: 1})(tt.capture) {
+				t.Error("check passed")
+			}
+		})
+	}
+	if !newSpec([]Question{toppings}, 0, true).check(tabState{cursor: 1})(fixture(t, "smulti-q")) {
+		t.Error("smulti-q does not match its own question")
+	}
+}
+
+// Only a dialog's own column-0 rule splits it, so an option described by a
+// line of rule runes still parses.
+func TestQuestionCheckIndentedRule(t *testing.T) {
+	q := colorPlain
+	q.Options = append([]Option(nil), q.Options...)
+	q.Options[2].Description = "────────"
+	capture := strings.Replace(fixture(t, "plain-q"), "     Natural\n", "     ────────\n", 1)
+	if !newSpec([]Question{q}, 0, false).check(tabState{cursor: 1})(capture) {
+		t.Error("check failed on an option described by a rule")
 	}
 }

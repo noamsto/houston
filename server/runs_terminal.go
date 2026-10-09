@@ -25,6 +25,7 @@ type runPaneOps interface {
 	SendKeys(ctx context.Context, p tmux.Pane, keys string, enter bool) error
 	SendSpecialKey(p tmux.Pane, key string) error
 	CapturePane(p tmux.Pane, lines int) (string, error)
+	PaneInMode(p tmux.Pane) (bool, error)
 }
 
 // terminalKeys mirrors MobileInputBar's quick actions plus the choice ordinals

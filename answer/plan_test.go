@@ -114,7 +114,7 @@ func TestPlanDoesNotReorderCallerOptions(t *testing.T) {
 }
 
 func TestPlanErrors(t *testing.T) {
-	nine := Question{Text: "Pick", Options: []string{"a", "b", "c", "d", "e", "f", "g", "h", "i"}}
+	nine := Question{Text: "Pick", Options: opts("a", "", "b", "", "c", "", "d", "", "e", "", "f", "", "g", "", "h", "", "i", "")}
 	tests := []struct {
 		name string
 		qs   []Question
@@ -131,8 +131,8 @@ func TestPlanErrors(t *testing.T) {
 		{"multi empty", []Question{toppings}, []Answer{{}}},
 		{"more than 8 options", []Question{nine}, []Answer{{Options: []int{0}}}},
 		{"no options", []Question{{Text: "Pick"}}, []Answer{{Text: "x"}}},
-		{"empty question", []Question{{Text: " ", Options: []string{"a"}}}, []Answer{{Options: []int{0}}}},
-		{"empty label", []Question{{Text: "Pick", Options: []string{"a", " "}}}, []Answer{{Options: []int{0}}}},
+		{"empty question", []Question{{Text: " ", Options: opts("a", "")}}, []Answer{{Options: []int{0}}}},
+		{"empty label", []Question{{Text: "Pick", Options: opts("a", "", " ", "x")}}, []Answer{{Options: []int{0}}}},
 		{"blank text", []Question{colorPlain}, []Answer{{Text: "  "}}},
 		{"newline in text", []Question{colorPlain}, []Answer{{Text: "a\nb"}}},
 		{"escape in text", []Question{toppings}, []Answer{{Text: "a\x1b[A"}}},

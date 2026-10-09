@@ -102,3 +102,64 @@ func TestPermissionPromptDetailCap(t *testing.T) {
 		t.Errorf("Detail is %d bytes, valid UTF-8 %v", len(p.Detail), utf8.ValidString(p.Detail))
 	}
 }
+
+// withCommand swaps perm-bash's command for lines, as Claude indents them
+// between the "╌" delimiters.
+func withCommand(t *testing.T, lines ...string) string {
+	t.Helper()
+	const cmd = "\n touch colours.txt && ln -s colours.txt toppings.txt\n╌"
+	base := fixture(t, "perm-bash")
+	if strings.Count(base, cmd) != 1 {
+		t.Fatal("perm-bash command line not found")
+	}
+	return strings.Replace(base, cmd, "\n "+strings.Join(lines, "\n ")+"\n╌", 1)
+}
+
+func TestPermissionPromptIndentedRuleInCommand(t *testing.T) {
+	heredoc := func(head string) Prompt {
+		t.Helper()
+		p, ok := PermissionPrompt(withCommand(t, head, "────────", "X"))
+		if !ok {
+			t.Fatal("no prompt")
+		}
+		return p
+	}
+	rm, ls := heredoc("rm -rf ~/important && cat <<X"), heredoc("ls && cat <<X")
+	if rm.Frame == ls.Frame {
+		t.Error("frame unchanged when the command above an indented rule changed")
+	}
+	if !strings.HasPrefix(rm.Detail, "Bash command\n") || !strings.Contains(rm.Detail, "rm -rf ~/important && cat <<X\n────────\nX\n") {
+		t.Errorf("Detail = %q, want the whole dialog text", rm.Detail)
+	}
+}
+
+func TestPermissionPromptFrameKeepsWhitespace(t *testing.T) {
+	frame := func(cmd string) string {
+		t.Helper()
+		p, ok := PermissionPrompt(withCommand(t, cmd))
+		if !ok {
+			t.Fatal("no prompt")
+		}
+		return p.Frame
+	}
+	if frame("rm -rf /tmp/x") == frame("rm -rf / tmp/x") {
+		t.Error("frame unchanged when a space moved into the command")
+	}
+}
+
+func TestPermissionPromptDetailTruncationNote(t *testing.T) {
+	rule := strings.Repeat("─", 40)
+	long := rule + "\n" + strings.Repeat(" é long description line\n", 200) +
+		"\n Do you want to proceed?\n ❯ 1. Yes\n   2. No\n\n Esc to cancel\n"
+	p, ok := PermissionPrompt(long)
+	if !ok {
+		t.Fatal("no prompt")
+	}
+	if !strings.HasSuffix(p.Detail, "\n"+truncatedNote) {
+		t.Errorf("Detail ends %q, want the truncation note", p.Detail[max(0, len(p.Detail)-80):])
+	}
+	short, ok := PermissionPrompt(fixture(t, "perm-bash"))
+	if !ok || strings.Contains(short.Detail, truncatedNote) {
+		t.Errorf("Detail = %q, want no truncation note", short.Detail)
+	}
+}

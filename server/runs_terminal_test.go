@@ -56,6 +56,15 @@ type fakeRunPanes struct {
 	captureErr     error
 	captureErrFrom int // captureErr fails captures from this 0-based index on
 	captures       int
+
+	// The pane is in copy mode once inMode is set, or after the
+	// modeAfter-th delivered key. modeErr fails every mode probe from the
+	// modeErrFrom-th (0-based) on.
+	inMode      bool
+	modeAfter   int
+	modeErr     error
+	modeErrFrom int
+	modeProbes  int
 }
 
 func (f *fakeRunPanes) ResolvePane(paneID string) (tmux.Pane, error) {
@@ -88,6 +97,9 @@ func (f *fakeRunPanes) send(in sentInput, key string) error {
 		return f.sendErr
 	}
 	f.delivered++
+	if f.modeAfter > 0 && f.delivered == f.modeAfter {
+		f.inMode = true
+	}
 	if f.injectFrame != "" && f.delivered == f.injectAfter {
 		f.frame, f.pending = f.injectFrame, nil
 		return nil
@@ -108,6 +120,17 @@ func (f *fakeRunPanes) CapturePane(tmux.Pane, int) (string, error) {
 		return "", f.captureErr
 	}
 	return f.frames[f.frame], nil
+}
+
+func (f *fakeRunPanes) PaneInMode(tmux.Pane) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	failing := f.modeProbes >= f.modeErrFrom
+	f.modeProbes++
+	if failing && f.modeErr != nil {
+		return false, f.modeErr
+	}
+	return f.inMode, nil
 }
 
 func (f *fakeRunPanes) calls() (resolved int, sent []sentInput) {

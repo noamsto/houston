@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { ChatTab } from './ChatTab'
+import { QuestionCard } from './QuestionCard'
 import type { Run } from '../api/runs'
 import type { Prompt } from '../api/answer'
 import type { ChatPage, ChatToolDetail, ChatUpdate } from '../api/chat'
@@ -52,13 +53,17 @@ interface FetchOpts {
   page: ChatPage
   earlier?: ChatPage
   tool?: ChatToolDetail
+  toolStatus?: number
   answer?: { status: number; body?: string }
   prompt?: Prompt
 }
 
 function installFetch(opts: FetchOpts): ReturnType<typeof vi.fn> {
   const mock = vi.fn((url: string) => {
-    if (url.includes('/chat/tool/')) return Promise.resolve(jsonResponse(opts.tool ?? {}))
+    if (url.includes('/chat/tool/')) {
+      if (opts.toolStatus) return Promise.resolve({ status: opts.toolStatus, ok: false, text: async () => 'boom' } as Response)
+      return Promise.resolve(jsonResponse(opts.tool ?? {}))
+    }
     if (url.includes('before=')) return Promise.resolve(jsonResponse(opts.earlier ?? opts.page))
     if (url.includes('/chat')) return Promise.resolve(jsonResponse(opts.page))
     if (url.includes('/input')) return Promise.resolve(okResponse())
@@ -994,6 +999,49 @@ describe('ChatTab', () => {
         expect(screen.getByRole('radio', { name: /A/ }).getAttribute('aria-checked')).toBe('true')
       })
 
+      it('moves focus and selection with the arrow keys, wrapping through Other, with a roving tabindex', async () => {
+        await renderReady({}, pending())
+        await screen.findByText('Which scope?')
+        const group = screen.getByRole('radiogroup', { name: 'Which scope?' })
+        const radios = () => within(group).getAllByRole('radio') as HTMLButtonElement[]
+        const tabStops = () => radios().map((r) => r.tabIndex)
+        expect(tabStops()).toEqual([0, -1, -1])
+
+        radios()[0].focus()
+        fireEvent.keyDown(radios()[0], { key: 'ArrowDown' })
+        expect(radios()[1].getAttribute('aria-checked')).toBe('true')
+        expect(document.activeElement).toBe(radios()[1])
+        expect(tabStops()).toEqual([-1, 0, -1])
+
+        fireEvent.keyDown(radios()[1], { key: 'ArrowRight' })
+        expect(radios()[2].getAttribute('aria-checked')).toBe('true')
+        expect(document.activeElement).toBe(radios()[2])
+
+        fireEvent.keyDown(radios()[2], { key: 'ArrowDown' })
+        expect(radios()[0].getAttribute('aria-checked')).toBe('true')
+        expect(document.activeElement).toBe(radios()[0])
+
+        fireEvent.keyDown(radios()[0], { key: 'ArrowUp' })
+        expect(radios()[2].getAttribute('aria-checked')).toBe('true')
+        fireEvent.keyDown(radios()[2], { key: 'ArrowLeft' })
+        expect(radios()[1].getAttribute('aria-checked')).toBe('true')
+        expect(document.activeElement).toBe(radios()[1])
+      })
+
+      it('tapping Other focuses its input, and a viewport resize scrolls the focused input back into view', async () => {
+        const viewport = new EventTarget()
+        vi.stubGlobal('visualViewport', viewport)
+        await renderReady({}, pending())
+        await screen.findByText('Which scope?')
+        fireEvent.click(screen.getByRole('radio', { name: 'Other' }))
+        const input = screen.getByLabelText('Other answer: Which scope?') as HTMLInputElement
+        expect(document.activeElement).toBe(input)
+        const scroll = vi.fn()
+        input.scrollIntoView = scroll
+        act(() => { viewport.dispatchEvent(new Event('resize')) })
+        expect(scroll).toHaveBeenCalledWith({ block: 'nearest' })
+      })
+
       it('offers no picker for an agent houston cannot answer for', async () => {
         await renderReady({ agent: 'pi' }, pending())
         await screen.findByText('Which scope?')
@@ -1021,6 +1069,26 @@ describe('ChatTab', () => {
       })
       const row = await screen.findByTestId('question-fallback')
       expect(row.textContent).toContain('Scope')
+    })
+
+    it('a pending question whose detail fails to load points to the Terminal tab', async () => {
+      await renderReady({ state: 'blocked', question: { text: 'Which?', via: 'pane' } }, {
+        page: page('e1', [askCall({ status: 'in_progress' })]),
+        toolStatus: 500,
+      })
+      const link = await screen.findByRole('link', { name: 'Open Terminal' })
+      expect(link.getAttribute('href')).toBe('#/fleet/r1/terminal')
+      expect(screen.getByTestId('question-fallback').textContent).toMatch(/answer it in the terminal tab/i)
+      expect(screen.queryByRole('button', { name: 'Reply in Terminal' })).toBeNull()
+    })
+
+    it('reports a layout change once the tool detail loads', async () => {
+      installFetch({ page: page('e1', []), tool: { toolCallId: 'q1', name: 'AskUserQuestion', input } })
+      const onLayout = vi.fn()
+      const item = { kind: 'question' as const, id: 'q1', seq: 1, call: { toolCallId: 'q1', tool: 'AskUserQuestion', status: 'in_progress', seq: 1 } }
+      render(<QuestionCard item={item} runId="r1" canAnswer answerable onLayout={onLayout} />)
+      await screen.findByText('Which scope?')
+      expect(onLayout).toHaveBeenCalled()
     })
 
     it('fetches the answers when the pending call completes live', async () => {
@@ -1225,6 +1293,64 @@ describe('ChatTab permission bar', () => {
     await screen.findByText('The session moved on — refresh')
     await waitFor(() => expect(promptFetches(fetchMock)).toBe(2))
     expect((screen.getByRole('button', { name: '1. Yes' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  describe('moved notice', () => {
+    const moved = 'The session moved on — refresh'
+
+    it('stays when the re-fetch finds no prompt, until dismissed', async () => {
+      const opts = withPrompt({ answer: { status: 409, body: 'moved' } })
+      const { fetchMock } = await renderReady({ state: 'blocked' }, opts)
+      fireEvent.click(await screen.findByRole('button', { name: '1. Yes' }))
+      opts.prompt = undefined
+      await waitFor(() => expect(promptFetches(fetchMock)).toBe(2))
+      await waitFor(() => expect(screen.queryByText(barText)).toBeNull())
+      expect(screen.getByText(moved)).toBeTruthy()
+      fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
+      expect(screen.queryByText(moved)).toBeNull()
+    })
+
+    it('stays above a new prompt from the re-fetch, until a later answer is sent', async () => {
+      const opts = withPrompt({ answer: { status: 409, body: 'moved' } })
+      await renderReady({ state: 'blocked' }, opts)
+      fireEvent.click(await screen.findByRole('button', { name: '1. Yes' }))
+      opts.prompt = { ...dialog, question: 'Run the tests?', frame: 'f2' }
+      await screen.findByText('Run the tests?')
+      expect(screen.getByText(moved)).toBeTruthy()
+      opts.answer = { status: 204 }
+      fireEvent.click(screen.getByRole('button', { name: '1. Yes' }))
+      expect(screen.queryByText(moved)).toBeNull()
+    })
+  })
+
+  it('shows the answered frame again once three polls after the answer still return it', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    await renderReady({ state: 'blocked' }, withPrompt({ answer: { status: 204 } }))
+    fireEvent.click(await screen.findByRole('button', { name: '1. Yes' }))
+    await waitFor(() => expect(screen.queryByText(barText)).toBeNull())
+    await act(async () => { vi.advanceTimersByTime(2000) })
+    await act(async () => { vi.advanceTimersByTime(2000) })
+    expect(screen.queryByText(barText)).toBeNull()
+    await act(async () => { vi.advanceTimersByTime(2000) })
+    expect(screen.getByText(barText)).toBeTruthy()
+  })
+
+  it('skips a poll while the previous one is still in flight', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    installFetch(withPrompt())
+    const base = globalThis.fetch
+    let release: (r: Response) => void = () => {}
+    const fetchMock = vi.fn((url: string) =>
+      url.includes('/prompt') ? new Promise<Response>((res) => { release = res }) : base(url))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<ChatTab run={run({ state: 'blocked' })} now={now} />)
+    await waitFor(() => expect(promptFetches(fetchMock)).toBe(1))
+    await act(async () => { vi.advanceTimersByTime(4000) })
+    expect(promptFetches(fetchMock)).toBe(1)
+    await act(async () => { release(jsonResponse(dialog)) })
+    await screen.findByText(barText)
+    await act(async () => { vi.advanceTimersByTime(2000) })
+    expect(promptFetches(fetchMock)).toBe(2)
   })
 
   it('shows an answer error and re-enables the choices', async () => {

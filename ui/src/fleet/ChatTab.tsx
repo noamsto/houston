@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Run } from '../api/runs'
 import { fetchTool } from '../api/chat'
 import type { ChatToolDetail } from '../api/chat'
@@ -224,7 +224,7 @@ function ChatItemRow({ item, runId, canAnswer, answerable, live, reducedMotion, 
   if (item.kind === 'user') return <UserBubble item={item} />
   if (item.kind === 'divider') return <Divider item={item} />
   if (item.kind === 'tools') return <ToolsRow item={item} runId={runId} />
-  if (item.kind === 'question') return <QuestionCard item={item} runId={runId} canAnswer={canAnswer} answerable={answerable} />
+  if (item.kind === 'question') return <QuestionCard item={item} runId={runId} canAnswer={canAnswer} answerable={answerable} onLayout={onTick} />
   return <AssistantBubble item={item} live={live} reducedMotion={reducedMotion} revealed={revealed} onRevealed={onRevealed} onTick={onTick} />
 }
 
@@ -355,7 +355,7 @@ export function ChatTab({ run, now }: { run: Run; now: number }) {
   const [revealedIds, setRevealedIds] = useState<Set<string>>(new Set())
   const markRevealed = (id: string) => setRevealedIds((prev) => (prev.has(id) ? prev : new Set(prev).add(id)))
   const [revealVersion, setRevealVersion] = useState(0)
-  const bumpReveal = () => setRevealVersion((v) => v + 1)
+  const bumpReveal = useCallback(() => setRevealVersion((v) => v + 1), [])
   const reducedMotion = useMemo(() => prefersReducedMotion(), [])
   useEffect(() => { preloadChatMarkdown() }, [])
 

@@ -17,6 +17,10 @@ import (
 
 const cursorMark = "❯"
 
+// dialogRule stands for a dialog's own rule among dialogLines' normalized
+// lines. Normalize deletes every space, so no capture line can spell it.
+const dialogRule = "── dialog rule ──"
+
 // Normalize drops a leading "│" from each line and deletes every Unicode
 // whitespace rune, so Claude's hard wrapping never affects a comparison.
 func Normalize(s string) string {
@@ -41,6 +45,13 @@ func isRule(line, runes string) bool {
 	return line != "" && strings.Trim(line, runes) == ""
 }
 
+// isDialogRule reports whether a capture line is one of a dialog's own rules,
+// which Claude draws from column 0. The text a dialog frames is indented, so a
+// command or description line made of rule runes never passes.
+func isDialogRule(line, runes string) bool {
+	return isRule(strings.TrimRightFunc(line, unicode.IsSpace), runes)
+}
+
 func isTabBar(line string) bool {
 	return strings.HasPrefix(line, "←") && strings.HasSuffix(line, "✔Submit→")
 }
@@ -51,17 +62,20 @@ func isHeader(line string) bool {
 
 // dialogLines returns the normalized, non-blank lines of the question dialog
 // at the bottom of capture, starting with its tab bar or header line: the
-// lines after the last "─" rule that is directly followed by one.
+// lines after the last "─" dialog rule that is directly followed by one. Each
+// later dialog rule is the dialogRule line.
 func dialogLines(capture string) ([]string, bool) {
 	raw := captureLines(capture)
 	lines := make([]string, 0, len(raw))
 	for _, l := range raw {
-		if n := Normalize(l); n != "" {
+		if isDialogRule(l, "─") {
+			lines = append(lines, dialogRule)
+		} else if n := Normalize(l); n != "" {
 			lines = append(lines, n)
 		}
 	}
 	for i := len(lines) - 2; i >= 0; i-- {
-		if isRule(lines[i], "─") && (isTabBar(lines[i+1]) || isHeader(lines[i+1])) {
+		if lines[i] == dialogRule && (isTabBar(lines[i+1]) || isHeader(lines[i+1])) {
 			return lines[i+1:], true
 		}
 	}
@@ -83,7 +97,7 @@ func cursorRow(line string) row {
 // questionSpec is one question as its tab must render it, normalized.
 type questionSpec struct {
 	text   string
-	labels []string
+	labels []string // each option's label followed by its description
 	multi  bool
 	tabbed bool
 	index  int    // position of the question's tab
@@ -105,8 +119,8 @@ func newSpec(qs []Question, i int, tabbed bool) questionSpec {
 	if i == len(qs)-1 {
 		s.final = "Submit"
 	}
-	for _, l := range q.Options {
-		s.labels = append(s.labels, Normalize(l))
+	for _, o := range q.Options {
+		s.labels = append(s.labels, Normalize(o.Label)+Normalize(o.Description))
 	}
 	return s
 }
@@ -132,7 +146,7 @@ func (s questionSpec) parse(capture string) (string, []row, row, bool) {
 	if !ok {
 		return "", nil, row{}, false
 	}
-	rule := slices.IndexFunc(body, func(l string) bool { return isRule(l, "─") })
+	rule := slices.Index(body, dialogRule)
 	if rule < 0 || !s.isTail(body[rule+1:]) {
 		return "", nil, row{}, false
 	}
@@ -241,7 +255,7 @@ func (s questionSpec) matches(rows []row, final row, want tabState) bool {
 				return false
 			}
 		}
-		if rows[k].cursor != (want.cursor == k+1) || !strings.HasPrefix(text, label) {
+		if rows[k].cursor != (want.cursor == k+1) || text != label {
 			return false
 		}
 	}
@@ -289,7 +303,7 @@ func reviewCheck(qs []Question, as []Answer) Check {
 func reviewAnswer(q Question, a Answer) string {
 	var parts []string
 	for _, o := range sortedOptions(a) {
-		parts = append(parts, q.Options[o])
+		parts = append(parts, q.Options[o].Label)
 	}
 	if a.Text != "" {
 		parts = append(parts, a.Text)

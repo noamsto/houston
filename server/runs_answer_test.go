@@ -28,12 +28,12 @@ const (
 // The questions behind answer/testdata's plain-* and tab-* frames.
 const (
 	plainInput = `{"questions":[{"question":"Which color do you prefer?","header":"Color","multiSelect":false,
-		"options":[{"label":"Red"},{"label":"Blue"},{"label":"Green"}]}]}`
+		"options":[{"label":"Red","description":"Warm"},{"label":"Blue","description":"Cool"},{"label":"Green","description":"Natural"}]}]}`
 	tabbedInput = `{"questions":[
 		{"question":"Which color do you prefer?","header":"Color","multiSelect":false,
-		 "options":[{"label":"Red"},{"label":"Blue"}]},
+		 "options":[{"label":"Red","description":"Warm"},{"label":"Blue","description":"Cool"}]},
 		{"question":"Which toppings do you want?","header":"Toppings","multiSelect":true,
-		 "options":[{"label":"Cheese"},{"label":"Olives"},{"label":"Basil"}]}]}`
+		 "options":[{"label":"Cheese","description":"Melty"},{"label":"Olives","description":"Salty"},{"label":"Basil","description":"Fresh"}]}]}`
 )
 
 func askCall(id, input string) *chat.Update {
@@ -214,7 +214,7 @@ func TestRunAnswerQuestionCaptureFailsMidway(t *testing.T) {
 	s, _ := newAnswerServer(t, panes, "claude")
 
 	rec := postAnswer(t, s, questionBody(t, tabbedCall, tabbedOtherAnswer))
-	wantPartial(t, rec, http.StatusConflict)
+	wantPartial(t, rec, http.StatusServiceUnavailable)
 	if got, want := keyLog(panes), []string{"3"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("keys %q, want %q", got, want)
 	}
@@ -561,5 +561,63 @@ func TestRunPrompt(t *testing.T) {
 		panes := &fakeRunPanes{captureErr: errors.New("no server running")}
 		s, _ := newAnswerServer(t, panes, "claude")
 		wantRefusal(t, get(s), http.StatusServiceUnavailable, "tmux unavailable")
+	})
+}
+
+// capture-pane shows the live screen under copy mode, so every check passes
+// while copy mode would swallow the keys.
+func TestRunAnswerCopyMode(t *testing.T) {
+	bodies := map[string]func(t *testing.T) (string, string){
+		"question": func(t *testing.T) (string, string) {
+			return "plain-q", questionBody(t, plainCall, []answerEntry{{Question: 0, Options: []int{1}}})
+		},
+		"choice": func(t *testing.T) (string, string) {
+			return "perm-bash", choiceBody(2, promptFrameOf(t, "perm-bash"))
+		},
+	}
+	for name, body := range bodies {
+		t.Run(name+"/in copy mode", func(t *testing.T) {
+			frame, b := body(t)
+			panes := &fakeRunPanes{inMode: true}
+			screen(t, panes, frame)
+			s, _ := newAnswerServer(t, panes, "claude")
+
+			wantRefusal(t, postAnswer(t, s, b), http.StatusConflict, "pane is in copy mode")
+			if _, sent := panes.calls(); len(sent) != 0 {
+				t.Fatalf("sent %+v to a pane in copy mode", sent)
+			}
+		})
+		t.Run(name+"/probe fails", func(t *testing.T) {
+			frame, b := body(t)
+			panes := &fakeRunPanes{modeErr: errors.New("no server running")}
+			screen(t, panes, frame)
+			s, _ := newAnswerServer(t, panes, "claude")
+
+			wantRefusal(t, postAnswer(t, s, b), http.StatusServiceUnavailable, "tmux unavailable")
+			if _, sent := panes.calls(); len(sent) != 0 {
+				t.Fatalf("sent %+v without a mode probe", sent)
+			}
+		})
+	}
+
+	t.Run("question/enters copy mode midway", func(t *testing.T) {
+		panes := &fakeRunPanes{modeAfter: 1}
+		tabbedOtherScreen(t, panes)
+		s, _ := newAnswerServer(t, panes, "claude")
+
+		wantPartial(t, postAnswer(t, s, questionBody(t, tabbedCall, tabbedOtherAnswer)), http.StatusConflict)
+		if got, want := keyLog(panes), []string{"3"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("keys %q, want %q", got, want)
+		}
+	})
+	t.Run("question/probe fails midway", func(t *testing.T) {
+		panes := &fakeRunPanes{modeErr: errors.New("no server running"), modeErrFrom: 1}
+		tabbedOtherScreen(t, panes)
+		s, _ := newAnswerServer(t, panes, "claude")
+
+		wantPartial(t, postAnswer(t, s, questionBody(t, tabbedCall, tabbedOtherAnswer)), http.StatusServiceUnavailable)
+		if got, want := keyLog(panes), []string{"3"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("keys %q, want %q", got, want)
+		}
 	})
 }

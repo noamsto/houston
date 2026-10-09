@@ -565,6 +565,16 @@ func (c *Client) IsZoomed(p Pane) (bool, error) {
 	return strings.TrimSpace(string(out)) == "1", nil
 }
 
+// PaneInMode reports whether the pane is in a mode such as copy mode, which
+// takes the keys sent to it instead of the program.
+func (c *Client) PaneInMode(p Pane) (bool, error) {
+	out, err := c.output("display-message", "-t", p.Target(), "-p", "#{pane_in_mode}")
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(string(out)) == "1", nil
+}
+
 // WindowPaneCount returns the number of panes in the pane's window.
 func (c *Client) WindowPaneCount(p Pane) (int, error) {
 	out, err := c.output("display-message", "-t", p.Target(), "-p", "#{window_panes}")

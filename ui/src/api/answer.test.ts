@@ -65,6 +65,20 @@ describe('result mapping', () => {
     })
   })
 
+  it('503 with partial true warns the answer may have been partly sent', async () => {
+    vi.mocked(fetch).mockResolvedValue(respond(503, '{"partial":true}'))
+    expect(await answerChoice('r1', 1, 'f')).toEqual({
+      error: 'may have been partly sent — check the agent before resending',
+    })
+  })
+
+  it('a copy-mode 409 asks to exit copy mode instead of reading as moved', async () => {
+    vi.mocked(fetch).mockResolvedValue(respond(409, 'pane is in copy mode\n'))
+    expect(await answerChoice('r1', 1, 'f')).toEqual({
+      error: 'The terminal is scrolled back (copy mode) — exit it, then retry',
+    })
+  })
+
   it('other statuses show the server text', async () => {
     vi.mocked(fetch).mockResolvedValue(respond(422, 'too many options\n'))
     expect(await answerChoice('r1', 1, 'f')).toEqual({ error: 'too many options' })
@@ -92,6 +106,12 @@ describe('fetchPrompt', () => {
     vi.mocked(fetch).mockResolvedValue(respond(200, JSON.stringify(prompt)))
     expect(await fetchPrompt('r1')).toEqual(prompt)
     expect(lastRequest().url).toBe('/api/runs/r1/prompt')
+  })
+
+  it('bounds the request with a timeout signal', async () => {
+    vi.mocked(fetch).mockResolvedValue(respond(404))
+    await fetchPrompt('r1')
+    expect(lastRequest().init.signal).toBeInstanceOf(AbortSignal)
   })
 
   it('returns null on 404', async () => {

@@ -11,6 +11,8 @@ import (
 
 const maxDetail = 2 << 10
 
+const truncatedNote = "… (truncated — open the Terminal tab)"
+
 // ruleRun is collapsed to one rune before hashing, so a pane resize that only
 // redraws the rules at another width keeps the frame.
 var ruleRun = regexp.MustCompile(`─+|╌+`)
@@ -20,19 +22,19 @@ var ruleRun = regexp.MustCompile(`─+|╌+`)
 type Prompt struct {
 	Question string
 	Choices  []string // labels of choices 1..len(Choices)
-	Detail   string   // the dialog text above the question, ≤ 2 KiB
-	Frame    string   // hex sha256 of the normalized dialog, command included
+	Detail   string   // the dialog text above the question, ≤ 2 KiB, ending in truncatedNote when cut
+	Frame    string   // hex sha256 of the dialog's frameText, command included
 }
 
 // PermissionPrompt parses the permission-style dialog at the bottom of
-// capture: the lines after the last "─" rule, ending in an "Esc to cancel"
-// footer, with consecutive choices 1..m (2 ≤ m ≤ 9), one under the cursor,
+// capture: the lines after the last "─" dialog rule, ending in an "Esc to
+// cancel" footer, with consecutive choices 1..m (2 ≤ m ≤ 9), one under the cursor,
 // below a line ending in "?". A question dialog is never one.
 func PermissionPrompt(capture string) (Prompt, bool) {
 	lines := captureLines(capture)
 	top := -1
 	for i := len(lines) - 1; i >= 0; i-- {
-		if isRule(Normalize(lines[i]), "─") {
+		if isDialogRule(lines[i], "─") {
 			top = i
 			break
 		}
@@ -85,11 +87,7 @@ func PermissionPrompt(capture string) (Prompt, bool) {
 		qStart--
 	}
 
-	norm := ruleRun.ReplaceAllStringFunc(Normalize(strings.Join(region, "\n")), func(run string) string {
-		r, _ := utf8.DecodeRuneInString(run)
-		return string(r)
-	})
-	sum := sha256.Sum256([]byte(norm))
+	sum := sha256.Sum256([]byte(frameText(region)))
 	return Prompt{
 		Question: joinTrimmed(region[qStart:qEnd+1], " "),
 		Choices:  choices,
@@ -162,7 +160,22 @@ func parseChoices(lines []string) ([]string, bool) {
 
 func isBlank(line string) bool { return strings.TrimSpace(line) == "" }
 
-func isRuleLine(line string) bool { return isRule(strings.TrimSpace(line), "─╌") }
+func isRuleLine(line string) bool { return isDialogRule(line, "─╌") }
+
+// frameText is what the frame hashes: the region's words, each line's
+// leading "│" dropped, separated by single spaces, so a space that moves
+// inside a command changes the frame while a rewrap at a space does not.
+func frameText(region []string) string {
+	var words []string
+	for _, l := range region {
+		l = strings.TrimPrefix(strings.TrimLeftFunc(l, unicode.IsSpace), "│")
+		words = append(words, strings.Fields(l)...)
+	}
+	return ruleRun.ReplaceAllStringFunc(strings.Join(words, " "), func(run string) string {
+		r, _ := utf8.DecodeRuneInString(run)
+		return string(r)
+	})
+}
 
 func joinTrimmed(lines []string, sep string) string {
 	parts := make([]string, 0, len(lines))
@@ -173,7 +186,7 @@ func joinTrimmed(lines []string, sep string) string {
 }
 
 // detail is the dialog text above the question without blank or rule lines,
-// cut to maxDetail bytes on a rune boundary.
+// cut on a rune boundary to fit maxDetail with truncatedNote as its last line.
 func detail(lines []string) string {
 	var kept []string
 	for _, l := range lines {
@@ -185,9 +198,9 @@ func detail(lines []string) string {
 	if len(s) <= maxDetail {
 		return s
 	}
-	cut := maxDetail
+	cut := maxDetail - len(truncatedNote) - 1
 	for cut > 0 && !utf8.RuneStart(s[cut]) {
 		cut--
 	}
-	return s[:cut]
+	return s[:cut] + "\n" + truncatedNote
 }

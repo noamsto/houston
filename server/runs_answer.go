@@ -105,7 +105,8 @@ func isClaudeAgent(agent string) bool { return agent == "claude" || agent == "cl
 //	POST /api/runs/{id}/answer
 //	  {"kind":"question","toolCallId":"…","answers":[{"question":0,"options":[1],"text":"…"}]}
 //	  {"kind":"choice","ordinal":2,"frame":"<hex>"}
-//	→ 204 · 409 "prompt changed" (nothing typed) · 409/502 {"partial":true} · 429 busy
+//	→ 204 · 409 "prompt changed" | "pane is in copy mode" (nothing typed)
+//	  · 409/502/503 {"partial":true} · 429 busy
 func (s *Server) handleRunAnswer(w http.ResponseWriter, r *http.Request) {
 	run, pane, ok := s.runPane(w, r)
 	if !ok {
@@ -275,7 +276,7 @@ func (s *Server) typeSteps(ctx context.Context, pane tmux.Pane, steps []answer.S
 	capture, err := s.runPanes.CapturePane(pane, answerCaptureLines)
 	if err != nil {
 		slog.Warn("run answer: capture failed", "pane", pane.Target(), "err", err)
-		return answerOutcome{code: http.StatusServiceUnavailable, detail: "tmux unavailable"}
+		return tmuxUnavailable(false)
 	}
 	if !steps[0].Expect(capture) {
 		return answerOutcome{code: http.StatusConflict, detail: "prompt changed"}
@@ -283,9 +284,12 @@ func (s *Server) typeSteps(ctx context.Context, pane tmux.Pane, steps []answer.S
 	sent := false
 	for i, step := range steps {
 		if i > 0 {
-			if detail := s.awaitStep(ctx, pane, step.Expect); detail != "" {
-				return answerOutcome{code: http.StatusConflict, detail: detail, partial: true}
+			if out, ok := s.awaitStep(ctx, pane, step.Expect); !ok {
+				return out
 			}
+		}
+		if out, ok := s.paneTakesKeys(pane, sent); !ok {
+			return out
 		}
 		for _, k := range step.Keys {
 			if out, ok := s.sendAnswerKey(ctx, pane, k, sent); !ok {
@@ -297,9 +301,9 @@ func (s *Server) typeSteps(ctx context.Context, pane tmux.Pane, steps []answer.S
 	return answerOutcome{code: http.StatusNoContent, detail: "delivered"}
 }
 
-// awaitStep polls the pane until expect passes, returning why it gave up, or
-// "" once it passes.
-func (s *Server) awaitStep(ctx context.Context, pane tmux.Pane, expect answer.Check) string {
+// awaitStep polls the pane, after keys reached it, until expect passes,
+// returning how the answer ends when it gives up.
+func (s *Server) awaitStep(ctx context.Context, pane tmux.Pane, expect answer.Check) (answerOutcome, bool) {
 	poll := time.NewTicker(orDefault(s.answerPoll, answerPollInterval))
 	defer poll.Stop()
 	deadline := time.NewTimer(orDefault(s.answerWait, answerWaitTimeout))
@@ -307,20 +311,39 @@ func (s *Server) awaitStep(ctx context.Context, pane tmux.Pane, expect answer.Ch
 	for {
 		select {
 		case <-ctx.Done():
-			return "request cancelled"
+			return answerOutcome{code: http.StatusConflict, detail: "request cancelled", partial: true}, false
 		case <-deadline.C:
-			return "pane did not reach the next step"
+			return answerOutcome{code: http.StatusConflict, detail: "pane did not reach the next step", partial: true}, false
 		case <-poll.C:
 		}
 		capture, err := s.runPanes.CapturePane(pane, answerCaptureLines)
 		if err != nil {
 			slog.Warn("run answer: capture failed", "pane", pane.Target(), "err", err)
-			return "capture failed"
+			return tmuxUnavailable(true), false
 		}
 		if expect(capture) {
-			return ""
+			return answerOutcome{}, true
 		}
 	}
+}
+
+// paneTakesKeys checks the pane is in no tmux mode: capture-pane shows the
+// live screen under copy mode, so every check passes while copy mode would
+// swallow the keys. sent says whether an earlier key reached the pane.
+func (s *Server) paneTakesKeys(pane tmux.Pane, sent bool) (answerOutcome, bool) {
+	inMode, err := s.runPanes.PaneInMode(pane)
+	if err != nil {
+		slog.Warn("run answer: mode probe failed", "pane", pane.Target(), "err", err)
+		return tmuxUnavailable(sent), false
+	}
+	if inMode {
+		return answerOutcome{code: http.StatusConflict, detail: "pane is in copy mode", partial: sent}, false
+	}
+	return answerOutcome{}, true
+}
+
+func tmuxUnavailable(sent bool) answerOutcome {
+	return answerOutcome{code: http.StatusServiceUnavailable, detail: "tmux unavailable", partial: sent}
 }
 
 // sendAnswerKey sends one key. sent says whether an earlier key reached the
@@ -351,7 +374,7 @@ func (s *Server) typeChoice(ctx context.Context, pane tmux.Pane, ordinal int, fr
 	capture, err := s.runPanes.CapturePane(pane, answerCaptureLines)
 	if err != nil {
 		slog.Warn("run answer: capture failed", "pane", pane.Target(), "err", err)
-		return answerOutcome{code: http.StatusServiceUnavailable, detail: "tmux unavailable"}
+		return tmuxUnavailable(false)
 	}
 	p, ok := answer.PermissionPrompt(capture)
 	if !ok || p.Frame != frame {
@@ -359,6 +382,9 @@ func (s *Server) typeChoice(ctx context.Context, pane tmux.Pane, ordinal int, fr
 	}
 	if ordinal > len(p.Choices) {
 		return answerOutcome{code: http.StatusBadRequest, detail: "no such choice"}
+	}
+	if out, ok := s.paneTakesKeys(pane, false); !ok {
+		return out
 	}
 	if out, ok := s.sendAnswerKey(ctx, pane, answer.Key{Special: strconv.Itoa(ordinal)}, false); !ok {
 		return out
