@@ -379,7 +379,7 @@ func (c *sseConn) close() {
 	_ = c.resp.Body.Close()
 }
 
-// next returns the next non-comment frame.
+// next returns the next frame that is neither a comment nor a ping.
 func (c *sseConn) next(t *testing.T) sseFrame {
 	t.Helper()
 	deadline := time.After(3 * time.Second)
@@ -389,7 +389,7 @@ func (c *sseConn) next(t *testing.T) sseFrame {
 			if !ok {
 				t.Fatal("stream ended, want a frame")
 			}
-			if f.comment {
+			if f.comment || f.event == "ping" {
 				continue
 			}
 			return f
@@ -408,7 +408,7 @@ func (c *sseConn) wantEOF(t *testing.T) {
 			if !ok {
 				return
 			}
-			if !f.comment {
+			if !f.comment && f.event != "ping" {
 				t.Fatalf("frame %+v after the end, want EOF", f)
 			}
 		case <-deadline:
@@ -640,7 +640,7 @@ func TestRunChatStreamPings(t *testing.T) {
 			if !ok {
 				t.Fatal("stream ended before a ping")
 			}
-			if fr.comment {
+			if fr.event == "ping" {
 				return
 			}
 		case <-deadline:

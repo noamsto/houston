@@ -187,6 +187,36 @@ func TestRunsStreamDeliversARemoval(t *testing.T) {
 	}
 }
 
+func TestRunsStreamPingsAsANamedEvent(t *testing.T) {
+	s := &Server{runs: runs.NewRegistry(runs.DefaultOrder), runsPing: 20 * time.Millisecond}
+	rec := newSyncRecorder()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet, "/api/runs/stream", nil).WithContext(ctx)
+
+	done := make(chan struct{})
+	go func() {
+		s.handleRunsStream(rec, req)
+		close(done)
+	}()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for !strings.Contains(rec.body(), "event: ping\ndata: \n\n") {
+		if time.Now().After(deadline) {
+			t.Fatalf("no named ping event within 3s\n%s", rec.body())
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Errorf("handler did not return after cancel")
+	}
+}
+
 func TestRunsRoutesAreBehindTheAuthGate(t *testing.T) {
 	// A new route registered outside apiMux would reopen the hole closed in #4.
 	dir := t.TempDir()

@@ -8,6 +8,9 @@ import (
 	"time"
 )
 
+// runsPingInterval is the runs stream's keep-alive period.
+const runsPingInterval = 25 * time.Second
+
 // handleRunsSnapshot returns every known run.
 //
 //	GET /api/runs → []runs.Run
@@ -52,7 +55,7 @@ func (s *Server) handleRunsStream(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "event: snapshot\ndata: %s\n\n", snap)
 	flusher.Flush()
 
-	ping := time.NewTicker(25 * time.Second)
+	ping := time.NewTicker(orDefault(s.runsPing, runsPingInterval))
 	defer ping.Stop()
 
 	for {
@@ -86,7 +89,7 @@ func (s *Server) handleRunsStream(w http.ResponseWriter, r *http.Request) {
 				if _, err := fmt.Fprintf(w, "event: snapshot\ndata: %s\n\n", snap); err != nil {
 					return
 				}
-			} else if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
+			} else if _, err := fmt.Fprint(w, "event: ping\ndata: \n\n"); err != nil {
 				return
 			}
 			flusher.Flush()
