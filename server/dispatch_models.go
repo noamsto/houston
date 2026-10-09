@@ -138,11 +138,8 @@ func execDispatchModels(ctx context.Context, serverPath string) (dispatchModelSe
 	return parseDispatchModels(out)
 }
 
-// dispatchModelSet is the model set for one request: dispatch's own, or the
-// built-in fallback with the reason. It is read once per request and never
-// cached, so an options GET or a POST sees one consistent list, and a changed
-// tier map shows up on the next request without a restart. A POST pays one
-// extra dispatch exec, the same as the engines lookup.
+// dispatchModelSet reads the model set once per request, uncached, so one request sees one
+// consistent list. On failure it returns the built-in set with the reason.
 func (s *Server) dispatchModelSet(ctx context.Context, serverPath string) (dispatchModelSet, error) {
 	set, err := s.dispatchModels(ctx, serverPath)
 	if err != nil {
