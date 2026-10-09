@@ -205,7 +205,7 @@ func TestOnPath(t *testing.T) {
 }
 
 // Not parallel: it changes the process working directory.
-func TestOnPathEmptyElementIsNotCwd(t *testing.T) {
+func TestOnPathIgnoresCwdRelativeElements(t *testing.T) {
 	prev, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -217,12 +217,19 @@ func TestOnPathEmptyElementIsNotCwd(t *testing.T) {
 	})
 	dir := t.TempDir()
 	writeFile(t, dir, "crew", 0o755)
+	if err := os.Mkdir(filepath.Join(dir, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(dir, "bin"), "crew", 0o755)
 	if err := os.Chdir(dir); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{"", sep} {
+	for _, path := range []string{".", "bin", "", sep} {
 		if OnPath("crew", path) {
 			t.Errorf("OnPath(crew, %q) = true, want false", path)
 		}
+	}
+	if !OnPath("crew", dir) {
+		t.Errorf("OnPath(crew, %q) = false, want true", dir)
 	}
 }

@@ -74,12 +74,12 @@ func Resolve(ctx context.Context, requested Mode, p Probe) (m Mode, reason strin
 	return m, reason
 }
 
-// OnPath reports whether name is an executable regular file in some non-empty
-// element of path. Unlike exec.LookPath, an empty element does not mean the
-// current directory.
+// OnPath reports whether name is an executable regular file in some absolute
+// element of path. Unlike exec.LookPath, an empty or relative element never
+// matches instead of meaning the current directory.
 func OnPath(name, path string) bool {
 	for _, dir := range filepath.SplitList(path) {
-		if dir == "" {
+		if !filepath.IsAbs(dir) {
 			continue
 		}
 		info, err := os.Stat(filepath.Join(dir, name))
