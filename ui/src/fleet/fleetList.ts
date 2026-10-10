@@ -5,7 +5,7 @@ export type Filter = 'active' | 'needs-you' | 'stuck' | 'done' | 'all'
 
 // Fresh needs-you, then fresh stuck, then fresh done, then the rest. A stale
 // run of any kind ranks as the rest: the verdict no longer describes it.
-function rank(r: Run, now: number): number {
+export function rank(r: Run, now: number): number {
   if (needsYou(r, now)) return 3
   if (isStuck(r, now)) return 2
   if (isDone(r, now)) return 1
@@ -14,7 +14,7 @@ function rank(r: Run, now: number): number {
 
 // Newest-started first, then id: neither moves while a run lives, so a run's
 // output never reshuffles the list.
-function stableOrder(a: Run, b: Run): number {
+export function stableOrder(a: Run, b: Run): number {
   const bySince = (b.since ?? 0) - (a.since ?? 0)
   if (bySince !== 0) return bySince
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0

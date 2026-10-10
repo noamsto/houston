@@ -30,7 +30,7 @@ export function crewAttention(run: Run): Attention | undefined {
 }
 
 // Flags are gated on freshness like Fleet's badge; unflagged runs bucket by state.
-function bucket(run: Run, now: number): keyof CrewCounts {
+export function bucket(run: Run, now: number): keyof CrewCounts {
   if (run.attention) {
     if (!isFresh(run, now)) return 'ended'
     return run.attention === 'needs-you' ? 'needsYou' : run.attention
