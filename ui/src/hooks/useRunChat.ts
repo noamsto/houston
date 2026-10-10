@@ -88,8 +88,15 @@ export function useRunChat(runId: string, enabled: boolean): UseRunChatResult {
       const es = new EventSource(chatStreamURL(runId, epoch, seq))
       esRef.current = es
       let highWaterSeq = seq
+      // The server answers each (re)connect with one event holding everything
+      // after the cursor; later events are live ticks that may batch several
+      // updates of one message, so they all animate.
+      let catchUp = true
 
-      es.addEventListener('open', () => liveness.seen())
+      es.addEventListener('open', () => {
+        liveness.seen()
+        catchUp = true
+      })
       es.addEventListener('ping', () => liveness.seen())
 
       es.addEventListener('updates', (ev: MessageEvent<string>) => {
@@ -103,14 +110,17 @@ export function useRunChat(runId: string, enabled: boolean): UseRunChatResult {
           return
         }
         setUpdates((prev) => mergeUpdates(prev, incoming))
-        const newlyLive = incoming.filter((u) => u.seq > highWaterSeq)
-        if (newlyLive.length) {
+        const fresh = incoming.filter((u) => u.seq > highWaterSeq)
+        const isCatchUp = catchUp
+        catchUp = false
+        if (fresh.length) {
+          const live = isCatchUp ? [fresh.reduce((a, b) => (b.seq > a.seq ? b : a))] : fresh
           setLiveIds((prev) => {
             const next = new Set(prev)
-            for (const u of newlyLive) next.add(u.id)
+            for (const u of live) next.add(u.id)
             return next
           })
-          highWaterSeq = Math.max(highWaterSeq, ...newlyLive.map((u) => u.seq))
+          highWaterSeq = Math.max(highWaterSeq, ...fresh.map((u) => u.seq))
         }
       })
 

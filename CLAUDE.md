@@ -610,7 +610,7 @@ conversation. Design and measured per-engine mapping:
   → SSE `updates` batches with `id: <epoch>.<last seq>` (`Last-Event-ID` wins
   over `after`, so a native EventSource reconnect resumes with no gap), `reset`
   then EOF on an epoch mismatch, a cursor the ring can't serve, the run's
-  Session changing (checked every 2 s), or the session going away; an idle
+  Session changing (checked every 2 s), or the session going away; the first pull after every connect always sends an `updates` event, `[]` when nothing is missed, so the UI can tell the catch-up batch from live ticks (only the newest update of the catch-up is marked live and animates, `useRunChat`); an idle
   stream gets a named `ping` event every 25 s (see "Stream liveness");
   `GET /api/runs/{id}/chat/tool/{callId}` → name/input/output/diff, each of
   output/oldText/newText capped at 16 KiB (`truncated`), an input over 16 KiB

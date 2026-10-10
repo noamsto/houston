@@ -487,6 +487,20 @@ func TestRunChatStreamResumesAfterCursorAndFollowsAppends(t *testing.T) {
 	wantSeqs(t, frameSeqs(t, c.next(t)), 6, 7)
 }
 
+func TestRunChatStreamSendsAnEmptyFirstEventWhenCaughtUp(t *testing.T) {
+	f := newFakeChat(3)
+	_, ts, path := newChatStreamServer(t, f)
+
+	c := openChatStream(t, ts, path+"?after="+chatEpoch+".3", "")
+	first := c.next(t)
+	if first.event != "updates" || first.data != "[]" || first.id != chatEpoch+".3" {
+		t.Fatalf("first frame %+v, want an empty updates event at the cursor", first)
+	}
+
+	f.appendN(1)
+	wantSeqs(t, frameSeqs(t, c.next(t)), 4, 4)
+}
+
 func TestRunChatStreamReconnectHasNoGapOrDuplicate(t *testing.T) {
 	f := newFakeChat(3)
 	_, ts, path := newChatStreamServer(t, f)
