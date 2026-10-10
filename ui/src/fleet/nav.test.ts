@@ -1,5 +1,5 @@
 import { act, cleanup, renderHook } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Run } from '../api/runs'
 import { installFakeHistory, settle, type FakeHistory } from '../testing/fakeHistory'
 import { back, backLabel, navEntry, openRun, popToRoot, rootLabel, selectRun, switchRunTab } from './nav'
@@ -107,6 +107,73 @@ describe('navigation stack', () => {
     expect(window.location.hash).toBe('#/fleet/b')
     await pop(() => back('#/fleet'))
     expect(window.location.hash).toBe('#/fleet')
+  })
+
+  it('selecting the run the entry-from names collapses the stack instead of leaving a stale from', async () => {
+    openRun('disp')
+    openRun('worker')
+    const length = fake.length
+    selectRun('disp')
+    await act(async () => { await settle() })
+    expect(window.location.hash).toBe('#/fleet/disp')
+    expect(fake.length).toBe(length)
+    expect(navEntry()).toEqual({ depth: 1, from: '#/fleet', root: '#/fleet' })
+    expect(backLabel(navEntry(), [], 'fleet')).toBe('Fleet')
+    await pop(() => back('#/fleet'))
+    expect(window.location.hash).toBe('#/fleet')
+  })
+
+  it('a parent opened from another tab still collapses (ids, not raw hashes)', async () => {
+    openRun('disp')
+    switchRunTab('disp', 'crew')
+    openRun('worker')
+    const length = fake.length
+    selectRun('disp')
+    await act(async () => { await settle() })
+    expect(window.location.hash).toBe('#/fleet/disp/crew')
+    expect(fake.length).toBe(length)
+    expect(navEntry()?.depth).toBe(1)
+  })
+
+  it('a pop that never yields popstate does not wedge Back: the fallback clears the guard', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    try {
+      openRun('disp')
+      openRun('worker')
+      const realBack = fake.back
+      let calls = 0
+      fake.back = () => { calls += 1 }
+      back('#/fleet')
+      back('#/fleet')
+      expect(calls).toBe(1)
+      vi.advanceTimersByTime(1100)
+      fake.back = realBack
+      back('#/fleet')
+      vi.advanceTimersByTime(1)
+      expect(window.location.hash).toBe('#/fleet/disp')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('pageshow and hashchange also clear the pop guard', () => {
+    openRun('disp')
+    openRun('worker')
+    const realBack = fake.back
+    let calls = 0
+    fake.back = () => { calls += 1 }
+    back('#/fleet')
+    back('#/fleet')
+    expect(calls).toBe(1)
+    window.dispatchEvent(new Event('pageshow'))
+    back('#/fleet')
+    expect(calls).toBe(2)
+    back('#/fleet')
+    expect(calls).toBe(2)
+    window.dispatchEvent(new Event('hashchange'))
+    back('#/fleet')
+    expect(calls).toBe(3)
+    fake.back = realBack
   })
 
   it('a second Back while a pop is in flight is ignored until popstate', async () => {
