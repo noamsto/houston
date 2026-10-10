@@ -1,7 +1,9 @@
 import { useMemo, useState } from 'react'
 import type { Run } from '../api/runs'
+import type { Mode } from '../api/mode'
 import { needsYou } from './staleness'
-import { filterRuns, groupByHost, type Filter } from './fleetList'
+import { fleetEntries, groupEntriesByHost } from './fleetEntries'
+import type { Filter } from './fleetList'
 import { RunList } from './RunList'
 import { useGroupByProject } from '../hooks/useLayout'
 import './fleet.css'
@@ -10,10 +12,11 @@ interface FleetViewProps {
   runs: Run[]
   connected: boolean
   now: number
+  mode: Mode | null
   onOpen?: (r: Run) => void
 }
 
-export function FleetView({ runs, connected, now, onOpen }: FleetViewProps) {
+export function FleetView({ runs, connected, now, mode, onOpen }: FleetViewProps) {
   const [filter, setFilter] = useState<Filter>('active')
   const [grouped, setGrouped] = useGroupByProject()
 
@@ -22,9 +25,9 @@ export function FleetView({ runs, connected, now, onOpen }: FleetViewProps) {
     [runs, now],
   )
 
-  const visible = useMemo(() => filterRuns(runs, filter, now), [runs, filter, now])
+  const entries = useMemo(() => fleetEntries(runs, filter, now, mode), [runs, filter, now, mode])
 
-  const groups = useMemo(() => groupByHost(visible), [visible])
+  const groups = useMemo(() => groupEntriesByHost(entries), [entries])
 
   return (
     <div className="fleet mocha">
@@ -60,13 +63,13 @@ export function FleetView({ runs, connected, now, onOpen }: FleetViewProps) {
         </button>
       </div>
 
-      {visible.length === 0 && (
+      {entries.length === 0 && (
         <div className="fleet-empty">
           {connected ? 'No runs match this filter.' : 'Connecting to the run stream…'}
         </div>
       )}
 
-      <RunList groups={groups} allRuns={runs} now={now} onOpen={onOpen} groupByProject={grouped} />
+      <RunList groups={groups} now={now} onOpen={onOpen} groupByProject={grouped} />
     </div>
   )
 }

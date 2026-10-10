@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { Run } from '../api/runs'
+import type { Mode } from '../api/mode'
 import { agoLabel, nameLabel } from './format'
 import { projectOf } from './fleetList'
 import { TerminalPane } from '../components/TerminalPane'
@@ -7,6 +8,7 @@ import { isClaudeAgent, suggestedCommand } from '../components/quickCommands'
 import { useRunChat } from '../hooks/useRunChat'
 import { useTerminalLifecycle } from './useTerminalLifecycle'
 import { ChatTab } from './ChatTab'
+import { CrewTab } from './CrewTab'
 import { RunQuestion, RunStatusStrip } from './RunStatusStrip'
 import { runHash } from './routes'
 import type { DetailTab } from './routes'
@@ -19,6 +21,7 @@ interface RunDetailProps {
   now: number
   id: string
   tab?: DetailTab
+  mode: Mode | null
   onBack?: () => void
   backLabel?: string
 }
@@ -36,7 +39,7 @@ function goToTab(id: string, tab: DetailTab): void {
  * sibling layer over `.fleet` (see Shell.tsx) rather than in place of it, so
  * `.fleet`'s own scroll position survives a visit here and back.
  */
-export function RunDetail({ runs, hasSnapshot, streamConnected, now, id, tab, onBack = goToFleet, backLabel = 'Fleet' }: RunDetailProps) {
+export function RunDetail({ runs, hasSnapshot, streamConnected, now, id, tab, mode, onBack = goToFleet, backLabel = 'Fleet' }: RunDetailProps) {
   // `hasSnapshot` distinguishes "haven't heard from the stream yet" (loading)
   // from "heard from it, this id isn't in it" (really not found) — without
   // it, every cold deep link would flash "not found" for the one tick before
@@ -68,16 +71,17 @@ export function RunDetail({ runs, hasSnapshot, streamConnected, now, id, tab, on
           <button type="button" className="run-detail-back-cta" onClick={onBack}>Back to {backLabel}</button>
         </div>
       ) : (
-        <RunDetailBody run={run} tab={tab} streamConnected={streamConnected} now={now} onBack={onBack} backLabel={backLabel} />
+        <RunDetailBody run={run} runs={runs} tab={tab} mode={mode} streamConnected={streamConnected} now={now} onBack={onBack} backLabel={backLabel} />
       )}
     </div>
   )
 }
 
-function RunDetailBody({ run, tab, streamConnected, now, onBack, backLabel }: { run: Run; tab?: DetailTab; streamConnected: boolean; now: number; onBack: () => void; backLabel: string }) {
+function RunDetailBody({ run, runs, tab, mode, streamConnected, now, onBack, backLabel }: { run: Run; runs: Run[]; tab?: DetailTab; mode: Mode | null; streamConnected: boolean; now: number; onBack: () => void; backLabel: string }) {
   const capable = run.caps.terminal && Boolean(run.tmux)
   const lifecycle = useTerminalLifecycle(run.id, capable, tab === 'terminal', streamConnected)
   const chatOffered = Boolean(run.caps.chat)
+  const crewOffered = mode === 'dispatcher' && run.role === 'dispatcher' && Boolean(run.crew?.name)
 
   // A deep link to `.../terminal` for a run that has never actually gone live
   // (never had, or already lost, terminal capability before the view ever
@@ -86,7 +90,14 @@ function RunDetailBody({ run, tab, streamConnected, now, onBack, backLabel }: { 
   // Once it *has* gone live, a later capability loss is shown explicitly
   // instead (see the terminal branch below) rather than silently falling back
   // here.
-  const effectiveTab: DetailTab = tab === 'terminal' && (run.caps.terminal || lifecycle.everLive) ? 'terminal' : 'chat'
+  // A dispatcher's own run opens on its Crew tab unless the route names Chat or
+  // Terminal; a crew route on any other run degrades like an unknown tab.
+  const effectiveTab: DetailTab =
+    crewOffered && (tab === undefined || tab === 'crew')
+      ? 'crew'
+      : tab === 'terminal' && (run.caps.terminal || lifecycle.everLive)
+        ? 'terminal'
+        : 'chat'
   // useRunChat keeps its last updates once disabled, so gate the result too.
   const chatEnabled = effectiveTab === 'terminal' && chatOffered && isClaudeAgent(run.agent)
   const { updates } = useRunChat(run.id, chatEnabled)
@@ -98,6 +109,16 @@ function RunDetailBody({ run, tab, streamConnected, now, onBack, backLabel }: { 
         <button type="button" className="run-detail-tabs-back" onClick={onBack} aria-label={`Back to ${backLabel}`}>
           <span aria-hidden>‹</span> {backLabel}
         </button>
+        {crewOffered && (
+          <button
+            type="button"
+            className={effectiveTab === 'crew' ? 'on' : ''}
+            aria-pressed={effectiveTab === 'crew'}
+            onClick={() => goToTab(run.id, 'crew')}
+          >
+            Crew
+          </button>
+        )}
         {chatOffered && (
           <button
             type="button"
@@ -120,7 +141,9 @@ function RunDetailBody({ run, tab, streamConnected, now, onBack, backLabel }: { 
         )}
       </nav>
       <div className={`run-detail-body${effectiveTab === 'terminal' ? ' terminal' : ''}`}>
-        {effectiveTab === 'chat' ? (
+        {effectiveTab === 'crew' ? (
+          <CrewTab key={run.id} run={run} runs={runs} now={now} />
+        ) : effectiveTab === 'chat' ? (
           chatOffered ? <ChatTab key={run.id} run={run} now={now} /> : <RunStatusCard key={run.id} run={run} now={now} />
         ) : (
           <>

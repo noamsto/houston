@@ -1,13 +1,13 @@
 import type { Run } from '../api/runs'
 import { isDone, isFresh, isHistory, isStuck, needsYou } from './staleness'
-import { agoLabel, nameLabel, subtitle } from './format'
+import { agoLabel, isWebUrl, nameLabel, subtitle } from './format'
 import { projectOf } from './fleetList'
 
 // The card is a <button>, so a link inside it must not bubble to onOpen.
-function PRChip({ pr }: { pr: NonNullable<Run['pr']> }) {
+export function PRChip({ pr }: { pr: NonNullable<Run['pr']> }) {
   const cls = `run-chip pr${pr.check_state === 'failure' ? ' failing' : ''}`
   const label = pr.number ? `#${pr.number}` : 'PR'
-  if (!pr.url || !/^https?:\/\//i.test(pr.url)) return <span className={cls}>{label}</span>
+  if (!pr.url || !isWebUrl(pr.url)) return <span className={cls}>{label}</span>
   return (
     <a className={cls} href={pr.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
       {label}

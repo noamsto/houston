@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { MobileShell } from './MobileShell'
 import { fetchDispatchOptions } from '../api/dispatch'
+import type { Run } from '../api/runs'
 
 vi.mock('./useWorkspace', () => ({
   useWorkspace: () => ({ workspace: null, error: null, loading: false }),
@@ -109,9 +110,9 @@ describe('MobileShell tabs', () => {
 
   it('follows Back to the empty hash and returns to Fleet', () => {
     render(<MobileShell runs={[]} connected hasSnapshot now={0} mode="dispatcher" />)
-    fireEvent.click(screen.getByRole('button', { name: /crews/i }))
+    fireEvent.click(screen.getByRole('button', { name: /workspace/i }))
     act(() => { window.dispatchEvent(new HashChangeEvent('hashchange')) })
-    expect(window.location.hash).toBe('#/crews')
+    expect(window.location.hash).toBe('#/workspace')
 
     act(() => { window.location.hash = '' })
 
@@ -126,20 +127,29 @@ describe('MobileShell tabs', () => {
   })
 
   it('keeps the prior tab under a run detail and Back returns to it', () => {
-    window.location.hash = '#/crews'
+    window.location.hash = '#/workspace'
     render(<MobileShell runs={[]} connected hasSnapshot now={0} mode="dispatcher" />)
 
     act(() => { window.location.hash = '#/fleet/gone/activity' })
-    expect(within(screen.getByRole('navigation', { name: 'sections' })).getByRole('button', { name: /crews/i }).getAttribute('aria-current')).toBe('true')
+    expect(within(screen.getByRole('navigation', { name: 'sections' })).getByRole('button', { name: /workspace/i }).getAttribute('aria-current')).toBe('true')
 
-    fireEvent.click(screen.getAllByRole('button', { name: 'Back to Crews' })[0])
-    expect(window.location.hash).toBe('#/crews')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Back to Workspace' })[0])
+    expect(window.location.hash).toBe('#/workspace')
   })
 })
 
 describe('MobileShell modes', () => {
   beforeEach(() => {
     vi.mocked(fetchDispatchOptions).mockClear()
+  })
+
+  it('dispatcher mode has no Crews tab button and lands #/crews on Fleet', () => {
+    window.location.hash = '#/crews'
+    render(<MobileShell runs={[]} connected hasSnapshot now={0} mode="dispatcher" />)
+
+    expect(within(screen.getByRole('navigation', { name: 'sections' })).queryByRole('button', { name: /crews/i })).toBeNull()
+    expect(window.location.hash).toBe('#/fleet')
+    expect(screen.getByRole('button', { name: /^.?Fleet/ }).getAttribute('aria-current')).toBe('true')
   })
 
   it('tmux mode has no Crews or Dispatch and never loads dispatch options', async () => {
@@ -174,14 +184,11 @@ describe('MobileShell modes', () => {
     expect(screen.getByRole('button', { name: /^.?Fleet/ }).getAttribute('aria-current')).toBe('true')
   })
 
-  it('an unknown mode leaves #/crews alone and mounts no Crews pane, then redirects once tmux is known', () => {
+  it('an unknown mode rewrites #/crews to Fleet at once and loads no dispatch options', () => {
     window.location.hash = '#/crews'
-    const { rerender } = render(<MobileShell runs={[]} connected hasSnapshot now={0} mode={null} />)
-    expect(window.location.hash).toBe('#/crews')
-    expect(fetchDispatchOptions).not.toHaveBeenCalled()
-
-    rerender(<MobileShell runs={[]} connected hasSnapshot now={0} mode="tmux" />)
+    render(<MobileShell runs={[]} connected hasSnapshot now={0} mode={null} />)
     expect(window.location.hash).toBe('#/fleet')
+    expect(fetchDispatchOptions).not.toHaveBeenCalled()
   })
 
   it('dispatcher mode stays on #/dispatch', () => {
@@ -189,5 +196,30 @@ describe('MobileShell modes', () => {
     render(<MobileShell runs={[]} connected hasSnapshot now={0} mode="dispatcher" />)
 
     expect(window.location.hash).toBe('#/dispatch')
+  })
+})
+
+describe('MobileShell fleet entries', () => {
+  const nowSec = 1_800_000_000
+  const base = { agent: 'claude', activity: {}, tokens: { input: 0, output: 0 }, caps: { terminal: true, reply: true, kill: true }, updated_at: nowSec }
+  const runs = [
+    { ...base, id: 'd', state: 'idle', role: 'dispatcher', branch: 'main', crew: { name: '1-1' } },
+    { ...base, id: 'w', state: 'blocked', role: 'worker', branch: 'w-one', crew: { name: '1-1', codename: 'blush' } },
+  ] as Run[]
+
+  it('passes the mode down: dispatcher mode nests the worker, tmux mode lists it flat', () => {
+    const { container, rerender } = render(<MobileShell runs={runs} connected hasSnapshot now={nowSec * 1000} mode="dispatcher" />)
+    expect(container.querySelectorAll('.fleet-group-card .worker-row').length).toBe(1)
+    expect(container.querySelectorAll('.run-card').length).toBe(1)
+
+    rerender(<MobileShell runs={runs} connected hasSnapshot now={nowSec * 1000} mode="tmux" />)
+    expect(container.querySelector('.fleet-group-card')).toBeNull()
+    expect(container.querySelectorAll('.run-card').length).toBe(2)
+  })
+
+  it('opens a worker row by writing its run hash', () => {
+    const { container } = render(<MobileShell runs={runs} connected hasSnapshot now={nowSec * 1000} mode="dispatcher" />)
+    fireEvent.click(container.querySelector('.worker-row-main') as HTMLElement)
+    expect(window.location.hash).toBe('#/fleet/w')
   })
 })

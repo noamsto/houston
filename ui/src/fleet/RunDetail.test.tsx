@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { waitFor } from '@testing-library/react'
 import { RunDetail } from './RunDetail'
 import { parseDetailRoute } from './routes'
+import { resetCrewReposCache } from './useCrewRepos'
 import type { Run } from '../api/runs'
 import type { Terminal } from '@xterm/xterm'
 import { installFakeEventSource } from '../testing/fakeEventSource'
@@ -81,19 +82,19 @@ afterEach(async () => {
 
 describe('RunDetail', () => {
   it('shows a loading state before the first snapshot arrives, even for an id not yet known', () => {
-    render(<RunDetail runs={[]} hasSnapshot={false} streamConnected now={now} id="pane-1" tab="chat" />)
+    render(<RunDetail mode={null} runs={[]} hasSnapshot={false} streamConnected now={now} id="pane-1" tab="chat" />)
     expect(screen.getByText(/loading run/i)).toBeTruthy()
     expect(screen.queryByText(/no longer available/i)).toBeNull()
   })
 
   it('shows "not found" once a snapshot has arrived and the id is not in it', () => {
-    render(<RunDetail runs={[]} hasSnapshot streamConnected now={now} id="pane-1" tab="chat" />)
+    render(<RunDetail mode={null} runs={[]} hasSnapshot streamConnected now={now} id="pane-1" tab="chat" />)
     expect(screen.getByText(/no longer available/i)).toBeTruthy()
   })
 
   it('falls back to the status card when the deep-linked run has no terminal capability', () => {
     const r = run({ caps: { terminal: false, reply: true, kill: true }, activity: { tool: 'edit', hint: 'RunDetail.tsx' } })
-    render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
+    render(<RunDetail mode={null} runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
 
     // The status card renders...
     const card = document.querySelector<HTMLElement>('.run-status-card')!
@@ -105,14 +106,14 @@ describe('RunDetail', () => {
 
   it('renders the Terminal tab button and placeholder when the run has terminal capability', () => {
     const r = run({ caps: { terminal: true, reply: true, kill: true } })
-    render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
+    render(<RunDetail mode={null} runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
     expect(screen.getByText('Terminal')).toBeTruthy()
     expect(screen.getByText(/coming soon/i)).toBeTruthy()
   })
 
   it('shows project and branch separately in the header, not the worktree-dir repo slug twice', () => {
     const r = run({ project: 'houston', repo: 'feat-97-dogfood-houston-as-a-phone-user-and-file', branch: 'feat/97-dogfood-houston-as-a-phone-user-and-file' })
-    render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="chat" />)
+    render(<RunDetail mode={null} runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="chat" />)
     expect(screen.getByText('houston')).toBeTruthy()
     expect(screen.getByText('feat/97-dogfood-houston-as-a-phone-user-and-file')).toBeTruthy()
     expect(screen.queryByText(/feat-97-dogfood-houston-as-a-phone-user-and-file\/feat/)).toBeNull()
@@ -120,7 +121,7 @@ describe('RunDetail', () => {
 
   it('shows the agent chip in the header', () => {
     const r = run({ agent: 'pi' })
-    render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="chat" />)
+    render(<RunDetail mode={null} runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="chat" />)
     expect(screen.getByText('pi')).toBeTruthy()
   })
 })
@@ -128,24 +129,24 @@ describe('RunDetail', () => {
 describe('RunDetail terminal lifecycle', () => {
   it('renders a live TerminalPane when the run has terminal capability and tmux data', () => {
     const r = liveRun()
-    render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
+    render(<RunDetail mode={null} runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
     expect(screen.queryByText(/coming soon/i)).toBeNull()
     expect(screen.queryByText(/session ended/i)).toBeNull()
   })
 
   it('addresses the terminal socket at the run, not the pane', () => {
     const r = liveRun()
-    render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
+    render(<RunDetail mode={null} runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
     expect(lastSocketPath).toBe(`/api/runs/${r.id}/terminal`)
   })
 
   it('case 1: shows "session ended" when caps.terminal drops after going live, and unmounts the terminal', () => {
     const r = liveRun()
-    const { rerender } = render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
+    const { rerender } = render(<RunDetail mode={null} runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
     expect(screen.queryByText(/session ended/i)).toBeNull()
 
     const dead = liveRun({ caps: { terminal: false, reply: true, kill: true } })
-    rerender(<RunDetail runs={[dead]} hasSnapshot streamConnected now={now} id={dead.id} tab="terminal" />)
+    rerender(<RunDetail mode={null} runs={[dead]} hasSnapshot streamConnected now={now} id={dead.id} tab="terminal" />)
 
     expect(screen.getByText(/session ended/i)).toBeTruthy()
     expect(screen.getByRole('button', { name: /reconnect/i })).toBeTruthy()
@@ -155,10 +156,10 @@ describe('RunDetail terminal lifecycle', () => {
 
   it('case 2: shows "no longer available" when a run with a live terminal is evicted', () => {
     const r = liveRun()
-    const { rerender } = render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
+    const { rerender } = render(<RunDetail mode={null} runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
     expect(screen.queryByText(/session ended/i)).toBeNull()
 
-    rerender(<RunDetail runs={[]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
+    rerender(<RunDetail mode={null} runs={[]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
 
     expect(screen.getByText(/no longer available/i)).toBeTruthy()
   })
@@ -168,11 +169,11 @@ describe('RunDetail terminal lifecycle', () => {
     try {
       const r = liveRun()
       mockConnected = false
-      const { rerender } = render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
+      const { rerender } = render(<RunDetail mode={null} runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
 
       act(() => { vi.advanceTimersByTime(3000) })
       mockConnected = true
-      rerender(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
+      rerender(<RunDetail mode={null} runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
 
       act(() => { vi.advanceTimersByTime(15000) })
       expect(screen.queryByText(/session ended/i)).toBeNull()
@@ -186,7 +187,7 @@ describe('RunDetail terminal lifecycle', () => {
     try {
       const r = liveRun()
       mockConnected = false
-      render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
+      render(<RunDetail mode={null} runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
 
       act(() => { vi.advanceTimersByTime(9000) })
       expect(screen.queryByText(/session ended/i)).toBeNull()
@@ -201,7 +202,7 @@ describe('RunDetail terminal lifecycle', () => {
   it('ends the session immediately (no 10s grace) and shows the reason when the terminal socket reports tmux server changed', () => {
     const r = liveRun()
     mockEnded = 'tmux server changed'
-    render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
+    render(<RunDetail mode={null} runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
 
     expect(screen.getByText(/session ended/i)).toBeTruthy()
     expect(screen.getByText('tmux server changed')).toBeTruthy()
@@ -209,7 +210,7 @@ describe('RunDetail terminal lifecycle', () => {
 
   it('case 4: a stale SSE stream shows a reconnecting indicator but keeps the terminal mounted', () => {
     const r = liveRun()
-    render(<RunDetail runs={[r]} hasSnapshot streamConnected={false} now={now} id={r.id} tab="terminal" />)
+    render(<RunDetail mode={null} runs={[r]} hasSnapshot streamConnected={false} now={now} id={r.id} tab="terminal" />)
 
     expect(screen.getByRole('status')).toBeTruthy()
     expect(screen.getByText(/reconnecting/i)).toBeTruthy()
@@ -218,34 +219,34 @@ describe('RunDetail terminal lifecycle', () => {
 
   it('recovers to a live terminal once caps.terminal flips back true after ending', () => {
     const r = liveRun()
-    const { rerender } = render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
+    const { rerender } = render(<RunDetail mode={null} runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
 
     const dead = liveRun({ caps: { terminal: false, reply: true, kill: true } })
-    rerender(<RunDetail runs={[dead]} hasSnapshot streamConnected now={now} id={dead.id} tab="terminal" />)
+    rerender(<RunDetail mode={null} runs={[dead]} hasSnapshot streamConnected now={now} id={dead.id} tab="terminal" />)
     expect(screen.getByText(/session ended/i)).toBeTruthy()
 
-    rerender(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
+    rerender(<RunDetail mode={null} runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
     expect(screen.queryByText(/session ended/i)).toBeNull()
   })
 
   it('unmounts TerminalPane (rather than hiding it) when the tab switches away from terminal', () => {
     const r = liveRun()
-    const { rerender } = render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
+    const { rerender } = render(<RunDetail mode={null} runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
     expect(screen.queryByText(/coming soon/i)).toBeNull()
 
-    rerender(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="chat" />)
+    rerender(<RunDetail mode={null} runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="chat" />)
     expect(document.querySelector('.run-status-card')).toBeTruthy()
     expect(document.querySelector('.xterm')).toBeNull()
 
     // Switching back doesn't read as "ended" — the tab switch alone must not
     // have flagged the pane as dead.
-    rerender(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
+    rerender(<RunDetail mode={null} runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
     expect(screen.queryByText(/session ended/i)).toBeNull()
   })
 
   it('desktop: hides the classic PaneHeader (RunDetail supplies its own header/tabs)', () => {
     const r = liveRun()
-    const { container } = render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
+    const { container } = render(<RunDetail mode={null} runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
 
     // PaneHeader would render the pane id as text — neither it nor any
     // /api/pane reference must appear here (RunDetail addresses the run).
@@ -258,7 +259,7 @@ describe('RunDetail terminal lifecycle', () => {
 
   it('desktop: input is wired — typing into the mounted terminal calls sendInput', async () => {
     const r = liveRun()
-    render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
+    render(<RunDetail mode={null} runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
 
     const term = await lastTerminalInstance()
     act(() => {
@@ -270,7 +271,7 @@ describe('RunDetail terminal lifecycle', () => {
   it('mobile: MobileInputBar renders and sends via fetch, not sendInput', async () => {
     desktop = false
     const r = liveRun()
-    render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
+    render(<RunDetail mode={null} runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
 
     expect(screen.getByPlaceholderText('Send a message...')).toBeTruthy()
     // Simplest reliable path through MobileInputBar: a quick-action button, not
@@ -292,7 +293,7 @@ describe('RunDetail terminal lifecycle', () => {
     const r = liveRun()
     const onBack = vi.fn()
     const { container } = render(
-      <RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" onBack={onBack} />,
+      <RunDetail mode={null} runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" onBack={onBack} />,
     )
 
     fireEvent.click(
@@ -306,7 +307,7 @@ describe('RunDetail terminal lifecycle', () => {
 describe('RunDetail status card (no chat)', () => {
   const renderCard = (p: Partial<Run>) => {
     const r = run(p)
-    return render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="chat" />)
+    return render(<RunDetail mode={null} runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="chat" />)
   }
 
   it('shows no reply affordance for a watchdog-sourced question', () => {
@@ -337,7 +338,7 @@ describe('RunDetail status card (no chat)', () => {
 
   it('omits Reply in Terminal for the card above the terminal', () => {
     const r = liveRun({ state: 'blocked', question: { text: 'ok?', via: 'pane' } })
-    render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
+    render(<RunDetail mode={null} runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
     expect(screen.getByText('ok?')).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Reply in Terminal' })).toBeNull()
   })
@@ -387,7 +388,7 @@ describe('RunDetail chat tab', () => {
   it('offers and selects the Chat tab by default when caps.chat is true and no tab is routed', async () => {
     stubChatFetch(emptyPage)
     const r = chatRun()
-    render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} />)
+    render(<RunDetail mode={null} runs={[r]} hasSnapshot streamConnected now={now} id={r.id} />)
 
     const chatBtn = screen.getByRole('button', { name: 'Chat' })
     expect(chatBtn.getAttribute('aria-pressed')).toBe('true')
@@ -397,7 +398,7 @@ describe('RunDetail chat tab', () => {
   it('the tabs row holds exactly Chat and Terminal', async () => {
     stubChatFetch(emptyPage)
     const r = chatRun()
-    const { container } = render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="chat" />)
+    const { container } = render(<RunDetail mode={null} runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="chat" />)
 
     const names = within(container.querySelector<HTMLElement>('.run-detail-tabs')!)
       .getAllByRole('button')
@@ -410,7 +411,7 @@ describe('RunDetail chat tab', () => {
   it('a legacy #/fleet/<id>/activity deep link opens Chat', async () => {
     stubChatFetch(emptyPage)
     const r = chatRun()
-    render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab={parseDetailRoute('#/fleet/pane-1/activity')!.tab} />)
+    render(<RunDetail mode={null} runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab={parseDetailRoute('#/fleet/pane-1/activity')!.tab} />)
 
     expect(screen.getByRole('button', { name: 'Chat' }).getAttribute('aria-pressed')).toBe('true')
     await waitFor(() => expect(vi.mocked(fetch).mock.calls.some((c) => String(c[0]).includes('/chat'))).toBe(true))
@@ -418,7 +419,7 @@ describe('RunDetail chat tab', () => {
 
   it('a legacy #/fleet/<id>/activity deep link shows the status card for a no-chat run', () => {
     const r = run()
-    render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab={parseDetailRoute('#/fleet/pane-1/activity')!.tab} />)
+    render(<RunDetail mode={null} runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab={parseDetailRoute('#/fleet/pane-1/activity')!.tab} />)
 
     expect(document.querySelector('.run-status-card')).toBeTruthy()
   })
@@ -429,7 +430,7 @@ describe('RunDetail chat tab', () => {
       activity: { message: 'Still working on the migration' },
       question: { text: 'Deploy to prod?', via: 'pane' },
     })
-    const { container } = render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} />)
+    const { container } = render(<RunDetail mode={null} runs={[r]} hasSnapshot streamConnected now={now} id={r.id} />)
 
     const card = container.querySelector<HTMLElement>('.run-status-card')!
     expect(card.querySelector('.run-status')).toBeTruthy()
@@ -442,18 +443,18 @@ describe('RunDetail chat tab', () => {
   it('offers no Activity tab for any run', () => {
     stubChatFetch(emptyPage)
     const chat = chatRun()
-    const { unmount } = render(<RunDetail runs={[chat]} hasSnapshot streamConnected now={now} id={chat.id} />)
+    const { unmount } = render(<RunDetail mode={null} runs={[chat]} hasSnapshot streamConnected now={now} id={chat.id} />)
     expect(screen.queryByRole('button', { name: 'Activity' })).toBeNull()
     unmount()
 
     const plain = run()
-    render(<RunDetail runs={[plain]} hasSnapshot streamConnected now={now} id={plain.id} />)
+    render(<RunDetail mode={null} runs={[plain]} hasSnapshot streamConnected now={now} id={plain.id} />)
     expect(screen.queryByRole('button', { name: 'Activity' })).toBeNull()
   })
 
   it('a no-chat run with no terminal renders the card as the body', () => {
     const r = run({ caps: { terminal: false, reply: true, kill: true }, activity: { message: 'hello there' } })
-    const { container } = render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} />)
+    const { container } = render(<RunDetail mode={null} runs={[r]} hasSnapshot streamConnected now={now} id={r.id} />)
 
     const body = container.querySelector<HTMLElement>('.run-detail-body')!
     expect(body.querySelector('.run-status-card')).toBeTruthy()
@@ -462,7 +463,7 @@ describe('RunDetail chat tab', () => {
 
   it('a no-chat run on the terminal tab shows the card above the terminal', () => {
     const r = liveRun()
-    const { container } = render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
+    const { container } = render(<RunDetail mode={null} runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
 
     const card = container.querySelector<HTMLElement>('.run-status-card')!
     const terminal = container.querySelector<HTMLElement>('.xterm')!
@@ -473,18 +474,18 @@ describe('RunDetail chat tab', () => {
 
   it('shows the Chat tab once a rerender flips caps.chat to true', () => {
     const r = run()
-    const { rerender } = render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} />)
+    const { rerender } = render(<RunDetail mode={null} runs={[r]} hasSnapshot streamConnected now={now} id={r.id} />)
     expect(screen.queryByRole('button', { name: 'Chat' })).toBeNull()
 
     stubChatFetch(emptyPage)
     const withChat = chatRun()
-    rerender(<RunDetail runs={[withChat]} hasSnapshot streamConnected now={now} id={withChat.id} />)
+    rerender(<RunDetail mode={null} runs={[withChat]} hasSnapshot streamConnected now={now} id={withChat.id} />)
     expect(screen.getByRole('button', { name: 'Chat' })).toBeTruthy()
   })
 
   it('a deep link to tab="chat" without caps.chat degrades to the status card', () => {
     const r = run()
-    render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="chat" />)
+    render(<RunDetail mode={null} runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="chat" />)
 
     expect(screen.queryByRole('button', { name: 'Chat' })).toBeNull()
     expect(document.querySelector('.run-status-card')).toBeTruthy()
@@ -500,19 +501,110 @@ describe('RunDetail chat tab', () => {
     stubChatFetch(fenced)
     const a = liveRun({ id: 'pane-a', state: 'idle', caps: { terminal: true, reply: true, kill: true, chat: true } })
     const b = liveRun({ id: 'pane-b', state: 'idle' })
-    const { rerender } = render(<RunDetail runs={[a, b]} hasSnapshot streamConnected now={now} id="pane-a" tab="terminal" />)
+    const { rerender } = render(<RunDetail mode={null} runs={[a, b]} hasSnapshot streamConnected now={now} id="pane-a" tab="terminal" />)
     await waitFor(() => expect(screen.getByRole('button', { name: '↳ suggested' })).toBeTruthy())
 
-    rerender(<RunDetail runs={[a, b]} hasSnapshot streamConnected now={now} id="pane-b" tab="terminal" />)
+    rerender(<RunDetail mode={null} runs={[a, b]} hasSnapshot streamConnected now={now} id="pane-b" tab="terminal" />)
     expect(screen.queryByRole('button', { name: '↳ suggested' })).toBeNull()
   })
 
   it('shows "Chat unavailable" with a Retry when the chat page fetch 404s', async () => {
     stubChatFetch({}, 404)
     const r = chatRun()
-    render(<RunDetail runs={[r]} hasSnapshot streamConnected now={now} id={r.id} />)
+    render(<RunDetail mode={null} runs={[r]} hasSnapshot streamConnected now={now} id={r.id} />)
 
     await waitFor(() => expect(screen.getByText(/chat unavailable/i)).toBeTruthy())
     expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy()
+  })
+})
+
+describe('RunDetail crew tab', () => {
+  let fake: FakeEventSourceHandle
+
+  beforeEach(() => {
+    fake = installFakeEventSource()
+    vi.mocked(fetch).mockImplementation((input: string | URL | Request) => {
+      if (String(input).includes('/crew/feed')) {
+        const page = {
+          epoch: 'e1',
+          more: false,
+          entries: [{ id: 'e1.10', ts: now, kind: 'dispatch', text: 'dispatched a worker', branch: 'w-one', codename: 'blush' }],
+        }
+        return Promise.resolve({ ok: true, status: 200, json: async () => page, text: async () => '' } as Response)
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({}), text: async () => '' } as Response)
+    })
+  })
+
+  afterEach(() => {
+    fake.uninstall()
+    resetCrewReposCache()
+  })
+
+  const dispatcher = (p: Partial<Run> = {}) =>
+    run({ id: 'd', role: 'dispatcher', branch: 'main', crew: { name: '1-1' }, caps: { terminal: true, reply: true, kill: true, chat: true }, ...p })
+  const worker = (p: Partial<Run> = {}) =>
+    run({ id: 'w', role: 'worker', branch: 'w-one', crew: { name: '1-1', codename: 'blush' }, ...p })
+
+  const tabNames = (container: HTMLElement) =>
+    within(container.querySelector<HTMLElement>('.run-detail-tabs')!)
+      .getAllByRole('button')
+      .filter((b) => !b.classList.contains('run-detail-tabs-back'))
+      .map((b) => b.textContent)
+
+  it('a dispatcher with a crew opens on the Crew tab in dispatcher mode and shows the feed', async () => {
+    const d = dispatcher()
+    const { container } = render(<RunDetail mode="dispatcher" runs={[d, worker()]} hasSnapshot streamConnected now={now} id={d.id} />)
+
+    expect(tabNames(container)).toEqual(['Crew', 'Chat', 'Terminal'])
+    expect(screen.getByRole('button', { name: 'Crew' }).getAttribute('aria-pressed')).toBe('true')
+    await waitFor(() => expect(screen.getByText('dispatched a worker')).toBeTruthy())
+    expect(container.querySelector('.crew-tab')).toBeTruthy()
+  })
+
+  it('a crew route opens the Crew tab too', async () => {
+    const d = dispatcher()
+    render(<RunDetail mode="dispatcher" runs={[d]} hasSnapshot streamConnected now={now} id={d.id} tab="crew" />)
+
+    expect(screen.getByRole('button', { name: 'Crew' }).getAttribute('aria-pressed')).toBe('true')
+    await waitFor(() => expect(screen.getByText('dispatched a worker')).toBeTruthy())
+  })
+
+  it('an explicit chat or terminal route still wins on a dispatcher', () => {
+    const d = dispatcher({ tmux: { session: 's', window: 0, pane_id: '%1' } })
+    const { rerender, container } = render(
+      <RunDetail mode="dispatcher" runs={[d]} hasSnapshot streamConnected now={now} id={d.id} tab="chat" />,
+    )
+    expect(screen.getByRole('button', { name: 'Chat' }).getAttribute('aria-pressed')).toBe('true')
+    expect(container.querySelector('.crew-tab')).toBeNull()
+
+    rerender(<RunDetail mode="dispatcher" runs={[d]} hasSnapshot streamConnected now={now} id={d.id} tab="terminal" />)
+    expect(screen.getByRole('button', { name: 'Terminal' }).getAttribute('aria-pressed')).toBe('true')
+    expect(container.querySelector('.crew-tab')).toBeNull()
+  })
+
+  it('has no Crew tab for a worker, a solo run, a dispatcher without a crew, or outside dispatcher mode', () => {
+    const cases: [Run, 'dispatcher' | 'tmux' | null][] = [
+      [worker(), 'dispatcher'],
+      [run({ id: 's' }), 'dispatcher'],
+      [dispatcher({ crew: undefined }), 'dispatcher'],
+      [dispatcher({ crew: { name: '' } }), 'dispatcher'],
+      [dispatcher(), 'tmux'],
+      [dispatcher(), null],
+    ]
+    for (const [r, mode] of cases) {
+      const { unmount } = render(<RunDetail mode={mode} runs={[r]} hasSnapshot streamConnected now={now} id={r.id} />)
+      expect(screen.queryByRole('button', { name: 'Crew' })).toBeNull()
+      unmount()
+    }
+    expect(vi.mocked(fetch).mock.calls.some((c) => String(c[0]).includes('/crew/feed'))).toBe(false)
+  })
+
+  it('a crew route on a run that does not qualify degrades to the default tab', () => {
+    const w = worker()
+    const { container } = render(<RunDetail mode="dispatcher" runs={[w]} hasSnapshot streamConnected now={now} id={w.id} tab="crew" />)
+
+    expect(container.querySelector('.crew-tab')).toBeNull()
+    expect(container.querySelector('.run-status-card')).toBeTruthy()
   })
 })

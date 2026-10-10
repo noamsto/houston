@@ -5,7 +5,7 @@ export type Filter = 'active' | 'needs-you' | 'stuck' | 'done' | 'all'
 
 // Fresh needs-you, then fresh stuck, then fresh done, then the rest. A stale
 // run of any kind ranks as the rest: the verdict no longer describes it.
-function rank(r: Run, now: number): number {
+export function rank(r: Run, now: number): number {
   if (needsYou(r, now)) return 3
   if (isStuck(r, now)) return 2
   if (isDone(r, now)) return 1
@@ -14,7 +14,7 @@ function rank(r: Run, now: number): number {
 
 // Newest-started first, then id: neither moves while a run lives, so a run's
 // output never reshuffles the list.
-function stableOrder(a: Run, b: Run): number {
+export function stableOrder(a: Run, b: Run): number {
   const bySince = (b.since ?? 0) - (a.since ?? 0)
   if (bySince !== 0) return bySince
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
@@ -75,21 +75,6 @@ export function groupByProject(runs: Run[]): [string, Run[]][] {
     project,
     [...list.filter((r) => r.role === 'dispatcher'), ...list.filter((r) => r.role !== 'dispatcher')],
   ])
-}
-
-/** "3 workers · 1 blocked" for a dispatcher card. Null when there is nothing to
- *  say, or when several dispatchers share the project+host and the workers
- *  cannot be attributed to one of them. */
-export function crewSummary(dispatcher: Run, allRuns: Run[], now: number): string | null {
-  const project = projectOf(dispatcher)
-  const host = dispatcher.host || 'local'
-  const sameCrewScope = (r: Run) => projectOf(r) === project && (r.host || 'local') === host
-  if (allRuns.filter((r) => r.role === 'dispatcher' && sameCrewScope(r) && !isHistory(r, now)).length > 1) return null
-  const workers = allRuns.filter((r) => r.role === 'worker' && sameCrewScope(r) && !isHistory(r, now))
-  if (workers.length === 0) return null
-  const blocked = workers.filter((r) => needsYou(r, now)).length
-  const count = `${workers.length} ${workers.length === 1 ? 'worker' : 'workers'}`
-  return blocked > 0 ? `${count} · ${blocked} blocked` : count
 }
 
 // The bus carries no crew-level title, only the id — shorten it for the

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { Mode } from '../api/mode'
 
-export type DetailTab = 'chat' | 'terminal'
+export type DetailTab = 'chat' | 'terminal' | 'crew'
 
 export interface DetailRoute {
   id: string
@@ -11,7 +11,7 @@ export interface DetailRoute {
 export function parseDetailRoute(hash: string): DetailRoute | null {
   const m = hash.match(/^#\/fleet\/([^/]+)(?:\/([^/]*))?$/)
   if (!m) return null
-  if (m[2] === 'chat' || m[2] === 'terminal') return { id: m[1], tab: m[2] }
+  if (m[2] === 'chat' || m[2] === 'terminal' || m[2] === 'crew') return { id: m[1], tab: m[2] }
   // The activity tab was folded into chat; old bookmarks and history still name it.
   if (m[2] === 'activity') return { id: m[1], tab: 'chat' }
   return { id: m[1] }
@@ -77,18 +77,20 @@ export function useDispatchRoute(): DispatchRoute | null {
   return route
 }
 
-export type ShellTab = 'fleet' | 'crews' | 'workspace' | 'dispatch'
+export type ShellTab = 'fleet' | 'workspace' | 'dispatch'
 
 export const TAB_LABEL: Record<ShellTab, string> = {
   fleet: 'Fleet',
-  crews: 'Crews',
   workspace: 'Workspace',
   dispatch: 'Dispatch',
 }
 
+const CREWS_HASH = /^#\/crews(?:\?.*)?$/
+
 export function parseTabRoute(hash: string): ShellTab | null {
   if (hash === '' || hash === '#' || hash === '#/' || hash === '#/fleet') return 'fleet'
-  if (hash === '#/crews') return 'crews'
+  // Retired `#/crews` hash: old bookmarks land on Fleet.
+  if (CREWS_HASH.test(hash)) return 'fleet'
   if (hash === '#/workspace') return 'workspace'
   if (parseDispatchRoute(hash)) return 'dispatch'
   return null
@@ -99,32 +101,36 @@ export function tabHash(tab: ShellTab): string {
 }
 
 export function tabsFor(mode: Mode | null): ShellTab[] {
-  return mode === 'dispatcher' ? ['fleet', 'crews', 'workspace', 'dispatch'] : ['fleet', 'workspace']
+  return mode === 'dispatcher' ? ['fleet', 'workspace', 'dispatch'] : ['fleet', 'workspace']
 }
 
 /** A detail or other non-tab hash leaves the tab as it was, so the tab under
  *  a run-detail overlay is the one Back returns to. `closeDetail` is for the
  *  mobile overlay, which a tab tap must dismiss; the desktop detail is a
  *  persistent pane, so with a run selected a tab switch is state-only.
- *  A tab the mode lacks reads as Fleet and its hash is rewritten in place;
- *  while the mode is unknown the hash is left alone, so a reload on #/crews
- *  still lands there once the mode arrives. */
+ *  A tab the mode lacks reads as Fleet and its hash is rewritten in place,
+ *  once the mode is known. The retired `#/crews` hash is rewritten at once in
+ *  every mode, known or not. */
 export function useShellTab(mode: Mode | null): [ShellTab, (tab: ShellTab, closeDetail?: boolean) => void] {
   const [tab, setTab] = useState<ShellTab>(() => parseTabRoute(window.location.hash) ?? 'fleet')
   useEffect(() => {
     const redirectToFleet = () => window.history.replaceState(window.history.state, '', tabHash('fleet'))
     const onHash = () => {
-      const next = parseTabRoute(window.location.hash)
-      if (next && mode !== null && !tabsFor(mode).includes(next)) {
+      const hash = window.location.hash
+      const next = parseTabRoute(hash)
+      if (CREWS_HASH.test(hash) || (next && mode !== null && !tabsFor(mode).includes(next))) {
         redirectToFleet()
         setTab('fleet')
       } else if (next) {
         setTab(next)
       }
     }
-    if (mode !== null) {
-      const current = parseTabRoute(window.location.hash)
-      if (current && !tabsFor(mode).includes(current)) redirectToFleet()
+    const current = window.location.hash
+    if (CREWS_HASH.test(current)) {
+      redirectToFleet()
+    } else if (mode !== null) {
+      const tabNow = parseTabRoute(current)
+      if (tabNow && !tabsFor(mode).includes(tabNow)) redirectToFleet()
     }
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)

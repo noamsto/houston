@@ -118,3 +118,20 @@ func TestForegroundStartInRealTTY(t *testing.T) {
 		t.Errorf("foregroundStartIn(/proc, self) = %d, want <= %d", got, now+1)
 	}
 }
+
+func TestParentIn(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "200")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "stat"), []byte(realShapedStatWithField(4-3, "100")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := parentIn(root, 200); err != nil || got != 100 {
+		t.Errorf("parentIn(200) = %d, %v; want 100", got, err)
+	}
+	if _, err := parentIn(root, 300); err == nil {
+		t.Error("parentIn of an exited pid succeeded, want an error")
+	}
+}

@@ -130,12 +130,13 @@ describe('ConsoleShell layout', () => {
     const runs = [
       run({
         id: 'dead',
+        role: 'worker',
         crew: { name: 'DEAD' },
         state: 'review',
         updated_at: nowSec - 7 * 24 * 3600,
         caps: { terminal: false, reply: true, kill: false },
       }),
-      run({ id: 'live', crew: { name: 'LIVE' } }),
+      run({ id: 'live', role: 'worker', crew: { name: 'LIVE' } }),
     ]
     render(<ConsoleShell runs={runs} connected hasSnapshot now={now} mode="dispatcher" />)
 
@@ -147,9 +148,9 @@ describe('ConsoleShell layout', () => {
 
   it('narrows the fleet list to one crew and shows a clearable "N of M" chip', () => {
     const runs = [
-      run({ id: 'x1', crew: { name: 'X' }, repo: 'r-x1', branch: 'b-x1' }),
-      run({ id: 'y1', crew: { name: 'Y' }, repo: 'r-y1', branch: 'b-y1' }),
-      run({ id: 'y2', crew: { name: 'Y' }, repo: 'r-y2', branch: 'b-y2' }),
+      run({ id: 'x1', role: 'worker', crew: { name: 'X' }, repo: 'r-x1', branch: 'b-x1' }),
+      run({ id: 'y1', role: 'worker', crew: { name: 'Y' }, repo: 'r-y1', branch: 'b-y1' }),
+      run({ id: 'y2', role: 'worker', crew: { name: 'Y' }, repo: 'r-y2', branch: 'b-y2' }),
       run({ id: 'n1', repo: 'r-n1', branch: 'b-n1' }),
     ]
     render(<ConsoleShell runs={runs} connected hasSnapshot now={now} mode="dispatcher" />)
@@ -176,9 +177,9 @@ describe('ConsoleShell layout', () => {
 
   it('invariant: the needs-you badge always clears the crew filter, so stale-blocked runs are never hidden behind it', () => {
     const runs = [
-      run({ id: 'x1', crew: { name: 'X' }, state: 'running' }),
-      run({ id: 'y-fresh', crew: { name: 'Y' }, state: 'blocked' }),
-      run({ id: 'y-stale', crew: { name: 'Y' }, state: 'blocked', updated_at: nowSec - 2 * 3600 }),
+      run({ id: 'x1', role: 'worker', crew: { name: 'X' }, branch: 'x1', state: 'running' }),
+      run({ id: 'y-fresh', role: 'worker', crew: { name: 'Y' }, branch: 'y-fresh', state: 'blocked' }),
+      run({ id: 'y-stale', role: 'worker', crew: { name: 'Y' }, branch: 'y-stale', state: 'blocked', updated_at: nowSec - 2 * 3600 }),
       run({ id: 'n-stale', state: 'blocked', updated_at: nowSec - 2 * 3600 }),
     ]
     render(<ConsoleShell runs={runs} connected hasSnapshot now={now} mode="dispatcher" />)
@@ -202,18 +203,15 @@ describe('ConsoleShell layout', () => {
     expect(within(list).queryByRole('button', { name: 'Clear crew filter' })).toBeNull()
   })
 
-  it('switches the list column between Fleet, Crews, Workspace and Dispatch', async () => {
+  it('switches the list column between Fleet, Workspace and Dispatch', async () => {
     const runs = [run({ id: 'a' })]
     render(<ConsoleShell runs={runs} connected hasSnapshot now={now} mode="dispatcher" />)
 
     const rail = screen.getByLabelText('rail')
 
-    fireEvent.click(within(rail).getByRole('button', { name: 'Crews' }))
-    expect(screen.getByRole('heading', { level: 1, name: 'Crews' })).toBeTruthy()
-    expect(screen.queryByRole('heading', { level: 1, name: 'Active' })).toBeNull()
-
     fireEvent.click(within(rail).getByRole('button', { name: 'Workspace' }))
     expect(screen.getByRole('heading', { level: 1, name: 'Workspace' })).toBeTruthy()
+    expect(screen.queryByRole('heading', { level: 1, name: 'Active' })).toBeNull()
 
     fireEvent.click(within(rail).getByRole('button', { name: 'Dispatch' }))
     expect(await screen.findByLabelText('Title')).toBeTruthy()
@@ -254,7 +252,19 @@ describe('ConsoleShell project grouping', () => {
     render(<ConsoleShell runs={runs} connected hasSnapshot now={now} mode="dispatcher" />)
     const list = screen.getByLabelText('fleet list')
     expect(list.querySelectorAll('.fleet-project-group').length).toBe(0)
-    expect(cardFor(list, 'w-one').querySelector('.run-project')?.textContent).toBe('houston')
+    expect(cardFor(list, 'main').querySelector('.run-project')?.textContent).toBe('houston')
+    expect(cardFor(list, 'o-one').querySelector('.run-project')?.textContent).toBe('other')
+  })
+
+  it('nests the workers under their dispatcher and under a header when no dispatcher owns the crew', () => {
+    render(<ConsoleShell runs={runs} connected hasSnapshot now={now} mode="dispatcher" />)
+    const list = screen.getByLabelText('fleet list')
+
+    const card = cardFor(list, 'main').closest('.fleet-group-card') as HTMLElement
+    expect(within(card).getByText('w-one').closest('.worker-row')).toBeTruthy()
+    expect(within(card).queryByText('w-two')).toBeNull()
+    const orphan = within(list).getByText('w-two').closest('.fleet-group-card') as HTMLElement
+    expect(orphan.querySelector('.fleet-group-id')?.textContent).toBe('Y')
   })
 
   it('groups by project with counts and dispatcher before its workers', () => {
@@ -266,16 +276,33 @@ describe('ConsoleShell project grouping', () => {
     expect(headers.map((h) => h.querySelector('.fleet-project-name')?.textContent)).toEqual(['houston', 'other'])
     expect(headers[0].textContent).toContain('3')
     expect(headers[0].textContent).toContain('1 need you')
-    const names = Array.from(list.querySelectorAll('.run-name')).map((e) => e.textContent)
+    const names = Array.from(list.querySelectorAll('.run-name, .worker-row-title')).map((e) => e.textContent)
     expect(names).toEqual(['main', 'w-one', 'w-two', 'o-one'])
   })
 
-  it('keeps the dispatcher crew summary complete while a crew narrows the list', () => {
+  it('narrows to a crew while keeping its dispatcher card as the container', () => {
     render(<ConsoleShell runs={runs} connected hasSnapshot now={now} mode="dispatcher" />)
     fireEvent.click(within(screen.getByLabelText('rail')).getByTitle('X'))
     const list = screen.getByLabelText('fleet list')
     expect(within(list).queryByText('w-two')).toBeNull()
-    expect(cardFor(list, 'main').querySelector('.run-crew')?.textContent).toBe('2 workers · 1 blocked')
+    expect(within(list).queryByText('o-one')).toBeNull()
+    expect(within(list).getByText('w-one').closest('.fleet-group-card')).toBe(cardFor(list, 'main').closest('.fleet-group-card'))
+    expect(cardFor(list, 'main').querySelector('.run-crew')?.textContent).toBe('1 worker · 1 need you')
+    expect(within(list).getByText('2 of 4')).toBeTruthy()
+  })
+
+  it('counts workers only in the rail crews list, keeping the blocked count', () => {
+    render(<ConsoleShell runs={runs} connected hasSnapshot now={now} mode="dispatcher" />)
+    const rail = screen.getByLabelText('rail')
+    expect(within(rail).getByTitle('X').querySelector('.console-count')?.textContent).toBe('1 · 1 blocked')
+    expect(within(rail).getByTitle('Y').querySelector('.console-count')?.textContent).toBe('1')
+  })
+
+  it('renders the flat list in tmux mode', () => {
+    render(<ConsoleShell runs={runs} connected hasSnapshot now={now} mode="tmux" />)
+    const list = screen.getByLabelText('fleet list')
+    expect(list.querySelector('.fleet-group-card')).toBeNull()
+    expect(list.querySelectorAll('.run-card').length).toBe(4)
   })
 })
 
@@ -292,29 +319,38 @@ describe('ConsoleShell tab routes', () => {
     expect(within(screen.getByLabelText('detail')).getByText('branch-b')).toBeTruthy()
   })
 
-  it('switches the list to Crews while the detail stays open', () => {
+  it('switches the list to Workspace while the detail stays open', () => {
     window.location.hash = '#/fleet/b'
     render(<ConsoleShell runs={runs} connected hasSnapshot now={now} mode="dispatcher" />)
 
-    const crewsButton = within(screen.getByLabelText('rail')).getByRole('button', { name: 'Crews' })
-    fireEvent.click(crewsButton)
+    const workspaceButton = within(screen.getByLabelText('rail')).getByRole('button', { name: 'Workspace' })
+    fireEvent.click(workspaceButton)
 
-    expect(crewsButton.getAttribute('aria-pressed')).toBe('true')
+    expect(workspaceButton.getAttribute('aria-pressed')).toBe('true')
     expect(within(screen.getByLabelText('detail')).getByText('branch-b')).toBeTruthy()
   })
 
   it('the detail back button returns to the current section', () => {
     window.location.hash = '#/fleet/b'
     render(<ConsoleShell runs={runs} connected hasSnapshot now={now} mode="dispatcher" />)
-    fireEvent.click(within(screen.getByLabelText('rail')).getByRole('button', { name: 'Crews' }))
+    fireEvent.click(within(screen.getByLabelText('rail')).getByRole('button', { name: 'Workspace' }))
 
     fireEvent.click(
       within(screen.getByLabelText('detail').querySelector<HTMLElement>('.run-detail-header')!).getByRole('button', {
-        name: 'Back to Crews',
+        name: 'Back to Workspace',
       }),
     )
 
-    expect(window.location.hash).toBe('#/crews')
+    expect(window.location.hash).toBe('#/workspace')
+  })
+
+  it('has no Crews view button in the rail and lands #/crews on Fleet', () => {
+    window.location.hash = '#/crews'
+    render(<ConsoleShell runs={[]} connected hasSnapshot now={now} mode="dispatcher" />)
+
+    expect(within(screen.getByLabelText('rail')).queryByRole('button', { name: 'Crews' })).toBeNull()
+    expect(window.location.hash).toBe('#/fleet')
+    expect(screen.getByLabelText('fleet list').hasAttribute('hidden')).toBe(false)
   })
 })
 
@@ -356,14 +392,11 @@ describe('ConsoleShell modes', () => {
     expect(screen.getByLabelText('fleet list').hasAttribute('hidden')).toBe(false)
   })
 
-  it('an unknown mode leaves #/crews alone and mounts no Crews pane, then redirects once tmux is known', () => {
+  it('an unknown mode rewrites #/crews to Fleet at once and loads no dispatch options', () => {
     window.location.hash = '#/crews'
-    const { rerender } = render(<ConsoleShell runs={[]} connected hasSnapshot now={now} mode={null} />)
-    expect(window.location.hash).toBe('#/crews')
-    expect(fetchDispatchOptions).not.toHaveBeenCalled()
-
-    rerender(<ConsoleShell runs={[]} connected hasSnapshot now={now} mode="tmux" />)
+    render(<ConsoleShell runs={[]} connected hasSnapshot now={now} mode={null} />)
     expect(window.location.hash).toBe('#/fleet')
+    expect(fetchDispatchOptions).not.toHaveBeenCalled()
   })
 
   it('dispatcher mode stays on #/dispatch', () => {

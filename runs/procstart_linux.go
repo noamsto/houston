@@ -78,3 +78,27 @@ func foregroundStartIn(root string, panePID int) int64 {
 func foregroundStart(panePID int) int64 {
 	return foregroundStartIn("/proc", panePID)
 }
+
+func (hostProcs) Start(pid int) int64 { return procStartIn("/proc", pid) }
+
+func (hostProcs) Descends(pid, root int) (bool, error) {
+	return descendsVia(func(p int) (int, error) { return parentIn("/proc", p) }, pid, root)
+}
+
+// parentIn reads pid's ppid from root (normally /proc).
+func parentIn(root string, pid int) (int, error) {
+	stat, err := os.ReadFile(root + "/" + strconv.Itoa(pid) + "/stat") //nolint:gosec // procfs path built from an integer pid
+	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			warnProbeBroken(err)
+		}
+		return 0, err
+	}
+	ppid, ok := parsePPID(string(stat))
+	if !ok {
+		err := errors.New("unparseable /proc/<pid>/stat")
+		warnProbeBroken(err)
+		return 0, err
+	}
+	return ppid, nil
+}

@@ -67,6 +67,11 @@ type Run struct {
 	// and, unlike Session, is trusted without any pane identity.
 	CrewSession string `json:"-"`
 
+	// CrewBus is the crew bus directory (<git-common-dir>/crew) the crew
+	// layer read this run from, on both worker and dispatcher layers.
+	// Internal; never on the wire.
+	CrewBus string `json:"-"`
+
 	// Stale means a source stopped reporting. The Run keeps its last known
 	// values and says so; it is never a State, because a stale run still has
 	// one.

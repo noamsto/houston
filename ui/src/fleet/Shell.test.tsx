@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, render, screen, within } from '@testing-library/react'
 import { Shell } from './Shell'
 import { installFakeEventSource } from '../testing/fakeEventSource'
 import type { Run } from '../api/runs'
@@ -10,7 +10,7 @@ vi.mock('./useWorkspace', () => ({
   useWorkspace: () => ({ workspace: null, error: null, loading: false }),
 }))
 vi.mock('../hooks/useMode', () => ({ useMode: () => 'dispatcher' }))
-// DispatchView is kept mounted like Crews/Workspace in both shells, so it
+// DispatchView is kept mounted like Fleet in both shells, so it
 // fetches on mount — never a real fetch in tests.
 vi.mock('../api/dispatch', () => ({
   fetchDispatchOptions: () => Promise.resolve({
@@ -67,6 +67,20 @@ describe('Shell layout selection', () => {
       render(<Shell />)
       expect(screen.getByLabelText('sections')).toBeTruthy()
       expect(screen.queryByLabelText('console')).toBeNull()
+    } finally {
+      events.uninstall()
+    }
+  })
+
+  it('offers no Crews tab in dispatcher mode', async () => {
+    originalMatchMedia = window.matchMedia
+    stubMatchMedia(false)
+    const events = installFakeEventSource()
+    try {
+      render(<Shell />)
+      const tabs = within(screen.getByLabelText('sections'))
+      expect(await tabs.findByRole('button', { name: /dispatch/i })).toBeTruthy()
+      expect(tabs.queryByRole('button', { name: /crews/i })).toBeNull()
     } finally {
       events.uninstall()
     }
