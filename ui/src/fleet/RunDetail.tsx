@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import type { Run } from '../api/runs'
 import type { Mode } from '../api/mode'
 import { agoLabel, nameLabel } from './format'
@@ -6,6 +6,7 @@ import { projectOf } from './fleetList'
 import { TerminalPane } from '../components/TerminalPane'
 import { isClaudeAgent, suggestedCommand } from '../components/quickCommands'
 import { useRunChat } from '../hooks/useRunChat'
+import { useEdgeSwipeBack } from '../hooks/useEdgeSwipeBack'
 import { useTerminalLifecycle } from './useTerminalLifecycle'
 import { ChatTab } from './ChatTab'
 import { CrewTab } from './CrewTab'
@@ -24,6 +25,8 @@ interface RunDetailProps {
   mode: Mode | null
   onBack?: () => void
   backLabel?: string
+  /** Mobile overlay only: a left-edge rightward swipe calls `onBack`. */
+  edgeSwipeBack?: boolean
 }
 
 function goToFleet(): void {
@@ -39,7 +42,10 @@ function goToTab(id: string, tab: DetailTab): void {
  * sibling layer over `.fleet` (see Shell.tsx) rather than in place of it, so
  * `.fleet`'s own scroll position survives a visit here and back.
  */
-export function RunDetail({ runs, hasSnapshot, streamConnected, now, id, tab, mode, onBack = goToFleet, backLabel = 'Fleet' }: RunDetailProps) {
+export function RunDetail({ runs, hasSnapshot, streamConnected, now, id, tab, mode, onBack = goToFleet, backLabel = 'Fleet', edgeSwipeBack = false }: RunDetailProps) {
+  const rootRef = useRef<HTMLDivElement>(null)
+  useEdgeSwipeBack(rootRef, onBack, edgeSwipeBack)
+
   // `hasSnapshot` distinguishes "haven't heard from the stream yet" (loading)
   // from "heard from it, this id isn't in it" (really not found) — without
   // it, every cold deep link would flash "not found" for the one tick before
@@ -47,7 +53,7 @@ export function RunDetail({ runs, hasSnapshot, streamConnected, now, id, tab, mo
   const run = hasSnapshot ? runs.find((r) => r.id === id) : undefined
 
   return (
-    <div className="run-detail">
+    <div className="run-detail" ref={rootRef}>
       <header className="run-detail-header">
         <button type="button" className="run-detail-back" onClick={onBack} aria-label={`Back to ${backLabel}`}>
           <span aria-hidden>‹</span> {backLabel}
