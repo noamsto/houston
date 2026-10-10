@@ -11,7 +11,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // question is one bus line yielding a question entry for crew.
@@ -558,5 +560,37 @@ func TestStoreConcurrentReaders(t *testing.T) {
 	want := foldCrew(t, s, bus, "c1")
 	if got := pageAll(t, s, bus, "c1", 100); !reflect.DeepEqual(got, want) {
 		t.Fatalf("after the run: paged %d entries, want %d", len(got), len(want))
+	}
+}
+
+// A FIFO at events.jsonl must not block Advance (which holds the store lock).
+func TestAdvanceFIFODoesNotBlock(t *testing.T) {
+	bus := t.TempDir()
+	if err := syscall.Mkfifo(busFile(bus), 0o644); err != nil {
+		t.Skipf("mkfifo: %v", err)
+	}
+	done := make(chan struct{})
+	go func() {
+		NewStore().Advance(bus)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Advance blocked on a FIFO bus file")
+	}
+}
+
+func TestOpenBusRejectsNonRegularFile(t *testing.T) {
+	bus := t.TempDir()
+	if err := os.Mkdir(busFile(bus), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f, _, _, err := openBus(busFile(bus))
+	if err == nil || errors.Is(err, os.ErrNotExist) {
+		if f != nil {
+			_ = f.Close()
+		}
+		t.Fatalf("openBus on a directory: err = %v, want a not-regular-file error", err)
 	}
 }
