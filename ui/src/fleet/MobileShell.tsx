@@ -65,6 +65,7 @@ export function MobileShell({ runs, connected, hasSnapshot, now, mode }: ShellDa
             mode={mode}
             onBack={() => { window.location.hash = tabHash(tab) }}
             backLabel={TAB_LABEL[tab]}
+            edgeSwipeBack
           />
         )}
       </div>
