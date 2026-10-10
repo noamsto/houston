@@ -1,0 +1,30 @@
+{"ts":1000,"crew_id":"c1","kind":"dispatch","branch":"feat/a","title":"Add widget","tier":"deep","engine":"claude","model":"opus","name":"apollo","engine_session":"s-1"}
+{"ts":1001,"crew_id":"c2","kind":"dispatch","branch":"feat/b","title":"Fix gadget","tier":"standard","engine":"pi","model":"small","name":"borealis"}
+{"ts":1002,"crew_id":"c1","from":"worker:feat/a#s100-7","to":"dispatcher:c1","kind":"status","body":{"state":"running","detail":"starting"}}
+{"ts":1003,"crew_id":"c1","from":"worker:feat/a#s100-8","to":"dispatcher:c1","kind":"status","body":{"state":"running","detail":"editing files"}}
+{"ts":1004,"crew_id":"c1","from":"worker:feat/a#s100-9","to":"dispatcher:c1","kind":"status","body":{"state":"running","detail":"quiet: no output for ten minutes","source":"watchdog"}}
+{"ts":1005,"crew_id":"c1","from":"worker:feat/a#s100-9","to":"dispatcher:c1","kind":"status","body":{"state":"running","detail":"quiet: still nothing","source":"watchdog"}}
+{"ts":1006,"crew_id":"c1","from":"worker:feat/a#s100-10","to":"dispatcher:c1","kind":"status","body":{"state":"blocked","detail":"which database?"}}
+{"ts":1007,"crew_id":"c1","from":"worker:feat/a#s100-11","to":"dispatcher:c1","kind":"status","body":{"state":"blocked","detail":"which database?"}}
+{"ts":1008,"crew_id":"c1","from":"worker:feat/a#s100-12","to":"dispatcher:c1","kind":"msg","body":"Which database should this use?\nsqlite or postgres"}
+{"ts":1009,"crew_id":"c1","from":"dispatcher:c1","to":"worker:feat/a#s100-12","kind":"msg","body":"Use sqlite."}
+{"ts":1010,"crew_id":"c1","from":"worker:feat/a#s100-13","to":"dispatcher:c1","kind":"status","body":{"state":"blocked","detail":"which database?"}}
+{"ts":1011,"crew_id":"c1","from":"worker:feat/a#s100-14","to":"dispatcher:c1","kind":"status","body":{"state":"blocked","detail":"which\ndatabase now?"}}
+{"ts":1012,"crew_id":"c1","from":"worker:feat/a#s100-15","to":"dispatcher:c1","kind":"msg","body":"follow-ups (untracked):\n- tidy the README"}
+{"ts":1013,"crew_id":"c1","from":"pr-watch:165","to":"dispatcher:c1","kind":"msg","body":"{\"pr\":165,\"url\":\"https://github.com/o/r/pull/165\",\"changed\":[\"checks\"],\"state\":{\"state\":\"OPEN\",\"checks\":\"SUCCESS\"},\"was\":{\"checks\":\"PENDING\"}}"}
+{"ts":1014,"crew_id":"c1","from":"pr-watch:164","to":"dispatcher:c1","kind":"msg","body":"{\"pr\":164,\"url\":\"https://github.com/o/r/pull/164\",\"changed\":[\"state\",\"checks\"],\"state\":{\"state\":\"MERGED\",\"checks\":\"SUCCESS\"},\"was\":{\"checks\":\"PENDING\"}}"}
+{"ts":1015,"crew_id":"c1","from":"worker:feat/a#s100-16","to":"dispatcher:c1","kind":"status","body":{"state":"pr_open","detail":"ready for review","pr_url":"https://github.com/o/r/pull/165"}}
+{"ts":1016,"crew_id":"c1","from":"worker:feat/a#s100-17","to":"dispatcher:c1","kind":"claim","body":{"issue":"1"}}
+{"ts":1017,"crew_id":"c1","kind":"claim-issue","branch":"feat/a"}
+{"ts":1018,"crew_id":"c1","from":"role:feat/a:critic","to":"dispatcher:c1","kind":"status","body":{"state":"running","detail":"reviewing"}}
+{"ts":1019,"crew_id":"c1","from":"worker:feat/a#s100-18","to":"role:feat/a","kind":"msg","body":"role chatter"}
+{"ts":1020,"crew_id":"c1","from":"worker:feat/a#s100-18","to":"metrics:c1","kind":"msg","body":"metrics chatter"}
+{"ts":1021,"crew_id":"c1","from":"worker:feat/a#s100-18","to":"review:c1","kind":"msg","body":"review chatter"}
+{"ts":1022,"crew_id":"c1","from":"dispatcher:c1","to":"retro:c1","kind":"msg","body":"retro chatter"}
+this is not json
+{"ts":1023,"from":"worker:feat/b#s200-1","to":"dispatcher:c2","kind":"msg","body":"question without crew id"}
+{"ts":1024,"kind":"reap","branch":"feat/a","pr":"https://github.com/o/r/pull/252","pr_state":"MERGED","worktree":"/w/a"}
+{"ts":1025,"kind":"release","branch":"feat/b","session":"sess","state":"done","windows":["w"]}
+{"ts":1026,"crew_id":"c2","kind":"reclaim","branch":"feat/b","state":"done","windows":["w"]}
+{"ts":1027,"kind":"reap","branch":"feat/unknown","pr":"https://github.com/o/r/pull/9","pr_state":"MERGED"}
+{"ts":1028,"crew_id":"c2","kind":"resume","branch":"feat/b","engine":"pi","model":"small","worker_id":"worker:feat/b#s300-1"}
