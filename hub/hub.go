@@ -472,12 +472,12 @@ func (h *Hub) refreshTranscript(sessionID string) {
 		events    []TranscriptEvent
 		newOffset int64
 		err       error
-		initial   *bgTracker
+		initial   *prefixState
 	)
 	if offset == 0 {
-		var bg bgTracker
-		bg, events, newOffset, err = readInitial(path)
-		initial = &bg
+		var prefix prefixState
+		prefix, events, newOffset, err = readInitial(path)
+		initial = &prefix
 	} else {
 		events, newOffset, err = ReadTranscriptFrom(path, offset)
 	}
@@ -499,7 +499,10 @@ func (h *Hub) refreshTranscript(sessionID string) {
 			h.mu.Unlock()
 			return
 		}
-		sess.bg = *initial
+		sess.bg = initial.bg
+		sess.spend = initial.spend
+		sess.view.SpendUSD = initial.spend
+		sess.maxCtx = initial.maxCtx
 	}
 	sess.transcriptOffset = newOffset
 	for _, ev := range events {
@@ -681,8 +684,9 @@ func applyTranscriptEvent(s *Session, ev TranscriptEvent) {
 	}
 
 	// Roll up token usage (last observed wins; Claude reports running totals).
-	// A field added to this roll-up must join readInitial's tailSuffices, or a
-	// first read from the tail can miss it.
+	// A last-wins field added to this roll-up must join readInitial's
+	// tailSuffices, and a sum or maximum its pre-pass (foldPrefix), or a first
+	// read from the tail can miss it.
 	if ev.InputTokens > 0 {
 		s.view.InputTokens = ev.InputTokens
 	}

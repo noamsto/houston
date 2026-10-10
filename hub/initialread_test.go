@@ -116,7 +116,7 @@ func TestHubRestartListsBackgroundStartedBeforeTheTail(t *testing.T) {
 	firstTurn := bgStartLine("tu_sh", "Bash", shellInput, "2026-01-01T00:00:00Z") +
 		bgResultLine("tu_sh", fmt.Sprintf(shellResult, "bsh1"), false) +
 		monitorTurn
-	// Both shell lines outgrow foldBackground's 64 KiB read buffer.
+	// Both shell lines outgrow foldPrefix's 64 KiB read buffer.
 	pad := strings.Repeat("x", 200_000)
 	longTurn := bgStartLine("tu_sh", "Bash", fmt.Sprintf(`{"command":"sleep 300","description":%q,"run_in_background":true}`, pad), "2026-01-01T00:00:00Z") +
 		bgResultLine("tu_sh", fmt.Sprintf(shellResult, "bsh1")+" "+pad, false) +
@@ -252,6 +252,40 @@ func TestReadInitialPiTranscriptEqualsFullReplay(t *testing.T) {
 	requireReplayEqual(t, path)
 }
 
+// Sums and maxima span the whole file, so a tail read must still count lines
+// before the tail.
+func TestReadInitialCountsRollUpsBeforeTheTail(t *testing.T) {
+	claudePeak := `{"type":"assistant","timestamp":"2025-01-01T00:00:01Z","message":{"role":"assistant","model":"claude-opus-4-1","content":[{"type":"text","text":"big"}],"usage":{"input_tokens":3,"cache_read_input_tokens":240000,"cache_creation_input_tokens":9997,"output_tokens":50}}}` + "\n"
+	// The filler's model has no known window, so the tail ends on a record that does.
+	claudeTail := `{"type":"assistant","timestamp":"2025-01-01T00:00:02Z","message":{"role":"assistant","model":"claude-opus-4-1","content":[{"type":"text","text":"small"}],"usage":{"input_tokens":2,"cache_read_input_tokens":20000,"cache_creation_input_tokens":1000,"output_tokens":60}}}` + "\n"
+	piCosts, err := os.ReadFile("testdata/context_pi.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("context peak", func(t *testing.T) {
+		path := writeJSONL(t, claudePeak+filler(t, 2_000_000)+claudeTail)
+		if tailOffset(t, path) == 0 {
+			t.Fatal("read whole; want a tail")
+		}
+		requireReplayEqual(t, path)
+		if got := fastState(t, path).View.ContextLimit; got != 0 {
+			t.Fatalf("ContextLimit = %d, want 0 after the peak passed the window", got)
+		}
+	})
+	t.Run("pi spend", func(t *testing.T) {
+		path := writeJSONL(t, string(piCosts)+filler(t, 2_000_000))
+		if tailOffset(t, path) == 0 {
+			t.Fatal("read whole; want a tail")
+		}
+		requireReplayEqual(t, path)
+		got := fastState(t, path).View.SpendUSD
+		if got == nil || *got != 0.75 {
+			t.Fatalf("SpendUSD = %v, want 0.75", got)
+		}
+	})
+}
+
 // BenchmarkInitialTranscriptRead compares a full replay with readInitial over
 // a loadfixture host, and times a hub scan of it.
 func BenchmarkInitialTranscriptRead(b *testing.B) {
@@ -278,11 +312,13 @@ func BenchmarkInitialTranscriptRead(b *testing.B) {
 		for range b.N {
 			for _, s := range sessions {
 				sess := &Session{}
-				bg, evs, _, err := readInitial(s.TranscriptPath)
+				prefix, evs, _, err := readInitial(s.TranscriptPath)
 				if err != nil {
 					b.Fatal(err)
 				}
-				sess.bg = bg
+				sess.bg = prefix.bg
+				sess.spend = prefix.spend
+				sess.maxCtx = prefix.maxCtx
 				for _, ev := range evs {
 					applyTranscriptEvent(sess, ev)
 				}
