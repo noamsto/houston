@@ -327,7 +327,7 @@ type signature struct {
 	crewSessions                                           int
 
 	hasQuestion bool
-	qText, qVia string
+	qText, qVia, qKind string
 
 	actTool, actHint, actMessage, actTask string
 
@@ -410,7 +410,7 @@ func runSignature(r Run) signature {
 	}
 	if r.Question != nil {
 		s.hasQuestion = true
-		s.qText, s.qVia = r.Question.Text, r.Question.Via
+		s.qText, s.qVia, s.qKind = r.Question.Text, r.Question.Via, r.Question.Kind
 	}
 	return s
 }

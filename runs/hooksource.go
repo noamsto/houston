@@ -442,16 +442,16 @@ func runFromSessionView(v hub.SessionView, project string) (string, Run) {
 
 	switch {
 	case v.State == hook.StatePermission && v.LastMessage != "":
-		r.Question = &Question{Text: v.LastMessage, Via: "pane"}
+		r.Question = &Question{Text: v.LastMessage, Via: "pane", Kind: QuestionDialog}
 	case v.State == hook.StateWaiting && v.Asks != "":
 		// The turn ended on a question: the agent is parked on the human even
 		// though the turn-end state itself is idle.
 		r.State = StateBlocked
-		r.Question = &Question{Text: v.Asks, Via: "pane"}
+		r.Question = &Question{Text: v.Asks, Via: "pane", Kind: QuestionTurn}
 	case v.State == hook.StateToolRunning && v.Tool == "AskUserQuestion":
 		// The tool exists to ask the human and blocks until answered.
 		r.State = StateBlocked
-		r.Question = &Question{Text: askUserQuestionNote, Via: "pane"}
+		r.Question = &Question{Text: askUserQuestionNote, Via: "pane", Kind: QuestionAsk}
 	}
 	// The hub fills LastMessage for waiting too; an idle run must not show
 	// "Claude is waiting for your input".

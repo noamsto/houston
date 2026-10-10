@@ -166,7 +166,19 @@ type Question struct {
 	// synthesized informational note; watchdog statuses no longer produce a
 	// Question, so only the UI still recognizes it for compatibility.
 	Via string `json:"via"`
+	// Kind is what raised the question: "turn" (the turn ended on a `?`; the
+	// transcript already shows it and a plain reply answers it), "dialog" (a
+	// permission/elicitation dialog or watchdog prompt answered with a
+	// keystroke), "ask" (AskUserQuestion) or "crew" (a worker's bus question).
+	Kind string `json:"kind,omitempty"`
 }
+
+const (
+	QuestionTurn   = "turn"
+	QuestionDialog = "dialog"
+	QuestionAsk    = "ask"
+	QuestionCrew   = "crew"
+)
 
 // Context is how full the model's context window is. Limit is absent when the
 // model's window is unknown.

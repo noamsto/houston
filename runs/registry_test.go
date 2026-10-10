@@ -284,6 +284,26 @@ func TestSignatureCoversSessionAndChat(t *testing.T) {
 	}
 }
 
+func TestSignatureCoversQuestionKind(t *testing.T) {
+	q := func(kind string) Run {
+		return Run{Agent: "claude", Question: &Question{Text: "q", Via: "pane", Kind: kind}}
+	}
+	if runSignature(q(QuestionTurn)) == runSignature(q(QuestionDialog)) {
+		t.Error("signature ignores Question.Kind")
+	}
+}
+
+func TestQuestionKindWire(t *testing.T) {
+	b, err := json.Marshal(Question{Text: "q", Via: "pane", Kind: QuestionTurn})
+	if err != nil || !strings.Contains(string(b), `"kind":"turn"`) {
+		t.Fatalf("got %s, %v", b, err)
+	}
+	b, _ = json.Marshal(Question{Text: "q", Via: "pane"})
+	if strings.Contains(string(b), "kind") {
+		t.Errorf("empty kind not omitted: %s", b)
+	}
+}
+
 func TestSignatureCoversProjectAndRole(t *testing.T) {
 	for _, tt := range []struct {
 		name string
