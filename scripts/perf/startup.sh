@@ -45,9 +45,9 @@ cp -r "$fx/state/." "$state"
 debug=()
 [ -n "${PPROF:-}" ] && debug=(-debug)
 start=$(date +%s.%N)
-# Its own tmux socket dir and no inherited $TMUX: the instance must never list
-# the real tmux server's panes.
-env -u TMUX HOME="$fx/home" TMUX_TMPDIR="$work/tmux" \
+# Its own tmux socket dir and no inherited $TMUX/$TMUX_PANE: the instance must
+# never list the real tmux server's panes.
+env -u TMUX -u TMUX_PANE HOME="$fx/home" TMUX_TMPDIR="$work/tmux" \
 	"$bin" -addr "127.0.0.1:$port" -status-dir "$state" -no-opencode -mode "$mode" "${debug[@]}" >"$log" 2>&1 &
 pid=$!
 
