@@ -21,8 +21,10 @@ import (
 )
 
 const (
-	plainCall  = "call-plain"
-	tabbedCall = "call-tabbed"
+	plainCall      = "call-plain"
+	tabbedCall     = "call-tabbed"
+	previewCall    = "call-preview"
+	previewTabCall = "call-preview-tabbed"
 )
 
 // The questions behind answer/testdata's plain-* and tab-* frames.
@@ -34,6 +36,16 @@ const (
 		 "options":[{"label":"Red","description":"Warm"},{"label":"Blue","description":"Cool"}]},
 		{"question":"Which toppings do you want?","header":"Toppings","multiSelect":true,
 		 "options":[{"label":"Cheese","description":"Melty"},{"label":"Olives","description":"Salty"},{"label":"Basil","description":"Fresh"}]}]}`
+	// The questions behind answer/testdata's prev-q* and prevtab-* frames.
+	previewInput = `{"questions":[{"question":"Which layout do you prefer?","header":"Layout","multiSelect":false,
+		"options":[{"label":"Grid","description":"Cards in rows","preview":"+--+ +--+\n|A | |B |"},
+		{"label":"List","description":"One per line","preview":"+------+\n| item |"},
+		{"label":"Split","description":"Two panes","preview":"+-----+------+\n| Nav | Main |"}]}]}`
+	previewTabInput = `{"questions":[
+		{"question":"Pick a size?","header":"Size","multiSelect":false,
+		 "options":[{"label":"Small","description":"Compact","preview":"+---+\n| s |"},{"label":"Large","description":"Roomy","preview":"+---+\n| L |"}]},
+		{"question":"Pick a speed?","header":"Speed","multiSelect":false,
+		 "options":[{"label":"Slow","description":"Careful"},{"label":"Fast","description":"Quick"}]}]}`
 )
 
 func askCall(id, input string) *chat.Update {
@@ -59,6 +71,8 @@ func newAnswerServer(t *testing.T, panes *fakeRunPanes, agent string) (*Server, 
 	src := newFakeChat(0)
 	src.tools[plainCall] = askCall(plainCall, plainInput)
 	src.tools[tabbedCall] = askCall(tabbedCall, tabbedInput)
+	src.tools[previewCall] = askCall(previewCall, previewInput)
+	src.tools[previewTabCall] = askCall(previewTabCall, previewTabInput)
 	s.chat = src
 	s.answerPoll = time.Millisecond
 	s.answerWait = 100 * time.Millisecond
@@ -170,6 +184,100 @@ func TestRunAnswerQuestionPlainOption(t *testing.T) {
 	if got, want := keyLog(panes), []string{"2"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("keys %q, want %q", got, want)
 	}
+}
+
+// In the preview layout a digit only moves the cursor; Enter submits.
+func TestRunAnswerQuestionPreview(t *testing.T) {
+	answerSplit := []answerEntry{{Question: 0, Options: []int{2}}}
+
+	t.Run("submits", func(t *testing.T) {
+		panes := &fakeRunPanes{}
+		screen(t, panes, "prev-q",
+			[3]string{"prev-q", "3", "prev-q-split"},
+			[3]string{"prev-q-split", "Enter", "plain-done"},
+		)
+		s, _ := newAnswerServer(t, panes, "claude")
+
+		rec := postAnswer(t, s, questionBody(t, previewCall, answerSplit))
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("status %d, want 204 (%q)", rec.Code, rec.Body.String())
+		}
+		if got, want := keyLog(panes), []string{"3", "Enter"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("keys %q, want %q", got, want)
+		}
+	})
+
+	t.Run("tabbed with a non-preview tab", func(t *testing.T) {
+		panes := &fakeRunPanes{}
+		screen(t, panes, "prevtab-q1",
+			[3]string{"prevtab-q1", "2", "prevtab-q1-large"},
+			[3]string{"prevtab-q1-large", "Enter", "prevtab-q2"},
+			[3]string{"prevtab-q2", "1", "prevtab-review"},
+			[3]string{"prevtab-review", "1", "plain-done"},
+		)
+		s, _ := newAnswerServer(t, panes, "claude")
+
+		rec := postAnswer(t, s, questionBody(t, previewTabCall, []answerEntry{{Question: 0, Options: []int{1}}, {Question: 1, Options: []int{0}}}))
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("status %d, want 204 (%q)", rec.Code, rec.Body.String())
+		}
+		if got, want := keyLog(panes), []string{"2", "Enter", "1", "1"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("keys %q, want %q", got, want)
+		}
+	})
+
+	nonPreview := strings.NewReplacer(
+		"Which color do you prefer?", "Which layout do you prefer?",
+		"Red", "Grid", "Warm", "Cards in rows", "Blue", "List", "Cool", "One per line", "Green", "Split", "Natural", "Two panes",
+	)
+	for name, edit := range map[string]func(frames map[string]string){
+		"label changed": func(f map[string]string) {
+			f["prev-q"] = strings.Replace(f["prev-q"], "2. List ", "2. Lists", 1)
+		},
+		"options reordered": func(f map[string]string) {
+			f["prev-q"] = strings.NewReplacer("2. List ", "2. Split", "3. Split", "3. List ").Replace(f["prev-q"])
+		},
+		"same question without previews": func(f map[string]string) {
+			f["prev-q"] = nonPreview.Replace(screenFrame(t, "plain-q"))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			panes := &fakeRunPanes{}
+			screen(t, panes, "prev-q")
+			edit(panes.frames)
+			s, _ := newAnswerServer(t, panes, "claude")
+
+			wantRefusal(t, postAnswer(t, s, questionBody(t, previewCall, answerSplit)), http.StatusConflict, "prompt changed")
+			if _, sent := panes.calls(); len(sent) != 0 {
+				t.Fatalf("sent %+v on a changed dialog", sent)
+			}
+		})
+	}
+
+	t.Run("cursor lands on the wrong row", func(t *testing.T) {
+		panes := &fakeRunPanes{}
+		screen(t, panes, "prev-q", [3]string{"prev-q", "3", "prev-q-list"})
+		s, _ := newAnswerServer(t, panes, "claude")
+
+		wantPartial(t, postAnswer(t, s, questionBody(t, previewCall, answerSplit)), http.StatusConflict)
+		if got, want := keyLog(panes), []string{"3"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("keys %q, want %q", got, want)
+		}
+	})
+
+	t.Run("Other text has no row", func(t *testing.T) {
+		panes := &fakeRunPanes{}
+		screen(t, panes, "prev-q")
+		s, _ := newAnswerServer(t, panes, "claude")
+
+		rec := postAnswer(t, s, questionBody(t, previewCall, []answerEntry{{Question: 0, Text: "Masonry"}}))
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("status %d, want 422 (%q)", rec.Code, rec.Body.String())
+		}
+		if _, sent := panes.calls(); len(sent) != 0 {
+			t.Fatalf("sent %+v for an unplannable answer", sent)
+		}
+	})
 }
 
 func TestRunAnswerQuestionTabbedWithOther(t *testing.T) {

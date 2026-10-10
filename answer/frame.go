@@ -52,6 +52,36 @@ func isDialogRule(line, runes string) bool {
 	return isRule(strings.TrimRightFunc(line, unicode.IsSpace), runes)
 }
 
+// anchorWidth is the most visible runes on any line of a capture. A dialog's
+// own rule spans the pane, so it is the widest line, while a short rule run
+// spilled into its text is not.
+func anchorWidth(lines []string) int {
+	w := 0
+	for _, l := range lines {
+		w = max(w, visibleRunes(l))
+	}
+	return w
+}
+
+// visibleRunes counts a line's runes, right-trimmed, without zero-width ones
+// (combining marks, format runes such as ZWJ, variation selectors), so an emoji
+// sequence in a full-width line cannot outnumber the rule.
+func visibleRunes(line string) int {
+	n := 0
+	for _, r := range strings.TrimRightFunc(line, unicode.IsSpace) {
+		if !unicode.In(r, unicode.Mn, unicode.Me, unicode.Cf) && (r < 0xFE00 || r > 0xFE0F) {
+			n++
+		}
+	}
+	return n
+}
+
+// isAnchorRule reports whether a capture line is a dialog's "─" rule: drawn
+// from column 0 across the capture's width.
+func isAnchorRule(line string, width int) bool {
+	return isDialogRule(line, "─") && visibleRunes(line) >= width
+}
+
 func isTabBar(line string) bool {
 	return strings.HasPrefix(line, "←") && strings.HasSuffix(line, "✔Submit→")
 }
@@ -60,26 +90,71 @@ func isHeader(line string) bool {
 	return strings.HasPrefix(line, "☐") || strings.HasPrefix(line, "☒")
 }
 
-// dialogLines returns the normalized, non-blank lines of the question dialog
-// at the bottom of capture, starting with its tab bar or header line: the
-// lines after the last "─" dialog rule that is directly followed by one. Each
-// later dialog rule is the dialogRule line.
-func dialogLines(capture string) ([]string, bool) {
+// dialogLine is one non-blank line of a dialog: the capture line and its
+// normalized text.
+type dialogLine struct {
+	raw, norm string
+}
+
+// dialogLines returns the non-blank lines of the question dialog at the
+// bottom of capture, starting with its tab bar or header line: the lines after
+// the last "─" dialog rule (see isAnchorRule) that is directly followed by one.
+// Each later dialog rule's norm is dialogRule.
+func dialogLines(capture string) ([]dialogLine, bool) {
 	raw := captureLines(capture)
-	lines := make([]string, 0, len(raw))
+	width := anchorWidth(raw)
+	lines := make([]dialogLine, 0, len(raw))
 	for _, l := range raw {
-		if isDialogRule(l, "─") {
-			lines = append(lines, dialogRule)
+		if isAnchorRule(l, width) {
+			lines = append(lines, dialogLine{l, dialogRule})
 		} else if n := Normalize(l); n != "" {
-			lines = append(lines, n)
+			lines = append(lines, dialogLine{l, n})
 		}
 	}
 	for i := len(lines) - 2; i >= 0; i-- {
-		if lines[i] == dialogRule && (isTabBar(lines[i+1]) || isHeader(lines[i+1])) {
+		if lines[i].norm == dialogRule && (isTabBar(lines[i+1].norm) || isHeader(lines[i+1].norm)) {
 			return lines[i+1:], true
 		}
 	}
 	return nil, false
+}
+
+func norms(lines []dialogLine) []string {
+	out := make([]string, len(lines))
+	for i, l := range lines {
+		out[i] = l.norm
+	}
+	return out
+}
+
+// previewNotes is the hint under an empty preview notes field.
+const previewNotes = "Notes:pressntoaddnotes"
+
+// previewLeft returns the normalized label column of a preview layout's
+// option area: each line cut at the preview box's left border (a box rune
+// after whitespace), so the preview itself is never compared, and the empty
+// notes hint dropped as the area's last line. Typed notes stay and fail the
+// match.
+func previewLeft(area []dialogLine) []string {
+	var out []string
+	for _, l := range area {
+		left := l.raw
+		var prev rune
+		for i, r := range l.raw {
+			if strings.ContainsRune("┌│└", r) && unicode.IsSpace(prev) {
+				left = l.raw[:i]
+				break
+			}
+			prev = r
+		}
+		if n := Normalize(left); n != "" {
+			out = append(out, n)
+		}
+	}
+	if len(out) > 0 && out[len(out)-1] == previewNotes {
+		out = out[:len(out)-1]
+	}
+	return out
 }
 
 // row is one numbered option row (or the unnumbered Next/Submit row) with its
@@ -96,13 +171,14 @@ func cursorRow(line string) row {
 
 // questionSpec is one question as its tab must render it, normalized.
 type questionSpec struct {
-	text   string
-	labels []string // each option's label followed by its description
-	multi  bool
-	tabbed bool
-	index  int    // position of the question's tab
-	count  int    // number of question tabs
-	final  string // the unnumbered row of a multi-select tab: "Next" or "Submit"
+	text    string
+	labels  []string // each option's label followed by its description (label only in the preview layout)
+	multi   bool
+	preview bool // the preview layout: label rows, no Other row, unnumbered "Chat about this"
+	tabbed  bool
+	index   int    // position of the question's tab
+	count   int    // number of question tabs
+	final   string // the unnumbered row of a multi-select tab: "Next" or "Submit"
 }
 
 // tabState is what a question tab must show at one point of the answer.
@@ -115,12 +191,16 @@ type tabState struct {
 
 func newSpec(qs []Question, i int, tabbed bool) questionSpec {
 	q := qs[i]
-	s := questionSpec{text: Normalize(q.Text), multi: q.MultiSelect, tabbed: tabbed, index: i, count: len(qs), final: "Next"}
+	s := questionSpec{text: Normalize(q.Text), multi: q.MultiSelect, preview: q.PreviewLayout(), tabbed: tabbed, index: i, count: len(qs), final: "Next"}
 	if i == len(qs)-1 {
 		s.final = "Submit"
 	}
 	for _, o := range q.Options {
-		s.labels = append(s.labels, Normalize(o.Label)+Normalize(o.Description))
+		label := Normalize(o.Label)
+		if !s.preview {
+			label += Normalize(o.Description)
+		}
+		s.labels = append(s.labels, label)
 	}
 	return s
 }
@@ -133,22 +213,27 @@ func (s questionSpec) check(want tabState) Check {
 }
 
 // parse splits the tab into its tab bar or header line, its option rows
-// (options, then Other) and, for a multi-select, the Next/Submit row. The tab
-// must hold exactly this question, followed by a rule, the "Chat about this"
-// row and the footer, so a dialog that is not at the bottom of the pane never
-// parses.
+// (options, then Other unless in the preview layout) and, for a multi-select,
+// the Next/Submit row. The tab must hold exactly this question, followed by a
+// rule, the "Chat about this" row and the footer, so a dialog that is not at
+// the bottom of the pane never parses.
 func (s questionSpec) parse(capture string) (string, []row, row, bool) {
 	lines, ok := dialogLines(capture)
-	if !ok || isTabBar(lines[0]) != s.tabbed {
+	if !ok || isTabBar(lines[0].norm) != s.tabbed {
 		return "", nil, row{}, false
 	}
-	body, ok := consumeText(lines[1:], s.text)
+	body, ok := consumeText(norms(lines[1:]), s.text)
 	if !ok {
 		return "", nil, row{}, false
 	}
 	rule := slices.Index(body, dialogRule)
 	if rule < 0 || !s.isTail(body[rule+1:]) {
 		return "", nil, row{}, false
+	}
+	if s.preview {
+		start := len(lines) - len(body)
+		rows, ok := splitRows(previewLeft(lines[start:start+rule]), len(s.labels))
+		return lines[0].norm, rows, row{}, ok
 	}
 	area := body[:rule]
 	var final row
@@ -160,7 +245,7 @@ func (s questionSpec) parse(capture string) (string, []row, row, bool) {
 		area = area[:len(area)-1]
 	}
 	rows, ok := splitRows(area, len(s.labels)+1)
-	return lines[0], rows, final, ok
+	return lines[0].norm, rows, final, ok
 }
 
 // barMatches checks the tab bar's answered boxes: one per question, ticked
@@ -216,8 +301,13 @@ func consumeText(lines []string, want string) ([]string, bool) {
 
 // isTail reports whether lines are the "Chat about this" row and a footer
 // ending in "Esc to cancel" — at most three lines, since a narrow pane wraps it.
+// The preview layout leaves the row unnumbered.
 func (s questionSpec) isTail(lines []string) bool {
-	if len(lines) < 2 || len(lines) > 4 || lines[0] != strconv.Itoa(len(s.labels)+2)+".Chataboutthis" {
+	chat := strconv.Itoa(len(s.labels)+2) + ".Chataboutthis"
+	if s.preview {
+		chat = "Chataboutthis"
+	}
+	if len(lines) < 2 || len(lines) > 4 || lines[0] != chat {
 		return false
 	}
 	footer := strings.Join(lines[1:], "")
@@ -260,6 +350,9 @@ func (s questionSpec) matches(rows []row, final row, want tabState) bool {
 		}
 	}
 	n := len(s.labels)
+	if s.preview {
+		return true
+	}
 	if rows[n].cursor != (want.cursor == n+1) || rows[n].text != s.otherRow(want.other) {
 		return false
 	}
@@ -294,8 +387,8 @@ func reviewCheck(qs []Question, as []Answer) Check {
 	answered := slices.Repeat([]bool{true}, len(qs))
 	return func(capture string) bool {
 		lines, ok := dialogLines(capture)
-		return ok && isTabBar(lines[0]) && slices.Equal(tabBoxes(lines[0]), answered) &&
-			strings.Join(lines[1:], "") == want
+		return ok && isTabBar(lines[0].norm) && slices.Equal(tabBoxes(lines[0].norm), answered) &&
+			strings.Join(norms(lines[1:]), "") == want
 	}
 }
 

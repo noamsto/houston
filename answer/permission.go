@@ -32,9 +32,10 @@ type Prompt struct {
 // below a line ending in "?". A question dialog is never one.
 func PermissionPrompt(capture string) (Prompt, bool) {
 	lines := captureLines(capture)
+	width := anchorWidth(lines)
 	top := -1
 	for i := len(lines) - 1; i >= 0; i-- {
-		if isDialogRule(lines[i], "─") {
+		if isAnchorRule(lines[i], width) {
 			top = i
 			break
 		}
@@ -162,16 +163,19 @@ func isBlank(line string) bool { return strings.TrimSpace(line) == "" }
 
 func isRuleLine(line string) bool { return isDialogRule(line, "─╌") }
 
-// frameText is what the frame hashes: the region's words, each line's
-// leading "│" dropped, separated by single spaces, so a space that moves
-// inside a command changes the frame while a rewrap at a space does not.
+// frameText is what the frame hashes: the region's non-blank lines, each
+// line's leading "│" dropped and its words separated by single spaces, one
+// line per row, so a space or line break that moves inside a command changes
+// the frame.
 func frameText(region []string) string {
-	var words []string
+	var lines []string
 	for _, l := range region {
 		l = strings.TrimPrefix(strings.TrimLeftFunc(l, unicode.IsSpace), "│")
-		words = append(words, strings.Fields(l)...)
+		if words := strings.Fields(l); len(words) > 0 {
+			lines = append(lines, strings.Join(words, " "))
+		}
 	}
-	return ruleRun.ReplaceAllStringFunc(strings.Join(words, " "), func(run string) string {
+	return ruleRun.ReplaceAllStringFunc(strings.Join(lines, "\n"), func(run string) string {
 		r, _ := utf8.DecodeRuneInString(run)
 		return string(r)
 	})

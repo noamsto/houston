@@ -21,10 +21,19 @@ type Question struct {
 }
 
 // Option is one choice of a Question. Its row shows the label with the
-// description under it.
+// description under it, unless the question renders in the preview layout.
 type Option struct {
 	Label       string
 	Description string
+	Preview     string
+}
+
+// PreviewLayout reports whether q renders in Claude's preview layout: label
+// rows beside the focused option's preview, no descriptions and no Other row.
+// Only a single-select question with a non-blank preview does; a multi-select
+// one ignores previews.
+func (q Question) PreviewLayout() bool {
+	return !q.MultiSelect && slices.ContainsFunc(q.Options, func(o Option) bool { return strings.TrimSpace(o.Preview) != "" })
 }
 
 // ParseQuestions decodes the input of an AskUserQuestion tool call.
@@ -36,6 +45,7 @@ func ParseQuestions(raw json.RawMessage) ([]Question, error) {
 			Options     []struct {
 				Label       string `json:"label"`
 				Description string `json:"description"`
+				Preview     string `json:"preview"`
 			} `json:"options"`
 		} `json:"questions"`
 	}
@@ -124,6 +134,12 @@ func Plan(qs []Question, as []Answer) ([]Step, error) {
 		n := len(q.Options)
 		expect(spec.check(tabState{cursor: 1}))
 		switch {
+		case q.PreviewLayout():
+			// A digit only moves the cursor here; Enter submits or advances.
+			k := a.Options[0] + 1
+			send(digit(k))
+			expect(spec.check(tabState{cursor: k, touched: true}))
+			send(keyEnter)
 		case !q.MultiSelect && len(a.Options) == 1:
 			send(digit(a.Options[0] + 1))
 		case !q.MultiSelect:
@@ -193,6 +209,9 @@ func validate(q Question, a Answer) error {
 	}
 	if (len(a.Options) == 1) == (a.Text != "") || len(a.Options) > 1 {
 		return errors.New("single-select needs exactly one option or text")
+	}
+	if a.Text != "" && q.PreviewLayout() {
+		return errors.New("a question with previews has no Other row")
 	}
 	return nil
 }

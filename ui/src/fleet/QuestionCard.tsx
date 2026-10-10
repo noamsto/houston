@@ -17,6 +17,9 @@ interface Question {
   header?: string
   multiSelect: boolean
   options: QuestionOption[]
+  // Claude Code renders a single-select question with option previews in a
+  // layout that has no Other row.
+  preview: boolean
 }
 
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v !== '' ? v : undefined)
@@ -29,11 +32,14 @@ function parseQuestions(input: unknown): Question[] {
     const question = str(q?.question)
     if (!question) continue
     const options: QuestionOption[] = []
+    let preview = false
     for (const o of Array.isArray(q.options) ? (q.options as Record<string, unknown>[]) : []) {
       const label = str(o?.label)
       if (label) options.push({ label, description: str(o.description) })
+      if (typeof o?.preview === 'string' && o.preview.trim() !== '') preview = true
     }
-    out.push({ question, header: str(q.header), multiSelect: q.multiSelect === true, options })
+    const multiSelect = q.multiSelect === true
+    out.push({ question, header: str(q.header), multiSelect, options, preview: preview && !multiSelect })
   }
   return out
 }
@@ -161,24 +167,26 @@ function PickerBlock({ q, stage, disabled, onOption, onOther, onText }: {
             </button>
           )
         })}
-        <button
-          type="button"
-          role={role}
-          aria-checked={stage.otherOn}
-          tabIndex={tabIndex(otherIndex)}
-          disabled={disabled}
-          className={`chat-question-pick${stage.otherOn ? ' on' : ''}`}
-          onClick={() => {
-            focusOther.current = !stage.otherOn
-            onOther()
-          }}
-        >
-          <span className="chat-question-marker" aria-hidden="true">{marker(stage.otherOn)}</span>
-          <span className="chat-question-option-body">
-            <span className="chat-question-option-label">Other</span>
-          </span>
-        </button>
-        {stage.otherOn && (
+        {!q.preview && (
+          <button
+            type="button"
+            role={role}
+            aria-checked={stage.otherOn}
+            tabIndex={tabIndex(otherIndex)}
+            disabled={disabled}
+            className={`chat-question-pick${stage.otherOn ? ' on' : ''}`}
+            onClick={() => {
+              focusOther.current = !stage.otherOn
+              onOther()
+            }}
+          >
+            <span className="chat-question-marker" aria-hidden="true">{marker(stage.otherOn)}</span>
+            <span className="chat-question-option-body">
+              <span className="chat-question-option-label">Other</span>
+            </span>
+          </button>
+        )}
+        {!q.preview && stage.otherOn && (
           <input
             ref={otherRef}
             type="text"
@@ -305,14 +313,24 @@ export function QuestionCard({ item, runId, canAnswer, answerable, onLayout }: {
           </button>
           <div className="chat-question-status" role="status">
             {phase.kind === 'sent' && phase.status === call.status && 'Sent — waiting for Claude'}
-            {phase.kind === 'moved' && 'The session moved on — refresh'}
+            {phase.kind === 'moved' && (
+              <>
+                <span>The session moved on — refresh</span>, or answer in the{' '}
+                <a className="chat-question-terminal" href={runHash(runId, 'terminal')}>Terminal tab</a>
+              </>
+            )}
             {phase.kind === 'partial' && (
               <>
                 Part of the answer went in — finish in the{' '}
                 <a className="chat-question-terminal" href={runHash(runId, 'terminal')}>Terminal tab</a>
               </>
             )}
-            {phase.kind === 'error' && phase.message}
+            {phase.kind === 'error' && (
+              <>
+                <span>{phase.message}</span> — or answer in the{' '}
+                <a className="chat-question-terminal" href={runHash(runId, 'terminal')}>Terminal tab</a>
+              </>
+            )}
           </div>
         </div>
       )}

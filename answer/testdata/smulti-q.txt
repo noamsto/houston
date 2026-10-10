@@ -1,6 +1,6 @@
 
-❯ Ask me "Which toppings do you want?" (Cheese, Olives, Basil;
-  pick any).
+❯ Ask me "Which toppings do you want?" (Cheese, Olives,
+  Basil; pick any).
 ────────────────────────────────────────────────────────────
 ←  ☐ Toppings  ✔ Submit  →
 

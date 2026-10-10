@@ -972,7 +972,7 @@ describe('ChatTab', () => {
         fireEvent.click(sendBtn())
         await screen.findByText('The session moved on — refresh')
         await waitFor(() => expect(toolFetches(fetchMock)).toBe(before + 1))
-        expect(screen.queryByRole('link')).toBeNull()
+        expect(screen.getByRole('link', { name: 'Terminal tab' }).getAttribute('href')).toBe('#/fleet/r1/terminal')
         expect(sendBtn().disabled).toBe(false)
       })
 

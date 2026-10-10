@@ -134,9 +134,9 @@ func TestPermissionPromptIndentedRuleInCommand(t *testing.T) {
 }
 
 func TestPermissionPromptFrameKeepsWhitespace(t *testing.T) {
-	frame := func(cmd string) string {
+	frame := func(cmd ...string) string {
 		t.Helper()
-		p, ok := PermissionPrompt(withCommand(t, cmd))
+		p, ok := PermissionPrompt(withCommand(t, cmd...))
 		if !ok {
 			t.Fatal("no prompt")
 		}
@@ -144,6 +144,12 @@ func TestPermissionPromptFrameKeepsWhitespace(t *testing.T) {
 	}
 	if frame("rm -rf /tmp/x") == frame("rm -rf / tmp/x") {
 		t.Error("frame unchanged when a space moved into the command")
+	}
+	if frame("rm -rf /tmp/x") == frame("rm -rf", "/tmp/x") {
+		t.Error("frame unchanged when a line break moved into the command")
+	}
+	if frame("rm  -rf   /tmp/x") != frame("rm -rf /tmp/x") {
+		t.Error("frame changed by a run of spaces")
 	}
 }
 
@@ -161,5 +167,23 @@ func TestPermissionPromptDetailTruncationNote(t *testing.T) {
 	short, ok := PermissionPrompt(fixture(t, "perm-bash"))
 	if !ok || strings.Contains(short.Detail, truncatedNote) {
 		t.Errorf("Detail = %q, want no truncation note", short.Detail)
+	}
+}
+
+// A dialog rule spans the pane, so a short column-0 rule run in the dialog's
+// text never anchors it.
+func TestPermissionPromptShortRuleDoesNotAnchor(t *testing.T) {
+	base := fixture(t, "perm-bash")
+	want, ok := PermissionPrompt(base)
+	if !ok {
+		t.Fatal("no prompt")
+	}
+	capture := strings.Replace(base, "\n This command requires approval", "\n──\n This command requires approval", 1)
+	p, ok := PermissionPrompt(capture)
+	if !ok {
+		t.Fatal("no prompt")
+	}
+	if p.Detail != want.Detail {
+		t.Errorf("Detail = %q, want %q", p.Detail, want.Detail)
 	}
 }
