@@ -223,3 +223,44 @@ describe('MobileShell fleet entries', () => {
     expect(window.location.hash).toBe('#/fleet/w')
   })
 })
+
+describe('MobileShell run tabs', () => {
+  const nowSec = 1_800_000_000
+  const run = {
+    id: 'r', agent: 'claude', state: 'idle', branch: 'b', activity: {}, tokens: { input: 0, output: 0 },
+    caps: { terminal: true, reply: true, kill: true, chat: true }, updated_at: nowSec,
+  } as Run
+  const bar = () => screen.getByRole('tablist', { name: 'run tabs' })
+
+  it('swaps the shell tabs for the run tabs while a run is open, and back', () => {
+    window.location.hash = '#/fleet/r/chat'
+    const { container } = render(<MobileShell runs={[run]} connected hasSnapshot now={nowSec * 1000} mode="dispatcher" />)
+
+    expect(within(bar()).getAllByRole('tab').map((t) => t.textContent)).toEqual(['✉Chat', '▸Terminal'])
+    expect(within(bar()).getByRole('tab', { name: /chat/i }).getAttribute('aria-selected')).toBe('true')
+    expect(screen.queryByRole('navigation', { name: 'sections' })).toBeNull()
+    expect(container.querySelector('.run-detail-tabs')).toBeNull()
+
+    fireEvent.click(within(bar()).getByRole('tab', { name: /terminal/i }))
+    expect(window.location.hash).toBe('#/fleet/r/terminal')
+
+    act(() => { window.location.hash = '#/fleet' })
+    expect(screen.queryByRole('tablist', { name: 'run tabs' })).toBeNull()
+    expect(screen.getByRole('navigation', { name: 'sections' })).toBeTruthy()
+  })
+
+  it('hides the bar while the keyboard is up', () => {
+    const vv = fakeVisualViewport(window.innerHeight)
+    window.location.hash = '#/fleet/r/chat'
+    render(<MobileShell runs={[run]} connected hasSnapshot now={nowSec * 1000} mode="dispatcher" />)
+    const shell = bar().closest('.shell') as HTMLElement
+    expect(shell.classList.contains('keyboard-open')).toBe(false)
+
+    act(() => {
+      vv.height = window.innerHeight - 300
+      vv.emit()
+    })
+    expect(shell.classList.contains('keyboard-open')).toBe(true)
+    expect(bar().classList.contains('shell-tabs')).toBe(true)
+  })
+})

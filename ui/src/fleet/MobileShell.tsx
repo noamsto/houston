@@ -7,6 +7,7 @@ import { WorkspaceView } from './WorkspaceView'
 import { DispatchView } from './DispatchView'
 import { RunDetail } from './RunDetail'
 import { runHash, tabHash, TAB_LABEL, useDetailRoute, useShellTab } from './routes'
+import { DETAIL_TAB_LABEL, offeredTabs } from './runTabs'
 import { useKeyboardInset } from '../hooks/useKeyboardInset'
 
 export interface ShellData {
@@ -17,6 +18,8 @@ export interface ShellData {
   mode: Mode | null
 }
 
+const RUN_TAB_GLYPH = { crew: '◉', chat: '✉', terminal: '▸' } as const
+
 export function MobileShell({ runs, connected, hasSnapshot, now, mode }: ShellData) {
   const [tab, goTab] = useShellTab(mode)
   const dispatcherMode = mode === 'dispatcher'
@@ -26,6 +29,12 @@ export function MobileShell({ runs, connected, hasSnapshot, now, mode }: ShellDa
 
   const detail = useDetailRoute()
   const keyboardInset = useKeyboardInset()
+  const detailRun = detail && hasSnapshot ? runs.find((r) => r.id === detail.id) : undefined
+  const runTabs = detailRun ? offeredTabs(detailRun, mode) : []
+  // Mirrors RunDetail's choice of tab: a dispatcher defaults to Crew, others to Chat.
+  const activeRunTab = detail?.tab === 'terminal' && detailRun?.caps.terminal ? 'terminal'
+    : runTabs.includes('crew') && (detail?.tab === undefined || detail.tab === 'crew') ? 'crew'
+      : 'chat'
 
   return (
     <div
@@ -66,10 +75,27 @@ export function MobileShell({ runs, connected, hasSnapshot, now, mode }: ShellDa
             onBack={() => { window.location.hash = tabHash(tab) }}
             backLabel={TAB_LABEL[tab]}
             edgeSwipeBack
+            tabsInBar
           />
         )}
       </div>
 
+      {detailRun && detail ? (
+        <div className="shell-tabs run-tabs" role="tablist" aria-label="run tabs">
+          {runTabs.map((t) => (
+            <button
+              key={t}
+              type="button"
+              role="tab"
+              className={activeRunTab === t ? 'on' : ''}
+              aria-selected={activeRunTab === t}
+              onClick={() => { window.location.hash = runHash(detail.id, t) }}
+            >
+              <span className="glyph" aria-hidden>{RUN_TAB_GLYPH[t]}</span>{DETAIL_TAB_LABEL[t]}
+            </button>
+          ))}
+        </div>
+      ) : (
       <nav className="shell-tabs" aria-label="sections">
         <button className={tab === 'fleet' ? 'on' : ''} aria-current={tab === 'fleet' ? 'true' : undefined} onClick={() => goTab('fleet', true)}>
           <span className="glyph" aria-hidden>▤</span>
@@ -85,6 +111,7 @@ export function MobileShell({ runs, connected, hasSnapshot, now, mode }: ShellDa
           </button>
         )}
       </nav>
+      )}
     </div>
   )
 }
