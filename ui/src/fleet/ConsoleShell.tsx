@@ -9,7 +9,7 @@ import { WorkspaceView } from './WorkspaceView'
 import { DispatchView } from './DispatchView'
 import { RunDetail } from './RunDetail'
 import { tabHash, useDetailRoute, useShellTab } from './routes'
-import { back, backLabel, openRun, useNavEntry } from './nav'
+import { back, backLabel, selectRun, useNavEntry } from './nav'
 import type { ShellData } from './MobileShell'
 import { useGroupByProject } from '../hooks/useLayout'
 import '../theme/mocha.css'
@@ -96,7 +96,7 @@ export function ConsoleShell({ runs, connected, hasSnapshot, now, mode }: ShellD
     setCrew((c) => (c === name ? null : name))
   }
 
-  const open = useCallback((r: Run) => openRun(r.id), [])
+  const open = useCallback((r: Run) => selectRun(r.id), [])
 
   return (
     <div className="console mocha" aria-label="console">
@@ -235,7 +235,7 @@ export function ConsoleShell({ runs, connected, hasSnapshot, now, mode }: ShellD
         </div>
 
         {section === 'workspace' && (
-          <WorkspaceView onOpen={openRun} />
+          <WorkspaceView onOpen={selectRun} />
         )}
 
         {dispatcherMode && (

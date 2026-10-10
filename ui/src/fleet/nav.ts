@@ -26,6 +26,10 @@ export function navEntry(): NavEntry | null {
 
 export function openRun(id: string, tab?: DetailTab): void {
   const from = window.location.hash
+  if (parseDetailRoute(from)?.id === id) {
+    go('replaceState', window.history.state, runHash(id, tab))
+    return
+  }
   const current = navEntry()
   const root = current ? current.root : parseDetailRoute(from) ? null : tabHash(parseTabRoute(from) ?? 'fleet')
   go('pushState', { houston: { depth: (current?.depth ?? 0) + 1, from, root } }, runHash(id, tab))
@@ -36,11 +40,28 @@ export function switchRunTab(id: string, tab: DetailTab): void {
   go('replaceState', window.history.state, runHash(id, tab))
 }
 
+/** Desktop list/Workspace pick: the detail is a persistent pane, so choosing a
+ *  sibling run while one is shown replaces instead of pushing. */
+export function selectRun(id: string): void {
+  if (!parseDetailRoute(window.location.hash)) {
+    openRun(id)
+    return
+  }
+  go('replaceState', window.history.state, runHash(id))
+}
+
+// history.back()/go() land asynchronously and navEntry() keeps the old depth
+// until then, so a second pop in that window would overshoot.
+let popping = false
+window.addEventListener('popstate', () => { popping = false })
+
 /** A real pop when houston pushed the entry; otherwise (deep link, reload with
  *  nothing of houston's underneath) replace to the parent, never push. */
 export function back(rootHash: string): void {
+  if (popping) return
   const current = navEntry()
   if (current && current.depth >= 1) {
+    popping = true
     window.history.back()
     return
   }
@@ -48,8 +69,10 @@ export function back(rootHash: string): void {
 }
 
 export function popToRoot(rootHash: string): void {
+  if (popping) return
   const current = navEntry()
   if (current && current.depth >= 1 && current.root !== null) {
+    popping = true
     window.history.go(-current.depth)
     return
   }

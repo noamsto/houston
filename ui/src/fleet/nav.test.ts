@@ -2,7 +2,7 @@ import { act, cleanup, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { Run } from '../api/runs'
 import { installFakeHistory, settle, type FakeHistory } from '../testing/fakeHistory'
-import { back, backLabel, navEntry, openRun, popToRoot, rootLabel, switchRunTab } from './nav'
+import { back, backLabel, navEntry, openRun, popToRoot, rootLabel, selectRun, switchRunTab } from './nav'
 import { useDispatchRoute, useShellTab, navigateHash } from './routes'
 
 let fake: FakeHistory
@@ -86,6 +86,38 @@ describe('navigation stack', () => {
     act(() => result.current[1]('workspace', true))
     expect(fake.length).toBe(length + 1)
     expect(window.location.hash).toBe('#/workspace')
+  })
+
+  it('re-opening the run already shown replaces and keeps the stack entry', () => {
+    openRun('r', 'chat')
+    const length = fake.length
+    const entry = navEntry()
+    openRun('r', 'terminal')
+    expect(fake.length).toBe(length)
+    expect(navEntry()).toEqual(entry)
+    expect(window.location.hash).toBe('#/fleet/r/terminal')
+  })
+
+  it('selectRun pushes from a list and replaces laterally from a shown run', async () => {
+    const length = fake.length
+    selectRun('a')
+    expect(fake.length).toBe(length + 1)
+    selectRun('b')
+    expect(fake.length).toBe(length + 1)
+    expect(window.location.hash).toBe('#/fleet/b')
+    await pop(() => back('#/fleet'))
+    expect(window.location.hash).toBe('#/fleet')
+  })
+
+  it('a second Back while a pop is in flight is ignored until popstate', async () => {
+    openRun('disp')
+    openRun('worker')
+    back('#/fleet')
+    back('#/fleet')
+    await act(async () => { await settle() })
+    expect(window.location.hash).toBe('#/fleet/disp')
+    await pop(() => back('#/fleet'))
+    expect(window.location.hash).toBe('#/fleet')
   })
 
   it('useDispatchRoute still bumps seq on navigateHash changes', () => {
