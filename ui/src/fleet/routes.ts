@@ -89,7 +89,7 @@ const CREWS_HASH = /^#\/crews(?:\?.*)?$/
 
 export function parseTabRoute(hash: string): ShellTab | null {
   if (hash === '' || hash === '#' || hash === '#/' || hash === '#/fleet') return 'fleet'
-  // The Crews view is gone; its hash is kept as an alias so old bookmarks land on Fleet.
+  // Retired `#/crews` hash: old bookmarks land on Fleet.
   if (CREWS_HASH.test(hash)) return 'fleet'
   if (hash === '#/workspace') return 'workspace'
   if (parseDispatchRoute(hash)) return 'dispatch'
