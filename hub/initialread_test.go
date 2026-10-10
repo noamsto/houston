@@ -229,7 +229,11 @@ func TestReadInitialFewToolCallsEqualsFullReplay(t *testing.T) {
 		fmt.Fprintf(&b, `{"type":"assistant","timestamp":"2026-01-01T00:01:00Z","message":{"role":"assistant","content":[{"type":"text","text":%q}],"usage":{"input_tokens":%d,"output_tokens":%d}}}`+"\n", text, 100+i, 10+i)
 	}
 	path := writeJSONL(t, b.String())
-	if fi, _ := os.Stat(path); fi.Size() <= 2*initialTail {
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Size() <= 2*initialTail {
 		t.Fatalf("transcript is %d bytes; want past two tails", fi.Size())
 	}
 	requireReplayEqual(t, path)
@@ -246,7 +250,11 @@ func TestReadInitialPiTranscriptEqualsFullReplay(t *testing.T) {
 	}
 	fmt.Fprintf(&b, `{"type":"message","id":"end","timestamp":"2025-01-01T00:00:04.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Shall I go on?"}],"stopReason":"stop"}}`+"\n")
 	path := writeJSONL(t, b.String())
-	if fi, _ := os.Stat(path); fi.Size() <= 2*initialTail {
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Size() <= 2*initialTail {
 		t.Fatalf("transcript is %d bytes; want past two tails", fi.Size())
 	}
 	requireReplayEqual(t, path)

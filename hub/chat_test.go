@@ -734,11 +734,21 @@ func TestChatPageBuildsTheRingLazily(t *testing.T) {
 	if p.Epoch != f.eagerEpoch() {
 		t.Errorf("epoch = %s, want %s", p.Epoch, f.eagerEpoch())
 	}
-	all, _, _, err := chat.For("claude").Read(f.transcript, chat.Cursor{})
+	r := chat.For("claude")
+	if r == nil {
+		t.Fatal("no claude reader")
+	}
+	all, _, _, err := r.Read(f.transcript, chat.Cursor{})
 	if err != nil {
 		t.Fatalf("read transcript: %v", err)
 	}
+	if all == nil {
+		t.Fatal("transcript read returned no updates")
+	}
 	for _, u := range p.Updates {
+		if u.Seq == 0 || u.Seq > uint64(len(all)) {
+			t.Fatalf("seq %d outside the transcript's %d updates", u.Seq, len(all))
+		}
 		want := all[u.Seq-1]
 		want.Seq = u.Seq
 		if got, wantJSON := mustJSON(t, u), mustJSON(t, want); got != wantJSON {

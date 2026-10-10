@@ -176,10 +176,14 @@ func (h *Hub) chatFor(sessionID string) (*Session, *chatState, error) {
 func (h *Hub) primeChat(sessionID string) error {
 	h.mu.Lock()
 	_, c, err := h.chatFor(sessionID)
-	primed := err == nil && c.primed
-	h.mu.Unlock()
-	if err != nil || primed {
+	if err != nil {
+		h.mu.Unlock()
 		return err
+	}
+	primed := c.primed
+	h.mu.Unlock()
+	if primed {
+		return nil
 	}
 	h.refreshChat(sessionID, true)
 	return nil
