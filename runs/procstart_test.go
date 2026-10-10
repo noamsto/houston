@@ -168,3 +168,26 @@ func TestParseLstart(t *testing.T) {
 		})
 	}
 }
+
+func TestParsePPID(t *testing.T) {
+	tests := []struct {
+		name   string
+		stat   string
+		want   int
+		wantOK bool
+	}{
+		{"real-shaped line with comm containing spaces and parens", realShapedStatWithField(4-3, "4321"), 4321, true},
+		{"empty", "", 0, false},
+		{"no closing paren", "1234 a S 4321", 0, false},
+		{"nothing after comm", "1234 (a) S", 0, false},
+		{"non-numeric ppid", realShapedStatWithField(4-3, "abc"), 0, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := parsePPID(tt.stat)
+			if ok != tt.wantOK || got != tt.want {
+				t.Errorf("parsePPID = %d, %v; want %d, %v", got, ok, tt.want, tt.wantOK)
+			}
+		})
+	}
+}

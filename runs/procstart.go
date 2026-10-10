@@ -1,23 +1,67 @@
 package runs
 
 import (
+	"errors"
 	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
 var probeBroken sync.Once
 
 // warnProbeBroken logs, once per process, a probe failure that is not a
-// legitimately exited process: every such failure fails the terminal join
-// closed, so a probe broken for good would otherwise stop every finished
-// worker joining its pane with no trace above Debug.
+// legitimately exited process: every such failure fails a join closed (a
+// terminal worker record to its pane, a crew to its dispatcher pane), so a
+// probe broken for good would otherwise stop those joins with no trace above
+// Debug.
 func warnProbeBroken(err error) {
 	probeBroken.Do(func() {
-		slog.Warn("crew source: foreground-process probe failed, terminal crew records will not join their panes", "error", err)
+		slog.Warn("crew source: process probe failed, terminal crew records and crews with a pid file will not join their panes", "error", err)
 	})
+}
+
+// hostProcs is the production procProbe, over this host's process table.
+// Start and Descends live in the per-OS files.
+type hostProcs struct{}
+
+func (hostProcs) Alive(pid int) bool {
+	err := syscall.Kill(pid, 0)
+	if err == nil || errors.Is(err, syscall.EPERM) {
+		return true
+	}
+	if !errors.Is(err, syscall.ESRCH) {
+		warnProbeBroken(err)
+	}
+	return false
+}
+
+// maxPPIDSteps bounds the parent walk: a dispatcher sits a few levels below
+// its pane's shell, and the bound keeps a cycle from a racing pid reuse
+// finite.
+const maxPPIDSteps = 32
+
+// descendsVia walks pid's ancestry through parent until it reaches root
+// (true), init or a top-level process (false), or maxPPIDSteps parent hops.
+// pid == root counts as descending.
+func descendsVia(parent func(pid int) (int, error), pid, root int) (bool, error) {
+	cur := pid
+	for range maxPPIDSteps {
+		if cur == root {
+			return true, nil
+		}
+		if cur <= 1 {
+			return false, nil
+		}
+		next, err := parent(cur)
+		if err != nil {
+			return false, err
+		}
+		cur = next
+	}
+	return cur == root, nil
 }
 
 // procStartFunc returns the unix start time of the foreground process group
@@ -48,6 +92,24 @@ func parseProcStat(stat string) (tpgid int, startTicks int64, ok bool) {
 		return 0, 0, false
 	}
 	return tpgid, startTicks, true
+}
+
+// parsePPID returns the ppid (field 4) of a /proc/<pid>/stat line, skipping
+// comm the same way parseProcStat does.
+func parsePPID(stat string) (int, bool) {
+	i := strings.LastIndex(stat, ")")
+	if i < 0 || i+1 >= len(stat) {
+		return 0, false
+	}
+	fields := strings.Fields(stat[i+1:])
+	if len(fields) < 2 {
+		return 0, false
+	}
+	ppid, err := strconv.Atoi(fields[4-3])
+	if err != nil {
+		return 0, false
+	}
+	return ppid, true
 }
 
 // parseBtime extracts the "btime <N>" line from /proc/stat: the kernel boot

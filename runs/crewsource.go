@@ -6,14 +6,14 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/noamsto/houston/tmux"
 )
 
 // CrewSource reads dispatcher's git-backed bus. It contributes what no other
@@ -37,6 +37,10 @@ type CrewSource struct {
 	// procStart parameter) — a field so tests stay hermetic.
 	procStart procStartFunc
 
+	// procs is the dispatcher join's process probe (joinDispatchers' probe
+	// parameter), a field for the same reason as procStart.
+	procs procProbe
+
 	// sessions is the hooks layer's live session-per-pane view, used to keep a
 	// terminal record from joining a different session inside the same engine
 	// process (/clear, /resume). nil disables the check — tests, and a build
@@ -59,7 +63,7 @@ func NewCrewSource(c lister, sessions hookSessions, every time.Duration) *CrewSo
 	if every <= 0 {
 		every = 3 * time.Second
 	}
-	return &CrewSource{client: c, sessions: sessions, every: every, crewDirs: map[string]string{}, logs: map[string]crewLog{}, procStart: foregroundStart}
+	return &CrewSource{client: c, sessions: sessions, every: every, crewDirs: map[string]string{}, logs: map[string]crewLog{}, procStart: foregroundStart, procs: hostProcs{}}
 }
 
 func (s *CrewSource) Name() string { return "crew" }
@@ -144,6 +148,9 @@ func tickCrewDeltas(current map[string]Run, seen map[string]bool, now time.Time)
 
 // scan returns this tick's runs under their final registry keys: the pane id
 // where the branch joins exactly one agent pane, otherwise "crew/<bus>/<branch>".
+// It also returns, under its pane id, a dispatcher layer for every crew that
+// joins its dispatcher pane (joinDispatchers) — Role, crew id and bus only, so
+// the key lists only while another layer supplies an agent.
 //
 // ok=false means a tmux query failed — a transient error, not evidence every
 // crew-sourced branch vanished. The caller must skip the tick entirely rather
@@ -180,14 +187,26 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 		paneSessions = paneHookSessions(s.sessions.Snapshot(), paneSetFrom(panes, time.Now()))
 	}
 
+	// Every bus, not only those whose log names a branch: a dispatcher that
+	// has not dispatched yet still joins its pane.
+	joins := map[string]map[string]string{}
+	for _, repo := range rootList {
+		if bus := s.crewDir(repo); bus != "" {
+			if _, done := joins[bus]; !done {
+				joins[bus] = joinDispatchers(bus, wins, panes, s.procs)
+			}
+		}
+	}
+
 	now := time.Now()
 	out := map[string]Run{}
 	for bus, branches := range s.scanRoots(rootList) {
 		project := ProjectFromCommonDir(filepath.Dir(bus))
 		for branch, r := range branches {
-			routed := routeCrewQuestion(r, r.State == StateBlocked && dispatcherLive(bus, r.Crew.Name, wins, panes), now)
+			routed := routeCrewQuestion(r, dispatcherLive(joins[bus], r.Crew.Name), now)
 			routed.Project = project
 			routed.Role = RoleWorker
+			routed.CrewBus = bus
 			routed.Worktree = worktreeFor(bus, branch, wins, s.crewDir)
 			paneID, candidates := resolvePane(bus, branch, r.State, r.UpdatedAt, r.session, r.CrewSession, paneSessions, wins, panes, s.crewDir, s.procStart)
 			key := paneID
@@ -196,6 +215,17 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 				slog.Debug("crew source: no pane join", "bus", bus, "branch", branch, "candidates", candidates)
 			}
 			out[key] = routed
+		}
+	}
+
+	// Sorted so that two buses naming one pane resolve the same way every tick.
+	for _, bus := range slices.Sorted(maps.Keys(joins)) {
+		for crewID, paneID := range joins[bus] {
+			if held, taken := out[paneID]; taken {
+				slog.Debug("crew source: dispatcher pane already keyed", "bus", bus, "crew", crewID, "pane", paneID, "branch", held.Branch)
+				continue
+			}
+			out[paneID] = Run{Role: RoleDispatcher, Crew: &CrewRef{Name: crewID}, CrewBus: bus}
 		}
 	}
 	return out, true
@@ -559,28 +589,11 @@ func routeCrewQuestion(b crewBranch, live bool, now time.Time) Run {
 }
 
 // dispatcherLive reports whether the crew's dispatcher is still there to
-// answer: <bus>/crews/<crewID>/pane names a listed pane carrying an engine
-// status, in a window stamped @crew_name dispatcher (which guards against a
-// pane id reused after a tmux restart). A crew with no pane file has no
-// dispatcher. crewID comes from a bus record, so it must stay a single path
-// element.
-func dispatcherLive(bus, crewID string, wins []tmux.WindowOptions, panes []tmux.PaneOptions) bool {
-	if crewID == "" || crewID == "." || crewID == ".." || filepath.Base(crewID) != crewID {
-		return false
-	}
-	raw, err := os.ReadFile(filepath.Join(bus, "crews", crewID, "pane")) //nolint:gosec // crewID is a single path element, checked above
-	if err != nil {
-		return false
-	}
-	id := strings.TrimSpace(string(raw))
-	byTarget := windowsByTarget(wins)
-	for _, p := range panes {
-		if p.PaneID != id {
-			continue
-		}
-		return (p.ClaudeStatus != "" || p.AgentScreen != "") && byTarget[p.Target].CrewName == dispatcherCrewName
-	}
-	return false
+// answer, over this tick's join of its bus (joinDispatchers): the same verdict
+// that nests a worker under its dispatcher, so routing and nesting never
+// disagree about who is alive.
+func dispatcherLive(joined map[string]string, crewID string) bool {
+	return joined[crewID] != ""
 }
 
 // sessionEpoch extracts <epoch> from a worker id "worker:<branch>#s<epoch>-<pid>".

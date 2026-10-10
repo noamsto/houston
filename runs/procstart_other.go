@@ -48,14 +48,24 @@ func foregroundStart(panePID int) int64 {
 	if tpgid <= 0 {
 		return 0
 	}
+	return psStart(tpgid)
+}
 
-	ctx2, cancel2 := context.WithTimeout(context.Background(), procProbeTimeout)
-	defer cancel2()
-	cmd := exec.CommandContext(ctx2, psPath, "-o", "lstart=", "-p", strconv.Itoa(tpgid))
+func (hostProcs) Start(pid int) int64 { return psStart(pid) }
+
+func (hostProcs) Descends(pid, root int) (bool, error) {
+	return descendsVia(psParent, pid, root)
+}
+
+// psStart returns pid's unix start time from ps, or 0 when unknown.
+func psStart(pid int) int64 {
+	ctx, cancel := context.WithTimeout(context.Background(), procProbeTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, psPath, "-o", "lstart=", "-p", strconv.Itoa(pid))
 	cmd.Env = append(os.Environ(), "TZ=UTC", "LC_ALL=C")
-	out, err = cmd.Output()
+	out, err := cmd.Output()
 	if err != nil {
-		if _, isExitErr := err.(*exec.ExitError); !isExitErr || ctx2.Err() != nil {
+		if _, isExitErr := err.(*exec.ExitError); !isExitErr || ctx.Err() != nil {
 			warnProbeBroken(err)
 		}
 		return 0
@@ -68,4 +78,26 @@ func foregroundStart(panePID int) int64 {
 		return 0
 	}
 	return start
+}
+
+// psParent returns pid's ppid from ps.
+func psParent(pid int) (int, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), procProbeTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, psPath, "-o", "ppid=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		if _, isExitErr := err.(*exec.ExitError); !isExitErr || ctx.Err() != nil {
+			warnProbeBroken(err)
+		}
+		return 0, err
+	}
+	trimmed := strings.TrimSpace(string(out))
+	ppid, err := strconv.Atoi(trimmed)
+	if err != nil {
+		if trimmed != "" {
+			warnProbeBroken(err)
+		}
+		return 0, err
+	}
+	return ppid, nil
 }

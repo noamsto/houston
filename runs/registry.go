@@ -447,6 +447,9 @@ func mergeInto(dst *Run, src Run) {
 	if src.Session != "" && dst.Session == "" {
 		dst.Session = src.Session
 	}
+	if src.CrewBus != "" && dst.CrewBus == "" {
+		dst.CrewBus = src.CrewBus
+	}
 	// A dispatcher window also carries a crew record, so the crew source's
 	// "worker" must not demote it.
 	if src.Role != "" && (src.Role != RoleWorker || dst.Role != RoleDispatcher) {
