@@ -26,7 +26,7 @@ interface RunDetailProps {
   mode: Mode | null
   onBack?: () => void
   backLabel?: string
-  /** Shown only when set: a one-tap way to the shell root from a nested run. */
+  /** A one-tap way to the shell root from a nested run. */
   onRoot?: () => void
   rootLabel?: string
   /** Mobile overlay only: a left-edge rightward swipe calls `onBack`. */
