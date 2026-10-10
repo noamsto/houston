@@ -11,7 +11,11 @@
 #
 # Every tmux call goes through tp: with $TMUX set tmux ignores TMUX_TMPDIR and
 # would act on the caller's live server, so TMUX and TMUX_PANE are unset and
-# the socket dir is refused when it could be the caller's default one.
+# the socket dir is refused when it could be the caller's default one. tmux
+# (3.2+) also falls back to /tmp when TMUX_TMPDIR is empty or not an existing
+# directory, so tp refuses unless the socket dir exists. `start` marks the
+# server it creates (@crewtmux 1) and `stop` and the failure trap kill only a
+# server that carries the marker.
 set -euo pipefail
 
 usage() {
@@ -20,10 +24,26 @@ usage() {
 }
 
 sock="" ok=""
-tp() { env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$sock" tmux -f /dev/null "$@"; }
+tp() {
+	[ -n "$sock" ] && [ -d "$sock" ] || {
+		echo "tmux socket dir is unset or missing: $sock" >&2
+		exit 2
+	}
+	env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$sock" tmux -f /dev/null "$@"
+}
 
-# prepare WORKDIR sets $sock to <WORKDIR>/tmux after refusing any dir whose
-# socket directory (<sock>/tmux-<uid>) is the caller's default.
+# kill_private kills the server behind tp only when start marked it.
+kill_private() {
+	[ "$(tp show-options -gqv @crewtmux 2>/dev/null)" = 1 ] || {
+		echo "refusing: no crewtmux server with the @crewtmux marker in $sock" >&2
+		return 1
+	}
+	tp kill-server
+}
+
+# prepare WORKDIR sets $sock to <WORKDIR>/tmux (creating nothing) after
+# refusing any dir whose socket directory (<sock>/tmux-<uid>) is the caller's
+# default.
 prepare() {
 	local work=$1
 	[ -n "$work" ] || {
@@ -46,8 +66,6 @@ prepare() {
 		echo "WORKDIR is too long for a unix socket path: $sock" >&2
 		exit 2
 	}
-	mkdir -p -- "$sock"
-	chmod 700 -- "$sock"
 }
 
 start() {
@@ -55,6 +73,8 @@ start() {
 	fx=$(realpath -- "$1")
 	prepare "$2"
 	work=$(realpath -m -- "$2")
+	mkdir -p -- "$sock"
+	chmod 700 -- "$sock"
 	local bus=$fx/repo/.git/crew
 	[ -f "$fx/crews.tsv" ] || {
 		echo "no $fx/crews.tsv: run loadfixture with -crews" >&2
@@ -65,8 +85,9 @@ start() {
 		exit 1
 	fi
 
-	trap '[ -n "$ok" ] || tp kill-server 2>/dev/null || true' EXIT
+	trap '[ -n "$ok" ] || kill_private 2>/dev/null || true' EXIT
 	tp new-session -d -s fx -n keepalive 'sleep 100000'
+	tp set-option -g @crewtmux 1
 
 	local now n=0 kind crew branch name state wname ids win pane panepid
 	now=$(date +%s)
@@ -112,7 +133,7 @@ start)
 stop)
 	[ $# -eq 2 ] || usage
 	prepare "$2"
-	tp kill-server 2>/dev/null || true
+	kill_private
 	;;
 *) usage ;;
 esac
