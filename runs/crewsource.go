@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/noamsto/houston/crewfeed"
 )
 
 // CrewSource reads dispatcher's git-backed bus. It contributes what no other
@@ -51,6 +53,10 @@ type CrewSource struct {
 	// hold. Same single-goroutine rule as crewDirs. The cached Runs are shared
 	// across ticks, so nothing may write through their pointer fields.
 	logs map[string]crewLog
+
+	// feed tails every resolved bus's events.jsonl for the activity feed; nil
+	// disables it (tests, tmux mode).
+	feed *crewfeed.Store
 }
 
 type crewLog struct {
@@ -59,11 +65,11 @@ type crewLog struct {
 	runs map[string]crewBranch
 }
 
-func NewCrewSource(c lister, sessions hookSessions, every time.Duration) *CrewSource {
+func NewCrewSource(c lister, sessions hookSessions, feed *crewfeed.Store, every time.Duration) *CrewSource {
 	if every <= 0 {
 		every = 3 * time.Second
 	}
-	return &CrewSource{client: c, sessions: sessions, every: every, crewDirs: map[string]string{}, logs: map[string]crewLog{}, procStart: foregroundStart, procs: hostProcs{}}
+	return &CrewSource{client: c, sessions: sessions, feed: feed, every: every, crewDirs: map[string]string{}, logs: map[string]crewLog{}, procStart: foregroundStart, procs: hostProcs{}}
 }
 
 func (s *CrewSource) Name() string { return "crew" }
@@ -194,6 +200,9 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 		if bus := s.crewDir(repo); bus != "" {
 			if _, done := joins[bus]; !done {
 				joins[bus] = joinDispatchers(bus, wins, panes, s.procs)
+				if s.feed != nil {
+					s.feed.Advance(bus)
+				}
 			}
 		}
 	}

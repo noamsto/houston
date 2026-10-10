@@ -114,6 +114,17 @@ func TestDispatcherModeKeepsRoutes(t *testing.T) {
 	}
 }
 
+func TestCrewFeedOnlyInDispatcherMode(t *testing.T) {
+	for _, m := range []mode.Mode{mode.Dispatcher, mode.Tmux} {
+		t.Run(string(m), func(t *testing.T) {
+			s := newFullServer(t, Config{StatusDir: t.TempDir(), Mode: m})
+			if got, want := s.crewFeed != nil, m == mode.Dispatcher; got != want {
+				t.Fatalf("crew feed present = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
 func TestRunSourcesByMode(t *testing.T) {
 	cm := tmux.NewControlManager()
 	t.Cleanup(cm.Close)
@@ -128,7 +139,7 @@ func TestRunSourcesByMode(t *testing.T) {
 	} {
 		t.Run(string(tc.mode), func(t *testing.T) {
 			var got []string
-			for _, src := range runSources(tc.mode, h, tmux.NewClient(), cm) {
+			for _, src := range runSources(tc.mode, h, tmux.NewClient(), cm, nil) {
 				got = append(got, src.Name())
 			}
 			if !slices.Equal(got, tc.want) {

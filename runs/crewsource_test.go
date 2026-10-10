@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/noamsto/houston/crewfeed"
 	"github.com/noamsto/houston/hook"
 	"github.com/noamsto/houston/hub"
 	"github.com/noamsto/houston/tmux"
@@ -1848,5 +1849,39 @@ func TestScanWorkerQuestionWithAGoneDispatcher(t *testing.T) {
 				t.Errorf("dispatcher layer present = %v, want %v", joined, !c.blocked)
 			}
 		})
+	}
+}
+
+// Every resolved bus is advanced once per scan, including one whose
+// events.jsonl does not exist yet, so its feed has an epoch from the start.
+func TestScanAdvancesTheFeedForEveryBus(t *testing.T) {
+	logged := writeBus(t, "fix/412")
+	bare := t.TempDir()
+	s := crewScanner(
+		map[string]string{"/wt/a": logged, "/wt/a2": logged, "/wt/b": bare},
+		[]tmux.WindowOptions{
+			{Session: "h", Window: 1, GitRoot: "/wt/a"},
+			{Session: "h", Window: 2, GitRoot: "/wt/a2"},
+			{Session: "h", Window: 3, GitRoot: "/wt/b"},
+		},
+		nil,
+	)
+	s.feed = crewfeed.NewStore()
+
+	if _, ok := s.scan(); !ok {
+		t.Fatal("scan reported failure")
+	}
+	for _, bus := range []string{logged, bare} {
+		if _, ok := s.feed.Epoch(bus); !ok {
+			t.Errorf("bus %s was not advanced", bus)
+		}
+	}
+	p, err := s.feed.Page(logged, "c1", 0, 0)
+	if err != nil || len(p.Entries) != 1 || p.Entries[0].Branch != "fix/412" {
+		t.Errorf("logged bus page = %+v, %v; want the one dispatch entry", p, err)
+	}
+	p, err = s.feed.Page(bare, "c1", 0, 0)
+	if err != nil || len(p.Entries) != 0 || p.Epoch == "" {
+		t.Errorf("bare bus page = %+v, %v; want an empty page with an epoch", p, err)
 	}
 }

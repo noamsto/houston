@@ -23,6 +23,7 @@ import (
 	"github.com/noamsto/houston/agents/amp"
 	"github.com/noamsto/houston/agents/claude"
 	"github.com/noamsto/houston/agents/generic"
+	"github.com/noamsto/houston/crewfeed"
 	"github.com/noamsto/houston/hub"
 	"github.com/noamsto/houston/mode"
 	"github.com/noamsto/houston/opencode"
@@ -106,6 +107,10 @@ type Server struct {
 	chatPing  time.Duration
 	chatCheck time.Duration
 	runsPing  time.Duration
+
+	// crewFeed tails each crew bus for the dispatcher's activity feed. nil in
+	// tmux mode, which has no crew bus.
+	crewFeed *crewfeed.Store
 
 	// replyRunner delivers a crew answer. It exists so a test can observe that
 	// no command ran, which no assertion about the response alone can prove.
@@ -278,6 +283,9 @@ func New(cfg Config) (*Server, error) {
 		debug:           cfg.Debug,
 	}
 	s.chat = s.hub
+	if cfg.Mode != mode.Tmux {
+		s.crewFeed = crewfeed.NewStore()
+	}
 
 	// Run the hub in the background. It watches <status-dir>/claude/ and the
 	// transcripts referenced from hook state files.
@@ -301,7 +309,7 @@ func New(cfg Config) (*Server, error) {
 		}
 	}()
 
-	for _, src := range runSources(cfg.Mode, s.hub, tmuxClient, s.controlMgr) {
+	for _, src := range runSources(cfg.Mode, s.hub, tmuxClient, s.controlMgr, s.crewFeed) {
 		s.sourcesWG.Add(1)
 		go func(src runs.Source) {
 			defer s.sourcesWG.Done()
@@ -358,14 +366,14 @@ func New(cfg Config) (*Server, error) {
 }
 
 // runSources lists the run sources for m in the registry's layer order; tmux
-// mode has no crew bus.
-func runSources(m mode.Mode, h *hub.Hub, c *tmux.Client, cm *tmux.ControlManager) []runs.Source {
+// mode has no crew bus. The crew source advances feed on every tick.
+func runSources(m mode.Mode, h *hub.Hub, c *tmux.Client, cm *tmux.ControlManager, feed *crewfeed.Store) []runs.Source {
 	srcs := []runs.Source{
 		runs.NewHookSource(h, c),
 		runs.NewTmuxSource(c, 2*time.Second, m),
 	}
 	if m != mode.Tmux {
-		srcs = append(srcs, runs.NewCrewSource(c, h, 3*time.Second))
+		srcs = append(srcs, runs.NewCrewSource(c, h, feed, 3*time.Second))
 	}
 	return append(srcs, runs.NewConnectionSource(cm, c, 2*time.Second))
 }
