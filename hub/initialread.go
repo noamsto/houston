@@ -34,8 +34,8 @@ var bgMarkers = [][]byte{
 	[]byte("task-notification"),
 }
 
-// readInitial is a session's first transcript read. Sums and maxima (background
-// tasks, cost, context peak) need history from byte 0; last-wins fields (trail,
+// readInitial is a session's first transcript read. Background tasks, the cost
+// sum and the context peak need history from byte 0; last-wins fields (trail,
 // asks, token counts) are decided by the tail once it holds every kind of event
 // they depend on. So it parses a tail that grows until it does, and folds only
 // the relevant lines before it. The caller seeds the session from prefix, then
