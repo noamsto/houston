@@ -10,6 +10,9 @@ const COMMIT_FRACTION = 0.38
 const FLICK_VELOCITY = 0.5
 const FLICK_MIN_PX = 40
 const SETTLE_MS = 200
+/** After a commit calls `onBack`, wait this long for the hash to move before
+ *  treating the navigation as a no-op and springing the overlay back. */
+const STRAND_MS = 500
 
 export function inEdgeZone(startX: number): boolean {
   return startX >= 0 && startX <= EDGE_ZONE_PX
@@ -68,6 +71,7 @@ export function useEdgeSwipeBack(
     let startHash = ''
     let dx = 0
     let settle: ReturnType<typeof setTimeout> | null = null
+    let strand: ReturnType<typeof setTimeout> | null = null
 
     const reset = () => {
       tracking = false
@@ -75,11 +79,19 @@ export function useEdgeSwipeBack(
       el.classList.remove('edge-swiping')
     }
 
+    const clearStrand = () => {
+      if (strand !== null) {
+        clearTimeout(strand)
+        strand = null
+      }
+    }
+
     const setOffset = (px: number) => {
       el.style.transform = px ? `translateX(${px}px)` : ''
     }
 
     const springBack = () => {
+      clearStrand()
       reset()
       if (reducedMotion() || dx === 0) {
         setOffset(0)
@@ -110,11 +122,21 @@ export function useEdgeSwipeBack(
           return
         }
         onBackRef.current()
+        // `onBack` can no-op (a swallowed pop) and strand the off-screen overlay.
+        strand = setTimeout(() => {
+          strand = null
+          if (window.location.hash !== startHash) {
+            el.style.transition = ''
+            setOffset(0)
+            return
+          }
+          springBack()
+        }, STRAND_MS)
       }, SETTLE_MS)
     }
 
     const onStart = (e: TouchEvent) => {
-      if (settle) return
+      if (settle || strand) return
       if (e.touches.length !== 1) {
         if (tracking) springBack()
         return
@@ -182,6 +204,7 @@ export function useEdgeSwipeBack(
       el.removeEventListener('touchend', onEnd, { capture: true })
       el.removeEventListener('touchcancel', onCancel, { capture: true })
       if (settle) clearTimeout(settle)
+      clearStrand()
       el.style.transform = ''
       el.style.transition = ''
     }

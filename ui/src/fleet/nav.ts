@@ -41,19 +41,48 @@ export function switchRunTab(id: string, tab: DetailTab): void {
 }
 
 /** Desktop list/Workspace pick: the detail is a persistent pane, so choosing a
- *  sibling run while one is shown replaces instead of pushing. */
+ *  sibling run while one is shown replaces instead of pushing; selecting the run
+ *  its `from` names (the on-screen parent) collapses the stack with `back()`. */
 export function selectRun(id: string): void {
   if (!parseDetailRoute(window.location.hash)) {
     openRun(id)
+    return
+  }
+  const current = navEntry()
+  if (current && parseDetailRoute(current.from)?.id === id) {
+    back(current.root ?? current.from)
     return
   }
   go('replaceState', window.history.state, runHash(id))
 }
 
 // history.back()/go() land asynchronously and navEntry() keeps the old depth
-// until then, so a second pop in that window would overshoot.
+// until then, so a second pop in that window would overshoot. `popstate` is the
+// usual clear, but a cancelled traversal or a pop past a pruned history start
+// never yields one, so `pageshow`/`hashchange` and a fallback timer clear it too.
+const POP_FALLBACK_MS = 1000
 let popping = false
-window.addEventListener('popstate', () => { popping = false })
+let popTimer: ReturnType<typeof setTimeout> | null = null
+
+/** Drops the in-flight pop guard and its fallback timer. The test history helper
+ *  calls it on uninstall so one test's pending pop cannot suppress the next. */
+export function clearPopGuard(): void {
+  popping = false
+  if (popTimer !== null) {
+    clearTimeout(popTimer)
+    popTimer = null
+  }
+}
+
+function raisePopGuard(): void {
+  popping = true
+  if (popTimer !== null) clearTimeout(popTimer)
+  popTimer = setTimeout(clearPopGuard, POP_FALLBACK_MS)
+}
+
+window.addEventListener('popstate', clearPopGuard)
+window.addEventListener('pageshow', clearPopGuard)
+window.addEventListener('hashchange', clearPopGuard)
 
 /** A real pop when houston pushed the entry; otherwise (deep link, reload with
  *  nothing of houston's underneath) replace to the parent, never push. */
@@ -61,7 +90,7 @@ export function back(rootHash: string): void {
   if (popping) return
   const current = navEntry()
   if (current && current.depth >= 1) {
-    popping = true
+    raisePopGuard()
     window.history.back()
     return
   }
@@ -72,7 +101,7 @@ export function popToRoot(rootHash: string): void {
   if (popping) return
   const current = navEntry()
   if (current && current.depth >= 1 && current.root !== null) {
-    popping = true
+    raisePopGuard()
     window.history.go(-current.depth)
     return
   }

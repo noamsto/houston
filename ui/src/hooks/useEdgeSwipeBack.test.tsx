@@ -83,6 +83,40 @@ describe('useEdgeSwipeBack', () => {
     expect(onBack).toHaveBeenCalledTimes(1)
   })
 
+  it('springs the overlay back when onBack does not navigate', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance', 'Date'] })
+    window.location.hash = '#/fleet/x'
+    const { onBack, overlay, touch } = setup()
+    touch('touchStart', 5, 300, 0)
+    touch('touchMove', 200, 300, 100)
+    touch('touchEnd', 200, 300, 150)
+    act(() => { vi.advanceTimersByTime(250) })
+    expect(onBack).toHaveBeenCalledTimes(1)
+    expect(overlay.style.transform).toBe(`translateX(${WIDTH}px)`)
+    act(() => { vi.advanceTimersByTime(500) })
+    expect(overlay.style.transform).toBe('')
+  })
+
+  it('resets the overlay when onBack navigates during the strand wait', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance', 'Date'] })
+    vi.stubGlobal('matchMedia', () => ({ matches: false }))
+    window.location.hash = '#/fleet/x'
+    const onBack = vi.fn(() => { window.location.hash = '#/fleet' })
+    const view = render(<Probe onBack={onBack} />)
+    const overlay = view.getByTestId('overlay')
+    Object.defineProperty(overlay, 'clientWidth', { value: WIDTH })
+    const inner = view.getByTestId('inner')
+    fireEvent.touchStart(inner, { touches: [{ clientX: 5, clientY: 300 }] })
+    fireEvent.touchMove(inner, { touches: [{ clientX: 250, clientY: 300 }] })
+    fireEvent.touchEnd(inner, { touches: [] })
+    act(() => { vi.advanceTimersByTime(250) })
+    expect(onBack).toHaveBeenCalledTimes(1)
+    expect(overlay.style.transform).toBe(`translateX(${WIDTH}px)`)
+    act(() => { vi.advanceTimersByTime(500) })
+    expect(overlay.style.transform).toBe('')
+    expect(overlay.style.transition).toBe('')
+  })
+
   it('springs back on a short slow swipe', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance', 'Date'] })
     const { onBack, overlay, touch } = setup()

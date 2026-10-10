@@ -1,3 +1,5 @@
+import { clearPopGuard } from '../fleet/nav'
+
 interface Entry {
   url: string
   state: unknown
@@ -65,6 +67,9 @@ export function installFakeHistory(): { history: FakeHistory; uninstall: () => v
   return {
     history: fake,
     uninstall: () => {
+      // A pop left in flight by this test would otherwise keep nav's guard raised
+      // (and its fallback timer pending) into the next one.
+      clearPopGuard()
       if (descriptor) Object.defineProperty(window, 'history', descriptor)
       else Reflect.deleteProperty(window, 'history')
     },
