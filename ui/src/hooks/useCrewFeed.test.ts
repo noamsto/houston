@@ -50,13 +50,13 @@ describe('useCrewFeed', () => {
     expect(fake.instances[0].url).toBe('/api/runs/r1/crew/feed/stream?after=e1.20')
   })
 
-  it('uses <epoch>.0 as the stream cursor for an empty first page', async () => {
+  it('streams from the start of the epoch for an empty first page', async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(page('e1', [])))
     const { result } = renderHook(() => useCrewFeed('r1', true))
 
     await waitFor(() => expect(result.current.status).toBe('ready'))
     expect(result.current.entries).toEqual([])
-    expect(fake.instances[0].url).toBe('/api/runs/r1/crew/feed/stream?after=e1.0')
+    expect(fake.instances[0].url).toBe('/api/runs/r1/crew/feed/stream?from=e1')
   })
 
   it('appends stream entries and ignores duplicates', async () => {
@@ -236,7 +236,7 @@ describe('useCrewFeed', () => {
       expect(ids(result.current.entries)).toEqual(['e1.10', 'e1.20'])
     })
 
-    it('reopens an empty feed at <epoch>.0', async () => {
+    it('reopens an empty feed from the start of its epoch', async () => {
       fetchMock.mockResolvedValue(jsonResponse(page('e1', [])))
       renderHook(() => useCrewFeed('r1', true))
       await advance(0)
@@ -247,7 +247,7 @@ describe('useCrewFeed', () => {
       await advance(0)
 
       expect(fake.instances.length).toBe(2)
-      expect(fake.instances[1].url).toBe('/api/runs/r1/crew/feed/stream?after=e1.0')
+      expect(fake.instances[1].url).toBe('/api/runs/r1/crew/feed/stream?from=e1')
     })
 
     it('pings keep a quiet stream alive', async () => {

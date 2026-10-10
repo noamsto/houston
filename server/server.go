@@ -112,6 +112,11 @@ type Server struct {
 	// tmux mode, which has no crew bus.
 	crewFeed *crewfeed.Store
 
+	// crewFeedPing and crewFeedCheck override the feed stream's keep-alive
+	// and re-read intervals when non-zero.
+	crewFeedPing  time.Duration
+	crewFeedCheck time.Duration
+
 	// replyRunner delivers a crew answer. It exists so a test can observe that
 	// no command ran, which no assertion about the response alone can prove.
 	replyRunner replyRunner
@@ -443,6 +448,8 @@ func (s *Server) Handler() http.Handler {
 	// launch, repo registry) unregistered, so they 404.
 	if s.mode != mode.Tmux {
 		apiMux.HandleFunc("POST /api/runs/{id}/reply", s.handleRunReply)
+		apiMux.HandleFunc("GET /api/runs/{id}/crew/feed", s.handleRunCrewFeed)
+		apiMux.HandleFunc("GET /api/runs/{id}/crew/feed/stream", s.handleRunCrewFeedStream)
 		apiMux.HandleFunc("POST /api/dispatch", s.handleDispatch)
 		apiMux.HandleFunc("GET /api/dispatch/options", s.handleDispatchOptions)
 		apiMux.HandleFunc("POST /api/dispatch/dispatcher", s.handleDispatcherLaunch)

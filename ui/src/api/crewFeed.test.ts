@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { CrewFeedReset, CrewFeedUnavailable, crewFeedStreamURL, fetchCrewFeed } from './crewFeed'
+import { CrewFeedReset, CrewFeedUnavailable, crewFeedStreamFromStart, crewFeedStreamURL, fetchCrewFeed } from './crewFeed'
 
 function response(status: number, body: string): Response {
   return { ok: status >= 200 && status < 300, status, text: () => Promise.resolve(body), json: () => Promise.resolve(JSON.parse(body)) } as unknown as Response
@@ -53,5 +53,11 @@ describe('fetchCrewFeed', () => {
 describe('crewFeedStreamURL', () => {
   it('encodes the run id and the cursor', () => {
     expect(crewFeedStreamURL('run/1', 'e1.42')).toBe('/api/runs/run%2F1/crew/feed/stream?after=e1.42')
+  })
+})
+
+describe('crewFeedStreamFromStart', () => {
+  it('encodes the run id and names only the epoch', () => {
+    expect(crewFeedStreamFromStart('run/1', 'e1')).toBe('/api/runs/run%2F1/crew/feed/stream?from=e1')
   })
 })

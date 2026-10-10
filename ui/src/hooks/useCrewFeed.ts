@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { CrewFeedReset, CrewFeedUnavailable, crewFeedStreamURL, fetchCrewFeed } from '../api/crewFeed'
+import { CrewFeedReset, CrewFeedUnavailable, crewFeedStreamFromStart, crewFeedStreamURL, fetchCrewFeed } from '../api/crewFeed'
 import type { FeedEntry } from '../api/crewFeed'
 import { watchLiveness } from './streamLiveness'
 
@@ -64,9 +64,12 @@ export function useCrewFeed(runId: string, enabled: boolean): UseCrewFeedResult 
       olderRef.current = null
     }
 
-    // An empty feed still needs a valid `<epoch>.<offset>` cursor.
-    function cursor(epoch: string, list: FeedEntry[]): string {
-      return list.length ? list[list.length - 1].id : `${epoch}.0`
+    // An empty feed has no entry id to resume after, so it streams from the
+    // start of its epoch.
+    function streamURL(epoch: string, list: FeedEntry[]): string {
+      return list.length
+        ? crewFeedStreamURL(runId, list[list.length - 1].id)
+        : crewFeedStreamFromStart(runId, epoch)
     }
 
     const liveness = watchLiveness(() => {
@@ -75,7 +78,7 @@ export function useCrewFeed(runId: string, enabled: boolean): UseCrewFeedResult 
       // it can't serve the cursor.
       const epoch = epochRef.current
       if (cancelled || esRef.current === null || epoch === null) return
-      openStream(cursor(epoch, entriesRef.current))
+      openStream(streamURL(epoch, entriesRef.current))
     })
 
     function closeStream() {
@@ -83,9 +86,9 @@ export function useCrewFeed(runId: string, enabled: boolean): UseCrewFeedResult 
       esRef.current = null
     }
 
-    function openStream(after: string) {
+    function openStream(url: string) {
       closeStream()
-      const es = new EventSource(crewFeedStreamURL(runId, after))
+      const es = new EventSource(url)
       esRef.current = es
 
       es.addEventListener('open', () => liveness.seen())
@@ -132,7 +135,7 @@ export function useCrewFeed(runId: string, enabled: boolean): UseCrewFeedResult 
         setEntries(page.entries)
         setMore(page.more)
         setStatus('ready')
-        openStream(cursor(page.epoch, page.entries))
+        openStream(streamURL(page.epoch, page.entries))
       } catch (e) {
         if (cancelled) return
         if (e instanceof CrewFeedUnavailable) {

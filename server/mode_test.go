@@ -68,6 +68,8 @@ func TestTmuxModeUnregistersDispatcherRoutes(t *testing.T) {
 		{"DELETE", "/api/repos"},
 		{"GET", "/api/repos/candidates"},
 		{"POST", "/api/runs/x/reply"},
+		{"GET", "/api/runs/x/crew/feed"},
+		{"GET", "/api/runs/x/crew/feed/stream"},
 	} {
 		t.Run(r.method+" "+r.path, func(t *testing.T) {
 			if rec := modeRequest(t, h, r.method, r.path, "{}"); rec.Code != http.StatusNotFound {

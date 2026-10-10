@@ -56,3 +56,9 @@ export async function fetchCrewFeed(
 export function crewFeedStreamURL(runId: string, after: string): string {
   return `/api/runs/${encodeURIComponent(runId)}/crew/feed/stream?after=${encodeURIComponent(after)}`
 }
+
+// Everything in `epoch` from the first byte: `after=<epoch>.0` would skip an
+// entry at offset 0.
+export function crewFeedStreamFromStart(runId: string, epoch: string): string {
+  return `/api/runs/${encodeURIComponent(runId)}/crew/feed/stream?from=${encodeURIComponent(epoch)}`
+}
