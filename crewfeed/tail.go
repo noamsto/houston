@@ -2,6 +2,7 @@ package crewfeed
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -24,7 +25,7 @@ const readBuf = 64 << 10
 func scanLines(r io.Reader, start, end int64, fn func(line []byte, off int64)) (int64, error) {
 	br := bufio.NewReaderSize(r, readBuf)
 	off := start
-	var line []byte
+	var line bytes.Buffer
 	n := 0
 	for {
 		if n == 0 && off >= end {
@@ -33,15 +34,16 @@ func scanLines(r io.Reader, start, end int64, fn func(line []byte, off int64)) (
 		chunk, err := br.ReadSlice('\n')
 		n += len(chunk)
 		if n <= maxLine+1 {
-			line = append(line, chunk...)
+			line.Write(chunk)
 		}
 		switch {
 		case err == nil:
 			if n <= maxLine+1 {
-				fn(line[:len(line)-1], off)
+				fn(line.Bytes()[:line.Len()-1], off)
 			}
 			off += int64(n)
-			line, n = line[:0], 0
+			line.Reset()
+			n = 0
 		case errors.Is(err, bufio.ErrBufferFull):
 		case errors.Is(err, io.EOF):
 			return off, nil

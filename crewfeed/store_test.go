@@ -68,6 +68,16 @@ func foldFile(t *testing.T, bus, epoch string) map[string][]Entry {
 	}
 }
 
+// foldCrew is foldFile's entries for one crew, which must have some.
+func foldCrew(t *testing.T, bus, epoch, crew string) []Entry {
+	t.Helper()
+	es, ok := foldFile(t, bus, epoch)[crew]
+	if !ok {
+		t.Fatalf("no entries for crew %q", crew)
+	}
+	return es
+}
+
 // idOff is the offset an id names, -1 for a malformed one.
 func idOff(id string) int64 {
 	_, o, _ := strings.Cut(id, ".")
@@ -204,7 +214,7 @@ func TestAdvanceResets(t *testing.T) {
 			if got := texts(p.Entries); !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("texts %q, want %q", got, tc.want)
 			}
-			if want := foldFile(t, bus, ep)["c1"]; !reflect.DeepEqual(p.Entries, want) {
+			if want := foldCrew(t, bus, ep, "c1"); !reflect.DeepEqual(p.Entries, want) {
 				t.Errorf("entries %+v, want a fresh fold %+v", p.Entries, want)
 			}
 			if _, ok := s.Since(bus, "c1", old, 0); ok {
@@ -314,7 +324,7 @@ func TestPageRescansPastTheRing(t *testing.T) {
 
 func TestPageFromAnUnevictedRing(t *testing.T) {
 	s, bus := ringBus(t, 60)
-	want := foldFile(t, bus, mustEpoch(t, s, bus))["c1"]
+	want := foldCrew(t, bus, mustEpoch(t, s, bus), "c1")
 	p, _ := s.Page(bus, "c1", 0, 0)
 	if !reflect.DeepEqual(p.Entries, want[10:]) || !p.More {
 		t.Fatalf("newest page = %d entries more %v, want the newest 50 and more", len(p.Entries), p.More)
@@ -336,7 +346,7 @@ func TestPageFromAnUnevictedRing(t *testing.T) {
 func TestSince(t *testing.T) {
 	s, bus := ringBus(t, feedRing+10)
 	ep := mustEpoch(t, s, bus)
-	all := foldFile(t, bus, ep)["c1"]
+	all := foldCrew(t, bus, ep, "c1")
 	off := func(i int) int64 { return offOf(t, all[i].ID) }
 	consumed := func() int64 {
 		fi, err := os.Stat(busFile(bus))
@@ -374,7 +384,7 @@ func TestSince(t *testing.T) {
 	// after 0.
 	s, bus = ringBus(t, 5)
 	ep = mustEpoch(t, s, bus)
-	all = foldFile(t, bus, ep)["c1"]
+	all = foldCrew(t, bus, ep, "c1")
 	if got, ok := s.Since(bus, "c1", ep, 0); !ok || !reflect.DeepEqual(got, all[1:]) {
 		t.Errorf("Since(0) = %q, %v; want every entry after the first", texts(got), ok)
 	}
@@ -399,7 +409,7 @@ func TestOversizedLineSkippedEverywhere(t *testing.T) {
 	appendBusFile(t, bus, rest.String())
 	s.Advance(bus)
 
-	want := foldFile(t, bus, mustEpoch(t, s, bus))["c1"]
+	want := foldCrew(t, bus, mustEpoch(t, s, bus), "c1")
 	if len(want) != feedRing+21 || want[0].Text != "before" || want[1].Text != "after #0" {
 		t.Fatalf("reference fold did not skip the oversized line: %d entries", len(want))
 	}
@@ -465,7 +475,7 @@ func TestStoreConcurrentReaders(t *testing.T) {
 	close(done)
 	wg.Wait()
 
-	want := foldFile(t, bus, mustEpoch(t, s, bus))["c1"]
+	want := foldCrew(t, bus, mustEpoch(t, s, bus), "c1")
 	if got := pageAll(t, s, bus, "c1", 100); !reflect.DeepEqual(got, want) {
 		t.Fatalf("after the run: paged %d entries, want %d", len(got), len(want))
 	}

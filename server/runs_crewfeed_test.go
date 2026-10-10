@@ -71,7 +71,11 @@ func feedServer(t *testing.T, lines []string, tune ...func(*Server)) (*Server, *
 	}
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
-	return s, ts, bus, "/api/runs/" + s.runs.Snapshot()[0].ID + "/crew/feed"
+	snap := s.runs.Snapshot()
+	if len(snap) == 0 {
+		t.Fatal("no run in the registry")
+	}
+	return s, ts, bus, "/api/runs/" + snap[0].ID + "/crew/feed"
 }
 
 func getFeed(t *testing.T, s *Server, path string) *httptest.ResponseRecorder {
@@ -132,8 +136,11 @@ func TestRunCrewFeedLadder(t *testing.T) {
 
 	worker := dispatcherDelta(bus, feedCrew)
 	worker.Key, worker.Run.Role = "crew/"+bus+"/w", runs.RoleWorker
-	solo := dispatcherDelta(bus, feedCrew)
-	solo.Key, solo.Run.Role, solo.Run.Crew = "crew/"+bus+"/s", "", nil
+	solo := runs.Delta{Source: "crew", Key: "crew/" + bus + "/s", Run: runs.Run{
+		Agent:   "claude",
+		State:   runs.StateRunning,
+		CrewBus: bus,
+	}}
 	noBus := dispatcherDelta(bus, feedCrew)
 	noBus.Key, noBus.Run.CrewBus = "crew/"+bus+"/n", ""
 	noName := dispatcherDelta(bus, "")

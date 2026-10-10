@@ -120,11 +120,11 @@ func (s *Store) Advance(bus string) {
 	defer s.adv.Unlock()
 
 	path := filepath.Join(bus, "events.jsonl")
-	t, known := s.tails[bus]
+	t := s.tails[bus]
 	f, size, head, err := openBus(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		// Not evidence the file is gone: keep what was published.
-		if !known {
+		if t == nil {
 			s.record(bus, path, &tail{}, nil)
 		}
 		return
@@ -133,10 +133,10 @@ func (s *Store) Advance(bus string) {
 		defer func() { _ = f.Close() }()
 	}
 
-	reset := !known || head != t.head || size < t.off
+	reset := t == nil || head != t.head || size < t.off
 	if reset {
 		next := &tail{head: head}
-		if known {
+		if t != nil {
 			next.gen = t.gen + 1
 		}
 		t = next
@@ -196,7 +196,10 @@ func (s *Store) record(bus, path string, t *tail, got []pending) {
 func (s *Store) publish(bus string, t *tail, got []pending) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	v := s.views[bus]
+	v, ok := s.views[bus]
+	if !ok {
+		return
+	}
 	v.consumed = t.off
 	pushAll(v, got)
 }
