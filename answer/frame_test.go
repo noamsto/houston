@@ -311,20 +311,22 @@ func TestQuestionCheckShortRuleIsText(t *testing.T) {
 	}
 }
 
-// Zero-width runes do not count toward a line's width, so a full-width
-// scrollback line of emoji sequences leaves the rule the widest line.
-func TestAnchorIgnoresZeroWidthRunes(t *testing.T) {
-	line := strings.Repeat("✔️", 20) + strings.Repeat("👩‍💻", 10) + strings.Repeat("é", 20)
-	if n := visibleRunes(line); n != 60 {
-		t.Fatalf("visibleRunes = %d, want 60", n)
+// The anchor width comes from the capture's rules, so a full-width scrollback
+// line holding more runes than cells (tmux draws a ZWJ family emoji in 2 cells
+// and NFD Hangul medial/final jamo in none) still lets the dialog anchor.
+func TestAnchorIgnoresWideRuneLines(t *testing.T) {
+	tests := []struct{ name, line string }{
+		{"zwj emoji", strings.Repeat("a", 58) + "\U0001F468\u200d\U0001F469\u200d\U0001F467"},
+		{"nfd hangul", strings.Repeat("\u1100\u1161\u11a8", 10) + strings.Repeat("a", 40)},
 	}
-	if !newSpec([]Question{colorPlain}, 0, false).check(tabState{cursor: 1})(line + "\n" + fixture(t, "plain-q")) {
-		t.Error("question check failed below a line of emoji sequences")
-	}
-	if _, ok := PermissionPrompt(line + "\n" + fixture(t, "perm-bash")); !ok {
-		t.Error("no permission prompt below a line of emoji sequences")
-	}
-	if newSpec([]Question{colorPlain}, 0, false).check(tabState{cursor: 1})(line + "x\n" + fixture(t, "plain-q")) {
-		t.Error("question check passed below a line wider than the rule")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !newSpec([]Question{colorPlain}, 0, false).check(tabState{cursor: 1})(tt.line + "\n" + fixture(t, "plain-q")) {
+				t.Error("question check failed below the line")
+			}
+			if _, ok := PermissionPrompt(tt.line + "\n" + fixture(t, "perm-bash")); !ok {
+				t.Error("no permission prompt below the line")
+			}
+		})
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/noamsto/houston/internal/ansi"
 )
@@ -52,34 +53,28 @@ func isDialogRule(line, runes string) bool {
 	return isRule(strings.TrimRightFunc(line, unicode.IsSpace), runes)
 }
 
-// anchorWidth is the most visible runes on any line of a capture. A dialog's
-// own rule spans the pane, so it is the widest line, while a short rule run
-// spilled into its text is not.
+// anchorWidth is the widest column-0 "─" rule in a capture, in runes. A
+// dialog's own rule spans the pane, so it sets the width, while a short rule
+// run spilled into its text falls short of it. Rule lines hold only "─", so
+// their rune count is their width in cells.
 func anchorWidth(lines []string) int {
 	w := 0
 	for _, l := range lines {
-		w = max(w, visibleRunes(l))
+		if isDialogRule(l, "─") {
+			w = max(w, ruleWidth(l))
+		}
 	}
 	return w
 }
 
-// visibleRunes counts a line's runes, right-trimmed, without zero-width ones
-// (combining marks, format runes such as ZWJ, variation selectors), so an emoji
-// sequence in a full-width line cannot outnumber the rule.
-func visibleRunes(line string) int {
-	n := 0
-	for _, r := range strings.TrimRightFunc(line, unicode.IsSpace) {
-		if !unicode.In(r, unicode.Mn, unicode.Me, unicode.Cf) && (r < 0xFE00 || r > 0xFE0F) {
-			n++
-		}
-	}
-	return n
+func ruleWidth(line string) int {
+	return utf8.RuneCountInString(strings.TrimRightFunc(line, unicode.IsSpace))
 }
 
 // isAnchorRule reports whether a capture line is a dialog's "─" rule: drawn
-// from column 0 across the capture's width.
+// from column 0 as wide as the capture's widest rule.
 func isAnchorRule(line string, width int) bool {
-	return isDialogRule(line, "─") && visibleRunes(line) >= width
+	return isDialogRule(line, "─") && ruleWidth(line) >= width
 }
 
 func isTabBar(line string) bool {
