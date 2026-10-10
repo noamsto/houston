@@ -27,12 +27,12 @@ type Prompt struct {
 }
 
 // PermissionPrompt parses the permission-style dialog at the bottom of
-// capture: the lines after the last "─" dialog rule, ending in an "Esc to
-// cancel" footer, with consecutive choices 1..m (2 ≤ m ≤ 9), one under the cursor,
-// below a line ending in "?". A question dialog is never one.
-func PermissionPrompt(capture string) (Prompt, bool) {
+// capture, width cells wide: the lines after the last full-width "─" dialog
+// rule, ending in an "Esc to cancel" footer, with consecutive choices 1..m
+// (2 ≤ m ≤ 9), one under the cursor, below a line ending in "?". A question
+// dialog is never one.
+func PermissionPrompt(capture string, width int) (Prompt, bool) {
 	lines := captureLines(capture)
-	width := anchorWidth(lines)
 	top := -1
 	for i := len(lines) - 1; i >= 0; i-- {
 		if isAnchorRule(lines[i], width) {

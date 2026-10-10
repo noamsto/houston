@@ -273,12 +273,12 @@ func (s *Server) lockAnswer(pane tmux.Pane) (func(), bool) {
 // or nothing is typed, and after each batch the pane must reach the next
 // step's Expect before anything more is typed.
 func (s *Server) typeSteps(ctx context.Context, pane tmux.Pane, steps []answer.Step) answerOutcome {
-	capture, err := s.runPanes.CapturePane(pane, answerCaptureLines)
+	capture, width, err := s.runPanes.CapturePaneWidth(pane, answerCaptureLines)
 	if err != nil {
 		slog.Warn("run answer: capture failed", "pane", pane.Target(), "err", err)
 		return tmuxUnavailable(false)
 	}
-	if !steps[0].Expect(capture) {
+	if !steps[0].Expect(capture, width) {
 		return answerOutcome{code: http.StatusConflict, detail: "prompt changed"}
 	}
 	sent := false
@@ -316,12 +316,12 @@ func (s *Server) awaitStep(ctx context.Context, pane tmux.Pane, expect answer.Ch
 			return answerOutcome{code: http.StatusConflict, detail: "pane did not reach the next step", partial: true}, false
 		case <-poll.C:
 		}
-		capture, err := s.runPanes.CapturePane(pane, answerCaptureLines)
+		capture, width, err := s.runPanes.CapturePaneWidth(pane, answerCaptureLines)
 		if err != nil {
 			slog.Warn("run answer: capture failed", "pane", pane.Target(), "err", err)
 			return tmuxUnavailable(true), false
 		}
-		if expect(capture) {
+		if expect(capture, width) {
 			return answerOutcome{}, true
 		}
 	}
@@ -371,12 +371,12 @@ func (s *Server) sendAnswerKey(ctx context.Context, pane tmux.Pane, k answer.Key
 // typeChoice presses ordinal on the permission dialog the client saw, and only
 // while the pane still shows that exact dialog.
 func (s *Server) typeChoice(ctx context.Context, pane tmux.Pane, ordinal int, frame string) answerOutcome {
-	capture, err := s.runPanes.CapturePane(pane, answerCaptureLines)
+	capture, width, err := s.runPanes.CapturePaneWidth(pane, answerCaptureLines)
 	if err != nil {
 		slog.Warn("run answer: capture failed", "pane", pane.Target(), "err", err)
 		return tmuxUnavailable(false)
 	}
-	p, ok := answer.PermissionPrompt(capture)
+	p, ok := answer.PermissionPrompt(capture, width)
 	if !ok || p.Frame != frame {
 		return answerOutcome{code: http.StatusConflict, detail: "prompt changed"}
 	}
@@ -405,13 +405,13 @@ func (s *Server) handleRunPrompt(w http.ResponseWriter, r *http.Request) {
 		terminalRefusal(w, run.ID, http.StatusUnprocessableEntity, "only a Claude run can be answered")
 		return
 	}
-	capture, err := s.runPanes.CapturePane(pane, answerCaptureLines)
+	capture, width, err := s.runPanes.CapturePaneWidth(pane, answerCaptureLines)
 	if err != nil {
 		slog.Warn("run prompt: capture failed", "id", run.ID, "pane", pane.Target(), "err", err)
 		http.Error(w, "tmux unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	p, ok := answer.PermissionPrompt(capture)
+	p, ok := answer.PermissionPrompt(capture, width)
 	if !ok {
 		slog.Debug("run prompt", "id", run.ID, "pane", pane.Target(), "status", http.StatusNotFound)
 		http.Error(w, "no prompt", http.StatusNotFound)

@@ -24,7 +24,7 @@ type runPaneOps interface {
 	ResolvePane(paneID string) (tmux.Pane, error)
 	SendKeys(ctx context.Context, p tmux.Pane, keys string, enter bool) error
 	SendSpecialKey(p tmux.Pane, key string) error
-	CapturePane(p tmux.Pane, lines int) (string, error)
+	CapturePaneWidth(p tmux.Pane, lines int) (string, int, error)
 	PaneInMode(p tmux.Pane) (bool, error)
 }
 

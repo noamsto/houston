@@ -287,6 +287,32 @@ func (c *Client) CapturePane(p Pane, lines int) (string, error) {
 	return result.Output, nil
 }
 
+// CapturePaneWidth captures the pane like CapturePane and also returns the
+// pane's width in cells. One tmux invocation reads both, so the width and the
+// content cannot disagree after a resize.
+func (c *Client) CapturePaneWidth(p Pane, lines int) (string, int, error) {
+	out, err := c.output("display-message", "-t", p.Target(), "-p", "#{pane_width}", ";",
+		"capture-pane", "-t", p.Target(), "-p", "-e", "-N", "-S", fmt.Sprintf("-%d", lines))
+	if err != nil {
+		return "", 0, fmt.Errorf("capture-pane failed: %w", err)
+	}
+	return splitWidthCapture(string(out))
+}
+
+// splitWidthCapture splits CapturePaneWidth's output: the width line, then the
+// capture.
+func splitWidthCapture(out string) (string, int, error) {
+	first, capture, ok := strings.Cut(out, "\n")
+	if !ok {
+		return "", 0, fmt.Errorf("capture-pane width: no newline in output")
+	}
+	width, err := strconv.Atoi(first)
+	if err != nil {
+		return "", 0, fmt.Errorf("capture-pane width %q: %w", first, err)
+	}
+	return strings.ReplaceAll(capture, "␛", "\x1b"), width, nil
+}
+
 func (c *Client) CapturePaneWithMode(p Pane, lines int) (CaptureResult, error) {
 	out, err := c.output("capture-pane",
 		"-t", p.Target(),

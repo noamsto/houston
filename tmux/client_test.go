@@ -702,3 +702,18 @@ func TestParsePaneInMode(t *testing.T) {
 		}
 	}
 }
+
+func TestSplitWidthCapture(t *testing.T) {
+	got, width, err := splitWidthCapture("60\nline one\n␛[1mbold\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if width != 60 || got != "line one\n\x1b[1mbold\n" {
+		t.Errorf("got %q, %d", got, width)
+	}
+	for _, bad := range []string{"wide\ncapture\n", "60"} {
+		if _, _, err := splitWidthCapture(bad); err == nil {
+			t.Errorf("splitWidthCapture(%q) succeeded", bad)
+		}
+	}
+}
