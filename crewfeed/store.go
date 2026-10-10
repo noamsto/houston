@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"log/slog"
 	"math"
 	"os"
 	"path/filepath"
@@ -36,9 +37,11 @@ var (
 // callers must not write through it.
 type Store struct {
 	// adv serializes Advance and guards tails, the parse state no reader
-	// touches, so the file I/O runs without mu.
-	adv   sync.Mutex
-	tails map[string]*tail
+	// touches, so the file I/O runs without mu, and ioErrs, the last I/O
+	// error warned about per bus.
+	adv    sync.Mutex
+	tails  map[string]*tail
+	ioErrs map[string]string
 
 	// mu guards views, the published state readers see.
 	mu    sync.Mutex
@@ -57,7 +60,7 @@ type tail struct {
 type snapshot struct {
 	path     string
 	head     string
-	epoch    string
+	busEpoch string
 	consumed int64
 }
 
@@ -89,7 +92,7 @@ func (r *ring) push(it item) {
 }
 
 func NewStore() *Store {
-	return &Store{tails: map[string]*tail{}, views: map[string]*view{}}
+	return &Store{tails: map[string]*tail{}, ioErrs: map[string]string{}, views: map[string]*view{}}
 }
 
 // feedEpoch names a bus file's entries. gen restarts at 0 with houston, so the
@@ -98,6 +101,13 @@ func NewStore() *Store {
 // never reaches the wire.
 func feedEpoch(bus, head string, gen uint64) string {
 	sum := sha256.Sum256([]byte(bus + "\x00" + head + "\x00" + strconv.FormatUint(gen, 10)))
+	return hex.EncodeToString(sum[:])[:12]
+}
+
+// crewEpoch names one crew's entries within a bus epoch, so a cursor minted
+// for one crew is never accepted for another crew on the same bus.
+func crewEpoch(busEpoch, crew string) string {
+	sum := sha256.Sum256([]byte(busEpoch + "\x00" + crew))
 	return hex.EncodeToString(sum[:])[:12]
 }
 
@@ -123,6 +133,7 @@ func (s *Store) Advance(bus string) {
 	t := s.tails[bus]
 	f, size, head, err := openBus(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		s.warnIO(bus, "open", err)
 		// Not evidence the file is gone: keep what was published.
 		if t == nil {
 			s.record(bus, path, &tail{}, nil)
@@ -144,23 +155,46 @@ func (s *Store) Advance(bus string) {
 	}
 
 	var got []pending
+	var readErr error
 	if f != nil && size > t.off {
-		epoch := feedEpoch(bus, t.head, t.gen)
+		busEpoch := feedEpoch(bus, t.head, t.gen)
+		epochs := map[string]string{}
 		// The offset scanLines returns is exact even on a read error, and the
 		// fold has seen exactly the lines before it, so a failed read resumes
 		// there on the next tick.
-		t.off, _ = scanLines(io.NewSectionReader(f, t.off, size-t.off), t.off, math.MaxInt64, func(line []byte, off int64) {
+		t.off, readErr = scanLines(io.NewSectionReader(f, t.off, size-t.off), t.off, math.MaxInt64, func(line []byte, off int64) {
 			if crew, e, ok := t.fold.Line(line, off); ok {
+				epoch, seen := epochs[crew]
+				if !seen {
+					epoch = crewEpoch(busEpoch, crew)
+					epochs[crew] = epoch
+				}
 				e.ID = entryID(epoch, off)
 				got = append(got, pending{crew, item{off, e}})
 			}
 		})
+	}
+	if readErr != nil {
+		s.warnIO(bus, "read", readErr)
+	} else {
+		delete(s.ioErrs, bus)
 	}
 	if reset {
 		s.record(bus, path, t, got)
 		return
 	}
 	s.publish(bus, t, got)
+}
+
+// warnIO logs an I/O error on bus only when it differs from the last one
+// logged for it, since Advance meets the same error on every tick.
+func (s *Store) warnIO(bus, op string, err error) {
+	msg := op + ": " + err.Error()
+	if s.ioErrs[bus] == msg {
+		return
+	}
+	s.ioErrs[bus] = msg
+	slog.Warn("crew feed: cannot read the bus file", "bus", bus, "op", op, "err", err)
 }
 
 // openBus opens a bus file and reads its size and first-line hash. A missing
@@ -184,7 +218,7 @@ func openBus(path string) (*os.File, int64, string, error) {
 // record replaces bus's published view with t's position and entries.
 func (s *Store) record(bus, path string, t *tail, got []pending) {
 	v := &view{
-		snapshot: snapshot{path: path, head: t.head, epoch: feedEpoch(bus, t.head, t.gen), consumed: t.off},
+		snapshot: snapshot{path: path, head: t.head, busEpoch: feedEpoch(bus, t.head, t.gen), consumed: t.off},
 		rings:    map[string]*ring{},
 	}
 	pushAll(v, got)
@@ -215,15 +249,16 @@ func pushAll(v *view, got []pending) {
 	}
 }
 
-// Epoch returns bus's current epoch; false for a bus Advance has never seen.
-func (s *Store) Epoch(bus string) (string, bool) {
+// Epoch returns crew's current epoch on bus; false for a bus Advance has
+// never seen.
+func (s *Store) Epoch(bus, crew string) (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	v, ok := s.views[bus]
 	if !ok {
 		return "", false
 	}
-	return v.epoch, true
+	return crewEpoch(v.busEpoch, crew), true
 }
 
 // Page returns crew's newest limit entries (1..100, 50 when ≤ 0) whose offset
@@ -248,7 +283,7 @@ func (s *Store) Page(bus, crew string, before int64, limit int) (Page, error) {
 		s.mu.Unlock()
 		return Page{}, ErrNoBus
 	}
-	p := Page{Epoch: v.epoch, Entries: []Entry{}}
+	p := Page{Epoch: crewEpoch(v.busEpoch, crew), Entries: []Entry{}}
 	r := v.rings[crew]
 	if r == nil {
 		s.mu.Unlock()
@@ -270,7 +305,7 @@ func (s *Store) Page(bus, crew string, before int64, limit int) (Page, error) {
 	if err != nil {
 		return Page{}, err
 	}
-	if cur, _ := s.Epoch(bus); cur != snap.epoch {
+	if cur, _ := s.Epoch(bus, crew); cur != p.Epoch {
 		return Page{}, ErrEpoch
 	}
 	p.Entries, p.More = entries, more
@@ -293,6 +328,7 @@ func rescan(v snapshot, crew string, before int64, limit int) ([]Entry, bool, er
 		return nil, false, ErrEpoch
 	}
 
+	epoch := crewEpoch(v.busEpoch, crew)
 	var fold Fold
 	got := []Entry{}
 	total := 0
@@ -302,7 +338,7 @@ func rescan(v snapshot, crew string, before int64, limit int) ([]Entry, bool, er
 		if !ok || c != crew {
 			return
 		}
-		e.ID = entryID(v.epoch, off)
+		e.ID = entryID(epoch, off)
 		total++
 		got = append(got, e)
 		if len(got) > limit {
@@ -319,14 +355,14 @@ func rescan(v snapshot, crew string, before int64, limit int) ([]Entry, bool, er
 }
 
 // Since returns crew's entries with offset above after, oldest to newest. ok
-// is false when epoch is not bus's current one, or after cannot be served from
-// the ring: older than an entry it pushed out, or past what has been read. The
-// caller then restarts from a fresh page.
+// is false when epoch is not crew's current one on bus, or after cannot be
+// served from the ring: older than an entry it pushed out, or past what has
+// been read. The caller then restarts from a fresh page.
 func (s *Store) Since(bus, crew, epoch string, after int64) ([]Entry, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	v, ok := s.views[bus]
-	if !ok || v.epoch != epoch || (after > 0 && after >= v.consumed) {
+	if !ok || crewEpoch(v.busEpoch, crew) != epoch || (after > 0 && after >= v.consumed) {
 		return nil, false
 	}
 	r := v.rings[crew]

@@ -50,17 +50,17 @@ func TestFoldFixture(t *testing.T) {
 	want := []folded{
 		{"c1", Entry{TS: 1000, Kind: "dispatch", Text: `Dispatched "Add widget" · deep · claude · opus`, Branch: "feat/a", Codename: "apollo"}},
 		{"c2", Entry{TS: 1001, Kind: "dispatch", Text: `Dispatched "Fix gadget" · standard · pi · small`, Branch: "feat/b", Codename: "borealis"}},
-		{"c1", Entry{TS: 1002, Kind: "status", Text: "running — starting", Branch: "feat/a", State: "running"}},
+		{"c1", Entry{TS: 1002, Kind: "status", Text: "starting", Branch: "feat/a", State: "running"}},
 		{"c1", Entry{TS: 1004, Kind: "status", Text: "watchdog: quiet", Branch: "feat/a", State: "running"}},
-		{"c1", Entry{TS: 1006, Kind: "status", Text: "blocked — which database?", Branch: "feat/a", State: "blocked"}},
+		{"c1", Entry{TS: 1006, Kind: "status", Text: "which database?", Branch: "feat/a", State: "blocked"}},
 		{"c1", Entry{TS: 1008, Kind: "question", Text: "Which database should this use? sqlite or postgres", Branch: "feat/a"}},
 		{"c1", Entry{TS: 1009, Kind: "reply", Text: "Use sqlite.", Branch: "feat/a"}},
-		{"c1", Entry{TS: 1010, Kind: "status", Text: "blocked — which database?", Branch: "feat/a", State: "blocked"}},
-		{"c1", Entry{TS: 1011, Kind: "status", Text: "blocked — which database now?", Branch: "feat/a", State: "blocked"}},
+		{"c1", Entry{TS: 1010, Kind: "status", Text: "which database?", Branch: "feat/a", State: "blocked"}},
+		{"c1", Entry{TS: 1011, Kind: "status", Text: "which database now?", Branch: "feat/a", State: "blocked"}},
 		{"c1", Entry{TS: 1012, Kind: "follow-ups", Text: "Follow-ups: - tidy the README", Branch: "feat/a"}},
 		{"c1", Entry{TS: 1013, Kind: "pr", Text: "PR #165 checks PENDING → SUCCESS", PR: pr165}},
 		{"c1", Entry{TS: 1014, Kind: "pr", Text: "PR #164 merged", PR: &PR{Number: 164, URL: "https://github.com/o/r/pull/164"}}},
-		{"c1", Entry{TS: 1015, Kind: "status", Text: "pr_open — ready for review", Branch: "feat/a", State: "pr_open", PR: pr165}},
+		{"c1", Entry{TS: 1015, Kind: "status", Text: "ready for review", Branch: "feat/a", State: "pr_open", PR: pr165}},
 		{"c2", Entry{TS: 1023, Kind: "question", Text: "question without crew id", Branch: "feat/b"}},
 		{"c1", Entry{TS: 1024, Kind: "reap", Text: "Reaped (PR #252 MERGED)", Branch: "feat/a", PR: &PR{Number: 252, URL: "https://github.com/o/r/pull/252"}}},
 		{"c2", Entry{TS: 1025, Kind: "reap", Text: "Released session (done)", Branch: "feat/b"}},
@@ -170,6 +170,44 @@ func TestAttributionViaBranch(t *testing.T) {
 	}
 }
 
+// A branch no git ref could be (over 255 bytes, or holding a control rune)
+// drops its record, whichever field names it, and is never learned for
+// attribution.
+func TestInvalidBranchDropsTheRecord(t *testing.T) {
+	long := "feat/" + strings.Repeat("x", 251)
+	for name, branch := range map[string]string{"too long": long, "control rune": "feat/a\x07b", "newline": "feat/a\nb"} {
+		t.Run(name, func(t *testing.T) {
+			b := quote(branch)
+			w := quote("worker:" + branch + "#s1-1")
+			lines := []string{
+				`{"crew_id":"c1","kind":"dispatch","branch":` + b + `,"title":"t"}`,
+				`{"crew_id":"c1","kind":"resume","branch":` + b + `,"engine":"claude"}`,
+				`{"crew_id":"c1","kind":"reap","branch":` + b + `}`,
+				`{"crew_id":"c1","kind":"reclaim","branch":` + b + `}`,
+				`{"crew_id":"c1","kind":"release","branch":` + b + `}`,
+				`{"crew_id":"c1","from":` + w + `,"kind":"status","body":{"state":"running"}}`,
+				`{"crew_id":"c1","from":` + w + `,"to":"dispatcher:c1","kind":"msg","body":"q?"}`,
+				`{"crew_id":"c1","from":"dispatcher:c1","to":` + w + `,"kind":"msg","body":"a"}`,
+			}
+			var f Fold
+			for _, line := range lines {
+				if _, e, ok := fold1(t, &f, line); ok {
+					t.Errorf("%s: got entry %+v, want none", line, e)
+				}
+			}
+			if len(f.branchCrew) != 0 || len(f.branches) != 0 {
+				t.Errorf("fold remembered the branch: %d crews, %d branches", len(f.branchCrew), len(f.branches))
+			}
+		})
+	}
+
+	var f Fold
+	limit := "feat/" + strings.Repeat("x", 250)
+	if _, e, ok := fold1(t, &f, `{"crew_id":"c1","kind":"dispatch","branch":`+quote(limit)+`}`); !ok || e.Branch != limit {
+		t.Fatalf("a 255-byte branch: %+v ok=%v, want kept as is", e, ok)
+	}
+}
+
 func TestReapText(t *testing.T) {
 	cases := map[string]string{
 		`{"crew_id":"c1","kind":"reap","branch":"b","pr":"https://github.com/o/r/pull/3","pr_state":"MERGED"}`: "Reaped (PR #3 MERGED)",
@@ -262,7 +300,10 @@ func TestStatusText(t *testing.T) {
 		name, line, want string
 	}{
 		{"no detail", statusLine("", "blocked", ""), "blocked"},
-		{"detail", statusLine("", "pr_open", "ready"), "pr_open — ready"},
+		{"detail", statusLine("", "pr_open", "ready"), "ready"},
+		{"detail sanitised", statusLine("", "blocked", "  which\n\tdb?\u0007 "), "which db?"},
+		{"detail capped", statusLine("", "blocked", strings.Repeat("a", 250)), strings.Repeat("a", 200) + "…"},
+		{"blank detail", statusLine("", "running", " \n "), "running"},
 		{"watchdog listed", statusLine("watchdog", "running", "turn-stall: 12m"), "watchdog: turn-stall"},
 		{"watchdog no colon", statusLine("watchdog", "running", "just words"), "watchdog"},
 		{"watchdog uppercase prefix", statusLine("watchdog", "running", "Quiet: x"), "watchdog"},

@@ -93,7 +93,7 @@ func (s *Server) handleRunCrewFeed(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	epoch, known := s.crewFeed.Epoch(run.CrewBus)
+	epoch, known := s.crewFeed.Epoch(run.CrewBus, run.Crew.Name)
 	if !known {
 		crewFeedRefusal(w, run.ID, http.StatusNotFound, "no crew")
 		return

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -42,8 +43,8 @@ func appendBusFile(t *testing.T, bus, data string) {
 }
 
 // foldFile is the reference: one pass over the whole file, skipping lines
-// over maxLine, with ids in epoch.
-func foldFile(t *testing.T, bus, epoch string) map[string][]Entry {
+// over maxLine, with ids in each crew's current epoch in s.
+func foldFile(t *testing.T, s *Store, bus string) map[string][]Entry {
 	t.Helper()
 	data, err := os.ReadFile(busFile(bus))
 	if err != nil {
@@ -59,7 +60,7 @@ func foldFile(t *testing.T, bus, epoch string) map[string][]Entry {
 		}
 		if i <= maxLine {
 			if crew, e, ok := f.Line(data[:i], off); ok {
-				e.ID = epoch + "." + strconv.FormatInt(off, 10)
+				e.ID = mustEpoch(t, s, bus, crew) + "." + strconv.FormatInt(off, 10)
 				out[crew] = append(out[crew], e)
 			}
 		}
@@ -69,9 +70,9 @@ func foldFile(t *testing.T, bus, epoch string) map[string][]Entry {
 }
 
 // foldCrew is foldFile's entries for one crew, which must have some.
-func foldCrew(t *testing.T, bus, epoch, crew string) []Entry {
+func foldCrew(t *testing.T, s *Store, bus, crew string) []Entry {
 	t.Helper()
-	es, ok := foldFile(t, bus, epoch)[crew]
+	es, ok := foldFile(t, s, bus)[crew]
 	if !ok {
 		t.Fatalf("no entries for crew %q", crew)
 	}
@@ -128,9 +129,9 @@ func texts(es []Entry) []string {
 	return out
 }
 
-func mustEpoch(t *testing.T, s *Store, bus string) string {
+func mustEpoch(t *testing.T, s *Store, bus, crew string) string {
 	t.Helper()
-	ep, ok := s.Epoch(bus)
+	ep, ok := s.Epoch(bus, crew)
 	if !ok {
 		t.Fatalf("no epoch for %s", bus)
 	}
@@ -167,7 +168,7 @@ func TestAdvanceTornLineWaits(t *testing.T) {
 	writeBusFile(t, bus, a+c[:10])
 	s := NewStore()
 	s.Advance(bus)
-	ep := mustEpoch(t, s, bus)
+	ep := mustEpoch(t, s, bus, "c1")
 	if p, _ := s.Page(bus, "c1", 0, 0); len(p.Entries) != 1 {
 		t.Fatalf("torn line yielded an entry: %+v", p.Entries)
 	}
@@ -202,11 +203,11 @@ func TestAdvanceResets(t *testing.T) {
 			writeBusFile(t, bus, a+b)
 			s := NewStore()
 			s.Advance(bus)
-			old := mustEpoch(t, s, bus)
+			old := mustEpoch(t, s, bus, "c1")
 
 			writeBusFile(t, bus, tc.after)
 			s.Advance(bus)
-			ep := mustEpoch(t, s, bus)
+			ep := mustEpoch(t, s, bus, "c1")
 			if ep == old {
 				t.Fatal("epoch unchanged after a reset")
 			}
@@ -214,7 +215,7 @@ func TestAdvanceResets(t *testing.T) {
 			if got := texts(p.Entries); !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("texts %q, want %q", got, tc.want)
 			}
-			if want := foldCrew(t, bus, ep, "c1"); !reflect.DeepEqual(p.Entries, want) {
+			if want := foldCrew(t, s, bus, "c1"); !reflect.DeepEqual(p.Entries, want) {
 				t.Errorf("entries %+v, want a fresh fold %+v", p.Entries, want)
 			}
 			if _, ok := s.Since(bus, "c1", old, 0); ok {
@@ -228,7 +229,7 @@ func TestAdvanceMissingFileThenAppears(t *testing.T) {
 	bus := t.TempDir()
 	s := NewStore()
 	s.Advance(bus)
-	ep := mustEpoch(t, s, bus)
+	ep := mustEpoch(t, s, bus, "c1")
 	p, err := s.Page(bus, "c1", 0, 0)
 	if err != nil || p.Epoch != ep || p.Entries == nil || len(p.Entries) != 0 || p.More {
 		t.Fatalf("Page = %+v, %v; want an empty page in epoch %q", p, err, ep)
@@ -239,7 +240,7 @@ func TestAdvanceMissingFileThenAppears(t *testing.T) {
 
 	writeBusFile(t, bus, question("c1", "feat/a", "hello"))
 	s.Advance(bus)
-	ep2 := mustEpoch(t, s, bus)
+	ep2 := mustEpoch(t, s, bus, "c1")
 	p, _ = s.Page(bus, "c1", 0, 0)
 	if got := texts(p.Entries); !reflect.DeepEqual(got, []string{"hello"}) || p.Epoch != ep2 {
 		t.Fatalf("page after the file appeared = %+v", p)
@@ -249,16 +250,96 @@ func TestAdvanceMissingFileThenAppears(t *testing.T) {
 	}
 }
 
+// captureLogs routes slog to a buffer for the rest of the test. slog's default
+// is process-global, so a test using it must not call t.Parallel().
+func captureLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &buf
+}
+
+// A bus file Advance cannot read is warned about once, not on every tick, and
+// again when it fails anew after recovering.
+func TestAdvanceWarnsOnceOnAnUnreadableFile(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a mode-000 file")
+	}
+	logs := captureLogs(t)
+	bus := t.TempDir()
+	writeBusFile(t, bus, question("c1", "feat/a", "hello"))
+	chmod := func(mode os.FileMode) {
+		t.Helper()
+		if err := os.Chmod(busFile(bus), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	chmod(0)
+	s := NewStore()
+	for range 3 {
+		s.Advance(bus)
+	}
+	if n := strings.Count(logs.String(), "level=WARN"); n != 1 {
+		t.Fatalf("%d warnings over 3 failing ticks, want 1:\n%s", n, logs)
+	}
+	if !strings.Contains(logs.String(), "bus="+bus) {
+		t.Errorf("warning does not name the bus:\n%s", logs)
+	}
+	if _, ok := s.Epoch(bus, "c1"); !ok {
+		t.Error("an unreadable first-seen bus was not recorded")
+	}
+
+	chmod(0o644)
+	s.Advance(bus)
+	chmod(0)
+	s.Advance(bus)
+	s.Advance(bus)
+	if n := strings.Count(logs.String(), "level=WARN"); n != 2 {
+		t.Fatalf("%d warnings, want a second one after the file recovered and failed again:\n%s", n, logs)
+	}
+}
+
 func TestUnknownBus(t *testing.T) {
 	s := NewStore()
 	if _, err := s.Page("/nope", "c1", 0, 0); !errors.Is(err, ErrNoBus) {
 		t.Errorf("Page err = %v, want ErrNoBus", err)
 	}
-	if _, ok := s.Epoch("/nope"); ok {
+	if _, ok := s.Epoch("/nope", "c1"); ok {
 		t.Error("Epoch known for an unseen bus")
 	}
 	if _, ok := s.Since("/nope", "c1", "x", 0); ok {
 		t.Error("Since ok for an unseen bus")
+	}
+}
+
+// A cursor names one crew's feed: a dispatcher restarted in the same pane
+// moves its run to another crew on the same bus, and the old crew's cursor
+// must not resume the new crew's feed past entries it never sent.
+func TestCursorIsCrewScoped(t *testing.T) {
+	bus := t.TempDir()
+	writeBusFile(t, bus, question("A", "feat/a", "a1")+question("B", "feat/b", "b1")+
+		question("A", "feat/a", "a2")+question("B", "feat/b", "b2"))
+	s := NewStore()
+	s.Advance(bus)
+
+	pa, _ := s.Page(bus, "A", 0, 0)
+	pb, _ := s.Page(bus, "B", 0, 0)
+	if pa.Epoch == pb.Epoch {
+		t.Fatalf("crews A and B share epoch %q", pa.Epoch)
+	}
+	for _, e := range pb.Entries {
+		if !strings.HasPrefix(e.ID, pb.Epoch+".") {
+			t.Errorf("B entry id %q is not in B's epoch %q", e.ID, pb.Epoch)
+		}
+	}
+	last := offOf(t, pa.Entries[len(pa.Entries)-1].ID)
+	if got, ok := s.Since(bus, "B", pa.Epoch, last); ok {
+		t.Errorf("Since(B, A's cursor) = %q, ok; want refused", texts(got))
+	}
+	if got, ok := s.Since(bus, "B", pb.Epoch, -1); !ok || !reflect.DeepEqual(texts(got), []string{"b1", "b2"}) {
+		t.Errorf("Since(B, B's epoch) = %q, %v; want b1,b2", texts(got), ok)
 	}
 }
 
@@ -290,8 +371,7 @@ func ringBus(t *testing.T, n int) (*Store, string) {
 // gives; each crew sees only its own entries.
 func TestPageRescansPastTheRing(t *testing.T) {
 	s, bus := ringBus(t, feedRing+150)
-	ep := mustEpoch(t, s, bus)
-	want := foldFile(t, bus, ep)
+	want := foldFile(t, s, bus)
 	if len(want["c1"]) != feedRing+150 {
 		t.Fatalf("fixture has %d c1 entries", len(want["c1"]))
 	}
@@ -324,7 +404,7 @@ func TestPageRescansPastTheRing(t *testing.T) {
 
 func TestPageFromAnUnevictedRing(t *testing.T) {
 	s, bus := ringBus(t, 60)
-	want := foldCrew(t, bus, mustEpoch(t, s, bus), "c1")
+	want := foldCrew(t, s, bus, "c1")
 	p, _ := s.Page(bus, "c1", 0, 0)
 	if !reflect.DeepEqual(p.Entries, want[10:]) || !p.More {
 		t.Fatalf("newest page = %d entries more %v, want the newest 50 and more", len(p.Entries), p.More)
@@ -345,8 +425,8 @@ func TestPageFromAnUnevictedRing(t *testing.T) {
 
 func TestSince(t *testing.T) {
 	s, bus := ringBus(t, feedRing+10)
-	ep := mustEpoch(t, s, bus)
-	all := foldCrew(t, bus, ep, "c1")
+	ep := mustEpoch(t, s, bus, "c1")
+	all := foldCrew(t, s, bus, "c1")
 	off := func(i int) int64 { return offOf(t, all[i].ID) }
 	consumed := func() int64 {
 		fi, err := os.Stat(busFile(bus))
@@ -383,8 +463,8 @@ func TestSince(t *testing.T) {
 	// A ring that never evicted serves from 0; the line at 0 itself is not
 	// after 0.
 	s, bus = ringBus(t, 5)
-	ep = mustEpoch(t, s, bus)
-	all = foldCrew(t, bus, ep, "c1")
+	ep = mustEpoch(t, s, bus, "c1")
+	all = foldCrew(t, s, bus, "c1")
 	if got, ok := s.Since(bus, "c1", ep, 0); !ok || !reflect.DeepEqual(got, all[1:]) {
 		t.Errorf("Since(0) = %q, %v; want every entry after the first", texts(got), ok)
 	}
@@ -409,7 +489,7 @@ func TestOversizedLineSkippedEverywhere(t *testing.T) {
 	appendBusFile(t, bus, rest.String())
 	s.Advance(bus)
 
-	want := foldCrew(t, bus, mustEpoch(t, s, bus), "c1")
+	want := foldCrew(t, s, bus, "c1")
 	if len(want) != feedRing+21 || want[0].Text != "before" || want[1].Text != "after #0" {
 		t.Fatalf("reference fold did not skip the oversized line: %d entries", len(want))
 	}
@@ -438,7 +518,7 @@ func TestStoreConcurrentReaders(t *testing.T) {
 					return
 				default:
 				}
-				ep, _ := s.Epoch(bus)
+				ep, _ := s.Epoch(bus, "c1")
 				p, err := s.Page(bus, "c1", 0, 20)
 				if err != nil {
 					t.Errorf("newest Page: %v", err)
@@ -475,7 +555,7 @@ func TestStoreConcurrentReaders(t *testing.T) {
 	close(done)
 	wg.Wait()
 
-	want := foldCrew(t, bus, mustEpoch(t, s, bus), "c1")
+	want := foldCrew(t, s, bus, "c1")
 	if got := pageAll(t, s, bus, "c1", 100); !reflect.DeepEqual(got, want) {
 		t.Fatalf("after the run: paged %d entries, want %d", len(got), len(want))
 	}

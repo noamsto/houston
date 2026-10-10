@@ -243,6 +243,32 @@ func TestRunCrewFeedRefusals(t *testing.T) {
 	}
 }
 
+// A dispatcher restarted in the same pane keeps its run id but moves to
+// another crew on the same bus; a cursor from the old crew is reset, never
+// resumed against the new one.
+func TestRunCrewFeedRefusesAnotherCrewsCursor(t *testing.T) {
+	const old = "1700000001-7"
+	s, ts, bus, path := feedServer(t, []string{
+		feedLine(old, "feat/z", "z1"),
+		feedLine(feedCrew, "feat/a", "q1"),
+		feedLine(old, "feat/z", "z2"),
+		feedLine(feedCrew, "feat/a", "q2"),
+	})
+	oldPage, err := s.crewFeed.Page(bus, old, 0, 0)
+	if err != nil || len(oldPage.Entries) != 2 {
+		t.Fatalf("old crew page = %+v, %v", oldPage, err)
+	}
+	oldLast := oldPage.Entries[len(oldPage.Entries)-1].ID
+
+	rec := getFeed(t, s, path+"?before="+oldLast)
+	if rec.Code != http.StatusConflict || strings.TrimSpace(rec.Body.String()) != `{"reset":true}` {
+		t.Fatalf("before=<old crew id>: %d %q, want 409 reset", rec.Code, rec.Body)
+	}
+	openChatStream(t, ts, path+"/stream?after="+oldLast, "").wantReset(t)
+	openChatStream(t, ts, path+"/stream?from="+oldPage.Epoch, "").wantReset(t)
+	openChatStream(t, ts, path+"/stream", oldLast).wantReset(t)
+}
+
 func TestRunCrewFeedStreamMalformedCursorIs400(t *testing.T) {
 	s, _, _, path := feedServer(t, []string{feedLine(feedCrew, "feat/a", "q1")})
 	path += "/stream"
@@ -315,7 +341,7 @@ func TestRunCrewFeedStreamFromEpochIncludesTheEntryAtOffsetZero(t *testing.T) {
 		feedLine(feedCrew, "feat/a", "q1"),
 		feedLine(feedCrew, "feat/a", "q2"),
 	}, fastCheck)
-	epoch, _ := s.crewFeed.Epoch(bus)
+	epoch, _ := s.crewFeed.Epoch(bus, feedCrew)
 
 	c := openChatStream(t, ts, path+"/stream?from="+epoch, "")
 	got := decodeEntries(t, c.next(t))
@@ -365,13 +391,13 @@ func TestRunCrewFeedStreamResets(t *testing.T) {
 
 	t.Run("cursor past the file", func(t *testing.T) {
 		s, ts, bus, path := feedServer(t, []string{feedLine(feedCrew, "feat/a", "q1")})
-		epoch, _ := s.crewFeed.Epoch(bus)
+		epoch, _ := s.crewFeed.Epoch(bus, feedCrew)
 		openChatStream(t, ts, path+"/stream?after="+epoch+".9999", "").wantReset(t)
 	})
 
 	t.Run("bus file replaced while open", func(t *testing.T) {
 		s, ts, bus, path := feedServer(t, []string{feedLine(feedCrew, "feat/a", "q1")}, fastCheck)
-		epoch, _ := s.crewFeed.Epoch(bus)
+		epoch, _ := s.crewFeed.Epoch(bus, feedCrew)
 		c := openChatStream(t, ts, path+"/stream?from="+epoch, "")
 		decodeEntries(t, c.next(t))
 
@@ -382,7 +408,7 @@ func TestRunCrewFeedStreamResets(t *testing.T) {
 
 	t.Run("crew changes while open", func(t *testing.T) {
 		s, ts, bus, path := feedServer(t, []string{feedLine(feedCrew, "feat/a", "q1")}, fastCheck)
-		epoch, _ := s.crewFeed.Epoch(bus)
+		epoch, _ := s.crewFeed.Epoch(bus, feedCrew)
 		c := openChatStream(t, ts, path+"/stream?from="+epoch, "")
 		decodeEntries(t, c.next(t))
 
@@ -392,7 +418,7 @@ func TestRunCrewFeedStreamResets(t *testing.T) {
 
 	t.Run("bus changes while open", func(t *testing.T) {
 		s, ts, bus, path := feedServer(t, []string{feedLine(feedCrew, "feat/a", "q1")}, fastCheck)
-		epoch, _ := s.crewFeed.Epoch(bus)
+		epoch, _ := s.crewFeed.Epoch(bus, feedCrew)
 		c := openChatStream(t, ts, path+"/stream?from="+epoch, "")
 		decodeEntries(t, c.next(t))
 
@@ -404,7 +430,7 @@ func TestRunCrewFeedStreamResets(t *testing.T) {
 
 	t.Run("run gone while open", func(t *testing.T) {
 		s, ts, bus, path := feedServer(t, []string{feedLine(feedCrew, "feat/a", "q1")}, fastCheck)
-		epoch, _ := s.crewFeed.Epoch(bus)
+		epoch, _ := s.crewFeed.Epoch(bus, feedCrew)
 		c := openChatStream(t, ts, path+"/stream?from="+epoch, "")
 		decodeEntries(t, c.next(t))
 

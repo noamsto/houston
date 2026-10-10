@@ -1,10 +1,14 @@
 package runs
 
 import (
+	"bytes"
 	"errors"
+	"log/slog"
 	"maps"
 	"os"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -198,6 +202,129 @@ func TestJoinDispatchersIgnoresStrayFiles(t *testing.T) {
 	got := joinDispatchers(bus, f.wins, f.panes, f.probe)
 	if !maps.Equal(got, map[string]string{"c1": "%1"}) {
 		t.Errorf("joinDispatchers = %v, want only c1", got)
+	}
+}
+
+// joinWithin runs joinDispatchers and fails the test if it does not return
+// within a second: a crew file that is not a regular file must never block
+// the scan.
+func joinWithin(t *testing.T, bus string, f joinFixture) map[string]string {
+	t.Helper()
+	done := make(chan map[string]string, 1)
+	go func() { done <- joinDispatchers(bus, f.wins, f.panes, f.probe) }()
+	select {
+	case got := <-done:
+		return got
+	case <-time.After(time.Second):
+		t.Fatal("joinDispatchers blocked")
+		return nil
+	}
+}
+
+// Pane and pid files are read only when they are small regular files; a FIFO
+// or an oversized file reads as unreadable (pane: no join; pid: fail closed).
+// A symlink is followed, so one to a regular file reads as that file.
+func TestJoinDispatchersCrewFileShapes(t *testing.T) {
+	cases := []struct {
+		name string
+		file string // "pane" or "pid"
+		make func(t *testing.T, path string)
+		want map[string]string
+	}{
+		{"FIFO pane file", "pane", mkfifo, map[string]string{}},
+		{"FIFO pid file", "pid", mkfifo, map[string]string{}},
+		{"oversized pane file", "pane", writeFile("%1" + strings.Repeat(" ", 100) + "\n"), map[string]string{}},
+		{"oversized pid file", "pid", writeFile("200" + strings.Repeat(" ", 100) + "\n"), map[string]string{}},
+		{"pane file at the size cap", "pane", writeFile("%1" + strings.Repeat(" ", maxCrewFile-2)), map[string]string{"c1": "%1"}},
+		{"symlinked pane file", "pane", symlinkTo("%1\n"), map[string]string{"c1": "%1"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := defaultJoinFixture()
+			bus := t.TempDir()
+			writeCrew(t, bus, f.crews[0])
+			path := filepath.Join(bus, "crews", "c1", c.file)
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			c.make(t, path)
+			if err := os.Chtimes(path, regT, regT); err != nil {
+				t.Fatal(err)
+			}
+			if got := joinWithin(t, bus, f); !maps.Equal(got, c.want) {
+				t.Errorf("joinDispatchers = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+func mkfifo(t *testing.T, path string) {
+	t.Helper()
+	if err := syscall.Mkfifo(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeFile(body string) func(*testing.T, string) {
+	return func(t *testing.T, path string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func symlinkTo(body string) func(*testing.T, string) {
+	return func(t *testing.T, path string) {
+		t.Helper()
+		target := filepath.Join(t.TempDir(), "target")
+		writeFile(body)(t, target)
+		if err := os.Chtimes(target, regT, regT); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, path); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// An unreadable crews directory or pane file is logged at Debug rather than
+// passed over in silence; a missing one is not logged.
+func TestJoinDispatchersLogsUnreadableFiles(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads mode-000 files")
+	}
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	f := defaultJoinFixture()
+	joinDispatchers(t.TempDir(), f.wins, f.panes, f.probe)
+	if logs.Len() != 0 {
+		t.Fatalf("a missing crews directory logged:\n%s", &logs)
+	}
+
+	bus := t.TempDir()
+	writeCrew(t, bus, f.crews[0])
+	pane := filepath.Join(bus, "crews", "c1", "pane")
+	if err := os.Chmod(pane, 0); err != nil {
+		t.Fatal(err)
+	}
+	joinDispatchers(bus, f.wins, f.panes, f.probe)
+	if !strings.Contains(logs.String(), "level=DEBUG") || !strings.Contains(logs.String(), "crew=c1") {
+		t.Errorf("an unreadable pane file was not logged:\n%s", &logs)
+	}
+
+	logs.Reset()
+	crews := filepath.Join(bus, "crews")
+	if err := os.Chmod(crews, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(crews, 0o755) })
+	joinDispatchers(bus, f.wins, f.panes, f.probe)
+	if !strings.Contains(logs.String(), "level=DEBUG") || !strings.Contains(logs.String(), "bus="+bus) {
+		t.Errorf("an unreadable crews directory was not logged:\n%s", &logs)
 	}
 }
 

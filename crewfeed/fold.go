@@ -13,6 +13,9 @@ const maxBusText = 200
 
 const followUpsPrefix = "follow-ups (untracked):"
 
+// maxBranch is git's ref name limit in bytes.
+const maxBranch = 255
+
 var (
 	prURLRe        = regexp.MustCompile(`^https://github\.com/[A-Za-z0-9-]+/[A-Za-z0-9._-]+/pull/[0-9]+$`)
 	watchdogNameRe = regexp.MustCompile(`^[a-z][a-z-]{0,15}$`)
@@ -147,6 +150,9 @@ func (f *Fold) branch(name string) *branchState {
 }
 
 func (f *Fold) dispatch(r record, e Entry) (Entry, bool) {
+	if !validBranch(r.Branch) {
+		return e, false
+	}
 	f.learn(r)
 	text := "Dispatched"
 	if title := clean(r.Title, maxBusText); title != "" {
@@ -160,6 +166,9 @@ func (f *Fold) dispatch(r record, e Entry) (Entry, bool) {
 }
 
 func (f *Fold) resume(r record, e Entry) (Entry, bool) {
+	if !validBranch(r.Branch) {
+		return e, false
+	}
 	f.learn(r)
 	e.Kind = KindResume
 	e.Text = "Resumed" + joinParts(r.Engine, r.Model)
@@ -180,7 +189,7 @@ func joinParts(parts ...string) string {
 
 func (f *Fold) status(r record, e Entry) (Entry, bool) {
 	branch := branchFromWorker(r.From)
-	if branch == "" {
+	if branch == "" || !validBranch(branch) {
 		return e, false
 	}
 	var body statusBody
@@ -207,9 +216,10 @@ func (f *Fold) status(r record, e Entry) (Entry, bool) {
 			b.blockedDetail, b.blockedSeen, b.replied = detail, true, false
 		}
 		b.worker = statusClass{state: state, seen: true}
+		// The entry's State already shows the state, so the text is the detail.
 		e.Text = state
 		if d := clean(body.Detail, maxBusText); d != "" {
-			e.Text += " — " + d
+			e.Text = d
 		}
 	}
 	if !emit {
@@ -241,6 +251,9 @@ func (f *Fold) msg(r record, e Entry) (Entry, bool) {
 	switch {
 	case strings.HasPrefix(from, "worker:") && strings.HasPrefix(to, "dispatcher:"):
 		e.Branch = branchFromWorker(from)
+		if !validBranch(e.Branch) {
+			return e, false
+		}
 		e.Kind = KindQuestion
 		if rest, found := strings.CutPrefix(strings.TrimLeftFunc(text, unicode.IsSpace), followUpsPrefix); found {
 			e.Kind = KindFollowUps
@@ -257,6 +270,9 @@ func (f *Fold) msg(r record, e Entry) (Entry, bool) {
 		return e, true
 	case strings.HasPrefix(from, "dispatcher:") && strings.HasPrefix(to, "worker:"):
 		e.Branch = branchFromWorker(to)
+		if !validBranch(e.Branch) {
+			return e, false
+		}
 		f.branch(e.Branch).replied = true
 		e.Kind = KindReply
 		e.Text = clean(text, maxBusText)
@@ -312,6 +328,9 @@ func prWatch(text string, e Entry) (Entry, bool) {
 }
 
 func reap(r record, e Entry) (Entry, bool) {
+	if !validBranch(r.Branch) {
+		return e, false
+	}
 	var url string
 	if json.Unmarshal(r.PR, &url) != nil {
 		url = ""
@@ -331,6 +350,9 @@ func reap(r record, e Entry) (Entry, bool) {
 }
 
 func reclaim(r record, e Entry, label string) (Entry, bool) {
+	if !validBranch(r.Branch) {
+		return e, false
+	}
 	var detail []string
 	if s := clean(r.State, maxBusText); s != "" {
 		detail = append(detail, s)
@@ -370,6 +392,13 @@ func branchFromWorker(from string) string {
 		rest = rest[:i]
 	}
 	return rest
+}
+
+// validBranch reports whether b could be a git ref: at most maxBranch bytes
+// with no control rune. A branch is kept unmodified, so client-side matching
+// on it stays exact; one that fails this drops its record instead.
+func validBranch(b string) bool {
+	return len(b) <= maxBranch && !strings.ContainsFunc(b, unicode.IsControl)
 }
 
 // clean drops control runes (C0 and C1), collapses every whitespace run to one

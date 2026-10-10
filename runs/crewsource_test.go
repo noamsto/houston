@@ -1872,7 +1872,7 @@ func TestScanAdvancesTheFeedForEveryBus(t *testing.T) {
 		t.Fatal("scan reported failure")
 	}
 	for _, bus := range []string{logged, bare} {
-		if _, ok := s.feed.Epoch(bus); !ok {
+		if _, ok := s.feed.Epoch(bus, "c1"); !ok {
 			t.Errorf("bus %s was not advanced", bus)
 		}
 	}
