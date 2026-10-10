@@ -164,9 +164,86 @@
 .run-chip.done { background: color-mix(in srgb, var(--state-running) 18%, transparent); color: var(--state-running); }
 .run-chip.stale { background: var(--bg-sunken); color: var(--text-faint); font-style: italic; }
 
+/* A dispatcher (or orphaned crew) and its worker rows share one container; the
+   head card is a button, so the rows are its siblings, not its children. */
+.fleet-group-card {
+  margin: 0 10px 8px; border-radius: 12px;
+  background: var(--bg-sunken); border: 1px solid var(--line);
+}
+.fleet-group-card.needs-you { border-color: color-mix(in srgb, var(--state-blocked) 45%, var(--line)); }
+.fleet-group-card > .run-card { width: calc(100% - 16px); margin: 8px 8px 6px; }
+.fleet-group-badge {
+  display: inline-block; margin: 0 0 6px 12px; padding: 2.5px 7px; border-radius: 5px;
+  font-size: 11px; font-weight: 600;
+  background: color-mix(in srgb, var(--state-blocked) 18%, transparent); color: var(--state-blocked);
+}
+.fleet-group-members { display: flex; flex-direction: column; gap: 4px; padding: 0 8px 8px; }
+.fleet-group-members:empty { display: none; }
+.fleet-group-more {
+  min-height: var(--tap); border: 1px solid var(--line); border-radius: 8px; background: none;
+  color: var(--text-dim); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
+}
+.fleet-group-more[aria-expanded="true"] { background: var(--fill); color: var(--text); }
+.fleet-group-more:active { background: var(--fill); }
+.fleet-group-head {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px;
+  padding: 8px 12px 6px;
+}
+.fleet-group-repo { min-width: 0; overflow-wrap: anywhere; color: var(--text); font-size: 14px; font-weight: 600; }
+.fleet-group-id { font-family: var(--font-mono); font-size: 12px; color: var(--text-faint); }
+.fleet-group-counts { flex-basis: 100%; order: 3; font-size: 12px; color: var(--text-dim); }
+.fleet-group-dispatch {
+  margin-left: auto; display: inline-flex; align-items: center; min-height: var(--tap);
+  padding: 0 4px; font-size: 12.5px; font-weight: 600; color: var(--accent); text-decoration: none;
+}
+
+.worker-row {
+  display: flex; align-items: stretch; border-radius: 8px;
+  background: var(--bg-raised); border: 1px solid var(--line);
+}
+.worker-row.selected { background: var(--fill); border-color: var(--accent); }
+.worker-row.needs-you { border-color: color-mix(in srgb, var(--state-blocked) 45%, var(--line)); }
+.worker-row.stuck { border-color: color-mix(in srgb, var(--state-failed) 35%, var(--line)); }
+.worker-row.done { border-color: color-mix(in srgb, var(--state-running) 25%, var(--line)); }
+.worker-row.needs-you.muted { border-color: color-mix(in srgb, var(--state-blocked) 22%, var(--line)); }
+.worker-row.stuck.muted { border-color: color-mix(in srgb, var(--state-failed) 18%, var(--line)); }
+.worker-row.done.muted { border-color: color-mix(in srgb, var(--state-running) 12%, var(--line)); }
+.worker-row-main {
+  flex: 1 1 0; min-width: 0; min-height: var(--tap); padding: 6px 10px;
+  display: flex; flex-direction: column; justify-content: center; gap: 3px;
+  border: 0; border-radius: 8px; background: none;
+  text-align: left; color: inherit; font: inherit; cursor: pointer;
+}
+.worker-row-main:active { background: var(--fill); }
+.worker-row-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.worker-row-swatch { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+.worker-row-codename {
+  flex: 0 1 auto; max-width: 40%; color: var(--text); font-size: 13px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.worker-row-title {
+  flex: 1 1 0; min-width: 0; color: var(--text-strong); font-size: 13px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.worker-row-sub { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; }
+.worker-row-meta { min-width: 0; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.worker-row-meta:empty { display: none; }
+.worker-row-attention.needs-you { background: color-mix(in srgb, var(--state-blocked) 18%, transparent); color: var(--state-blocked); }
+.worker-row-attention.stuck { background: color-mix(in srgb, var(--state-failed) 18%, transparent); color: var(--state-failed); }
+.worker-row-attention.done { background: color-mix(in srgb, var(--state-running) 18%, transparent); color: var(--state-running); }
+.worker-row-idle { background: var(--bg-sunken); color: var(--text-faint); }
+.worker-row-pr { flex: none; display: flex; align-items: center; padding: 0 10px 0 2px; }
+.worker-row-pr .run-chip.pr { position: relative; text-decoration: none; }
+/* The chip stays chip-sized in the flow; the ::after grows its tap area to >=44px. */
+.worker-row-pr a.run-chip::after { content: ''; position: absolute; inset: -14px -6px; }
+
 .fleet-empty { padding: 40px 20px; text-align: center; color: var(--text-faint); font-size: 13px; }
 
 .run-card:focus-visible,
+.worker-row-main:focus-visible,
+.fleet-group-more:focus-visible,
+.fleet-group-dispatch:focus-visible,
+.worker-row-pr a:focus-visible,
 .fleet-filters button:focus-visible,
 .shell-tabs button:focus-visible,
 .fleet-badge:focus-visible,

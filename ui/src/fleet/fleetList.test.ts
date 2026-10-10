@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Run } from '../api/runs'
-import { crewShortId, crewSummary, filterRuns, groupByHost, groupByProject, projectOf } from './fleetList'
+import { crewShortId, filterRuns, groupByHost, groupByProject, projectOf } from './fleetList'
 
 const now = 1_800_000_000_000 // fixed ms
 const nowSec = Math.floor(now / 1000)
@@ -220,61 +220,5 @@ describe('groupByProject', () => {
 
   it('groups runs without a project or repo under unknown', () => {
     expect(groupByProject([run()]).map(([p]) => p)).toEqual(['unknown'])
-  })
-})
-
-describe('crewSummary', () => {
-  const disp = run({ id: 'd', project: 'p', role: 'dispatcher' })
-  const worker = (id: string, p: Partial<Run> = {}) => run({ id, project: 'p', role: 'worker', ...p })
-
-  it('counts workers and omits the blocked part at zero', () => {
-    expect(crewSummary(disp, [disp, worker('w1'), worker('w2'), worker('w3')], now)).toBe('3 workers')
-  })
-
-  it('singularises one worker', () => {
-    expect(crewSummary(disp, [disp, worker('w1')], now)).toBe('1 worker')
-  })
-
-  it('appends the blocked count using needs-you rules', () => {
-    const runs = [
-      disp,
-      worker('w1', { state: 'blocked' }),
-      worker('w2', { state: 'blocked', updated_at: nowSec - 2 * HOUR }),
-      worker('w3'),
-    ]
-    expect(crewSummary(disp, runs, now)).toBe('3 workers · 1 blocked')
-  })
-
-  it('excludes history workers', () => {
-    const runs = [disp, worker('w1'), worker('old', { state: 'done', updated_at: nowSec - 2 * HOUR })]
-    expect(crewSummary(disp, runs, now)).toBe('1 worker')
-  })
-
-  it('excludes workers of another project or host', () => {
-    const runs = [
-      disp,
-      worker('other-project', { project: 'q' }),
-      worker('other-host', { host: 'box' }),
-    ]
-    expect(crewSummary(disp, runs, now)).toBeNull()
-  })
-
-  it('returns null with no workers', () => {
-    expect(crewSummary(disp, [disp, run({ id: 'solo', project: 'p' })], now)).toBeNull()
-  })
-
-  it('returns null when two dispatchers share the project and host', () => {
-    const other = run({ id: 'd2', project: 'p', role: 'dispatcher' })
-    expect(crewSummary(disp, [disp, other, worker('w1')], now)).toBeNull()
-  })
-
-  it('ignores a finished dispatcher when deciding whether the workers are ambiguous', () => {
-    const dead = run({ id: 'd-old', project: 'p', role: 'dispatcher', state: 'done', updated_at: nowSec - 2 * HOUR })
-    expect(crewSummary(disp, [disp, dead, worker('w1')], now)).toBe('1 worker')
-  })
-
-  it('still summarises when the second dispatcher is on another host', () => {
-    const other = run({ id: 'd2', project: 'p', role: 'dispatcher', host: 'box' })
-    expect(crewSummary(disp, [disp, other, worker('w1')], now)).toBe('1 worker')
   })
 })

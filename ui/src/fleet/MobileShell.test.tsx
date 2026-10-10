@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { MobileShell } from './MobileShell'
 import { fetchDispatchOptions } from '../api/dispatch'
+import type { Run } from '../api/runs'
 
 vi.mock('./useWorkspace', () => ({
   useWorkspace: () => ({ workspace: null, error: null, loading: false }),
@@ -189,5 +190,30 @@ describe('MobileShell modes', () => {
     render(<MobileShell runs={[]} connected hasSnapshot now={0} mode="dispatcher" />)
 
     expect(window.location.hash).toBe('#/dispatch')
+  })
+})
+
+describe('MobileShell fleet entries', () => {
+  const nowSec = 1_800_000_000
+  const base = { agent: 'claude', activity: {}, tokens: { input: 0, output: 0 }, caps: { terminal: true, reply: true, kill: true }, updated_at: nowSec }
+  const runs = [
+    { ...base, id: 'd', state: 'idle', role: 'dispatcher', branch: 'main', crew: { name: '1-1' } },
+    { ...base, id: 'w', state: 'blocked', role: 'worker', branch: 'w-one', crew: { name: '1-1', codename: 'blush' } },
+  ] as Run[]
+
+  it('passes the mode down: dispatcher mode nests the worker, tmux mode lists it flat', () => {
+    const { container, rerender } = render(<MobileShell runs={runs} connected hasSnapshot now={nowSec * 1000} mode="dispatcher" />)
+    expect(container.querySelectorAll('.fleet-group-card .worker-row').length).toBe(1)
+    expect(container.querySelectorAll('.run-card').length).toBe(1)
+
+    rerender(<MobileShell runs={runs} connected hasSnapshot now={nowSec * 1000} mode="tmux" />)
+    expect(container.querySelector('.fleet-group-card')).toBeNull()
+    expect(container.querySelectorAll('.run-card').length).toBe(2)
+  })
+
+  it('opens a worker row by writing its run hash', () => {
+    const { container } = render(<MobileShell runs={runs} connected hasSnapshot now={nowSec * 1000} mode="dispatcher" />)
+    fireEvent.click(container.querySelector('.worker-row-main') as HTMLElement)
+    expect(window.location.hash).toBe('#/fleet/w')
   })
 })

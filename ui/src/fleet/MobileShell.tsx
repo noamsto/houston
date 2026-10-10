@@ -1,3 +1,4 @@
+import { useCallback } from 'react'
 import type { Run } from '../api/runs'
 import type { Mode } from '../api/mode'
 import { needsYou } from './staleness'
@@ -22,6 +23,8 @@ export function MobileShell({ runs, connected, hasSnapshot, now, mode }: ShellDa
   const dispatcherMode = mode === 'dispatcher'
   const attention = runs.some((r) => needsYou(r, now))
 
+  const open = useCallback((r: Run) => { window.location.hash = runHash(r.id) }, [])
+
   const detail = useDetailRoute()
   const keyboardInset = useKeyboardInset()
 
@@ -38,7 +41,8 @@ export function MobileShell({ runs, connected, hasSnapshot, now, mode }: ShellDa
             runs={runs}
             connected={connected}
             now={now}
-            onOpen={(r) => { window.location.hash = runHash(r.id) }}
+            mode={mode}
+            onOpen={open}
           />
         </div>
         {/* Kept mounted like FleetView, so a half-typed reply survives a tab switch. */}

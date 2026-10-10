@@ -4,7 +4,7 @@ import { agoLabel, nameLabel, subtitle } from './format'
 import { projectOf } from './fleetList'
 
 // The card is a <button>, so a link inside it must not bubble to onOpen.
-function PRChip({ pr }: { pr: NonNullable<Run['pr']> }) {
+export function PRChip({ pr }: { pr: NonNullable<Run['pr']> }) {
   const cls = `run-chip pr${pr.check_state === 'failure' ? ' failing' : ''}`
   const label = pr.number ? `#${pr.number}` : 'PR'
   if (!pr.url || !/^https?:\/\//i.test(pr.url)) return <span className={cls}>{label}</span>
