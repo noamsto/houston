@@ -28,3 +28,5 @@ export function nameLabel(run: Run): string {
   if (run.repo && run.branch) return `${run.repo}/${run.branch}`
   return run.repo || run.branch || run.id
 }
+
+export const isWebUrl = (url: string): boolean => /^https?:\/\//i.test(url)

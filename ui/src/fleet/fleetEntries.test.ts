@@ -211,6 +211,26 @@ describe('fleetEntries: ranking and stability', () => {
   })
 })
 
+describe('fleetEntries: freshness under a filter', () => {
+  it('ignores a head that does not match the filter when ranking by freshness', () => {
+    const runs = [
+      dispatcher('d', '1-1', { since: 99 }),
+      worker('w-stale', '1-1', { state: 'blocked', updated_at: nowSec - 2 * HOUR }),
+      run({ id: 'solo-fresh', state: 'blocked', since: 1 }),
+    ]
+    expect(keys(fleetEntries(runs, 'needs-you', now, 'dispatcher'))).toEqual(['solo-fresh', 'd'])
+  })
+
+  it('still counts a head that matches the filter', () => {
+    const runs = [
+      dispatcher('d', '1-1', { since: 99, state: 'blocked' }),
+      worker('w-stale', '1-1', { state: 'blocked', updated_at: nowSec - 2 * HOUR }),
+      run({ id: 'solo-fresh', state: 'blocked', since: 1 }),
+    ]
+    expect(keys(fleetEntries(runs, 'needs-you', now, 'dispatcher'))).toEqual(['d', 'solo-fresh'])
+  })
+})
+
 describe('fleetEntries: filters', () => {
   it('needs-you keeps the head as container with only the matching members', () => {
     const runs = [

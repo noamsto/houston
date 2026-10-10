@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import type { Run } from '../api/runs'
-import { agoLabel, BLOCKED_FALLBACK } from './format'
+import { agoLabel, BLOCKED_FALLBACK, isWebUrl } from './format'
 import { crewShortId } from './fleetList'
 import { bucket, countsLabel, dispatchHref, type CrewCounts } from './crewsModel'
 import { CrewFeedList } from './CrewFeedList'
@@ -57,7 +57,7 @@ function Member({ run, now }: { run: Run; now: number }) {
       </button>
       <span className="run-chips crews-chips">
         {run.pr &&
-          (run.pr.url ? (
+          (run.pr.url && isWebUrl(run.pr.url) ? (
             <a
               className={`run-chip pr crews-pr${run.pr.check_state === 'failure' ? ' failing' : ''}`}
               href={run.pr.url}

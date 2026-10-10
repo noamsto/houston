@@ -149,6 +149,32 @@ describe('useCrewFeed', () => {
     expect(ids(result.current.entries)).toEqual(['e2.1'])
   })
 
+  it('ignores a loadOlder started while the newest page is reloading after a reset', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(page('e1', [ent('e1', 30)], true)))
+    const { result } = renderHook(() => useCrewFeed('r1', true))
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    const first = fake.instances[0]
+
+    let resolveNewest!: (r: Response) => void
+    fetchMock.mockReturnValueOnce(new Promise<Response>((resolve) => { resolveNewest = resolve }))
+    act(() => { first.emit('reset', null) })
+
+    let resolveOlder: ((r: Response) => void) | undefined
+    fetchMock.mockReturnValueOnce(new Promise<Response>((resolve) => { resolveOlder = resolve }))
+    let older!: Promise<void>
+    act(() => { older = result.current.loadOlder() })
+
+    await act(async () => { resolveNewest(jsonResponse(page('e2', [ent('e2', 1)], false))) })
+    await waitFor(() => expect(ids(result.current.entries)).toEqual(['e2.1']))
+    await act(async () => {
+      resolveOlder?.(jsonResponse(page('e1', [ent('e1', 10)], false)))
+      await older
+    })
+
+    expect(ids(result.current.entries)).toEqual(['e2.1'])
+    expect(result.current.more).toBe(false)
+  })
+
   it('a 404 on the initial load sets status unavailable and opens no stream', async () => {
     fetchMock.mockResolvedValueOnce(statusResponse(404))
     const { result } = renderHook(() => useCrewFeed('r1', true))

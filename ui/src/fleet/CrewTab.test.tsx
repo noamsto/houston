@@ -242,6 +242,12 @@ describe('CrewTab member row', () => {
     expect(replyRunMock).toHaveBeenCalledWith('second', 'go ahead')
   })
 
+  it('renders a PR whose url is not http(s) as a plain chip', () => {
+    const { container } = renderTab([run({ crew: { name: 'c' }, pr: { number: '7', url: 'javascript:alert(1)' } })])
+    expect(container.querySelector('a.run-chip.pr')).toBeNull()
+    expect(container.querySelector('span.run-chip.pr')?.textContent).toBe('#7')
+  })
+
   it('renders a PR with no url as a plain chip', () => {
     const { container } = renderTab([run({ crew: { name: 'c' }, pr: { number: '7' } })])
     expect(container.querySelector('a.run-chip.pr')).toBeNull()

@@ -6,7 +6,17 @@ import { isFresh, needsYou } from './staleness'
 
 export type FleetEntry =
   | { kind: 'run'; key: string; run: Run }
-  | { kind: 'dispatcher'; key: string; head: Run; shown: Run[]; members: Run[]; needsYou: number; counts: CrewCounts }
+  | {
+      kind: 'dispatcher'
+      key: string
+      head: Run
+      // False when the head is only the container for matching members.
+      headShown: boolean
+      shown: Run[]
+      members: Run[]
+      needsYou: number
+      counts: CrewCounts
+    }
   | {
       kind: 'crew'
       key: string
@@ -49,8 +59,8 @@ function summarize(members: Run[], now: number) {
   return { counts, needsYou: members.filter((m) => needsYou(m, now)).length }
 }
 
-// What the top-level ordering reads: the entry's own rank (max over its head
-// and shown members), whether any of them is fresh, and a start key that only
+// What the top-level ordering reads: the entry's own rank (max over its shown
+// head and shown members), whether any of them is fresh, and a start key that only
 // changes when the entry's identity does.
 interface Sort {
   rank: number
@@ -64,7 +74,7 @@ function sortOf(e: FleetEntry, now: number): Sort {
   if (e.kind === 'run') {
     return { rank: rank(e.run, now), fresh: isFresh(e.run, now), since: e.run.since ?? 0, id: e.run.id, key: e.key }
   }
-  const parts = e.kind === 'dispatcher' ? [e.head, ...e.shown] : e.shown
+  const parts = e.kind === 'dispatcher' && e.headShown ? [e.head, ...e.shown] : e.shown
   const rk = Math.max(...parts.map((r) => rank(r, now)))
   const fresh = parts.some((r) => isFresh(r, now))
   if (e.kind === 'dispatcher') return { rank: rk, fresh, since: e.head.since ?? 0, id: e.head.id, key: e.key }
@@ -119,8 +129,9 @@ export function fleetEntries(runs: Run[], filter: Filter, now: number, mode: Mod
   for (const [id, head] of heads) {
     const all = members.get(id) ?? []
     const shown = filterRuns(all, filter, now)
-    if (!headMatches.has(head) && shown.length === 0) continue
-    out.push({ kind: 'dispatcher', key: head.id, head, shown, members: all, ...summarize(all, now) })
+    const headShown = headMatches.has(head)
+    if (!headShown && shown.length === 0) continue
+    out.push({ kind: 'dispatcher', key: head.id, head, headShown, shown, members: all, ...summarize(all, now) })
   }
   for (const [id, all] of members) {
     if (heads.has(id)) continue
