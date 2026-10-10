@@ -8,7 +8,8 @@ import { RunList } from './RunList'
 import { WorkspaceView } from './WorkspaceView'
 import { DispatchView } from './DispatchView'
 import { RunDetail } from './RunDetail'
-import { runHash, tabHash, TAB_LABEL, useDetailRoute, useShellTab } from './routes'
+import { tabHash, useDetailRoute, useShellTab } from './routes'
+import { back, backLabel, selectRun, useNavEntry } from './nav'
 import type { ShellData } from './MobileShell'
 import { useGroupByProject } from '../hooks/useLayout'
 import '../theme/mocha.css'
@@ -29,6 +30,7 @@ export function ConsoleShell({ runs, connected, hasSnapshot, now, mode }: ShellD
   const [crew, setCrew] = useState<string | null>(null)
   const [grouped, setGrouped] = useGroupByProject()
   const route = useDetailRoute()
+  const entry = useNavEntry()
 
   const attentionCount = useMemo(
     () => runs.filter((r) => needsYou(r, now)).length,
@@ -94,7 +96,7 @@ export function ConsoleShell({ runs, connected, hasSnapshot, now, mode }: ShellD
     setCrew((c) => (c === name ? null : name))
   }
 
-  const open = useCallback((r: Run) => { window.location.hash = runHash(r.id) }, [])
+  const open = useCallback((r: Run) => selectRun(r.id), [])
 
   return (
     <div className="console mocha" aria-label="console">
@@ -233,7 +235,7 @@ export function ConsoleShell({ runs, connected, hasSnapshot, now, mode }: ShellD
         </div>
 
         {section === 'workspace' && (
-          <WorkspaceView onOpen={(id) => { window.location.hash = runHash(id) }} />
+          <WorkspaceView onOpen={selectRun} />
         )}
 
         {dispatcherMode && (
@@ -253,8 +255,8 @@ export function ConsoleShell({ runs, connected, hasSnapshot, now, mode }: ShellD
             id={route.id}
             tab={route.tab}
             mode={mode}
-            onBack={() => { window.location.hash = tabHash(section) }}
-            backLabel={TAB_LABEL[section]}
+            onBack={() => back(tabHash(section))}
+            backLabel={backLabel(entry, runs, section)}
           />
         ) : (
           <div className="console-detail-empty">Select a run</div>

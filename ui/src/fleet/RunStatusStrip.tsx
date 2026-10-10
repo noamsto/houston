@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { Run } from '../api/runs'
 import { agoLabel } from './format'
 import { ReplyComposer } from './ReplyComposer'
-import { runHash } from './routes'
+import { switchRunTab } from './nav'
 import { isFresh, needsYou } from './staleness'
 
 type Task = NonNullable<Run['background']>[number]
@@ -136,7 +136,7 @@ export function RunQuestion({ run, onTerminal = false, answeredHere = false }: {
         <button
           type="button"
           className="run-detail-question-reply"
-          onClick={() => { window.location.hash = runHash(run.id, 'terminal') }}
+          onClick={() => switchRunTab(run.id, 'terminal')}
         >
           Reply in Terminal
         </button>

@@ -6,6 +6,7 @@ import type { QuestionItem, ToolCall } from './chatModel'
 import { emptyStage, isComplete, setText, toggleOption, toggleOther, toWire } from './questionStage'
 import type { Stage } from './questionStage'
 import { runHash } from './routes'
+import { onAppLink, switchRunTab } from './nav'
 
 interface QuestionOption {
   label: string
@@ -204,19 +205,19 @@ function PickerBlock({ q, stage, disabled, onOption, onOther, onText }: {
   )
 }
 
-/** `terminalHref`: the question is still open and can't be shown here, so
- *  point to where it can be answered. */
-function FallbackRow({ call, terminalHref }: { call: ToolCall; terminalHref?: string }) {
+/** `terminalRunId`: the question is still open and can't be shown here, so
+ *  point to that run's Terminal tab, where it can be answered. */
+function FallbackRow({ call, terminalRunId }: { call: ToolCall; terminalRunId?: string }) {
   return (
     <div className="chat-question-fallback" data-testid="question-fallback">
       <div className="chat-tool-call-row">
         <span className="chat-tool-name">{call.tool}</span>
         {call.title && <span className="chat-tool-title">{call.title}</span>}
       </div>
-      {terminalHref && (
+      {terminalRunId && (
         <div className="chat-question-pending">
           Can't show this question here — answer it in the Terminal tab
-          <a className="chat-question-terminal" href={terminalHref}>Open Terminal</a>
+          <a className="chat-question-terminal" href={runHash(terminalRunId, 'terminal')} onClick={onAppLink(() => switchRunTab(terminalRunId, 'terminal'))}>Open Terminal</a>
         </div>
       )}
     </div>
@@ -265,10 +266,10 @@ export function QuestionCard({ item, runId, canAnswer, answerable, onLayout }: {
   }, [detail, picking, phase.kind, onLayout])
 
   if (!detail) return <FallbackRow call={call} />
-  const terminalHref = !done && canAnswer ? runHash(runId, 'terminal') : undefined
-  if (detail === 'error' || detail.inputOmitted) return <FallbackRow call={call} terminalHref={terminalHref} />
+  const terminalRunId = !done && canAnswer ? runId : undefined
+  if (detail === 'error' || detail.inputOmitted) return <FallbackRow call={call} terminalRunId={terminalRunId} />
   const questions = parseQuestions(detail.input)
-  if (questions.length === 0) return <FallbackRow call={call} terminalHref={terminalHref} />
+  if (questions.length === 0) return <FallbackRow call={call} terminalRunId={terminalRunId} />
 
   const output = done ? (detail.output ?? '') : ''
   const answers = call.status === 'completed' ? parseAnswers(questions, output) : null
@@ -316,19 +317,19 @@ export function QuestionCard({ item, runId, canAnswer, answerable, onLayout }: {
             {phase.kind === 'moved' && (
               <>
                 <span>The session moved on — refresh</span>, or answer in the{' '}
-                <a className="chat-question-terminal" href={runHash(runId, 'terminal')}>Terminal tab</a>
+                <a className="chat-question-terminal" href={runHash(runId, 'terminal')} onClick={onAppLink(() => switchRunTab(runId, 'terminal'))}>Terminal tab</a>
               </>
             )}
             {phase.kind === 'partial' && (
               <>
                 Part of the answer went in — finish in the{' '}
-                <a className="chat-question-terminal" href={runHash(runId, 'terminal')}>Terminal tab</a>
+                <a className="chat-question-terminal" href={runHash(runId, 'terminal')} onClick={onAppLink(() => switchRunTab(runId, 'terminal'))}>Terminal tab</a>
               </>
             )}
             {phase.kind === 'error' && (
               <>
                 <span>{phase.message}</span> — or answer in the{' '}
-                <a className="chat-question-terminal" href={runHash(runId, 'terminal')}>Terminal tab</a>
+                <a className="chat-question-terminal" href={runHash(runId, 'terminal')} onClick={onAppLink(() => switchRunTab(runId, 'terminal'))}>Terminal tab</a>
               </>
             )}
           </div>

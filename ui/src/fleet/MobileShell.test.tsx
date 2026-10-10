@@ -3,6 +3,8 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { MobileShell } from './MobileShell'
 import { fetchDispatchOptions } from '../api/dispatch'
 import type { Run } from '../api/runs'
+import { installFakeHistory, settle, type FakeHistory } from '../testing/fakeHistory'
+import { openRun } from './nav'
 
 vi.mock('./useWorkspace', () => ({
   useWorkspace: () => ({ workspace: null, error: null, loading: false }),
@@ -131,7 +133,9 @@ describe('MobileShell tabs', () => {
     render(<MobileShell runs={[]} connected hasSnapshot now={0} mode="dispatcher" />)
 
     act(() => { window.location.hash = '#/fleet/gone/activity' })
-    expect(within(screen.getByRole('navigation', { name: 'sections' })).getByRole('button', { name: /workspace/i }).getAttribute('aria-current')).toBe('true')
+    // The bar belongs to the run while a detail is open; the tab underneath is the one Back names.
+    expect(screen.queryByRole('navigation', { name: 'sections' })).toBeNull()
+    expect(document.querySelector('.run-tabs-back')?.getAttribute('aria-label')).toBe('Back to Workspace')
 
     fireEvent.click(screen.getAllByRole('button', { name: 'Back to Workspace' })[0])
     expect(window.location.hash).toBe('#/workspace')
@@ -249,7 +253,7 @@ describe('MobileShell run tabs', () => {
     expect(screen.getByRole('navigation', { name: 'sections' })).toBeTruthy()
   })
 
-  it('a joined dispatcher defaults to the Crew tab; a run with no tabs keeps the shell tabs', () => {
+  it('a joined dispatcher defaults to the Crew tab; a run with no tabs shows only Back in the bar', () => {
     window.location.hash = '#/fleet/d'
     const d = { ...run, id: 'd', role: 'dispatcher', crew: { name: '1-1' } } as Run
     const { unmount } = render(<MobileShell runs={[d]} connected hasSnapshot now={nowSec * 1000} mode="dispatcher" />)
@@ -259,8 +263,9 @@ describe('MobileShell run tabs', () => {
     const bare = { ...run, caps: { terminal: false, reply: false, kill: false } } as Run
     render(<MobileShell runs={[bare]} connected hasSnapshot now={nowSec * 1000} mode="dispatcher" />)
     act(() => { window.location.hash = '#/fleet/r' })
-    expect(screen.queryByRole('tablist', { name: 'run tabs' })).toBeNull()
-    expect(screen.getByRole('navigation', { name: 'sections' })).toBeTruthy()
+    expect(within(bar()).queryAllByRole('tab')).toEqual([])
+    expect(document.querySelector('.shell-tabs.run-tabs .run-tabs-back')).toBeTruthy()
+    expect(screen.queryByRole('navigation', { name: 'sections' })).toBeNull()
   })
 
   it('hides the bar while the keyboard is up', () => {
@@ -275,6 +280,119 @@ describe('MobileShell run tabs', () => {
       vv.emit()
     })
     expect(shell.classList.contains('keyboard-open')).toBe(true)
-    expect(bar().classList.contains('shell-tabs')).toBe(true)
+    expect(bar().closest('.shell-tabs')).toBeTruthy()
+  })
+})
+
+describe('MobileShell navigation stack', () => {
+  const nowSec = 1_800_000_000
+  const base = {
+    agent: 'claude', state: 'idle', activity: {}, tokens: { input: 0, output: 0 },
+    caps: { terminal: true, reply: true, kill: true, chat: true }, updated_at: nowSec,
+  }
+  const runs = [
+    { ...base, id: 'd', role: 'dispatcher', branch: 'main', crew: { name: '1-1', codename: 'ada' } },
+    { ...base, id: 'w', role: 'worker', branch: 'w-one', crew: { name: '1-1', codename: 'iris' } },
+  ] as Run[]
+  let fake: FakeHistory
+  let uninstall: () => void
+
+  beforeEach(() => {
+    window.location.hash = '#/fleet'
+    ;({ history: fake, uninstall } = installFakeHistory())
+  })
+  afterEach(() => {
+    cleanup()
+    vi.useRealTimers()
+    uninstall()
+  })
+
+  const renderShell = () => render(<MobileShell runs={runs} connected hasSnapshot now={nowSec * 1000} mode="dispatcher" />)
+  const open = (id: string) => act(() => { openRun(id) })
+  const settled = () => act(async () => { await settle() })
+  const selectedTab = () => screen.getByRole('tab', { selected: true }).textContent
+  const barBack = () => document.querySelector('.run-tabs-back') as HTMLElement
+
+  it('header Back, bar Back and the edge swipe all go through history.back()', async () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true }))
+    renderShell()
+    open('d')
+    open('w')
+    const back = vi.spyOn(fake, 'back')
+
+    expect(screen.getAllByRole('button', { name: 'Back to ada' }).length).toBe(2)
+
+    fireEvent.click(document.querySelector('.run-detail-back') as HTMLElement)
+    expect(back).toHaveBeenCalledTimes(1)
+    await settled()
+    expect(window.location.hash).toBe('#/fleet/d')
+
+    open('w')
+    fireEvent.click(barBack())
+    expect(back).toHaveBeenCalledTimes(2)
+    await settled()
+    expect(window.location.hash).toBe('#/fleet/d')
+
+    open('w')
+    const overlay = document.querySelector('.run-detail') as HTMLElement
+    Object.defineProperty(overlay, 'clientWidth', { value: 400 })
+    fireEvent.touchStart(overlay, { touches: [{ clientX: 5, clientY: 300 }] })
+    fireEvent.touchMove(overlay, { touches: [{ clientX: 200, clientY: 302 }] })
+    fireEvent.touchEnd(overlay, { touches: [] })
+    expect(back).toHaveBeenCalledTimes(3)
+    await settled()
+    expect(window.location.hash).toBe('#/fleet/d')
+  })
+
+  it('a native back shows the same screen as houston Back: the dispatcher with its Crew tab', async () => {
+    renderShell()
+    open('d')
+    open('w')
+    expect(selectedTab()).toContain('Chat')
+
+    fake.back()
+    await settled()
+
+    expect(window.location.hash).toBe('#/fleet/d')
+    expect(selectedTab()).toContain('Crew')
+    expect(barBack().getAttribute('aria-label')).toBe('Back to Fleet')
+  })
+
+  it('offers the Fleet jump in the header only from depth 2', () => {
+    renderShell()
+    open('d')
+    expect(document.querySelector('.run-detail-root')).toBeNull()
+
+    open('w')
+    expect(document.querySelector('.run-detail-root')?.textContent).toBe('Fleet')
+  })
+
+  it('a long press on the bar Back pops to the root and the release click does not also go back', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    renderShell()
+    open('d')
+    open('w')
+    const back = vi.spyOn(fake, 'back')
+    const go = vi.spyOn(fake, 'go')
+
+    fireEvent.pointerDown(barBack())
+    act(() => { vi.advanceTimersByTime(500) })
+    expect(go).toHaveBeenCalledWith(-2)
+
+    fireEvent.pointerUp(barBack())
+    fireEvent.click(barBack())
+    expect(back).not.toHaveBeenCalled()
+  })
+
+  it('re-tapping the current shell tab scrolls its list to the top and adds no entry', () => {
+    renderShell()
+    const list = document.querySelector('[data-shell-tab="fleet"] > *') as HTMLElement
+    list.scrollTop = 120
+    const length = fake.length
+
+    fireEvent.click(screen.getByRole('button', { name: /^.?Fleet/ }))
+
+    expect(list.scrollTop).toBe(0)
+    expect(fake.length).toBe(length)
   })
 })

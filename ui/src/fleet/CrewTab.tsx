@@ -5,7 +5,7 @@ import { crewShortId } from './fleetList'
 import { bucket, countsLabel, dispatchHref, type CrewCounts } from './crewsModel'
 import { CrewFeedList } from './CrewFeedList'
 import { ReplyComposer } from './ReplyComposer'
-import { runHash } from './routes'
+import { openRun } from './nav'
 import { isFresh, isHistory, needsYou } from './staleness'
 import { resolveCrewRepo, useCrewRepos } from './useCrewRepos'
 import './fleet.css'
@@ -28,10 +28,6 @@ function phase(run: Run): string {
 
 const ATTENTION_LABEL = { 'needs-you': 'needs you', stuck: 'stuck', done: 'done' } as const
 
-function openRun(r: Run): void {
-  window.location.hash = runHash(r.id)
-}
-
 function Member({ run, now }: { run: Run; now: number }) {
   const stale = !isFresh(run, now)
   const attention = run.attention
@@ -39,7 +35,7 @@ function Member({ run, now }: { run: Run; now: number }) {
   const sessions = run.crew?.sessions ?? 0
   return (
     <div className={`crews-member${attention ? ` ${attention}` : ''}${attention && stale ? ' muted' : ''}`}>
-      <button type="button" className="crews-member-main" onClick={() => openRun(run)}>
+      <button type="button" className="crews-member-main" onClick={() => openRun(run.id)}>
         <span className="crews-member-head">
           <span className="crews-swatch" style={{ background: run.crew?.color || 'var(--text-faint)' }} />
           <span className="crews-codename">{run.crew?.codename || 'worker'}</span>

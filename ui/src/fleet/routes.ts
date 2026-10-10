@@ -21,6 +21,15 @@ export function runHash(id: string, tab?: DetailTab): string {
   return tab ? `#/fleet/${id}/${tab}` : `#/fleet/${id}`
 }
 
+/** pushState/replaceState fire no hashchange, and every route hook listens for one. */
+export function navigateHash(method: 'pushState' | 'replaceState', state: unknown, hash: string): void {
+  const oldURL = window.location.href
+  window.history[method](state, '', hash)
+  if (window.location.href !== oldURL) {
+    window.dispatchEvent(new HashChangeEvent('hashchange', { oldURL, newURL: window.location.href }))
+  }
+}
+
 export function useDetailRoute(): DetailRoute | null {
   const [detail, setDetail] = useState<DetailRoute | null>(() => parseDetailRoute(window.location.hash))
   useEffect(() => {
@@ -137,9 +146,10 @@ export function useShellTab(mode: Mode | null): [ShellTab, (tab: ShellTab, close
   }, [mode])
   const goTab = useCallback((next: ShellTab, closeDetail = false) => {
     setTab(next)
-    if (closeDetail || parseDetailRoute(window.location.hash) === null) {
-      window.location.hash = tabHash(next)
-    }
+    const hash = window.location.hash
+    // Re-selecting the tab already shown adds no entry.
+    const write = parseDetailRoute(hash) === null ? parseTabRoute(hash) !== next : closeDetail
+    if (write) navigateHash('pushState', null, tabHash(next))
   }, [])
   const shown = mode !== null && !tabsFor(mode).includes(tab) ? 'fleet' : tab
   return [shown, goTab]

@@ -11,8 +11,8 @@ import { useTerminalLifecycle } from './useTerminalLifecycle'
 import { ChatTab } from './ChatTab'
 import { CrewTab } from './CrewTab'
 import { RunQuestion, RunStatusStrip } from './RunStatusStrip'
-import { runHash } from './routes'
-import type { DetailTab } from './routes'
+import { tabHash, type DetailTab } from './routes'
+import { back, switchRunTab } from './nav'
 import { DETAIL_TAB_LABEL, offeredTabs } from './runTabs'
 import './fleet.css'
 
@@ -26,6 +26,9 @@ interface RunDetailProps {
   mode: Mode | null
   onBack?: () => void
   backLabel?: string
+  /** A one-tap way to the shell root from a nested run. */
+  onRoot?: () => void
+  rootLabel?: string
   /** Mobile overlay only: a left-edge rightward swipe calls `onBack`. */
   edgeSwipeBack?: boolean
   /** Mobile only: the shell's bottom bar shows the run's tabs, so the top row is omitted. */
@@ -33,11 +36,7 @@ interface RunDetailProps {
 }
 
 function goToFleet(): void {
-  window.location.hash = '#/fleet'
-}
-
-function goToTab(id: string, tab: DetailTab): void {
-  window.location.hash = runHash(id, tab)
+  back(tabHash('fleet'))
 }
 
 /**
@@ -45,7 +44,7 @@ function goToTab(id: string, tab: DetailTab): void {
  * sibling layer over `.fleet` (see Shell.tsx) rather than in place of it, so
  * `.fleet`'s own scroll position survives a visit here and back.
  */
-export function RunDetail({ runs, hasSnapshot, streamConnected, now, id, tab, mode, onBack = goToFleet, backLabel = 'Fleet', edgeSwipeBack = false, tabsInBar = false }: RunDetailProps) {
+export function RunDetail({ runs, hasSnapshot, streamConnected, now, id, tab, mode, onBack = goToFleet, backLabel = 'Fleet', onRoot, rootLabel = 'Fleet', edgeSwipeBack = false, tabsInBar = false }: RunDetailProps) {
   const rootRef = useRef<HTMLDivElement>(null)
   useEdgeSwipeBack(rootRef, onBack, edgeSwipeBack)
 
@@ -61,6 +60,11 @@ export function RunDetail({ runs, hasSnapshot, streamConnected, now, id, tab, mo
         <button type="button" className="run-detail-back" onClick={onBack} aria-label={`Back to ${backLabel}`}>
           <span aria-hidden>‹</span> {backLabel}
         </button>
+        {onRoot && (
+          <button type="button" className="run-detail-root" onClick={onRoot} aria-label={`Back to ${rootLabel}`}>
+            {rootLabel}
+          </button>
+        )}
         {run && (
           <div className="run-detail-heading">
             <span className="run-dot" style={{ background: `var(--state-${run.state}, var(--text-faint))` }} />
@@ -122,7 +126,7 @@ function RunDetailBody({ run, runs, tab, mode, streamConnected, now, onBack, tab
               type="button"
               className={effectiveTab === t ? 'on' : ''}
               aria-pressed={effectiveTab === t}
-              onClick={() => goToTab(run.id, t)}
+              onClick={() => switchRunTab(run.id, t)}
             >
               {DETAIL_TAB_LABEL[t]}
             </button>
