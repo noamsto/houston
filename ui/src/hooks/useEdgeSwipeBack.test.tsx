@@ -151,3 +151,21 @@ describe('useEdgeSwipeBack', () => {
     expect(onBack).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('useEdgeSwipeBack settle', () => {
+  it('drops a commit when the hash moves during the settle animation', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance', 'Date'] })
+    vi.stubGlobal('matchMedia', () => ({ matches: false }))
+    const onBack = vi.fn()
+    const view = render(<Probe onBack={onBack} />)
+    const overlay = view.getByTestId('overlay')
+    Object.defineProperty(overlay, 'clientWidth', { value: WIDTH })
+    const inner = view.getByTestId('inner')
+    fireEvent.touchStart(inner, { touches: [{ clientX: 5, clientY: 300 }] })
+    fireEvent.touchMove(inner, { touches: [{ clientX: 250, clientY: 300 }] })
+    fireEvent.touchEnd(inner, { touches: [] })
+    window.location.hash = '#/fleet/other'
+    act(() => { vi.advanceTimersByTime(250) })
+    expect(onBack).not.toHaveBeenCalled()
+  })
+})

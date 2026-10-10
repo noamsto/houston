@@ -102,7 +102,15 @@ export function useEdgeSwipeBack(
       }
       el.style.transition = `transform ${SETTLE_MS}ms ease-out`
       setOffset(width)
-      settle = setTimeout(() => { settle = null; onBackRef.current() }, SETTLE_MS)
+      settle = setTimeout(() => {
+        settle = null
+        if (window.location.hash !== startHash) {
+          el.style.transition = ''
+          setOffset(0)
+          return
+        }
+        onBackRef.current()
+      }, SETTLE_MS)
     }
 
     const onStart = (e: TouchEvent) => {
@@ -126,6 +134,9 @@ export function useEdgeSwipeBack(
     const onMove = (e: TouchEvent) => {
       if (!tracking) return
       e.stopPropagation()
+      // Before the lock too: once the browser starts a native scroll the
+      // touch is no longer cancelable. Costs a vertical scroll begun in the strip.
+      if (e.cancelable) e.preventDefault()
       const t = e.touches[0]
       const mx = t.clientX - startX
       const my = t.clientY - startY
@@ -139,7 +150,6 @@ export function useEdgeSwipeBack(
         locked = true
         el.classList.add('edge-swiping')
       }
-      if (e.cancelable) e.preventDefault()
       dx = Math.max(0, mx)
       if (!reducedMotion()) setOffset(dx)
     }
