@@ -203,18 +203,15 @@ describe('ConsoleShell layout', () => {
     expect(within(list).queryByRole('button', { name: 'Clear crew filter' })).toBeNull()
   })
 
-  it('switches the list column between Fleet, Crews, Workspace and Dispatch', async () => {
+  it('switches the list column between Fleet, Workspace and Dispatch', async () => {
     const runs = [run({ id: 'a' })]
     render(<ConsoleShell runs={runs} connected hasSnapshot now={now} mode="dispatcher" />)
 
     const rail = screen.getByLabelText('rail')
 
-    fireEvent.click(within(rail).getByRole('button', { name: 'Crews' }))
-    expect(screen.getByRole('heading', { level: 1, name: 'Crews' })).toBeTruthy()
-    expect(screen.queryByRole('heading', { level: 1, name: 'Active' })).toBeNull()
-
     fireEvent.click(within(rail).getByRole('button', { name: 'Workspace' }))
     expect(screen.getByRole('heading', { level: 1, name: 'Workspace' })).toBeTruthy()
+    expect(screen.queryByRole('heading', { level: 1, name: 'Active' })).toBeNull()
 
     fireEvent.click(within(rail).getByRole('button', { name: 'Dispatch' }))
     expect(await screen.findByLabelText('Title')).toBeTruthy()
@@ -322,29 +319,38 @@ describe('ConsoleShell tab routes', () => {
     expect(within(screen.getByLabelText('detail')).getByText('branch-b')).toBeTruthy()
   })
 
-  it('switches the list to Crews while the detail stays open', () => {
+  it('switches the list to Workspace while the detail stays open', () => {
     window.location.hash = '#/fleet/b'
     render(<ConsoleShell runs={runs} connected hasSnapshot now={now} mode="dispatcher" />)
 
-    const crewsButton = within(screen.getByLabelText('rail')).getByRole('button', { name: 'Crews' })
-    fireEvent.click(crewsButton)
+    const workspaceButton = within(screen.getByLabelText('rail')).getByRole('button', { name: 'Workspace' })
+    fireEvent.click(workspaceButton)
 
-    expect(crewsButton.getAttribute('aria-pressed')).toBe('true')
+    expect(workspaceButton.getAttribute('aria-pressed')).toBe('true')
     expect(within(screen.getByLabelText('detail')).getByText('branch-b')).toBeTruthy()
   })
 
   it('the detail back button returns to the current section', () => {
     window.location.hash = '#/fleet/b'
     render(<ConsoleShell runs={runs} connected hasSnapshot now={now} mode="dispatcher" />)
-    fireEvent.click(within(screen.getByLabelText('rail')).getByRole('button', { name: 'Crews' }))
+    fireEvent.click(within(screen.getByLabelText('rail')).getByRole('button', { name: 'Workspace' }))
 
     fireEvent.click(
       within(screen.getByLabelText('detail').querySelector<HTMLElement>('.run-detail-header')!).getByRole('button', {
-        name: 'Back to Crews',
+        name: 'Back to Workspace',
       }),
     )
 
-    expect(window.location.hash).toBe('#/crews')
+    expect(window.location.hash).toBe('#/workspace')
+  })
+
+  it('has no Crews view button in the rail and lands #/crews on Fleet', () => {
+    window.location.hash = '#/crews'
+    render(<ConsoleShell runs={[]} connected hasSnapshot now={now} mode="dispatcher" />)
+
+    expect(within(screen.getByLabelText('rail')).queryByRole('button', { name: 'Crews' })).toBeNull()
+    expect(window.location.hash).toBe('#/fleet')
+    expect(screen.getByLabelText('fleet list').hasAttribute('hidden')).toBe(false)
   })
 })
 
@@ -386,14 +392,11 @@ describe('ConsoleShell modes', () => {
     expect(screen.getByLabelText('fleet list').hasAttribute('hidden')).toBe(false)
   })
 
-  it('an unknown mode leaves #/crews alone and mounts no Crews pane, then redirects once tmux is known', () => {
+  it('an unknown mode rewrites #/crews to Fleet at once and loads no dispatch options', () => {
     window.location.hash = '#/crews'
-    const { rerender } = render(<ConsoleShell runs={[]} connected hasSnapshot now={now} mode={null} />)
-    expect(window.location.hash).toBe('#/crews')
-    expect(fetchDispatchOptions).not.toHaveBeenCalled()
-
-    rerender(<ConsoleShell runs={[]} connected hasSnapshot now={now} mode="tmux" />)
+    render(<ConsoleShell runs={[]} connected hasSnapshot now={now} mode={null} />)
     expect(window.location.hash).toBe('#/fleet')
+    expect(fetchDispatchOptions).not.toHaveBeenCalled()
   })
 
   it('dispatcher mode stays on #/dispatch', () => {

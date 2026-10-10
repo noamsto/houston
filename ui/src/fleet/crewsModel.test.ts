@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Run } from '../api/runs'
-import { countsLabel, crewAttention, dispatchHref, groupCrews } from './crewsModel'
+import { bucket, countsLabel, dispatchHref, type CrewCounts } from './crewsModel'
 
 const now = 1_800_000_000_000 // ms
 const nowSec = now / 1000
@@ -17,130 +17,19 @@ function run(p: Partial<Run> = {}): Run {
 
 const old = nowSec - 10 * 3600
 
-describe('groupCrews', () => {
-  it('excludes runs with no crew or an empty crew name', () => {
-    const { live, finished } = groupCrews([run({ id: 'a' }), run({ id: 'b', crew: { name: '' } })], now)
-    expect(live).toEqual([])
-    expect(finished).toEqual([])
-  })
-
-  it('splits live from finished crews', () => {
-    const runs = [
-      run({ id: 'a', crew: { name: 'crew-live' }, state: 'running' }),
-      run({ id: 'b', crew: { name: 'crew-done' }, state: 'done', updated_at: old }),
-    ]
-    const { live, finished } = groupCrews(runs, now)
-    expect(live.map((g) => g.name)).toEqual(['crew-live'])
-    expect(finished.map((g) => g.name)).toEqual(['crew-done'])
-  })
-
-  it('does not let a stale blocked member keep its crew live', () => {
-    const runs = [run({ id: 'a', crew: { name: 'c' }, state: 'blocked', updated_at: old })]
-    const { live, finished } = groupCrews(runs, now)
-    expect(live).toEqual([])
-    expect(finished[0].needsYou).toBe(0)
-  })
-
-  it('ranks a running member with a down control connection below a healthy one', () => {
-    const runs = [
-      run({ id: 'down', crew: { name: 'c' }, state: 'running', stale: true, updated_at: nowSec }),
-      run({ id: 'up', crew: { name: 'c' }, state: 'running', updated_at: nowSec - 30 }),
-    ]
-    expect(groupCrews(runs, now).live[0].members.map((m) => m.id)).toEqual(['up', 'down'])
-  })
-
-  it('does not let a ghost running member that stopped reporting keep its crew live', () => {
-    const runs = [run({ id: 'a', crew: { name: 'c' }, state: 'running', updated_at: old })]
-    const { live, finished } = groupCrews(runs, now)
-    expect(live).toEqual([])
-    expect(finished.map((g) => g.name)).toEqual(['c'])
-  })
-
-  it('counts a freshly reporting running member as live', () => {
-    const runs = [run({ id: 'a', crew: { name: 'c' }, state: 'running', updated_at: nowSec - 30 })]
-    expect(groupCrews(runs, now).live.map((g) => g.name)).toEqual(['c'])
-  })
-
-  it('treats a recently updated finished crew as live (updated_at is seconds, now is ms)', () => {
-    const runs = [run({ id: 'a', crew: { name: 'c' }, state: 'done', updated_at: nowSec - 60 })]
-    expect(groupCrews(runs, now).live.map((g) => g.name)).toEqual(['c'])
-  })
-
-  it('orders members needsYou first, then live, then the rest, each by recency', () => {
-    const runs = [
-      run({ id: 'done-new', crew: { name: 'c' }, state: 'done', updated_at: nowSec - 5 }),
-      run({ id: 'run-old', crew: { name: 'c' }, state: 'running', updated_at: nowSec - 100 }),
-      run({ id: 'run-new', crew: { name: 'c' }, state: 'running', updated_at: nowSec - 10 }),
-      run({ id: 'blocked', crew: { name: 'c' }, state: 'blocked', updated_at: nowSec - 200 }),
-    ]
-    const [g] = groupCrews(runs, now).live
-    expect(g.members.map((m) => m.id)).toEqual(['blocked', 'run-new', 'run-old', 'done-new'])
-  })
-
-  it('carries the project when every member that reports one agrees', () => {
-    const runs = [
-      run({ id: 'a', crew: { name: 'c' } }),
-      run({ id: 'b', crew: { name: 'c' }, project: 'qa-repo' }),
-    ]
-    expect(groupCrews(runs, now).live[0].project).toBe('qa-repo')
-  })
-
-  it('leaves project undefined when members span repos', () => {
-    const runs = [
-      run({ id: 'a', crew: { name: 'c' }, project: 'houston' }),
-      run({ id: 'b', crew: { name: 'c' }, project: 'nix-config' }),
-    ]
-    expect(groupCrews(runs, now).live[0].project).toBeUndefined()
-  })
-
-  it('counts states into buckets and tracks needsYou and lastActive', () => {
-    const runs = [
-      run({ id: 'a', crew: { name: 'c' }, state: 'running' }),
-      run({ id: 'b', crew: { name: 'c' }, state: 'thinking' }),
-      run({ id: 'c', crew: { name: 'c' }, state: 'blocked', attention: 'needs-you', updated_at: nowSec - 30 }),
-      run({ id: 'd', crew: { name: 'c' }, state: 'idle', updated_at: old }),
-    ]
-    const [g] = groupCrews(runs, now).live
-    expect(g.counts).toEqual({ working: 2, needsYou: 1, stuck: 0, done: 0, idle: 1, ended: 0 })
-    expect(g.needsYou).toBe(1)
-    expect(g.lastActive).toBe(nowSec)
-  })
-
-  it('sorts live crews needing you first, then by lastActive; finished by lastActive', () => {
-    const runs = [
-      run({ id: 'a', crew: { name: 'older' }, state: 'running', updated_at: nowSec - 500 }),
-      run({ id: 'b', crew: { name: 'newer' }, state: 'running', updated_at: nowSec - 5 }),
-      run({ id: 'c', crew: { name: 'blocked' }, state: 'blocked', updated_at: nowSec - 900 }),
-      run({ id: 'd', crew: { name: 'fin-old' }, state: 'done', updated_at: old - 100 }),
-      run({ id: 'e', crew: { name: 'fin-new' }, state: 'done', updated_at: old }),
-    ]
-    const { live, finished } = groupCrews(runs, now)
-    expect(live.map((g) => g.name)).toEqual(['blocked', 'newer', 'older'])
-    expect(finished.map((g) => g.name)).toEqual(['fin-new', 'fin-old'])
-  })
-})
-
-describe('crewAttention', () => {
-  it('is the server verdict only — an ended run is not "done"', () => {
-    expect(crewAttention(run({ state: 'running', attention: 'stuck' }))).toBe('stuck')
-    expect(crewAttention(run({ state: 'done' }))).toBeUndefined()
-    expect(crewAttention(run({ state: 'blocked' }))).toBeUndefined()
-  })
-})
-
-describe('bucketing', () => {
+describe('bucket', () => {
   it('counts fresh flags by attention, idle and ended runs apart, and stale flags as ended', () => {
-    const runs = [
-      run({ id: 'a', crew: { name: 'c' }, state: 'blocked', attention: 'needs-you' }),
-      run({ id: 'b', crew: { name: 'c' }, state: 'running', attention: 'stuck' }),
-      run({ id: 'd', crew: { name: 'c' }, state: 'idle', attention: 'done' }),
-      run({ id: 'e', crew: { name: 'c' }, state: 'idle' }),
-      run({ id: 'f', crew: { name: 'c' }, state: 'done' }),
-      run({ id: 'g', crew: { name: 'c' }, state: 'blocked', attention: 'needs-you', updated_at: old }),
-      run({ id: 'h', crew: { name: 'c' }, state: 'running', updated_at: old }),
+    const cases: [Partial<Run>, keyof CrewCounts][] = [
+      [{ state: 'blocked', attention: 'needs-you' }, 'needsYou'],
+      [{ state: 'running', attention: 'stuck' }, 'stuck'],
+      [{ state: 'idle', attention: 'done' }, 'done'],
+      [{ state: 'idle' }, 'idle'],
+      [{ state: 'done' }, 'ended'],
+      [{ state: 'blocked', attention: 'needs-you', updated_at: old }, 'ended'],
+      [{ state: 'running', updated_at: old }, 'working'],
+      [{ state: 'running' }, 'working'],
     ]
-    const [g] = groupCrews(runs, now).live
-    expect(g.counts).toEqual({ working: 1, needsYou: 1, stuck: 1, done: 1, idle: 1, ended: 2 })
+    for (const [p, expected] of cases) expect(bucket(run(p), now)).toBe(expected)
   })
 })
 

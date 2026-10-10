@@ -110,9 +110,9 @@ describe('MobileShell tabs', () => {
 
   it('follows Back to the empty hash and returns to Fleet', () => {
     render(<MobileShell runs={[]} connected hasSnapshot now={0} mode="dispatcher" />)
-    fireEvent.click(screen.getByRole('button', { name: /crews/i }))
+    fireEvent.click(screen.getByRole('button', { name: /workspace/i }))
     act(() => { window.dispatchEvent(new HashChangeEvent('hashchange')) })
-    expect(window.location.hash).toBe('#/crews')
+    expect(window.location.hash).toBe('#/workspace')
 
     act(() => { window.location.hash = '' })
 
@@ -127,20 +127,29 @@ describe('MobileShell tabs', () => {
   })
 
   it('keeps the prior tab under a run detail and Back returns to it', () => {
-    window.location.hash = '#/crews'
+    window.location.hash = '#/workspace'
     render(<MobileShell runs={[]} connected hasSnapshot now={0} mode="dispatcher" />)
 
     act(() => { window.location.hash = '#/fleet/gone/activity' })
-    expect(within(screen.getByRole('navigation', { name: 'sections' })).getByRole('button', { name: /crews/i }).getAttribute('aria-current')).toBe('true')
+    expect(within(screen.getByRole('navigation', { name: 'sections' })).getByRole('button', { name: /workspace/i }).getAttribute('aria-current')).toBe('true')
 
-    fireEvent.click(screen.getAllByRole('button', { name: 'Back to Crews' })[0])
-    expect(window.location.hash).toBe('#/crews')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Back to Workspace' })[0])
+    expect(window.location.hash).toBe('#/workspace')
   })
 })
 
 describe('MobileShell modes', () => {
   beforeEach(() => {
     vi.mocked(fetchDispatchOptions).mockClear()
+  })
+
+  it('dispatcher mode has no Crews tab button and lands #/crews on Fleet', () => {
+    window.location.hash = '#/crews'
+    render(<MobileShell runs={[]} connected hasSnapshot now={0} mode="dispatcher" />)
+
+    expect(within(screen.getByRole('navigation', { name: 'sections' })).queryByRole('button', { name: /crews/i })).toBeNull()
+    expect(window.location.hash).toBe('#/fleet')
+    expect(screen.getByRole('button', { name: /^.?Fleet/ }).getAttribute('aria-current')).toBe('true')
   })
 
   it('tmux mode has no Crews or Dispatch and never loads dispatch options', async () => {
@@ -175,14 +184,11 @@ describe('MobileShell modes', () => {
     expect(screen.getByRole('button', { name: /^.?Fleet/ }).getAttribute('aria-current')).toBe('true')
   })
 
-  it('an unknown mode leaves #/crews alone and mounts no Crews pane, then redirects once tmux is known', () => {
+  it('an unknown mode rewrites #/crews to Fleet at once and loads no dispatch options', () => {
     window.location.hash = '#/crews'
-    const { rerender } = render(<MobileShell runs={[]} connected hasSnapshot now={0} mode={null} />)
-    expect(window.location.hash).toBe('#/crews')
-    expect(fetchDispatchOptions).not.toHaveBeenCalled()
-
-    rerender(<MobileShell runs={[]} connected hasSnapshot now={0} mode="tmux" />)
+    render(<MobileShell runs={[]} connected hasSnapshot now={0} mode={null} />)
     expect(window.location.hash).toBe('#/fleet')
+    expect(fetchDispatchOptions).not.toHaveBeenCalled()
   })
 
   it('dispatcher mode stays on #/dispatch', () => {

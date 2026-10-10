@@ -3,7 +3,6 @@ import type { Run } from '../api/runs'
 import type { Mode } from '../api/mode'
 import { needsYou } from './staleness'
 import { FleetView } from './FleetView'
-import { CrewsView } from './CrewsView'
 import { WorkspaceView } from './WorkspaceView'
 import { DispatchView } from './DispatchView'
 import { RunDetail } from './RunDetail'
@@ -45,17 +44,7 @@ export function MobileShell({ runs, connected, hasSnapshot, now, mode }: ShellDa
             onOpen={open}
           />
         </div>
-        {/* Kept mounted like FleetView, so a half-typed reply survives a tab switch. */}
-        {dispatcherMode && (
-          <div hidden={tab !== 'crews'}>
-            <CrewsView
-              runs={runs}
-              now={now}
-              onOpen={(r) => { window.location.hash = runHash(r.id) }}
-            />
-          </div>
-        )}
-        {/* Kept mounted like Crews, so a half-typed dispatch form survives a tab switch. */}
+        {/* Kept mounted like FleetView, so a half-typed dispatch form survives a tab switch. */}
         {dispatcherMode && (
           <div hidden={tab !== 'dispatch'}>
             <DispatchView runs={runs} />
@@ -73,6 +62,7 @@ export function MobileShell({ runs, connected, hasSnapshot, now, mode }: ShellDa
             now={now}
             id={detail.id}
             tab={detail.tab}
+            mode={mode}
             onBack={() => { window.location.hash = tabHash(tab) }}
             backLabel={TAB_LABEL[tab]}
           />
@@ -85,11 +75,6 @@ export function MobileShell({ runs, connected, hasSnapshot, now, mode }: ShellDa
           Fleet
           {attention && tab !== 'fleet' && <span className="dot" role="status" aria-label="runs need you" />}
         </button>
-        {dispatcherMode && (
-          <button className={tab === 'crews' ? 'on' : ''} aria-current={tab === 'crews' ? 'true' : undefined} onClick={() => goTab('crews', true)}>
-            <span className="glyph" aria-hidden>◆</span>Crews
-          </button>
-        )}
         <button className={tab === 'workspace' ? 'on' : ''} aria-current={tab === 'workspace' ? 'true' : undefined} onClick={() => goTab('workspace', true)}>
           <span className="glyph" aria-hidden>▣</span>Workspace
         </button>

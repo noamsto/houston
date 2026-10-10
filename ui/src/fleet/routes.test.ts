@@ -17,6 +17,7 @@ describe('parseDetailRoute', () => {
     ['#/fleet/pane-1/chat', { id: 'pane-1', tab: 'chat' }],
     ['#/fleet/pane-1/activity', { id: 'pane-1', tab: 'chat' }],
     ['#/fleet/pane-1/terminal', { id: 'pane-1', tab: 'terminal' }],
+    ['#/fleet/pane-1/crew', { id: 'pane-1', tab: 'crew' }],
     ['#/fleet/pane-1/bogus', { id: 'pane-1' }],
     ['#/fleet/pane-1/', { id: 'pane-1' }],
     ['#/agents', null],
@@ -111,7 +112,8 @@ describe('parseTabRoute', () => {
     ['#', 'fleet'],
     ['#/', 'fleet'],
     ['#/fleet', 'fleet'],
-    ['#/crews', 'crews'],
+    ['#/crews', 'fleet'],
+    ['#/crews?x=1', 'fleet'],
     ['#/workspace', 'workspace'],
     ['#/dispatch', 'dispatch'],
     ['#/dispatch?repo=%2Frepo&crew=new', 'dispatch'],
@@ -123,8 +125,8 @@ describe('parseTabRoute', () => {
 })
 
 describe('tabsFor', () => {
-  it('lists every tab in dispatcher mode', () => {
-    expect(tabsFor('dispatcher')).toEqual(['fleet', 'crews', 'workspace', 'dispatch'])
+  it('lists Fleet, Workspace and Dispatch in dispatcher mode', () => {
+    expect(tabsFor('dispatcher')).toEqual(['fleet', 'workspace', 'dispatch'])
   })
 
   it.each(['tmux', null] as const)('lists only Fleet and Workspace for %s', (mode) => {
@@ -145,34 +147,34 @@ describe('useShellTab', () => {
     const { result } = renderHook(() => useShellTab('dispatcher'))
     expect(result.current[0]).toBe('workspace')
 
-    act(() => { window.location.hash = '#/crews' })
-    expect(result.current[0]).toBe('crews')
+    act(() => { window.location.hash = '#/dispatch' })
+    expect(result.current[0]).toBe('dispatch')
 
     act(() => { window.location.hash = '' })
     expect(result.current[0]).toBe('fleet')
   })
 
   it('keeps the tab across a detail hash', () => {
-    window.location.hash = '#/crews'
+    window.location.hash = '#/workspace'
     const { result } = renderHook(() => useShellTab('dispatcher'))
 
     act(() => { window.location.hash = '#/fleet/pane-1/activity' })
-    expect(result.current[0]).toBe('crews')
+    expect(result.current[0]).toBe('workspace')
   })
 
   it('goTab writes the hash when no detail is open', () => {
     const { result } = renderHook(() => useShellTab('dispatcher'))
-    act(() => result.current[1]('crews'))
-    expect(result.current[0]).toBe('crews')
-    expect(window.location.hash).toBe('#/crews')
+    act(() => result.current[1]('dispatch'))
+    expect(result.current[0]).toBe('dispatch')
+    expect(window.location.hash).toBe('#/dispatch')
   })
 
   it('goTab is state-only with a detail open unless closeDetail', () => {
     window.location.hash = '#/fleet/pane-1/activity'
     const { result } = renderHook(() => useShellTab('dispatcher'))
 
-    act(() => result.current[1]('crews'))
-    expect(result.current[0]).toBe('crews')
+    act(() => result.current[1]('dispatch'))
+    expect(result.current[0]).toBe('dispatch')
     expect(window.location.hash).toBe('#/fleet/pane-1/activity')
 
     act(() => result.current[1]('workspace', true))
@@ -181,16 +183,39 @@ describe('useShellTab', () => {
   })
 
   it('reads a tab the mode lacks as Fleet and rewrites the hash', () => {
-    window.location.hash = '#/crews'
+    window.location.hash = '#/dispatch'
     const { result } = renderHook(() => useShellTab('tmux'))
     expect(result.current[0]).toBe('fleet')
     expect(window.location.hash).toBe('#/fleet')
   })
 
   it('leaves a dispatcher-only hash alone while the mode is unknown', () => {
-    window.location.hash = '#/crews'
+    window.location.hash = '#/dispatch'
     const { result } = renderHook(() => useShellTab(null))
-    expect(result.current[0]).toBe('crews')
-    expect(window.location.hash).toBe('#/crews')
+    expect(result.current[0]).toBe('dispatch')
+    expect(window.location.hash).toBe('#/dispatch')
+  })
+
+  describe('retired #/crews hash', () => {
+    it.each(['dispatcher', 'tmux', null] as const)('is rewritten to #/fleet on mount in mode %s', (mode) => {
+      window.location.hash = '#/crews'
+      const { result } = renderHook(() => useShellTab(mode))
+      expect(result.current[0]).toBe('fleet')
+      expect(window.location.hash).toBe('#/fleet')
+    })
+
+    it.each(['dispatcher', 'tmux', null] as const)('is rewritten to #/fleet on hashchange in mode %s', (mode) => {
+      const { result } = renderHook(() => useShellTab(mode))
+      act(() => { window.location.hash = '#/crews' })
+      expect(result.current[0]).toBe('fleet')
+      expect(window.location.hash).toBe('#/fleet')
+    })
+
+    it('replaces the history entry instead of pushing one', () => {
+      window.location.hash = '#/crews'
+      const before = window.history.length
+      renderHook(() => useShellTab('dispatcher'))
+      expect(window.history.length).toBe(before)
+    })
   })
 })

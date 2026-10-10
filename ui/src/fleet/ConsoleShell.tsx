@@ -5,7 +5,6 @@ import { filterRuns, groupByHost, crewShortId, type Filter } from './fleetList'
 import { entryRuns } from './entryRuns'
 import { fleetEntries, groupEntriesByHost, narrowToCrew } from './fleetEntries'
 import { RunList } from './RunList'
-import { CrewsView } from './CrewsView'
 import { WorkspaceView } from './WorkspaceView'
 import { DispatchView } from './DispatchView'
 import { RunDetail } from './RunDetail'
@@ -58,8 +57,7 @@ export function ConsoleShell({ runs, connected, hasSnapshot, now, mode }: ShellD
       const name = r.crew?.name
       if (r.role !== 'worker' || !name) continue
       // The rail is a navigation of work in flight; a crew whose only runs are
-      // history (a merged PR with no session left) belongs in the Crews
-      // Finished list, not here.
+      // history (a merged PR with no session left) is not offered here.
       if (isHistory(r, now)) continue
       const list = byCrew.get(name)
       if (list) list.push(r)
@@ -189,9 +187,6 @@ export function ConsoleShell({ runs, connected, hasSnapshot, now, mode }: ShellD
 
         <div>
           <h2>Views</h2>
-          {dispatcherMode && (
-            <button type="button" className="console-rail-item" aria-pressed={section === 'crews'} onClick={() => goTab('crews')}>Crews</button>
-          )}
           <button type="button" className="console-rail-item" aria-pressed={section === 'workspace'} onClick={() => goTab('workspace')}>Workspace</button>
           {dispatcherMode && (
             <button type="button" className="console-rail-item" aria-pressed={section === 'dispatch'} onClick={() => goTab('dispatch')}>Dispatch</button>
@@ -201,7 +196,7 @@ export function ConsoleShell({ runs, connected, hasSnapshot, now, mode }: ShellD
       </nav>
 
       <section className="console-list" aria-label="list">
-        {/* Kept mounted like mobile's Fleet/Crews tabs: switching sections
+        {/* Kept mounted like mobile's Fleet tab: switching sections
             must not lose the chosen filter, crew narrowing or a half-typed
             reply. `hidden` is display:none, so scroll position is not kept. */}
         <div hidden={section !== 'fleet'} className="console-pane" aria-label="fleet list">
@@ -237,12 +232,6 @@ export function ConsoleShell({ runs, connected, hasSnapshot, now, mode }: ShellD
           </div>
         </div>
 
-        {dispatcherMode && (
-          <div hidden={section !== 'crews'} className="console-pane">
-            <CrewsView runs={runs} now={now} onOpen={open} />
-          </div>
-        )}
-
         {section === 'workspace' && (
           <WorkspaceView onOpen={(id) => { window.location.hash = runHash(id) }} />
         )}
@@ -263,6 +252,7 @@ export function ConsoleShell({ runs, connected, hasSnapshot, now, mode }: ShellD
             now={now}
             id={route.id}
             tab={route.tab}
+            mode={mode}
             onBack={() => { window.location.hash = tabHash(section) }}
             backLabel={TAB_LABEL[section]}
           />
