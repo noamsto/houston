@@ -27,9 +27,10 @@ type Prompt struct {
 }
 
 // PermissionPrompt parses the permission-style dialog at the bottom of
-// capture, width cells wide: the lines after the last full-width "─" dialog rule, ending in an "Esc to
-// cancel" footer, with consecutive choices 1..m (2 ≤ m ≤ 9), one under the cursor,
-// below a line ending in "?". A question dialog is never one.
+// capture, width cells wide: the lines after the last full-width "─" dialog
+// rule, ending in an "Esc to cancel" footer, with consecutive choices 1..m
+// (2 ≤ m ≤ 9), one under the cursor, below a line ending in "?". A question
+// dialog is never one.
 func PermissionPrompt(capture string, width int) (Prompt, bool) {
 	lines := captureLines(capture)
 	top := -1
