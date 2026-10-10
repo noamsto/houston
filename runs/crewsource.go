@@ -532,7 +532,7 @@ func deltasFromCrewLog(rd io.Reader) map[string]crewBranch {
 					r.AttentionNote = crewWatchdogDeadNote
 				case r.State != StateBlocked:
 				case body.Source != "watchdog":
-					r.Question = &Question{Text: crewBlockedNoDetail, Via: "crew"}
+					r.Question = &Question{Text: crewBlockedNoDetail, Via: "crew", Kind: QuestionCrew}
 					if body.Detail != "" {
 						r.Question.Text = body.Detail
 					}
@@ -550,7 +550,7 @@ func deltasFromCrewLog(rd io.Reader) map[string]crewBranch {
 							// Actionable at the pane: a human clears the prompt there, so
 							// the question routes to the terminal rather than the bus.
 							r.State = StateBlocked
-							r.Question = &Question{Text: c.note, Via: "pane"}
+							r.Question = &Question{Text: c.note, Via: "pane", Kind: QuestionDialog}
 						} else {
 							r.Attention, r.AttentionNote = AttentionStuck, c.note
 						}

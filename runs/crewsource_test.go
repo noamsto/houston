@@ -36,6 +36,9 @@ func TestDeltasFromCrewLogTakesLatestStatePerBranch(t *testing.T) {
 	if r.Question == nil || r.Question.Text != "Keep the legacy route?" {
 		t.Errorf("Question = %+v, want the blocking detail", r.Question)
 	}
+	if r.Question != nil && r.Question.Kind != QuestionCrew {
+		t.Errorf("Question.Kind = %q, want crew", r.Question.Kind)
+	}
 	if r.Question != nil && r.Question.Via != "crew" {
 		t.Errorf("Question.Via = %q, want crew — it is answered with `crew reply`", r.Question.Via)
 	}
@@ -1481,8 +1484,8 @@ func TestDeltasFromCrewLogWatchdogPrefixes(t *testing.T) {
 			switch {
 			case c.question == "" && r.Question != nil:
 				t.Errorf("Question = %+v, want nil", r.Question)
-			case c.question != "" && (r.Question == nil || r.Question.Via != "pane" || r.Question.Text != c.question):
-				t.Errorf("Question = %+v, want Via pane text %q", r.Question, c.question)
+			case c.question != "" && (r.Question == nil || r.Question.Via != "pane" || r.Question.Kind != QuestionDialog || r.Question.Text != c.question):
+				t.Errorf("Question = %+v, want Via pane Kind dialog text %q", r.Question, c.question)
 			}
 			if r.Attention != c.attention || r.AttentionNote != c.attentionNote {
 				t.Errorf("Attention = %q %q, want %q %q", r.Attention, r.AttentionNote, c.attention, c.attentionNote)

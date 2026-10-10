@@ -75,6 +75,9 @@ export interface ContextUsage {
 export interface Question {
   text: string
   via: string // "pane" | "crew" (legacy "watchdog" is no longer produced)
+  // "turn": the turn ended on a question the transcript already shows;
+  // "dialog" | "ask" | "crew" need their own surface. Absent on older servers.
+  kind?: 'turn' | 'dialog' | 'ask' | 'crew'
 }
 
 export interface Tokens {

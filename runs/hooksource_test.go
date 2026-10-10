@@ -71,6 +71,9 @@ func TestRunFromSessionViewCarriesQuestionWhenBlocked(t *testing.T) {
 	if r.Question.Via != "pane" {
 		t.Errorf("Question.Via = %q, want pane", r.Question.Via)
 	}
+	if r.Question.Kind != QuestionDialog {
+		t.Errorf("Question.Kind = %q, want %q", r.Question.Kind, QuestionDialog)
+	}
 }
 
 func TestRunFromSessionViewTurnEndQuestionNeedsYou(t *testing.T) {
@@ -83,7 +86,7 @@ func TestRunFromSessionViewTurnEndQuestionNeedsYou(t *testing.T) {
 	if r.State != StateBlocked {
 		t.Fatalf("State = %q, want blocked", r.State)
 	}
-	if r.Question == nil || *r.Question != (Question{Text: "A or B?", Via: "pane"}) {
+	if r.Question == nil || *r.Question != (Question{Text: "A or B?", Via: "pane", Kind: QuestionTurn}) {
 		t.Fatalf("Question = %+v, want the turn-ending question via pane", r.Question)
 	}
 }
@@ -98,7 +101,7 @@ func TestRunFromSessionViewAskUserQuestionNeedsYou(t *testing.T) {
 	if r.State != StateBlocked {
 		t.Fatalf("State = %q, want blocked", r.State)
 	}
-	if r.Question == nil || *r.Question != (Question{Text: askUserQuestionNote, Via: "pane"}) {
+	if r.Question == nil || *r.Question != (Question{Text: askUserQuestionNote, Via: "pane", Kind: QuestionAsk}) {
 		t.Fatalf("Question = %+v, want the fixed AskUserQuestion note via pane", r.Question)
 	}
 }

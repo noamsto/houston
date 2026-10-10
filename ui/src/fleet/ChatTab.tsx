@@ -411,7 +411,9 @@ export function ChatTab({ run, now }: { run: Run; now: number }) {
   const header = (
     <>
       <RunStatusStrip run={run} now={now} />
-      <RunQuestion run={run} answeredHere={promptShown || questionPending} />
+      {!(status === 'ready' && run.question?.kind === 'turn') && (
+        <RunQuestion run={run} answeredHere={promptShown || questionPending} />
+      )}
       <PermissionBar run={run} onPrompt={setPromptShown} />
     </>
   )

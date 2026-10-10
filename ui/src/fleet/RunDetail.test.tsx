@@ -331,6 +331,11 @@ describe('RunDetail status card (no chat)', () => {
     expect(screen.getAllByText('Deploy to prod?')).toHaveLength(1)
   })
 
+  it('still shows the turn-end question card on the status card of a run without chat', () => {
+    renderCard({ state: 'blocked', question: { text: 'ok?', via: 'pane', kind: 'turn' }, caps: { terminal: true, reply: true, kill: true } })
+    expect(screen.getByText('ok?')).toBeTruthy()
+  })
+
   it('offers Reply in Terminal for a blocked pane question on the default tab', () => {
     renderCard({ state: 'blocked', question: { text: 'ok?', via: 'pane' }, caps: { terminal: true, reply: true, kill: true } })
     expect(screen.getByRole('button', { name: 'Reply in Terminal' })).toBeTruthy()

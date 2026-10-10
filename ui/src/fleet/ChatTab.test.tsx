@@ -741,6 +741,40 @@ describe('ChatTab', () => {
     expect(screen.getByText('Ship it?')).toBeTruthy()
   })
 
+  it('shows no pinned question card or Reply in Terminal for a turn-end question', async () => {
+    await renderReady(
+      { state: 'blocked', question: { text: 'A or B?', via: 'pane', kind: 'turn' } },
+      { page: page('e1', [textUpdate('m1', 1, 'Which?\n\nA or B?')]) },
+    )
+    expect(screen.getByText('needs you')).toBeTruthy()
+    expect(document.querySelector('.run-detail-question')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Reply in Terminal' })).toBeNull()
+  })
+
+  it('keeps the turn-end question card while the transcript is not loaded', () => {
+    installFetch({ page: page('e1', []) })
+    render(<ChatTab run={run({ state: 'blocked', question: { text: 'A or B?', via: 'pane', kind: 'turn' } })} now={now} />)
+    expect(screen.getByText('A or B?')).toBeTruthy()
+  })
+
+  it('keeps the crew question with its reply composer', async () => {
+    await renderReady(
+      { state: 'blocked', question: { text: 'Ship it?', via: 'crew', kind: 'crew' } },
+      { page: page('e1', []) },
+    )
+    expect(screen.getByText('Ship it?')).toBeTruthy()
+    expect(screen.getByLabelText('Reply to the crew')).toBeTruthy()
+  })
+
+  it('keeps the card and Reply in Terminal for a dialog with no permission bar', async () => {
+    await renderReady(
+      { state: 'blocked', question: { text: 'Pick one?', via: 'pane', kind: 'dialog' } },
+      { page: page('e1', []) },
+    )
+    expect(document.querySelector('.run-detail-question')?.textContent).toBe('Pick one?')
+    expect(screen.getByRole('button', { name: 'Reply in Terminal' })).toBeTruthy()
+  })
+
   it('shows a provisional tool row from run.activity while running, gone once the matching tool_call arrives', async () => {
     const { container } = await renderReady(
       { state: 'running', activity: { tool: 'Edit', hint: 'foo.ts' } },
