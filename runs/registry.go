@@ -326,7 +326,7 @@ type signature struct {
 	crewModel, crewDetail                                  string
 	crewSessions                                           int
 
-	hasQuestion bool
+	hasQuestion        bool
 	qText, qVia, qKind string
 
 	actTool, actHint, actMessage, actTask string
