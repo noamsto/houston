@@ -208,17 +208,20 @@ func openBus(path string) (*os.File, int64, string, error) {
 		return nil, 0, "", err
 	}
 	fi, err := f.Stat()
-	if err == nil && !fi.Mode().IsRegular() {
-		err = fmt.Errorf("%s: not a regular file (%s)", path, fi.Mode().Type())
+	if err != nil {
+		_ = f.Close()
+		return nil, 0, "", err
 	}
-	if err == nil {
-		var head string
-		if head, err = headHash(io.NewSectionReader(f, 0, fi.Size())); err == nil {
-			return f, fi.Size(), head, nil
-		}
+	if !fi.Mode().IsRegular() {
+		_ = f.Close()
+		return nil, 0, "", fmt.Errorf("%s: not a regular file (%s)", path, fi.Mode().Type())
 	}
-	_ = f.Close()
-	return nil, 0, "", err
+	head, err := headHash(io.NewSectionReader(f, 0, fi.Size()))
+	if err != nil {
+		_ = f.Close()
+		return nil, 0, "", err
+	}
+	return f, fi.Size(), head, nil
 }
 
 // record replaces bus's published view with t's position and entries.
