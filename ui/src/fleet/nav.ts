@@ -41,10 +41,8 @@ export function switchRunTab(id: string, tab: DetailTab): void {
 }
 
 /** Desktop list/Workspace pick: the detail is a persistent pane, so choosing a
- *  sibling run while one is shown replaces instead of pushing. Choosing the run
- *  the current entry's `from` names — the run on screen's parent — collapses the
- *  stack instead: a replace would leave `from` naming the run now shown, so
- *  Back would be labelled with it and pop to the same run. */
+ *  sibling run while one is shown replaces instead of pushing; selecting the run
+ *  its `from` names (the on-screen parent) collapses the stack with `back()`. */
 export function selectRun(id: string): void {
   if (!parseDetailRoute(window.location.hash)) {
     openRun(id)
@@ -61,8 +59,7 @@ export function selectRun(id: string): void {
 // history.back()/go() land asynchronously and navEntry() keeps the old depth
 // until then, so a second pop in that window would overshoot. `popstate` is the
 // usual clear, but a cancelled traversal or a pop past a pruned history start
-// never yields one, so `pageshow`/`hashchange` and a fallback timer clear it too
-// (a guard cleared only by `popstate` would wedge every later Back).
+// never yields one, so `pageshow`/`hashchange` and a fallback timer clear it too.
 const POP_FALLBACK_MS = 1000
 let popping = false
 let popTimer: ReturnType<typeof setTimeout> | null = null

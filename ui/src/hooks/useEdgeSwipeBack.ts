@@ -122,8 +122,7 @@ export function useEdgeSwipeBack(
           return
         }
         onBackRef.current()
-        // `onBack` can no-op (e.g. a pop guard swallowed it); the overlay is
-        // off-screen then, so bring it back once navigation has had its chance.
+        // `onBack` can no-op (a swallowed pop) and strand the off-screen overlay.
         strand = setTimeout(() => {
           strand = null
           if (window.location.hash !== startHash) {
