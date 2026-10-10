@@ -196,8 +196,10 @@ func (s *Server) handleRunChatStream(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "event: reset\ndata: {}\n\n")
 		flusher.Flush()
 	}
-	// pull sends everything after the cursor; false ends the stream.
-	pull := func() bool {
+	// pull sends everything after the cursor; false ends the stream. The
+	// connect's first pull always sends an event, even an empty one, so the
+	// client can tell the catch-up batch from the live ticks that follow.
+	pull := func(first bool) bool {
 		ups, ok, err := s.chat.ChatSince(run.Session, epoch, after)
 		if err != nil && !errors.Is(err, hub.ErrNoChat) {
 			slog.Warn("run chat stream", "id", run.ID, "err", err)
@@ -206,15 +208,21 @@ func (s *Server) handleRunChatStream(w http.ResponseWriter, r *http.Request) {
 			reset()
 			return false
 		}
-		if len(ups) == 0 {
+		if len(ups) == 0 && !first {
 			return true
+		}
+		if ups == nil {
+			ups = []chat.Update{}
 		}
 		b, err := json.Marshal(ups)
 		if err != nil {
 			slog.Warn("run chat stream marshal", "id", run.ID, "err", err)
 			return false
 		}
-		last := ups[len(ups)-1].Seq
+		last := after
+		if len(ups) > 0 {
+			last = ups[len(ups)-1].Seq
+		}
 		if _, err := fmt.Fprintf(w, "id: %s.%d\nevent: updates\ndata: %s\n\n", epoch, last, b); err != nil {
 			return false
 		}
@@ -223,7 +231,7 @@ func (s *Server) handleRunChatStream(w http.ResponseWriter, r *http.Request) {
 		return true
 	}
 
-	if !pull() {
+	if !pull(true) {
 		return
 	}
 	// Commit the headers even when there was nothing to send yet.
@@ -243,7 +251,7 @@ func (s *Server) handleRunChatStream(w http.ResponseWriter, r *http.Request) {
 				reset()
 				return
 			}
-			if !pull() {
+			if !pull(false) {
 				return
 			}
 		case <-check.C:

@@ -74,6 +74,43 @@ describe('useRunChat', () => {
     expect(Array.from(result.current.liveIds)).toEqual(['u3'])
   })
 
+  it('marks only the newest update of a catch-up batch live, after a resume too', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(page('e1', [upd(1)])))
+    const { result } = renderHook(() => useRunChat('r1', true))
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+
+    act(() => { fake.instances[0].emit('updates', [upd(2), upd(3), upd(4)]) })
+    expect(result.current.updates.map((u) => u.seq)).toEqual([1, 2, 3, 4])
+    expect(Array.from(result.current.liveIds)).toEqual(['u4'])
+
+    // A later multi-update event is a live tick: all of it animates.
+    act(() => { fake.instances[0].emit('updates', [upd(5), upd(6)]) })
+    expect(Array.from(result.current.liveIds)).toEqual(['u4', 'u5', 'u6'])
+  })
+
+  it('treats the first event of a reopened stream as a catch-up', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(page('e1', [upd(1)])))
+    const { result } = renderHook(() => useRunChat('r1', true))
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    const es = fake.instances[0]
+    act(() => { es.emit('updates', [upd(2)]) })
+
+    act(() => { es.open() })
+    act(() => { es.emit('updates', [upd(3), upd(4), upd(5)]) })
+    expect(Array.from(result.current.liveIds)).toEqual(['u2', 'u5'])
+  })
+
+  it('an empty catch-up event leaves the next multi-update tick fully live', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(page('e1', [upd(1)])))
+    const { result } = renderHook(() => useRunChat('r1', true))
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    const es = fake.instances[0]
+
+    act(() => { es.emit('updates', []) })
+    act(() => { es.emit('updates', [upd(2), upd(3)]) })
+    expect(Array.from(result.current.liveIds)).toEqual(['u2', 'u3'])
+  })
+
   it('reset: closes the source, refetches the newest page, and reopens with the new epoch', async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(page('e1', [upd(1), upd(2)])))
     const { result } = renderHook(() => useRunChat('r1', true))
