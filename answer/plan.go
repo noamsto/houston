@@ -82,8 +82,9 @@ type Key struct {
 }
 
 // Check reports whether a capture (tmux capture-pane -p -e, ANSI included)
-// shows the expected dialog state.
-type Check func(capture string) bool
+// shows the expected dialog state. width is the pane's width in cells; the
+// capture is the pane at that width.
+type Check func(capture string, width int) bool
 
 // Step is one round of an answer: the pane must pass Expect before Keys are
 // sent.

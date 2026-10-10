@@ -53,28 +53,17 @@ func isDialogRule(line, runes string) bool {
 	return isRule(strings.TrimRightFunc(line, unicode.IsSpace), runes)
 }
 
-// anchorWidth is the widest column-0 "─" rule in a capture, in runes. A
-// dialog's own rule spans the pane, so it sets the width, while a short rule
-// run spilled into its text falls short of it. Rule lines hold only "─", so
-// their rune count is their width in cells.
-func anchorWidth(lines []string) int {
-	w := 0
-	for _, l := range lines {
-		if isDialogRule(l, "─") {
-			w = max(w, ruleWidth(l))
-		}
-	}
-	return w
-}
-
 func ruleWidth(line string) int {
 	return utf8.RuneCountInString(strings.TrimRightFunc(line, unicode.IsSpace))
 }
 
 // isAnchorRule reports whether a capture line is a dialog's "─" rule: drawn
-// from column 0 as wide as the capture's widest rule.
+// from column 0 across the whole pane. A dialog's own rule spans the pane, while
+// a short rule run spilled into its text falls short of it, so no shorter rule
+// may stand in: a capture with none (a dialog taller than the capture) holds no
+// dialog. Rule lines hold only "─", so their rune count is their width in cells.
 func isAnchorRule(line string, width int) bool {
-	return isDialogRule(line, "─") && ruleWidth(line) >= width
+	return width > 0 && isDialogRule(line, "─") && ruleWidth(line) >= width
 }
 
 func isTabBar(line string) bool {
@@ -94,10 +83,10 @@ type dialogLine struct {
 // dialogLines returns the non-blank lines of the question dialog at the
 // bottom of capture, starting with its tab bar or header line: the lines after
 // the last "─" dialog rule (see isAnchorRule) that is directly followed by one.
-// Each later dialog rule's norm is dialogRule.
-func dialogLines(capture string) ([]dialogLine, bool) {
+// Each later dialog rule's norm is dialogRule. width is the pane's width in
+// cells.
+func dialogLines(capture string, width int) ([]dialogLine, bool) {
 	raw := captureLines(capture)
-	width := anchorWidth(raw)
 	lines := make([]dialogLine, 0, len(raw))
 	for _, l := range raw {
 		if isAnchorRule(l, width) {
@@ -201,8 +190,8 @@ func newSpec(qs []Question, i int, tabbed bool) questionSpec {
 }
 
 func (s questionSpec) check(want tabState) Check {
-	return func(capture string) bool {
-		bar, rows, final, ok := s.parse(capture)
+	return func(capture string, width int) bool {
+		bar, rows, final, ok := s.parse(capture, width)
 		return ok && s.barMatches(bar, want.touched) && s.matches(rows, final, want)
 	}
 }
@@ -212,8 +201,8 @@ func (s questionSpec) check(want tabState) Check {
 // the Next/Submit row. The tab must hold exactly this question, followed by a
 // rule, the "Chat about this" row and the footer, so a dialog that is not at
 // the bottom of the pane never parses.
-func (s questionSpec) parse(capture string) (string, []row, row, bool) {
-	lines, ok := dialogLines(capture)
+func (s questionSpec) parse(capture string, width int) (string, []row, row, bool) {
+	lines, ok := dialogLines(capture, width)
 	if !ok || isTabBar(lines[0].norm) != s.tabbed {
 		return "", nil, row{}, false
 	}
@@ -380,8 +369,8 @@ func reviewCheck(qs []Question, as []Answer) Check {
 	b.WriteString("Readytosubmityouranswers?" + cursorMark + "1.Submitanswers2.Cancel")
 	want := b.String()
 	answered := slices.Repeat([]bool{true}, len(qs))
-	return func(capture string) bool {
-		lines, ok := dialogLines(capture)
+	return func(capture string, width int) bool {
+		lines, ok := dialogLines(capture, width)
 		return ok && isTabBar(lines[0].norm) && slices.Equal(tabBoxes(lines[0].norm), answered) &&
 			strings.Join(norms(lines[1:]), "") == want
 	}

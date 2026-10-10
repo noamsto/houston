@@ -41,7 +41,7 @@ type fakeRunPanes struct {
 	sent          []sentInput
 	lastCtx       context.Context
 
-	// A scripted screen: CapturePane shows frames[frame]. Keys delivered
+	// A scripted screen: CapturePaneWidth shows frames[frame]. Keys delivered
 	// since the frame last changed collect in pending, and once
 	// next[frame+"|"+pending] names a frame the screen moves there. After
 	// the injectAfter-th delivered key the screen jumps to injectFrame
@@ -56,6 +56,7 @@ type fakeRunPanes struct {
 	captureErr     error
 	captureErrFrom int // captureErr fails captures from this 0-based index on
 	captures       int
+	width          int // pane width in cells; zero reads as 60
 
 	// The pane is in copy mode once inMode is set, or after the
 	// modeAfter-th delivered key. modeErr fails every mode probe from the
@@ -111,15 +112,19 @@ func (f *fakeRunPanes) send(in sentInput, key string) error {
 	return nil
 }
 
-func (f *fakeRunPanes) CapturePane(tmux.Pane, int) (string, error) {
+func (f *fakeRunPanes) CapturePaneWidth(tmux.Pane, int) (string, int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	failing := f.captures >= f.captureErrFrom
 	f.captures++
 	if failing && f.captureErr != nil {
-		return "", f.captureErr
+		return "", 0, f.captureErr
 	}
-	return f.frames[f.frame], nil
+	width := f.width
+	if width == 0 {
+		width = 60 // the columns the answer fixtures were recorded at
+	}
+	return f.frames[f.frame], width, nil
 }
 
 func (f *fakeRunPanes) PaneInMode(tmux.Pane) (bool, error) {

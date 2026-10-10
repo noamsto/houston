@@ -48,6 +48,9 @@ func previews(os []Option) []Option {
 	return os
 }
 
+// fixtureWidth is the pane width the testdata captures were recorded at.
+const fixtureWidth = 60
+
 func fixture(t *testing.T, name string) string {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join("testdata", name+".txt"))
@@ -143,7 +146,7 @@ func TestQuestionChecks(t *testing.T) {
 			if ansi {
 				capture = colorize(capture)
 			}
-			if got := tt.check(capture); got != tt.want {
+			if got := tt.check(capture, fixtureWidth); got != tt.want {
 				t.Errorf("check(%s) = %v, want %v", tt.fixture, got, tt.want)
 			}
 		})
@@ -227,7 +230,7 @@ func TestPlanWalk(t *testing.T) {
 			for i, s := range steps {
 				for _, name := range all {
 					want := name == tt.frames[i]
-					if got := s.Expect(fixture(t, name)); got != want {
+					if got := s.Expect(fixture(t, name), fixtureWidth); got != want {
 						t.Errorf("step %d Expect(%s) = %v, want %v", i, name, got, want)
 					}
 				}
@@ -238,7 +241,7 @@ func TestPlanWalk(t *testing.T) {
 
 func TestDialogLinesIgnoresInputBox(t *testing.T) {
 	for _, name := range []string{"plain-done", "perm-after", "perm-bash"} {
-		if _, ok := dialogLines(fixture(t, name)); ok {
+		if _, ok := dialogLines(fixture(t, name), fixtureWidth); ok {
 			t.Errorf("dialogLines(%s) found a question dialog", name)
 		}
 	}
@@ -265,12 +268,12 @@ func TestQuestionCheckOptionRowsExactly(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if newSpec(tt.qs, 0, tt.tabbed).check(tabState{cursor: 1})(tt.capture) {
+			if newSpec(tt.qs, 0, tt.tabbed).check(tabState{cursor: 1})(tt.capture, fixtureWidth) {
 				t.Error("check passed")
 			}
 		})
 	}
-	if !newSpec([]Question{toppings}, 0, true).check(tabState{cursor: 1})(fixture(t, "smulti-q")) {
+	if !newSpec([]Question{toppings}, 0, true).check(tabState{cursor: 1})(fixture(t, "smulti-q"), fixtureWidth) {
 		t.Error("smulti-q does not match its own question")
 	}
 }
@@ -282,7 +285,7 @@ func TestQuestionCheckIndentedRule(t *testing.T) {
 	q.Options = append([]Option(nil), q.Options...)
 	q.Options[2].Description = "────────"
 	capture := strings.Replace(fixture(t, "plain-q"), "     Natural\n", "     ────────\n", 1)
-	if !newSpec([]Question{q}, 0, false).check(tabState{cursor: 1})(capture) {
+	if !newSpec([]Question{q}, 0, false).check(tabState{cursor: 1})(capture, fixtureWidth) {
 		t.Error("check failed on an option described by a rule")
 	}
 }
@@ -292,11 +295,11 @@ func TestQuestionCheckIndentedRule(t *testing.T) {
 func TestQuestionCheckPreviewNotes(t *testing.T) {
 	check := newSpec([]Question{layout}, 0, false).check(tabState{cursor: 1})
 	base := fixture(t, "prev-q")
-	if !check(base) {
+	if !check(base, fixtureWidth) {
 		t.Fatal("prev-q does not match its own question")
 	}
 	typed := strings.Replace(base, "Notes: press n to add notes", "Notes: rows of two", 1)
-	if check(typed) {
+	if check(typed, fixtureWidth) {
 		t.Error("check passed with typed notes")
 	}
 }
@@ -306,12 +309,12 @@ func TestQuestionCheckShortRuleIsText(t *testing.T) {
 	q := colorPlain
 	q.Text = "Pick one:\n────\nWhich color do you prefer?"
 	capture := strings.Replace(fixture(t, "plain-q"), "\nWhich color do you prefer?\n", "\nPick one:\n────\nWhich color do you prefer?\n", 1)
-	if !newSpec([]Question{q}, 0, false).check(tabState{cursor: 1})(capture) {
+	if !newSpec([]Question{q}, 0, false).check(tabState{cursor: 1})(capture, fixtureWidth) {
 		t.Error("check failed on a question holding a short rule")
 	}
 }
 
-// The anchor width comes from the capture's rules, so a full-width scrollback
+// The anchor width comes from the pane, so a full-width scrollback
 // line holding more runes than cells (tmux draws a ZWJ family emoji in 2 cells
 // and NFD Hangul medial/final jamo in none) still lets the dialog anchor.
 func TestAnchorIgnoresWideRuneLines(t *testing.T) {
@@ -321,12 +324,33 @@ func TestAnchorIgnoresWideRuneLines(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if !newSpec([]Question{colorPlain}, 0, false).check(tabState{cursor: 1})(tt.line + "\n" + fixture(t, "plain-q")) {
+			if !newSpec([]Question{colorPlain}, 0, false).check(tabState{cursor: 1})(tt.line+"\n"+fixture(t, "plain-q"), fixtureWidth) {
 				t.Error("question check failed below the line")
 			}
-			if _, ok := PermissionPrompt(tt.line + "\n" + fixture(t, "perm-bash")); !ok {
+			if _, ok := PermissionPrompt(tt.line+"\n"+fixture(t, "perm-bash"), fixtureWidth); !ok {
 				t.Error("no permission prompt below the line")
 			}
 		})
+	}
+}
+
+// A question dialog taller than the capture loses its own border, so a short
+// column-0 rule spilled above its header must not anchor it.
+func TestQuestionRefusesWithoutFullWidthRule(t *testing.T) {
+	check := newSpec([]Question{colorPlain}, 0, false).check(tabState{cursor: 1})
+	base := fixture(t, "plain-q")
+	if !check(base, fixtureWidth) {
+		t.Fatal("unmodified fixture failed")
+	}
+	_, below, ok := strings.Cut(base, strings.Repeat("─", fixtureWidth)+"\n ☐ Color")
+	if !ok {
+		t.Fatal("plain-q dialog border not found")
+	}
+	cut := "──\n ☐ Color" + below
+	if check(cut, fixtureWidth) {
+		t.Error("check anchored on a short rule")
+	}
+	if check(base, fixtureWidth+1) {
+		t.Error("check passed on a pane wider than the rule")
 	}
 }

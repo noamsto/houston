@@ -8,7 +8,7 @@ import (
 )
 
 func TestPermissionPromptBash(t *testing.T) {
-	p, ok := PermissionPrompt(fixture(t, "perm-bash"))
+	p, ok := PermissionPrompt(fixture(t, "perm-bash"), fixtureWidth)
 	if !ok {
 		t.Fatal("no prompt")
 	}
@@ -43,7 +43,7 @@ func TestPermissionPromptBash(t *testing.T) {
 func TestPermissionPromptFrame(t *testing.T) {
 	frame := func(capture string) string {
 		t.Helper()
-		p, ok := PermissionPrompt(capture)
+		p, ok := PermissionPrompt(capture, fixtureWidth)
 		if !ok {
 			t.Fatal("no prompt")
 		}
@@ -67,7 +67,7 @@ func TestPermissionPromptFrame(t *testing.T) {
 }
 
 func TestPermissionPromptBelowStaleQuestion(t *testing.T) {
-	p, ok := PermissionPrompt(fixture(t, "stale-negative"))
+	p, ok := PermissionPrompt(fixture(t, "stale-negative"), fixtureWidth)
 	if !ok {
 		t.Fatal("no prompt")
 	}
@@ -84,7 +84,7 @@ func TestPermissionPromptRefuses(t *testing.T) {
 		"perm-inactive", "perm-after", "plain-done",
 		"plain-q", "plain-other-cursor", "tab-q1", "tab-q2", "mfirst-q1-other-typed", "tab-review", "wrap-review",
 	} {
-		if p, ok := PermissionPrompt(fixture(t, name)); ok {
+		if p, ok := PermissionPrompt(fixture(t, name), fixtureWidth); ok {
 			t.Errorf("PermissionPrompt(%s) = %+v, want none", name, p)
 		}
 	}
@@ -94,7 +94,7 @@ func TestPermissionPromptDetailCap(t *testing.T) {
 	rule := strings.Repeat("─", 40)
 	capture := rule + "\n" + strings.Repeat(" é long description line\n", 200) +
 		"\n Do you want to proceed?\n ❯ 1. Yes\n   2. No\n\n Esc to cancel\n"
-	p, ok := PermissionPrompt(capture)
+	p, ok := PermissionPrompt(capture, len([]rune(rule)))
 	if !ok {
 		t.Fatal("no prompt")
 	}
@@ -118,7 +118,7 @@ func withCommand(t *testing.T, lines ...string) string {
 func TestPermissionPromptIndentedRuleInCommand(t *testing.T) {
 	heredoc := func(head string) Prompt {
 		t.Helper()
-		p, ok := PermissionPrompt(withCommand(t, head, "────────", "X"))
+		p, ok := PermissionPrompt(withCommand(t, head, "────────", "X"), fixtureWidth)
 		if !ok {
 			t.Fatal("no prompt")
 		}
@@ -136,7 +136,7 @@ func TestPermissionPromptIndentedRuleInCommand(t *testing.T) {
 func TestPermissionPromptFrameKeepsWhitespace(t *testing.T) {
 	frame := func(cmd ...string) string {
 		t.Helper()
-		p, ok := PermissionPrompt(withCommand(t, cmd...))
+		p, ok := PermissionPrompt(withCommand(t, cmd...), fixtureWidth)
 		if !ok {
 			t.Fatal("no prompt")
 		}
@@ -157,14 +157,14 @@ func TestPermissionPromptDetailTruncationNote(t *testing.T) {
 	rule := strings.Repeat("─", 40)
 	long := rule + "\n" + strings.Repeat(" é long description line\n", 200) +
 		"\n Do you want to proceed?\n ❯ 1. Yes\n   2. No\n\n Esc to cancel\n"
-	p, ok := PermissionPrompt(long)
+	p, ok := PermissionPrompt(long, len([]rune(rule)))
 	if !ok {
 		t.Fatal("no prompt")
 	}
 	if !strings.HasSuffix(p.Detail, "\n"+truncatedNote) {
 		t.Errorf("Detail ends %q, want the truncation note", p.Detail[max(0, len(p.Detail)-80):])
 	}
-	short, ok := PermissionPrompt(fixture(t, "perm-bash"))
+	short, ok := PermissionPrompt(fixture(t, "perm-bash"), fixtureWidth)
 	if !ok || strings.Contains(short.Detail, truncatedNote) {
 		t.Errorf("Detail = %q, want no truncation note", short.Detail)
 	}
@@ -174,16 +174,39 @@ func TestPermissionPromptDetailTruncationNote(t *testing.T) {
 // text never anchors it.
 func TestPermissionPromptShortRuleDoesNotAnchor(t *testing.T) {
 	base := fixture(t, "perm-bash")
-	want, ok := PermissionPrompt(base)
+	want, ok := PermissionPrompt(base, fixtureWidth)
 	if !ok {
 		t.Fatal("no prompt")
 	}
 	capture := strings.Replace(base, "\n This command requires approval", "\n──\n This command requires approval", 1)
-	p, ok := PermissionPrompt(capture)
+	p, ok := PermissionPrompt(capture, fixtureWidth)
 	if !ok {
 		t.Fatal("no prompt")
 	}
 	if p.Detail != want.Detail {
 		t.Errorf("Detail = %q, want %q", p.Detail, want.Detail)
+	}
+}
+
+// A dialog taller than the capture loses its own border, so a short column-0
+// rule spilled into its command must not anchor it: the Detail and Frame would
+// cover only the command's tail.
+func TestPermissionPromptRefusesWithoutFullWidthRule(t *testing.T) {
+	base := fixture(t, "perm-bash")
+	_, below, ok := strings.Cut(base, "─\n Bash command")
+	if !ok {
+		t.Fatal("perm-bash border not found")
+	}
+	cut := strings.Replace(" Bash command"+below, "\n This command requires approval", "\n──\n This command requires approval", 1)
+	if p, ok := PermissionPrompt(cut, fixtureWidth); ok {
+		t.Errorf("PermissionPrompt anchored on a short rule: %+v", p)
+	}
+}
+
+func TestPermissionPromptRefusesNarrowerThanPane(t *testing.T) {
+	for _, width := range []int{fixtureWidth + 1, 0} {
+		if p, ok := PermissionPrompt(fixture(t, "perm-bash"), width); ok {
+			t.Errorf("width %d: PermissionPrompt = %+v, want none", width, p)
+		}
 	}
 }

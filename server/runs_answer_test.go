@@ -344,6 +344,18 @@ func TestRunAnswerQuestionFirstFrameMismatch(t *testing.T) {
 	}
 }
 
+func TestRunAnswerQuestionNarrowPane(t *testing.T) {
+	panes := &fakeRunPanes{width: 61}
+	screen(t, panes, "plain-q")
+	s, _ := newAnswerServer(t, panes, "claude")
+
+	rec := postAnswer(t, s, questionBody(t, plainCall, []answerEntry{{Question: 0, Options: []int{1}}}))
+	wantRefusal(t, rec, http.StatusConflict, "prompt changed")
+	if _, sent := panes.calls(); len(sent) != 0 {
+		t.Fatalf("sent %+v with no full-width rule", sent)
+	}
+}
+
 func TestRunAnswerCaptureFailsFirst(t *testing.T) {
 	panes := &fakeRunPanes{captureErr: errors.New("no server running")}
 	s, _ := newAnswerServer(t, panes, "claude")
@@ -571,7 +583,7 @@ func TestRunAnswerQuestionRefusals(t *testing.T) {
 
 func promptFrameOf(t *testing.T, name string) string {
 	t.Helper()
-	p, ok := answer.PermissionPrompt(screenFrame(t, name))
+	p, ok := answer.PermissionPrompt(screenFrame(t, name), 60)
 	if !ok {
 		t.Fatalf("%s holds no permission prompt", name)
 	}
@@ -607,6 +619,17 @@ func TestRunAnswerChoice(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("narrow pane", func(t *testing.T) {
+		panes := &fakeRunPanes{width: 61}
+		screen(t, panes, "perm-bash")
+		s, _ := newAnswerServer(t, panes, "claude")
+
+		wantRefusal(t, postAnswer(t, s, choiceBody(1, promptFrameOf(t, "perm-bash"))), http.StatusConflict, "prompt changed")
+		if _, sent := panes.calls(); len(sent) != 0 {
+			t.Fatalf("sent %+v with no full-width rule", sent)
+		}
+	})
 
 	t.Run("no prompt on screen", func(t *testing.T) {
 		panes := &fakeRunPanes{}
@@ -657,6 +680,13 @@ func TestRunPrompt(t *testing.T) {
 			wantRefusal(t, get(s), http.StatusNotFound, "no prompt")
 		})
 	}
+
+	t.Run("narrow pane", func(t *testing.T) {
+		panes := &fakeRunPanes{width: 61}
+		screen(t, panes, "perm-bash")
+		s, _ := newAnswerServer(t, panes, "claude")
+		wantRefusal(t, get(s), http.StatusNotFound, "no prompt")
+	})
 
 	t.Run("pi run", func(t *testing.T) {
 		panes := &fakeRunPanes{}
