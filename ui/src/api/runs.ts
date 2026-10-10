@@ -57,7 +57,6 @@ export interface Activity {
   message?: string
   task?: string
   trail?: TrailChip[]
-  preview?: string
   turn?: number
 }
 

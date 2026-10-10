@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChatUnavailable, chatStreamURL, fetchChatPage } from '../api/chat'
 import type { ChatUpdate } from '../api/chat'
 import { mergeUpdates } from '../fleet/chatModel'
+import { watchLiveness } from './streamLiveness'
 
 export type ChatStatus = 'loading' | 'ready' | 'unavailable' | 'error'
 
@@ -68,6 +69,15 @@ export function useRunChat(runId: string, enabled: boolean): UseRunChatResult {
       earlierRef.current = null
     }
 
+    const liveness = watchLiveness(() => {
+      // No stream means a load, retry or terminal state is in charge. Resuming
+      // from the cursor keeps loaded history; the server answers `reset` when
+      // it can't serve the cursor.
+      const epoch = epochRef.current
+      if (cancelled || esRef.current === null || epoch === null) return
+      openStream(epoch, lastSeqOf(updatesRef.current))
+    })
+
     function closeStream() {
       esRef.current?.close()
       esRef.current = null
@@ -79,8 +89,12 @@ export function useRunChat(runId: string, enabled: boolean): UseRunChatResult {
       esRef.current = es
       let highWaterSeq = seq
 
+      es.addEventListener('open', () => liveness.seen())
+      es.addEventListener('ping', () => liveness.seen())
+
       es.addEventListener('updates', (ev: MessageEvent<string>) => {
         if (cancelled) return
+        liveness.seen()
         let incoming: ChatUpdate[]
         try {
           incoming = JSON.parse(ev.data) as ChatUpdate[]
@@ -102,6 +116,7 @@ export function useRunChat(runId: string, enabled: boolean): UseRunChatResult {
 
       es.addEventListener('reset', () => {
         if (cancelled) return
+        liveness.seen()
         closeStream()
         void loadNewest()
       })
@@ -143,6 +158,7 @@ export function useRunChat(runId: string, enabled: boolean): UseRunChatResult {
     return () => {
       cancelled = true
       controller.abort()
+      liveness.stop()
       newGeneration()
       clearTimeout(retryTimer)
       closeStream()

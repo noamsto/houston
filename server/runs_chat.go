@@ -259,7 +259,7 @@ func (s *Server) handleRunChatStream(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case <-ping.C:
-			if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
+			if _, err := fmt.Fprint(w, "event: ping\ndata: \n\n"); err != nil {
 				return
 			}
 			flusher.Flush()

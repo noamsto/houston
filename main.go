@@ -261,6 +261,7 @@ func runServer() {
 		AllowedHosts:    hostnames,
 		RepoRoots:       repoRoots,
 		Mode:            m,
+		Debug:           *debug,
 	})
 	if err != nil {
 		log.Fatalf("failed to create server: %v", err)

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { WSMeta, WSOutput } from '../api/types'
 import { WS_CLOSE_SERVER_CHANGED } from '../api/terminal'
+import { RESYNC_AFTER_HIDDEN_MS, trackHidden } from './streamLiveness'
 
 interface WSDims {
   cols: number
@@ -76,11 +77,10 @@ export function usePaneSocket(path: string | null, callbacks: PaneSocketCallback
         // When switching targets, the new effect sets wsRef.current to a new WS
         // before this old onclose fires — clearing it would null the new connection.
         const isCurrent = wsRef.current === ws
-        if (isCurrent) {
-          setConnected(false)
-          wsRef.current = null
-        }
-        if (isCurrent && !cancelled && e.code === WS_CLOSE_SERVER_CHANGED) {
+        if (!isCurrent) return
+        setConnected(false)
+        wsRef.current = null
+        if (!cancelled && e.code === WS_CLOSE_SERVER_CHANGED) {
           setEndedState({ path: socketPath, reason: e.reason || 'tmux server changed' })
           endedRef.current = true
           return
@@ -130,21 +130,27 @@ export function usePaneSocket(path: string | null, callbacks: PaneSocketCallback
 
     connect()
 
-    // Reconnect immediately when tab becomes visible again
-    const onVisibility = () => {
+    // A socket that outlived a long hidden spell may be a half-open zombie
+    // whose onclose never fires, so replace it rather than trust readyState.
+    const untrackHidden = trackHidden((hiddenMs) => {
       if (endedRef.current) return
-      if (document.visibilityState === 'visible' && wsRef.current?.readyState !== WebSocket.OPEN) {
-        clearTimeout(reconnectTimer)
-        retriesRef.current = 0
-        connect()
+      const ws = wsRef.current
+      if (ws && hiddenMs < RESYNC_AFTER_HIDDEN_MS && ws.readyState === WebSocket.OPEN) return
+      if (ws) {
+        ws.onopen = ws.onclose = ws.onmessage = ws.onerror = null
+        ws.close()
+        wsRef.current = null
+        setConnected(false)
       }
-    }
-    document.addEventListener('visibilitychange', onVisibility)
+      clearTimeout(reconnectTimer)
+      retriesRef.current = 0
+      connect()
+    })
 
     return () => {
       cancelled = true
       clearTimeout(reconnectTimer)
-      document.removeEventListener('visibilitychange', onVisibility)
+      untrackHidden()
       wsRef.current?.close()
       wsRef.current = null
     }

@@ -32,6 +32,10 @@ type chatState struct {
 	total  uint64        // Seq of the newest update
 	ring   []chat.Update // newest ≤ chatRingSize updates, seq-ascending
 	subs   map[chan struct{}]struct{}
+	// primed is set once a read from the stream's start has been applied.
+	// The tick refreshes only primed rings; a restart keeps it, so the tick
+	// re-reads a moved or truncated transcript a client is already following.
+	primed bool
 }
 
 // ChatPage is a run of consecutive updates, oldest first.
@@ -165,31 +169,52 @@ func (h *Hub) chatFor(sessionID string) (*Session, *chatState, error) {
 	return sess, c, nil
 }
 
-// refreshChat reads the transcript's new complete lines into the ring. The
-// read runs outside h.mu; its result is dropped if the stream restarted or
-// advanced meanwhile. A stream starting at byte 0 also (re)captures the
-// file's first line for the epoch; while the file has none, the first one to
-// arrive changes the epoch, so a brand-new session's stream resets once.
-func (h *Hub) refreshChat(sessionID string) {
+// primeChat creates the session's chat state and, until it is primed, reads
+// the transcript into it. Every public chat entry that serves the ring must
+// call it first, because the tick skips unprimed rings: the ring is built
+// only for sessions someone opens, not for every session houston knows.
+func (h *Hub) primeChat(sessionID string) error {
+	h.mu.Lock()
+	_, c, err := h.chatFor(sessionID)
+	if err != nil {
+		h.mu.Unlock()
+		return err
+	}
+	primed := c.primed
+	h.mu.Unlock()
+	if primed {
+		return nil
+	}
+	h.refreshChat(sessionID, true)
+	return nil
+}
+
+// refreshChat reads the transcript's new complete lines into the ring. It
+// never creates chat state, and only a cold read (primeChat) touches an
+// unprimed ring. The read runs outside h.mu; its result is dropped if the
+// stream restarted or advanced meanwhile, which also settles concurrent
+// primes: one applies, the rest are dropped. A stream starting at byte 0 also
+// (re)captures the file's first line for the epoch; while the file has none,
+// the first one to arrive changes the epoch, so a brand-new session's stream
+// resets once.
+func (h *Hub) refreshChat(sessionID string, cold bool) {
 	h.mu.Lock()
 	sess, ok := h.sessions[sessionID]
-	if !ok || sess.transcriptPath == "" {
+	if !ok || sess.transcriptPath == "" || sess.chat == nil || (!sess.chat.primed && !cold) {
 		h.mu.Unlock()
 		return
 	}
-	c := sess.chatLocked()
-	if c == nil {
-		h.mu.Unlock()
-		return
-	}
+	c := sess.chat
 	reader, path, cursor, gen, head := c.reader, c.path, c.cursor, c.gen, c.head
 	h.mu.Unlock()
 
 	updates, next, reset, err := reader.Read(path, cursor)
+	if errors.Is(err, fs.ErrNotExist) {
+		// Not written yet: an empty read, so the tick keeps polling for it.
+		updates, next, reset, err = nil, cursor, false, nil
+	}
 	if err != nil {
-		if !errors.Is(err, fs.ErrNotExist) {
-			h.log.Debug("read chat transcript", "path", path, "err", err)
-		}
+		h.log.Debug("read chat transcript", "path", path, "err", err)
 		return
 	}
 	newHead := head
@@ -202,6 +227,7 @@ func (h *Hub) refreshChat(sessionID string) {
 	if h.sessions[sessionID] != sess || c.gen != gen || c.path != path || c.head != head || c.cursor.Offset != cursor.Offset {
 		return
 	}
+	c.primed = true
 	if reset {
 		c.restart(path)
 	}
@@ -234,6 +260,9 @@ func (h *Hub) ChatPage(sessionID string, before uint64, limit int) (ChatPage, er
 		limit = 100
 	}
 
+	if err := h.primeChat(sessionID); err != nil {
+		return ChatPage{}, err
+	}
 	h.mu.Lock()
 	sess, c, err := h.chatFor(sessionID)
 	if err != nil {
@@ -290,6 +319,9 @@ func (h *Hub) ChatPage(sessionID string, before uint64, limit int) (ChatPage, er
 // (newer than the newest, or older than the oldest-1); the caller then
 // restarts from a fresh page.
 func (h *Hub) ChatSince(sessionID, epoch string, after uint64) ([]chat.Update, bool, error) {
+	if err := h.primeChat(sessionID); err != nil {
+		return nil, false, err
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	_, c, err := h.chatFor(sessionID)
@@ -304,6 +336,9 @@ func (h *Hub) ChatSince(sessionID, epoch string, after uint64) ([]chat.Update, b
 
 // ChatEpoch returns the session's current stream epoch.
 func (h *Hub) ChatEpoch(sessionID string) (string, error) {
+	if err := h.primeChat(sessionID); err != nil {
+		return "", err
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	_, c, err := h.chatFor(sessionID)
@@ -318,6 +353,9 @@ func (h *Hub) ChatEpoch(sessionID string) (string, error) {
 // when the session goes away. The returned func unsubscribes; it is
 // idempotent and safe after the channel was closed.
 func (h *Hub) ChatSubscribe(sessionID string) (<-chan struct{}, func(), error) {
+	if err := h.primeChat(sessionID); err != nil {
+		return nil, nil, err
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	_, c, err := h.chatFor(sessionID)

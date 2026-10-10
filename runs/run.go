@@ -134,7 +134,6 @@ type Activity struct {
 	Message string      `json:"message,omitempty"`
 	Task    string      `json:"task,omitempty"`
 	Trail   []TrailChip `json:"trail,omitempty"`
-	Preview string      `json:"preview,omitempty"`
 	Turn    int         `json:"turn,omitempty"`
 }
 

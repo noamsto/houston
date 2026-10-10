@@ -7,7 +7,7 @@
 //     written by `houston hook` (status, tool, timing).
 //
 //   - transcript JSONL at the path the state file points to
-//     (activity trail, preview text, token/cost telemetry).
+//     (activity trail, token/cost telemetry).
 //
 // The hub owns both.
 package hub

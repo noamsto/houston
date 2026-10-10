@@ -160,6 +160,21 @@ func (t *bgTracker) apply(ev TranscriptEvent) {
 	}
 }
 
+// pending returns the tool_use ids whose tool_result the tracker still awaits:
+// launches not yet confirmed, and stops.
+func (t *bgTracker) pending() []string {
+	var ids []string
+	for k, e := range t.byToolUse {
+		if !e.started {
+			ids = append(ids, k)
+		}
+	}
+	for k := range t.stops {
+		ids = append(ids, k)
+	}
+	return ids
+}
+
 func (t *bgTracker) finish(taskID, toolUseID string) {
 	for k, e := range t.byToolUse {
 		if (taskID != "" && e.started && e.task.ID == taskID) || (toolUseID != "" && k == toolUseID) {
