@@ -288,20 +288,6 @@ describe('RunDetail terminal lifecycle', () => {
     expect(JSON.parse(String(init?.body))).toEqual({ type: 'key', key: 'y' })
     expect(sendInput).not.toHaveBeenCalled()
   })
-
-  it('the tabs-row back button returns to Fleet (landscape one-step back)', () => {
-    const r = liveRun()
-    const onBack = vi.fn()
-    const { container } = render(
-      <RunDetail mode={null} runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" onBack={onBack} />,
-    )
-
-    fireEvent.click(
-      within(container.querySelector<HTMLElement>('.run-detail-tabs')!).getByRole('button', { name: /back to fleet/i }),
-    )
-
-    expect(onBack).toHaveBeenCalled()
-  })
 })
 
 describe('RunDetail status card (no chat)', () => {
@@ -407,7 +393,6 @@ describe('RunDetail chat tab', () => {
 
     const names = within(container.querySelector<HTMLElement>('.run-detail-tabs')!)
       .getAllByRole('button')
-      .filter((b) => !b.classList.contains('run-detail-tabs-back'))
       .map((b) => b.textContent)
     expect(names).toEqual(['Chat', 'Terminal'])
     await waitFor(() => expect(screen.queryByText(/loading chat/i)).toBeNull())
@@ -554,7 +539,6 @@ describe('RunDetail crew tab', () => {
   const tabNames = (container: HTMLElement) =>
     within(container.querySelector<HTMLElement>('.run-detail-tabs')!)
       .getAllByRole('button')
-      .filter((b) => !b.classList.contains('run-detail-tabs-back'))
       .map((b) => b.textContent)
 
   it('a dispatcher with a crew opens on the Crew tab in dispatcher mode and shows the feed', async () => {
@@ -611,5 +595,16 @@ describe('RunDetail crew tab', () => {
 
     expect(container.querySelector('.crew-tab')).toBeNull()
     expect(container.querySelector('.run-status-card')).toBeTruthy()
+  })
+})
+
+describe('RunDetail tabsInBar', () => {
+  it('omits the top tab row but keeps the header back button', () => {
+    const r = liveRun()
+    const { container } = render(
+      <RunDetail mode={null} runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" tabsInBar />,
+    )
+    expect(container.querySelector('.run-detail-tabs')).toBeNull()
+    expect(screen.getByRole('button', { name: /back to fleet/i })).toBeTruthy()
   })
 })

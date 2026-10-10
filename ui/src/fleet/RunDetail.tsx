@@ -13,6 +13,7 @@ import { CrewTab } from './CrewTab'
 import { RunQuestion, RunStatusStrip } from './RunStatusStrip'
 import { runHash } from './routes'
 import type { DetailTab } from './routes'
+import { DETAIL_TAB_LABEL, offeredTabs } from './runTabs'
 import './fleet.css'
 
 interface RunDetailProps {
@@ -27,6 +28,8 @@ interface RunDetailProps {
   backLabel?: string
   /** Mobile overlay only: a left-edge rightward swipe calls `onBack`. */
   edgeSwipeBack?: boolean
+  /** Mobile only: the shell's bottom bar shows the run's tabs, so the top row is omitted. */
+  tabsInBar?: boolean
 }
 
 function goToFleet(): void {
@@ -42,7 +45,7 @@ function goToTab(id: string, tab: DetailTab): void {
  * sibling layer over `.fleet` (see Shell.tsx) rather than in place of it, so
  * `.fleet`'s own scroll position survives a visit here and back.
  */
-export function RunDetail({ runs, hasSnapshot, streamConnected, now, id, tab, mode, onBack = goToFleet, backLabel = 'Fleet', edgeSwipeBack = false }: RunDetailProps) {
+export function RunDetail({ runs, hasSnapshot, streamConnected, now, id, tab, mode, onBack = goToFleet, backLabel = 'Fleet', edgeSwipeBack = false, tabsInBar = false }: RunDetailProps) {
   const rootRef = useRef<HTMLDivElement>(null)
   useEdgeSwipeBack(rootRef, onBack, edgeSwipeBack)
 
@@ -77,13 +80,13 @@ export function RunDetail({ runs, hasSnapshot, streamConnected, now, id, tab, mo
           <button type="button" className="run-detail-back-cta" onClick={onBack}>Back to {backLabel}</button>
         </div>
       ) : (
-        <RunDetailBody run={run} runs={runs} tab={tab} mode={mode} streamConnected={streamConnected} now={now} onBack={onBack} backLabel={backLabel} />
+        <RunDetailBody run={run} runs={runs} tab={tab} mode={mode} streamConnected={streamConnected} now={now} onBack={onBack} tabsInBar={tabsInBar} />
       )}
     </div>
   )
 }
 
-function RunDetailBody({ run, runs, tab, mode, streamConnected, now, onBack, backLabel }: { run: Run; runs: Run[]; tab?: DetailTab; mode: Mode | null; streamConnected: boolean; now: number; onBack: () => void; backLabel: string }) {
+function RunDetailBody({ run, runs, tab, mode, streamConnected, now, onBack, tabsInBar }: { run: Run; runs: Run[]; tab?: DetailTab; mode: Mode | null; streamConnected: boolean; now: number; onBack: () => void; tabsInBar: boolean }) {
   const capable = run.caps.terminal && Boolean(run.tmux)
   const lifecycle = useTerminalLifecycle(run.id, capable, tab === 'terminal', streamConnected)
   const chatOffered = Boolean(run.caps.chat)
@@ -111,41 +114,21 @@ function RunDetailBody({ run, runs, tab, mode, streamConnected, now, onBack, bac
 
   return (
     <>
-      <nav className="run-detail-tabs">
-        <button type="button" className="run-detail-tabs-back" onClick={onBack} aria-label={`Back to ${backLabel}`}>
-          <span aria-hidden>‹</span> {backLabel}
-        </button>
-        {crewOffered && (
-          <button
-            type="button"
-            className={effectiveTab === 'crew' ? 'on' : ''}
-            aria-pressed={effectiveTab === 'crew'}
-            onClick={() => goToTab(run.id, 'crew')}
-          >
-            Crew
-          </button>
-        )}
-        {chatOffered && (
-          <button
-            type="button"
-            className={effectiveTab === 'chat' ? 'on' : ''}
-            aria-pressed={effectiveTab === 'chat'}
-            onClick={() => goToTab(run.id, 'chat')}
-          >
-            Chat
-          </button>
-        )}
-        {run.caps.terminal && (
-          <button
-            type="button"
-            className={effectiveTab === 'terminal' ? 'on' : ''}
-            aria-pressed={effectiveTab === 'terminal'}
-            onClick={() => goToTab(run.id, 'terminal')}
-          >
-            Terminal
-          </button>
-        )}
-      </nav>
+      {!tabsInBar && (
+        <nav className="run-detail-tabs">
+          {offeredTabs(run, mode).map((t) => (
+            <button
+              key={t}
+              type="button"
+              className={effectiveTab === t ? 'on' : ''}
+              aria-pressed={effectiveTab === t}
+              onClick={() => goToTab(run.id, t)}
+            >
+              {DETAIL_TAB_LABEL[t]}
+            </button>
+          ))}
+        </nav>
+      )}
       <div className={`run-detail-body${effectiveTab === 'terminal' ? ' terminal' : ''}`}>
         {effectiveTab === 'crew' ? (
           <CrewTab key={run.id} run={run} runs={runs} now={now} />
