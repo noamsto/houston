@@ -249,6 +249,20 @@ describe('MobileShell run tabs', () => {
     expect(screen.getByRole('navigation', { name: 'sections' })).toBeTruthy()
   })
 
+  it('a joined dispatcher defaults to the Crew tab; a run with no tabs keeps the shell tabs', () => {
+    window.location.hash = '#/fleet/d'
+    const d = { ...run, id: 'd', role: 'dispatcher', crew: { name: '1-1' } } as Run
+    const { unmount } = render(<MobileShell runs={[d]} connected hasSnapshot now={nowSec * 1000} mode="dispatcher" />)
+    expect(within(bar()).getByRole('tab', { name: /crew/i }).getAttribute('aria-selected')).toBe('true')
+    unmount()
+
+    const bare = { ...run, caps: { terminal: false, reply: false, kill: false } } as Run
+    render(<MobileShell runs={[bare]} connected hasSnapshot now={nowSec * 1000} mode="dispatcher" />)
+    act(() => { window.location.hash = '#/fleet/r' })
+    expect(screen.queryByRole('tablist', { name: 'run tabs' })).toBeNull()
+    expect(screen.getByRole('navigation', { name: 'sections' })).toBeTruthy()
+  })
+
   it('hides the bar while the keyboard is up', () => {
     const vv = fakeVisualViewport(window.innerHeight)
     window.location.hash = '#/fleet/r/chat'

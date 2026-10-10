@@ -7,7 +7,7 @@ import { WorkspaceView } from './WorkspaceView'
 import { DispatchView } from './DispatchView'
 import { RunDetail } from './RunDetail'
 import { runHash, tabHash, TAB_LABEL, useDetailRoute, useShellTab } from './routes'
-import { DETAIL_TAB_LABEL, offeredTabs } from './runTabs'
+import { activeTab, DETAIL_TAB_LABEL, offeredTabs } from './runTabs'
 import { useKeyboardInset } from '../hooks/useKeyboardInset'
 
 export interface ShellData {
@@ -31,10 +31,7 @@ export function MobileShell({ runs, connected, hasSnapshot, now, mode }: ShellDa
   const keyboardInset = useKeyboardInset()
   const detailRun = detail && hasSnapshot ? runs.find((r) => r.id === detail.id) : undefined
   const runTabs = detailRun ? offeredTabs(detailRun, mode) : []
-  // Mirrors RunDetail's choice of tab: a dispatcher defaults to Crew, others to Chat.
-  const activeRunTab = detail?.tab === 'terminal' && detailRun?.caps.terminal ? 'terminal'
-    : runTabs.includes('crew') && (detail?.tab === undefined || detail.tab === 'crew') ? 'crew'
-      : 'chat'
+  const activeRunTab = detailRun ? activeTab(detailRun, mode, detail?.tab) : 'chat'
 
   return (
     <div
@@ -80,7 +77,7 @@ export function MobileShell({ runs, connected, hasSnapshot, now, mode }: ShellDa
         )}
       </div>
 
-      {detailRun && detail ? (
+      {detailRun && detail && runTabs.length > 0 ? (
         <div className="shell-tabs run-tabs" role="tablist" aria-label="run tabs">
           {runTabs.map((t) => (
             <button

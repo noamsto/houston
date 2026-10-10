@@ -12,3 +12,9 @@ export function offeredTabs(run: Run, mode: Mode | null): DetailTab[] {
   if (run.caps.terminal) tabs.push('terminal')
   return tabs
 }
+
+/** The tab shown for a route, ignoring whether the terminal has ever been live. */
+export function activeTab(run: Run, mode: Mode | null, tab: DetailTab | undefined): DetailTab {
+  if (offeredTabs(run, mode).includes('crew') && (tab === undefined || tab === 'crew')) return 'crew'
+  return tab === 'terminal' && run.caps.terminal ? 'terminal' : 'chat'
+}
