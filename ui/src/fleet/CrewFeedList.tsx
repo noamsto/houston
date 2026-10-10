@@ -3,6 +3,7 @@ import type { Run } from '../api/runs'
 import type { FeedEntry, FeedKind } from '../api/crewFeed'
 import { useCrewFeed } from '../hooks/useCrewFeed'
 import { runHash } from './routes'
+import { onAppLink, openRun } from './nav'
 import './fleet.css'
 
 const KIND_LABEL: Record<Exclude<FeedKind, 'status'>, string> = {
@@ -44,7 +45,7 @@ const FeedRow = memo(function FeedRow({ entry, workerId, workerCodename }: FeedR
       <span className="crew-feed-chips">
         {who &&
           (workerId ? (
-            <a className="run-chip crew-feed-link" href={runHash(workerId)}>{who}</a>
+            <a className="run-chip crew-feed-link" href={runHash(workerId)} onClick={onAppLink(() => openRun(workerId))}>{who}</a>
           ) : (
             <span className="run-chip">{entry.codename || entry.branch}</span>
           ))}

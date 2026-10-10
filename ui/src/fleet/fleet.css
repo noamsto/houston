@@ -286,6 +286,12 @@
 }
 .shell-tabs button.on { color: var(--accent); font-weight: 700; }
 .shell-tabs .glyph { font-size: 15px; line-height: 1; }
+.run-tabs-list { flex: 1; min-width: 0; display: flex; }
+.shell-tabs .run-tabs-back {
+  flex: 0 1 auto; min-width: 64px; max-width: 34%; padding: 0 12px;
+  color: var(--text-dim); border-right: 1px solid var(--line);
+}
+.run-tabs-back-label { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .shell-tabs .dot {
   position: absolute; transform: translate(14px, -10px);
   width: 6px; height: 6px; border-radius: 50%; background: var(--state-blocked);
@@ -311,8 +317,13 @@
   border-bottom: 1px solid var(--line);
 }
 .run-detail-back {
-  flex: none; min-height: var(--tap); padding: 0 4px; border: 0; background: none;
+  flex: none; max-width: 40%; min-height: var(--tap); padding: 0 4px; border: 0; background: none;
   color: var(--text-faint); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.run-detail-root {
+  flex: none; min-height: var(--tap); padding: 0 8px; border: 1px solid var(--line); border-radius: 8px;
+  background: none; color: var(--text-faint); font: inherit; font-size: 12px; cursor: pointer;
 }
 .run-detail-heading { display: flex; align-items: center; gap: 8px; min-width: 0; }
 /* flex:none so a long branch ellipsizes instead of squeezing the project out. */
@@ -428,6 +439,7 @@
 }
 
 .run-detail-back:focus-visible,
+.run-detail-root:focus-visible,
 .run-detail-back-cta:focus-visible,
 .run-detail-tabs button:focus-visible,
 .chat-earlier:focus-visible,

@@ -4,6 +4,7 @@ import { submitDispatcher, type DispatchOptions, type DispatcherOutcome } from '
 import type { Run } from '../api/runs'
 import { buildDispatcherRequest, MAX_TASKS, taskRowsProblem } from './dispatcherForm'
 import { runHash } from './routes'
+import { onAppLink, openRun } from './nav'
 
 interface TaskRow {
   id: number
@@ -155,7 +156,7 @@ export function DispatcherForm({
             <p>Dispatcher started in session <strong>{outcome.session}</strong>.</p>
             <p>Crew <code>{outcome.crew}</code></p>
             {startedRun ? (
-              <p><a href={runHash(startedRun.id)}>Open run</a></p>
+              <p><a href={runHash(startedRun.id)} onClick={onAppLink(() => openRun(startedRun.id))}>Open run</a></p>
             ) : (
               <p className="dispatch-hint">Waiting for it to appear in Fleet…</p>
             )}

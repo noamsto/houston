@@ -17,6 +17,7 @@ import {
 import { DispatcherForm } from './DispatcherForm'
 import { RepoPicker } from './RepoPicker'
 import { runHash, useDispatchRoute } from './routes'
+import { onAppLink, openRun } from './nav'
 import { useNow } from './useNow'
 import './fleet.css'
 
@@ -395,7 +396,7 @@ export function DispatchView({ runs }: { runs: Run[] }) {
               <p>Crew <code>{outcome.crew}</code>{outcomeWasNewCrew && ' (new crew)'}</p>
             )}
             {dispatchedRun ? (
-              <p><a href={runHash(dispatchedRun.id)}>Open run</a></p>
+              <p><a href={runHash(dispatchedRun.id)} onClick={onAppLink(() => openRun(dispatchedRun.id))}>Open run</a></p>
             ) : (
               <p className="dispatch-hint">Waiting for it to appear in Fleet…</p>
             )}
