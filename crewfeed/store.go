@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"math"
@@ -12,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"syscall"
 )
 
 // feedRing is how many of its newest entries each crew keeps in memory; an
@@ -200,11 +202,15 @@ func (s *Store) warnIO(bus, op string, err error) {
 // openBus opens a bus file and reads its size and first-line hash. A missing
 // file is (nil, 0, "", os.ErrNotExist).
 func openBus(path string) (*os.File, int64, string, error) {
-	f, err := os.Open(path) //nolint:gosec // the bus dir is derived from git's common dir, never from a request
+	// O_NONBLOCK keeps a FIFO from blocking the open while Advance holds its lock.
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0) //nolint:gosec // the bus dir is derived from git's common dir, never from a request
 	if err != nil {
 		return nil, 0, "", err
 	}
 	fi, err := f.Stat()
+	if err == nil && !fi.Mode().IsRegular() {
+		err = fmt.Errorf("%s: not a regular file (%s)", path, fi.Mode().Type())
+	}
 	if err == nil {
 		var head string
 		if head, err = headHash(io.NewSectionReader(f, 0, fi.Size())); err == nil {

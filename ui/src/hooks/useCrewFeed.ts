@@ -130,6 +130,7 @@ export function useCrewFeed(runId: string, enabled: boolean): UseCrewFeedResult 
       newGeneration()
       // Until the page lands, loadOlder would anchor on history from before the gap.
       epochRef.current = null
+      setMore(false)
       try {
         const page = await fetchCrewFeed(runId, { limit: 50, signal: controller.signal })
         if (cancelled) return
@@ -181,8 +182,10 @@ export function useCrewFeed(runId: string, enabled: boolean): UseCrewFeedResult 
       setMore(page.more)
     } catch (e) {
       if (generation !== generationRef.current) return
-      if (e instanceof CrewFeedUnavailable) setStatus('unavailable')
-      else if (e instanceof CrewFeedReset) reloadRef.current?.()
+      if (e instanceof CrewFeedUnavailable) {
+        setStatus('unavailable')
+        setMore(false)
+      } else if (e instanceof CrewFeedReset) reloadRef.current?.()
     } finally {
       if (olderRef.current === controller) olderRef.current = null
     }

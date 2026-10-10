@@ -87,6 +87,30 @@ describe('useCrewFeed', () => {
     expect(ids(result.current.entries)).toEqual(['e2.5'])
   })
 
+  it('reset then 404 leaves no `more`, so no inert Load older', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(page('e1', [ent('e1', 10)], true)))
+    const { result } = renderHook(() => useCrewFeed('r1', true))
+    await waitFor(() => expect(result.current.more).toBe(true))
+
+    fetchMock.mockResolvedValueOnce(statusResponse(404))
+    act(() => { fake.instances[0].emit('reset', null) })
+
+    await waitFor(() => expect(result.current.status).toBe('unavailable'))
+    expect(result.current.more).toBe(false)
+  })
+
+  it('a 404 on loadOlder clears `more` so Load older is not left inert', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(page('e1', [ent('e1', 10)], true)))
+    const { result } = renderHook(() => useCrewFeed('r1', true))
+    await waitFor(() => expect(result.current.more).toBe(true))
+
+    fetchMock.mockResolvedValueOnce(statusResponse(404))
+    await act(async () => { await result.current.loadOlder() })
+
+    expect(result.current.status).toBe('unavailable')
+    expect(result.current.more).toBe(false)
+  })
+
   it('loadOlder prepends older entries before the oldest id and updates `more`', async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(page('e1', [ent('e1', 30), ent('e1', 40)], true)))
     const { result } = renderHook(() => useCrewFeed('r1', true))
