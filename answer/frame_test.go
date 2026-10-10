@@ -18,6 +18,17 @@ var (
 	}
 	race = Question{Text: "Should `go test` run with **race** on?", Options: opts("Yes `-race`", "Slower", "No", "Faster")}
 	logo = Question{Text: "Which color should the logo be?", Options: opts("Red", "Warm", "Blue", "Cool", "Green", "Natural")}
+	// The preview-layout questions behind the prev-q* and prevtab-* frames.
+	layout = Question{Text: "Which layout do you prefer?", Options: previews(opts("Grid", "Cards in rows", "List", "One per line", "Split", "Two panes"))}
+	size   = Question{Text: "Pick a size?", Options: previews(opts("Small", "Compact", "Large", "Roomy"))}
+	speed  = Question{Text: "Pick a speed?", Options: opts("Slow", "Careful", "Fast", "Quick")}
+	deploy = Question{
+		Text: "Which deployment strategy should we use for the new service rollout?",
+		Options: previews(opts(
+			"Blue green deployment with full traffic switch", "Two identical fleets",
+			"Canary", "Gradual percentage rollout across regions over several hours",
+		)),
+	}
 )
 
 // opts pairs up labels and descriptions: label, description, label, ….
@@ -27,6 +38,14 @@ func opts(pairs ...string) []Option {
 		out = append(out, Option{Label: pairs[i], Description: pairs[i+1]})
 	}
 	return out
+}
+
+// previews gives every option a preview sketch.
+func previews(os []Option) []Option {
+	for i := range os {
+		os[i].Preview = "+--+\n|" + os[i].Label + "|\n+--+"
+	}
+	return os
 }
 
 func fixture(t *testing.T, name string) string {
@@ -111,6 +130,10 @@ func TestQuestionChecks(t *testing.T) {
 		{"wrapped review", reviewCheck([]Question{notes, toppings}, []Answer{{Options: []int{0}}, {Options: []int{1}}}), "wrap-review", true},
 		{"review with another answer", reviewCheck([]Question{notes, toppings}, []Answer{{Options: []int{1}}, {Options: []int{1}}}), "wrap-review", false},
 		{"review, ANSI", reviewCheck(tabbed, []Answer{{Options: []int{1}}, {Options: []int{2, 0}}}), "tab-review@ansi", true},
+		{"preview wrapped label", newSpec([]Question{deploy}, 0, false).check(tabState{cursor: 1}), "prev-q-wrap", true},
+		{"preview expected, non-preview shown", newSpec([]Question{size, speed}, 1, true).check(tabState{cursor: 1}), "prevtab-q2", true},
+		{"preview cursor on another row", newSpec([]Question{layout}, 0, false).check(tabState{cursor: 1}), "prev-q-list", false},
+		{"preview cursor row 2", newSpec([]Question{layout}, 0, false).check(tabState{cursor: 2, touched: true}), "prev-q-list", true},
 		{"typed text must match exactly", newSpec([]Question{colorPlain}, 0, false).check(tabState{cursor: 4, other: Normalize("2 mor")}), "plain-other-typed", false},
 	}
 	for _, tt := range tests {
@@ -177,6 +200,18 @@ func TestPlanWalk(t *testing.T) {
 				"mfirst-q2", "mfirst-q2-other-cursor", "mfirst-q2-other-typed",
 				"mfirst-review",
 			},
+		},
+		{
+			name:   "preview plain",
+			qs:     []Question{layout},
+			as:     []Answer{{Options: []int{2}}},
+			frames: []string{"prev-q", "prev-q-split"},
+		},
+		{
+			name:   "preview tabbed mixed",
+			qs:     []Question{size, speed},
+			as:     []Answer{{Options: []int{1}}, {Options: []int{0}}},
+			frames: []string{"prevtab-q1", "prevtab-q1-large", "prevtab-q2", "prevtab-review"},
 		},
 	}
 	all := fixtureNames(t)
@@ -249,5 +284,49 @@ func TestQuestionCheckIndentedRule(t *testing.T) {
 	capture := strings.Replace(fixture(t, "plain-q"), "     Natural\n", "     ────────\n", 1)
 	if !newSpec([]Question{q}, 0, false).check(tabState{cursor: 1})(capture) {
 		t.Error("check failed on an option described by a rule")
+	}
+}
+
+// Notes the user typed under the preview are not the empty-notes hint, so the
+// dialog no longer matches.
+func TestQuestionCheckPreviewNotes(t *testing.T) {
+	check := newSpec([]Question{layout}, 0, false).check(tabState{cursor: 1})
+	base := fixture(t, "prev-q")
+	if !check(base) {
+		t.Fatal("prev-q does not match its own question")
+	}
+	typed := strings.Replace(base, "Notes: press n to add notes", "Notes: rows of two", 1)
+	if check(typed) {
+		t.Error("check passed with typed notes")
+	}
+}
+
+// A dialog rule spans the pane, so a question line made of rule runes is text.
+func TestQuestionCheckShortRuleIsText(t *testing.T) {
+	q := colorPlain
+	q.Text = "Pick one:\n────\nWhich color do you prefer?"
+	capture := strings.Replace(fixture(t, "plain-q"), "\nWhich color do you prefer?\n", "\nPick one:\n────\nWhich color do you prefer?\n", 1)
+	if !newSpec([]Question{q}, 0, false).check(tabState{cursor: 1})(capture) {
+		t.Error("check failed on a question holding a short rule")
+	}
+}
+
+// The anchor width comes from the capture's rules, so a full-width scrollback
+// line holding more runes than cells (tmux draws a ZWJ family emoji in 2 cells
+// and NFD Hangul medial/final jamo in none) still lets the dialog anchor.
+func TestAnchorIgnoresWideRuneLines(t *testing.T) {
+	tests := []struct{ name, line string }{
+		{"zwj emoji", strings.Repeat("a", 58) + "\U0001F468\u200d\U0001F469\u200d\U0001F467"},
+		{"nfd hangul", strings.Repeat("\u1100\u1161\u11a8", 10) + strings.Repeat("a", 40)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !newSpec([]Question{colorPlain}, 0, false).check(tabState{cursor: 1})(tt.line + "\n" + fixture(t, "plain-q")) {
+				t.Error("question check failed below the line")
+			}
+			if _, ok := PermissionPrompt(tt.line + "\n" + fixture(t, "perm-bash")); !ok {
+				t.Error("no permission prompt below the line")
+			}
+		})
 	}
 }

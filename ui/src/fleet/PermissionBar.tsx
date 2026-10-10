@@ -68,6 +68,9 @@ export function PermissionBar({ run, onPrompt }: { run: Run; onPrompt: (shown: b
   // gone or replaced, which would unmount or reset the dialog's own status.
   const [moved, setMoved] = useState(false)
   const refetch = useRef<() => void>(() => {})
+  // Bumped on every answer; a poll started before it saw the dialog before the
+  // answer landed, so its result says nothing about whether the dialog closed.
+  const answerGen = useRef(0)
 
   useEffect(() => {
     if (!active) return
@@ -77,10 +80,12 @@ export function PermissionBar({ run, onPrompt }: { run: Run; onPrompt: (shown: b
       if (inFlight) return
       inFlight = true
       try {
+        const startedAt = answerGen.current
         const next = await fetchPrompt(run.id)
         if (cancelled) return
         setPrompt(next)
         setAnswered((a) => {
+          if (startedAt !== answerGen.current) return a
           if (!a || next === null || next.frame !== a.frame || a.polls + 1 >= ANSWERED_POLLS) return null
           return { ...a, polls: a.polls + 1 }
         })
@@ -97,6 +102,7 @@ export function PermissionBar({ run, onPrompt }: { run: Run; onPrompt: (shown: b
       cancelled = true
       clearInterval(timer)
       setPrompt(null)
+      setMoved(false)
     }
   }, [run.id, active])
 
@@ -119,7 +125,10 @@ export function PermissionBar({ run, onPrompt }: { run: Run; onPrompt: (shown: b
           runId={run.id}
           prompt={prompt}
           onSending={() => setMoved(false)}
-          onAnswered={() => setAnswered({ frame: prompt.frame, polls: 0 })}
+          onAnswered={() => {
+            answerGen.current++
+            setAnswered({ frame: prompt.frame, polls: 0 })
+          }}
           onMoved={() => {
             setMoved(true)
             refetch.current()

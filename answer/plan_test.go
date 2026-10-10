@@ -82,6 +82,24 @@ func TestPlanKeys(t *testing.T) {
 			as:   []Answer{{Options: []int{0}}},
 			want: [][]Key{keys("1"), keys("Down", "Down", "Down", "Down"), keys("Enter"), keys("1")},
 		},
+		{
+			name: "preview digit moves the cursor, Enter submits",
+			qs:   []Question{layout},
+			as:   []Answer{{Options: []int{2}}},
+			want: [][]Key{keys("3"), keys("Enter")},
+		},
+		{
+			name: "preview tab, Enter advances",
+			qs:   []Question{size, speed},
+			as:   []Answer{{Options: []int{1}}, {Options: []int{0}}},
+			want: [][]Key{keys("2"), keys("Enter"), keys("1"), keys("1")},
+		},
+		{
+			name: "multi-select ignores previews",
+			qs:   []Question{{Text: toppings.Text, MultiSelect: true, Options: previews(opts("Cheese", "Melty", "Olives", "Salty", "Basil", "Fresh"))}},
+			as:   []Answer{{Options: []int{0}}},
+			want: [][]Key{keys("1"), keys("Down", "Down", "Down", "Down"), keys("Enter"), keys("1")},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -136,6 +154,7 @@ func TestPlanErrors(t *testing.T) {
 		{"blank text", []Question{colorPlain}, []Answer{{Text: "  "}}},
 		{"newline in text", []Question{colorPlain}, []Answer{{Text: "a\nb"}}},
 		{"escape in text", []Question{toppings}, []Answer{{Text: "a\x1b[A"}}},
+		{"text on a preview question", []Question{layout}, []Answer{{Text: "Masonry"}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -159,6 +178,19 @@ func TestParseQuestions(t *testing.T) {
 	}
 	if want := []Question{colorTab, toppings}; !reflect.DeepEqual(got, want) {
 		t.Errorf("ParseQuestions = %+v, want %+v", got, want)
+	}
+	got, err = ParseQuestions(json.RawMessage(`{"questions":[{"question":"Pick a size?","multiSelect":false,
+		"options":[{"label":"Small","description":"Compact","preview":"+-+\n|s|"},{"label":"Large","description":"Roomy","preview":" "}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[0].Options[0].Preview != "+-+\n|s|" || !got[0].PreviewLayout() {
+		t.Errorf("ParseQuestions = %+v, want a preview question", got)
+	}
+	for _, q := range []Question{colorPlain, {Text: "Pick", Options: []Option{{Label: "a", Preview: " \n "}}}, {Text: "Pick", MultiSelect: true, Options: previews(opts("a", ""))}} {
+		if q.PreviewLayout() {
+			t.Errorf("%+v renders in the preview layout", q)
+		}
 	}
 	for _, bad := range []string{`{"questions":[]}`, `{}`, `[`, `{"questions":"x"}`} {
 		if _, err := ParseQuestions(json.RawMessage(bad)); err == nil {

@@ -1,0 +1,21 @@
+❯ Call AskUserQuestion once with TWO single-select
+  questions. Q1 "Pick a size?" header "Size", options
+  "Small" (desc "Compact", preview a 3-line ASCII box),
+  "Large" (desc "Roomy", preview a 3-line ASCII box). Q2
+  "Pick a speed?" header "Speed", options "Slow" (desc
+  "Careful") and "Fast" (desc "Quick"), NO previews on Q2.
+  Nothing else.
+────────────────────────────────────────────────────────────
+←  ☒ Size  ☐ Speed  ✔ Submit  →
+
+Pick a speed?
+
+❯ 1. Slow
+     Careful
+  2. Fast
+     Quick
+  3. Type something.
+────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · Tab/Arrow keys to navigate · Esc to cancel
