@@ -11,7 +11,8 @@
 // is authoritative: a process-environment value that differs from it is a
 // refusal, except NODE_PATH and TMUX_TMPDIR, where the file silently wins
 // (NODE_PATH holds playwright-core and qa.cjs prepends it; the caller's own
-// TMUX_TMPDIR is expected to differ and is never used). S must be a marked
+// TMUX_TMPDIR is expected to differ; ctx.tmux reads it only to refuse a default
+// socket dir). S must be a marked
 // /tmp/hqa.<random> dir and PORT within 17470-17499. SHOTS overrides the
 // screenshot dir (default $S/shots).
 //

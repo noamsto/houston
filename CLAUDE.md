@@ -280,6 +280,7 @@ Gotchas:
 - `gtrash` cannot trash under `/tmp` (no per-uid trash dir there), so `--purge` falls back to `rm -rf` of the validated `/tmp/hqa.*` dir.
 - The crew `question-live` and `question-composer` checks append to `$S`'s bus and skip on a second run; re-run `setup.sh` for a fresh `$S`. The `workspace` scenario ends by removing `$S/repos/qa-wt`.
 - Real-agent checks spend Claude quota: haiku, one-sentence prompts. Keep new prompts short.
+- Pass only `S=` to the scripts; never export `qa.env` or setup's `TMUX_TMPDIR=` line into your shell. `tp` and `ctx.tmux` compare `$S/tmux` against the caller's `TMUX_TMPDIR` to refuse a default socket dir, so with `TMUX_TMPDIR=$S/tmux` exported every tmux call is refused, teardown cannot stop the private server, and `isolation.sh` exits 2.
 
 Not covered: WebKit and iOS Safari (no WebKit browser launches on this host), so anything Safari-specific stays manual.
 
