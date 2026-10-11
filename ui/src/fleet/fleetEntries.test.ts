@@ -125,10 +125,21 @@ describe('fleetEntries: dispatcher groups', () => {
     if (mixed.kind !== 'crew') throw new Error('expected a crew entry')
     expect(mixed.project).toBe('dispatcher')
     expect(entryProject(mixed)).toBe('dispatcher')
-    expect(groupEntriesByProject(es).map(([p]) => p)).not.toContain('unknown')
+    expect(groupEntriesByProject(es).map(([p]) => p).sort()).toEqual(['dispatcher', 'p'])
     const sole = es.find((e) => e.key === 'crew:local:1-2')!
     if (sole.kind !== 'crew') throw new Error('expected a crew entry')
     expect(sole.project).toBe('p')
+  })
+
+  it('names a crew by home when no member has a project, and stays unknown with no home', () => {
+    const runs = [
+      worker('a', '1-1', { crew: { name: '1-1', home: 'dispatcher' } }),
+      worker('b', '1-2', { project: 'p' }),
+      worker('c', '1-2', { project: 'q' }),
+    ]
+    const es = fleetEntries(runs, 'all', now, 'dispatcher')
+    expect(entryProject(es.find((e) => e.key === 'crew:local:1-1')!)).toBe('dispatcher')
+    expect(entryProject(es.find((e) => e.key === 'crew:local:1-2')!)).toBe('unknown')
   })
 
   it('keeps a worker with no crew.name as a top-level run', () => {

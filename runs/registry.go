@@ -535,13 +535,16 @@ func mergeInto(dst *Run, src Run) {
 		if src.Crew.Name != "" {
 			dst.Crew.Name = src.Crew.Name
 		}
-		// First opinion wins: tmux merges first, and the crew bus only supplies
-		// an identity for a worker with no window.
-		if src.Crew.Codename != "" && dst.Crew.Codename == "" {
-			dst.Crew.Codename = src.Crew.Codename
-		}
-		if src.Crew.Color != "" && dst.Crew.Color == "" {
-			dst.Crew.Color = src.Crew.Color
+		// First opinion wins, as one pair: tmux merges first, and the crew bus only
+		// supplies an identity for a worker whose window gave no codename, so a
+		// bus colour never lands beside a tmux codename.
+		if dst.Crew.Codename == "" {
+			if src.Crew.Codename != "" {
+				dst.Crew.Codename = src.Crew.Codename
+			}
+			if src.Crew.Color != "" {
+				dst.Crew.Color = src.Crew.Color
+			}
 		}
 		if src.Crew.Home != "" {
 			dst.Crew.Home = src.Crew.Home

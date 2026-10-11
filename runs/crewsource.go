@@ -366,7 +366,7 @@ func (s *CrewSource) crewDir(root string) string {
 }
 
 var (
-	codenameRe  = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+	codenameRe  = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)
 	tmuxColorRe = regexp.MustCompile(`^colour[0-9]+$`)
 )
 
