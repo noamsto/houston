@@ -2,6 +2,7 @@
 package parser
 
 import (
+	"slices"
 	"testing"
 )
 
@@ -95,7 +96,24 @@ func TestDetectChoicesColoured(t *testing.T) {
 	if result.Type != TypeChoice {
 		t.Fatalf("expected TypeChoice, got %v", result.Type)
 	}
-	if len(result.Choices) != 4 {
-		t.Errorf("expected 4 choices, got %d: %q", len(result.Choices), result.Choices)
+	want := []string{"Yes", "Yes, and don't ask again", "Type here to tell Claude", "No"}
+	if !slices.Equal(result.Choices, want) {
+		t.Errorf("choices = %q, want %q", result.Choices, want)
+	}
+	if result.Question != "Do you want to proceed?" {
+		t.Errorf("unexpected question: %q", result.Question)
+	}
+}
+
+func TestDetectChoicesOSC8(t *testing.T) {
+	output := "Open the docs?\n" +
+		"\x1b]8;;https://example.com\x1b\\1. Yes\x1b]8;;\x1b\\\n" +
+		"2. No\n"
+
+	result := Parse(output)
+
+	want := []string{"Yes", "No"}
+	if result.Type != TypeChoice || !slices.Equal(result.Choices, want) {
+		t.Errorf("got %v %q, want choice %q", result.Type, result.Choices, want)
 	}
 }
