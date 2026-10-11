@@ -4,6 +4,8 @@
 const fs = require('node:fs')
 const path = require('node:path')
 
+const sh = require('./_shared.cjs')
+
 const AREA = 4
 
 async function runOf(ctx, pane) {
@@ -19,15 +21,21 @@ async function sendPrompt(ctx, run, text) {
 // idleAgain waits until the run has read idle on two polls a second apart.
 async function idleAgain(ctx, pane, timeout = 120000) {
   let last = 0
+  let state
   return ctx.waitFor(async () => {
     const r = await runOf(ctx, pane)
+    state = r?.state
     if (r?.state !== 'idle') {
       last = 0
       return null
     }
     if (!last) last = Date.now()
     return Date.now() - last >= 1500 ? r : null
-  }, { timeout, interval: 500, message: `claude did not return to idle (state ${(await runOf(ctx, pane))?.state})` })
+  }, { timeout, interval: 500, message: () => `claude did not return to idle (state ${state})` })
+}
+
+function paneEscape(ctx, pane) {
+  ctx.tmux('send-keys', '-t', pane, 'Escape')
 }
 
 function skipOut(reason) {
@@ -61,7 +69,12 @@ exports.run = async (ctx) => {
     for (const id of ['ask-single', 'ask-multi', 'permission', 'stale-409']) ctx.check(AREA, id, 'skip', 'agent: no claude run in this harness')
     return
   }
-  run = await idleAgain(ctx, pane, 8000).catch(() => run)
+  const ready = await idleAgain(ctx, pane, 60000).catch((e) => e)
+  if (ready instanceof Error) {
+    for (const id of ['ask-single', 'ask-multi', 'permission', 'stale-409']) ctx.check(AREA, id, 'skip', `agent: ${ready.message} within 60 s of the start`)
+    return
+  }
+  run = ready
   const { context, page } = await ctx.newPage(ctx.browser, 'mobile')
   const chatUrl = ctx.url(`#/fleet/${run.id}/chat`)
   const answerPosts = []
@@ -183,7 +196,7 @@ exports.run = async (ctx) => {
         const got = await ctx.waitFor(async () => {
           const r = await promptStatus()
           return r.status === 200 ? r : null
-        }, { timeout: 90000, interval: 500, message: 'no permission dialog' }).catch(() => null)
+        }, { timeout: 90000, interval: 500, message: 'no permission dialog (GET /prompt never 200)' }).catch(() => null)
         if (got) return got.json
         await idleAgain(ctx, pane, 60000).catch(() => {})
       }
@@ -200,6 +213,9 @@ exports.run = async (ctx) => {
     const dialog1 = await openDialog(`Use the Bash tool to run exactly this command: touch ${probe}`)
     if (!dialog1) {
       permissionYes = 'skip: agent did not ask: no permission dialog (GET /prompt stayed 404) in two tries'
+    } else if (!sh.dialogIsFor(dialog1, probe)) {
+      paneEscape(ctx, pane)
+      permissionYes = `skip: agent: the open dialog is not for the requested command (detail ${JSON.stringify(String(dialog1.detail ?? '').slice(0, 160))}); dismissed with Escape, nothing answered`
     } else {
       try {
         await page.waitForSelector('.permission-bar-choice', { timeout: 15000 })
@@ -224,28 +240,22 @@ exports.run = async (ctx) => {
     const dialog2 = permissionYes && String(permissionYes).startsWith('skip')
       ? null
       : await openDialog(`Use the Bash tool to run exactly this command: touch ${probe2}`)
-    if (!dialog2) {
-      permissionNo = 'skip: agent did not ask: no second permission dialog'
-      await step(ctx, 'stale-409', async () => skipOut('agent did not ask: no open dialog to send a stale frame against'))
+    if (!dialog2 || !sh.dialogIsFor(dialog2, probe2)) {
+      const why = dialog2
+        ? (paneEscape(ctx, pane), `the open dialog is not for the requested command (detail ${JSON.stringify(String(dialog2.detail ?? '').slice(0, 160))}); dismissed with Escape`)
+        : 'no second permission dialog'
+      permissionNo = `skip: agent: ${why}`
+      await step(ctx, 'stale-409', async () => skipOut(`agent: ${why}, so there is no open dialog to send a stale frame against`))
     } else {
       // stale-409 first: the dialog is open and untouched.
       await step(ctx, 'stale-409', async () => {
         await page.waitForSelector('.permission-bar-choice', { timeout: 15000 })
         const stale = '0'.repeat(64)
-        // The tool-call bullet above the dialog blinks, so only the dialog
-        // region (below the last full-width rule) can show a typed key.
-        const dialogRegion = () => {
-          const width = Number(ctx.tmux('display-message', '-p', '-t', pane, '#{pane_width}').trim())
-          const lines = ctx.capture(pane, { lines: 80 }).split('\n').map((l) => l.trimEnd())
-          const rule = lines.findLastIndex((l) => l.length >= width && /^─+$/.test(l))
-          if (rule < 0) throw new Error('no full-width rule in the pane capture: no dialog region to compare')
-          return lines.slice(rule + 1).join('\n').trimEnd()
-        }
-        const controlA = dialogRegion()
+        const controlA = sh.dialogRegion(ctx, pane)
         await ctx.sleep(1500)
-        const controlB = dialogRegion()
+        const controlB = sh.dialogRegion(ctx, pane)
         if (controlA !== controlB) throw new Error('dialog region differs between two captures with no input: the comparison itself is unstable')
-        const paneBefore = dialogRegion()
+        const paneBefore = sh.dialogRegion(ctx, pane)
         const res = await page.evaluate(async (id) => {
           const r = await fetch(`/api/runs/${id}/answer`, {
             method: 'POST',
@@ -255,7 +265,7 @@ exports.run = async (ctx) => {
           return { status: r.status, text: (await r.text()).trim() }
         }, run.id)
         await ctx.sleep(1500)
-        const paneAfter = dialogRegion()
+        const paneAfter = sh.dialogRegion(ctx, pane)
         if (res.status !== 409) throw new Error(`stale frame -> ${res.status} ${res.text}, want 409`)
         if (res.text !== 'prompt changed') throw new Error(`409 body "${res.text}", want "prompt changed"`)
         if (paneBefore !== paneAfter) throw new Error('dialog region changed after the stale answer (something was typed)')
@@ -270,20 +280,24 @@ exports.run = async (ctx) => {
         const noIdx = labels.findIndex((l) => /^\d+\. No\b/i.test(l))
         if (noIdx < 0) throw new Error(`no "No" choice among: ${labels.join(' / ')}`)
         const shot = await ctx.shot(page, 'answer-permission-no')
-        const countInterrupts = () => (ctx.capture(pane, { lines: 300 }).match(/Interrupted/g) ?? []).length
-        const interruptsBefore = countInterrupts()
+        const regionBefore = sh.dialogRegion(ctx, pane)
+        if (!/Esc to cancel/.test(regionBefore)) throw new Error(`the region below the last rule is not the permission dialog before tapping No: ${JSON.stringify(regionBefore.slice(-200))}`)
         const before = answerPosts.length
         await page.locator('.permission-bar-choice').nth(noIdx).click()
         await ctx.waitFor(() => answerPosts.length > before, { timeout: 30000, message: 'no POST /answer after tapping No' })
         if (answerPosts[answerPosts.length - 1] !== 204) throw new Error(`POST /answer -> ${answerPosts[answerPosts.length - 1]}, want 204`)
-        // A denied dialog fires no Stop: the pane returns to its prompt with the
-        // turn interrupted, so wait for that text rather than for idle.
-        await ctx.waitFor(() => countInterrupts() > interruptsBefore, { timeout: 30000, message: 'pane never showed the rejection' })
+        // A denied dialog fires no Stop, so wait for the dialog itself to go: the
+        // region below the last rule loses its "Esc to cancel" footer and GET /prompt is 404.
+        let regionNow = regionBefore
+        await ctx.waitFor(async () => {
+          regionNow = sh.dialogRegion(ctx, pane)
+          return !/Esc to cancel/.test(regionNow) && (await promptStatus()).status === 404
+        }, { timeout: 30000, message: () => `the dialog never closed after tapping No; region now ${JSON.stringify(regionNow.slice(-200))}` })
         await ctx.sleep(1500)
         if (fs.existsSync(probe2)) throw new Error(`${probe2} exists after choosing No`)
         const after = await runOf(ctx, pane)
         stateAfterNo = after?.state
-        permissionNo = { text: `pass: tapped "${labels[noIdx]}"; 204; ${probe2} absent; pane shows the interruption; run state afterwards: ${stateAfterNo}`, shot }
+        permissionNo = { text: `pass: tapped "${labels[noIdx]}"; 204; ${probe2} absent; dialog gone from the pane and GET /prompt 404; run state afterwards: ${stateAfterNo}`, shot }
       } catch (e) {
         permissionNo = `fail: ${e instanceof Error ? e.message : e}`
       }

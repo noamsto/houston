@@ -3,6 +3,7 @@
 //
 // deleted-wt is destructive to the harness (it removes the qa-wt worktree whose
 // directory the `wt` window sits in), so it runs last.
+const fs = require('node:fs')
 const { execFileSync } = require('node:child_process')
 const path = require('node:path')
 const sh = require('./_shared.cjs')
@@ -45,25 +46,27 @@ const readSections = (page) =>
 // settled retries a comparison until the 3 s workspace poll agrees with the API.
 async function settled(ctx, fn) {
   let last = ''
-  await ctx
-    .waitFor(
-      async () => {
-        last = (await fn()) || ''
-        return last === ''
-      },
-      { timeout: 9000, interval: 400, message: 'workspace view differs from the API' },
-    )
-    .catch((e) => {
-      throw new Error(`${e.message}: ${last}`)
-    })
+  await ctx.waitFor(
+    async () => {
+      last = (await fn()) || ''
+      return last === ''
+    },
+    { timeout: 9000, interval: 400, message: () => `workspace view differs from the API: ${last}` },
+  )
 }
 
 async function run(ctx) {
   await sh.ensureStates(ctx)
+  // An earlier run of deleted-wt removed the worktree for good; group-by-repo
+  // and deleted-wt both start from it.
+  const wtPath = path.join(ctx.S, 'repos', 'qa-wt')
+  const wtGone = !fs.existsSync(wtPath)
+  const wtReason = `harness: ${wtPath} is already gone (an earlier deleted-wt run removed it); run scripts/qa/setup.sh for a fresh harness`
   const mobile = await open(ctx)
   const { page } = mobile
   try {
-    await ctx.expect(AREA, 'group-by-repo', async () => {
+    if (wtGone) ctx.check(AREA, 'group-by-repo', 'skip', wtReason)
+    else await ctx.expect(AREA, 'group-by-repo', async () => {
       let names = []
       await settled(ctx, async () => {
         const ws = await workspaceOf(ctx)
@@ -144,7 +147,8 @@ async function run(ctx) {
       return { note: `tapped the "${label}" pane -> ${hash}; detail shows qa-repo, Back returns to Workspace`, shot }
     })
 
-    await ctx.expect(AREA, 'deleted-wt', async () => {
+    if (wtGone) ctx.check(AREA, 'deleted-wt', 'skip', wtReason)
+    else await ctx.expect(AREA, 'deleted-wt', async () => {
       const before = await workspaceOf(ctx)
       const find = (ws) => {
         for (const p of ws.projects) for (const w of windowsOf(p)) if (w.name === 'wt') return { project: sectionName(p), bucket: w.bucket, branch: w.branch ?? '', panes: w.panes.length, agents: w.panes.filter((x) => x.agent).length }
@@ -170,14 +174,14 @@ async function run(ctx) {
         if (secs.length === 0 || (await p2.locator('.workspace .fleet-empty').count()) > 0) throw new Error('Workspace is blank after the worktree was removed')
         const shown = secs.some((s) => s.windows.includes(after?.branch || 'wt'))
         const fleet = await ctx.api('/api/runs')
-        const run = (fleet.json ?? []).find((r) => r.id === 'pane-18')
+        const run = (fleet.json ?? []).find((r) => r.tmux?.pane_id === ctx.env.WT_PANE)
         const shot = await ctx.shot(p2, 'workspace-deleted-wt-mobile')
         if (errors.length) throw new Error(`uncaught page errors: ${errors.slice(0, 2).join(' | ')}`)
         if (!after) {
           return { note: `no crash or blank view; the wt window no longer appears in /api/workspace (before: ${was.project}/${was.bucket}); its run is ${run ? `still listed as ${run.state}, project ${run.project}` : 'gone from /api/runs'}`, shot }
         }
         return {
-          note: `no crash or blank view; wt window before: ${was.project}/${was.bucket} branch "${was.branch}", after: ${after.project}/${after.bucket} branch "${after.branch}" (${after.agents} agent pane, ${shown ? 'rendered' : 'NOT rendered'}); run pane-18 ${run ? `${run.state}, project ${run.project}` : 'gone'}`,
+          note: `no crash or blank view; wt window before: ${was.project}/${was.bucket} branch "${was.branch}", after: ${after.project}/${after.bucket} branch "${after.branch}" (${after.agents} agent pane, ${shown ? 'rendered' : 'NOT rendered'}); run of pane ${ctx.env.WT_PANE} ${run ? `${run.state}, project ${run.project}` : 'gone'}`,
           shot,
         }
       } finally {

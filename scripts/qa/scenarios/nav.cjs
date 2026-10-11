@@ -15,11 +15,8 @@ const histLen = (page) => page.evaluate(() => history.length)
 const depthOf = (page) => page.evaluate(() => history.state?.houston?.depth ?? 0)
 
 async function waitHash(ctx, page, want, timeout = 5000) {
-  await ctx
-    .waitFor(async () => (await hashOf(page)) === want, { timeout, interval: 50, message: `hash did not become ${want}` })
-    .catch(async (e) => {
-      throw new Error(`${e.message} (is ${await hashOf(page)})`)
-    })
+  let now = ''
+  await ctx.waitFor(async () => (now = await hashOf(page)) === want, { timeout, interval: 50, message: () => `hash did not become ${want} (is ${now})` })
 }
 
 async function fresh(ctx, kind, hash) {
@@ -88,6 +85,7 @@ async function hold(ctx, cdp, page, selector, ms) {
 }
 
 async function run(ctx) {
+  await sh.ensureStates(ctx)
   const ids = await fixtureIds(ctx)
   const wLabel = ids.worker.crew.codename
 

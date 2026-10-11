@@ -22,14 +22,17 @@ async function sendPrompt(ctx, run, text) {
 // waitIdle waits for the turn counter to pass `turn0`, then for the run to
 // settle back to idle.
 async function waitIdle(ctx, pane, turn0, timeout = 120000) {
-  await ctx.waitFor(async () => ((await runOf(ctx, pane))?.activity?.turn ?? 0) > turn0, {
+  let turn = turn0
+  await ctx.waitFor(async () => (turn = (await runOf(ctx, pane))?.activity?.turn ?? 0) > turn0, {
     timeout: 20000,
-    message: 'agent never started the turn',
+    message: () => `agent never started the turn (turn counter stayed ${turn})`,
   })
+  let state
   return ctx.waitFor(async () => {
     const r = await runOf(ctx, pane)
+    state = r?.state
     return r && r.state === 'idle' ? r : null
-  }, { timeout, message: 'agent did not return to idle' })
+  }, { timeout, message: () => `agent did not return to idle (state ${state})` })
 }
 
 async function prompt(ctx, run, text, timeout) {
@@ -69,12 +72,20 @@ exports.run = async (ctx) => {
 
   try {
     // ---- claude: stream, context meter, quick commands (disabled while working) ----
-    const quick = { seen: [], pong: false }
-    let streamed = null
-    if (!claude) {
+    const quick = { seen: [] }
+    let ready = claude
+    if (claude) {
+      // Every claude step needs an idle agent; a busy one is a harness state, not a product result.
+      ready = await ctx.waitFor(async () => {
+        const r = await runOf(ctx, ctx.env.CLAUDE_PANE)
+        return r?.state === 'idle' ? r : null
+      }, { timeout: 60000, interval: 500, message: 'claude is not idle' }).catch(async (e) => ({ notIdle: `${e.message} (state ${(await runOf(ctx, ctx.env.CLAUDE_PANE))?.state}) after 60 s` }))
+    }
+    if (!claude || ready.notIdle) {
       for (const id of ['stream', 'context-meter', 'quick-commands', 'catchup-settled', 'tool-row', 'suggested-pill', 'draft-persist', 'image-send'])
-        ctx.check(AREA, id, 'skip', 'agent: no claude run in this harness')
+        ctx.check(AREA, id, 'skip', claude ? `agent: ${ready.notIdle}` : 'agent: no claude run in this harness')
     } else {
+      claudeLive = ready
       await page.goto(chatUrl(claude))
       await page.waitForSelector('.chat-composer-textarea', { timeout: 15000 })
       await page.evaluate(() => {
@@ -101,7 +112,6 @@ exports.run = async (ctx) => {
         if (kept !== 'same-document') throw new Error('page reloaded while streaming')
         const sawUser = await page.evaluate((m) => [...document.querySelectorAll('.chat-user')].some((b) => b.textContent.includes(m)), marker)
         if (!sawUser) throw new Error('your own prompt never rendered as a user bubble')
-        streamed = marker
         claudeLive = await waitIdle(ctx, ctx.env.CLAUDE_PANE, turn0)
         const shot = await ctx.shot(page, 'chat-stream-claude')
         return { note: `assistant text "${marker}" appeared in the open Chat tab without a reload`, shot }
@@ -152,15 +162,30 @@ exports.run = async (ctx) => {
         await page.evaluate(() => clearInterval(window.__qaPillTimer))
         const listed = await page.$$eval('[data-testid="quick-commands"] button', (bs) => bs.map((b) => b.textContent))
         for (const c of ['/compact', '/compact…', '/clear', '/context']) if (!listed.includes(c)) throw new Error(`pill row misses ${c}: ${listed.join(' ')}`)
-        const before = ctx.capture(ctx.env.CLAUDE_PANE)
+        // The component's own status element sits inside [data-testid="quick-commands"]
+        // (QuickCommands.tsx, role="status"); it reads "Sent /context — waiting…" until the
+        // run leaves idle and then "/context accepted", so record every text it shows.
+        await page.evaluate(() => {
+          const el = document.querySelector('[data-testid="quick-commands"]')
+          window.__qaStatus = []
+          const take = () => {
+            const t = el.querySelector('[role="status"]')?.textContent
+            if (t && window.__qaStatus[window.__qaStatus.length - 1] !== t) window.__qaStatus.push(t)
+          }
+          window.__qaStatusObs = new MutationObserver(take)
+          window.__qaStatusObs.observe(el, { subtree: true, childList: true, characterData: true })
+        })
+        const contextLines = () => (ctx.capture(ctx.env.CLAUDE_PANE, { lines: 300 }).match(/^\s*[^\w\s]{0,2}\s*\/context\s*$/gm) ?? []).length
+        const linesBefore = contextLines()
         await page.locator('[data-testid="quick-commands"] button', { hasText: /^\/context$/ }).click()
-        await page.waitForSelector('[role="status"]', { timeout: 10000 })
-        await ctx.waitFor(() => {
-          const now = ctx.capture(ctx.env.CLAUDE_PANE)
-          return now !== before && /context/i.test(now.replace(before, ''))
-        }, { timeout: 20000, message: '/context never reached the pane' })
+        await ctx.waitFor(() => contextLines() > linesBefore, { timeout: 20000, message: () => `no literal "/context" line reached the pane scrollback (count stayed ${linesBefore})` })
+        const texts = await page.evaluate(() => {
+          window.__qaStatusObs.disconnect()
+          return window.__qaStatus.slice()
+        })
+        if (!texts.some((t) => /^Sent \/context/.test(t))) throw new Error(`the quick-commands status never read "Sent /context …"; it showed ${JSON.stringify(texts)}`)
         await ctx.waitFor(async () => (await runOf(ctx, ctx.env.CLAUDE_PANE))?.state === 'idle', { timeout: 30000, message: 'not idle after /context' })
-        return { note: `disabled while ${states}, enabled at idle; /context typed into the pane`, shot: await ctx.shot(page, 'chat-quick-commands') }
+        return { note: `disabled while ${states}, enabled at idle; /context typed into the pane (literal line in scrollback); status read ${JSON.stringify(texts)}`, shot: await ctx.shot(page, 'chat-quick-commands') }
       })
 
       // ---- suggested pill ----
@@ -188,34 +213,40 @@ exports.run = async (ctx) => {
 
       // ---- catch-up settled (after a reload) ----
       await step(ctx, 'catchup-settled', async () => {
-        await page.addInitScript(() => {
-          window.__qaSnaps = new Map()
-          const take = () => {
+        // Its own page: the observer below must not keep recording on the page the later steps use.
+        const cp = await context.newPage()
+        try {
+          await cp.addInitScript(() => {
+            window.__qaSnaps = new Map()
+            const take = () => {
+              const bubbles = document.querySelectorAll('.chat-assistant[data-id]')
+              const b = bubbles[bubbles.length - 1]
+              if (!b) return
+              const list = window.__qaSnaps.get(b.dataset.id) ?? []
+              list.push(b.textContent)
+              window.__qaSnaps.set(b.dataset.id, list)
+            }
+            new MutationObserver(take).observe(document, { subtree: true, childList: true, characterData: true })
+          })
+          await cp.goto(chatUrl(claudeLive))
+          await cp.waitForSelector('.chat-assistant', { timeout: 15000 })
+          await settle(2500)
+          const info = await cp.evaluate(() => {
             const bubbles = document.querySelectorAll('.chat-assistant[data-id]')
-            const b = bubbles[bubbles.length - 1]
-            if (!b) return
-            const list = window.__qaSnaps.get(b.dataset.id) ?? []
-            list.push(b.textContent)
-            window.__qaSnaps.set(b.dataset.id, list)
-          }
-          new MutationObserver(take).observe(document, { subtree: true, childList: true, characterData: true })
-        })
-        await page.reload()
-        await page.waitForSelector('.chat-assistant', { timeout: 15000 })
-        await settle(2500)
-        const info = await page.evaluate(() => {
-          const bubbles = document.querySelectorAll('.chat-assistant[data-id]')
-          const last = bubbles[bubbles.length - 1]
-          return { id: last.dataset.id, final: last.textContent, snaps: window.__qaSnaps.get(last.dataset.id) ?? [], plain: !!last.querySelector('.chat-plain'), md: !!last.querySelector('.chat-md') }
-        })
-        if (!info.final.trim()) throw new Error('last assistant bubble is empty')
-        // The plain-text stand-in shows the whole raw text at once and markdown
-        // then replaces it; a typing reveal instead shows growing prefixes.
-        const raw = info.snaps.reduce((a, b) => (b.length > a.length ? b : a), '')
-        const partial = info.snaps.filter((t) => t !== info.final && t.length < raw.length && raw.startsWith(t))
-        if (partial.length) throw new Error(`last message rendered partially after reload (typing reveal): ${JSON.stringify(partial.slice(0, 3))} of ${JSON.stringify(raw)}`)
-        if (info.plain || !info.md) throw new Error('last message still in the plain-text reveal state after 2.5 s')
-        return { note: `last message "${info.final.slice(0, 40)}" rendered complete on first paint, ${info.snaps.length} DOM snapshots all complete`, shot: await ctx.shot(page, 'chat-catchup-settled') }
+            const last = bubbles[bubbles.length - 1]
+            return { id: last.dataset.id, final: last.textContent, snaps: window.__qaSnaps.get(last.dataset.id) ?? [], plain: !!last.querySelector('.chat-plain'), md: !!last.querySelector('.chat-md') }
+          })
+          if (!info.final.trim()) throw new Error('last assistant bubble is empty')
+          // The plain-text stand-in shows the whole raw text at once and markdown
+          // then replaces it; a typing reveal instead shows growing prefixes.
+          const raw = info.snaps.reduce((a, b) => (b.length > a.length ? b : a), '')
+          const partial = info.snaps.filter((t) => t !== info.final && t.length < raw.length && raw.startsWith(t))
+          if (partial.length) throw new Error(`last message rendered partially after reload (typing reveal): ${JSON.stringify(partial.slice(0, 3))} of ${JSON.stringify(raw)}`)
+          if (info.plain || !info.md) throw new Error('last message still in the plain-text reveal state after 2.5 s')
+          return { note: `last message "${info.final.slice(0, 40)}" rendered complete on first paint, ${info.snaps.length} DOM snapshots all complete`, shot: await ctx.shot(cp, 'chat-catchup-settled') }
+        } finally {
+          await cp.close()
+        }
       })
 
       // ---- draft persistence, chat and terminal composers ----
@@ -274,8 +305,8 @@ exports.run = async (ctx) => {
           .catch((e) => e)
         if (found instanceof Error) throw found
         const ref = found.match(/\[Image #\d+\]|[\w/.-]*\.png/)[0]
-        await waitIdle(ctx, ctx.env.CLAUDE_PANE, turn0).catch(() => {})
-        return { note: `image chip appeared, Send cleared it, pane shows "${ref}" with the text`, shot: chipShot }
+        const settled = await waitIdle(ctx, ctx.env.CLAUDE_PANE, turn0).then(() => '', (e) => `; WARNING: ${e.message}`)
+        return { note: `image chip appeared, Send cleared it, pane shows "${ref}" with the text${settled}`, shot: chipShot }
       })
     }
 
@@ -294,14 +325,16 @@ exports.run = async (ctx) => {
         await sendPrompt(ctx, pi, `Reply with only the word: ${m}`)
         try {
           await page.waitForFunction((x) => [...document.querySelectorAll('.chat-assistant')].some((b) => b.textContent.includes(x)), m, { timeout: 120000 })
-        } catch (e) {
+        } catch {
           return skipOut('pi gave no reply within 120 s')
         }
         if ((await page.evaluate(() => window.__qaMarker)) !== 'same-document') throw new Error('page reloaded while streaming')
+        let piState
         piLive = await ctx.waitFor(async () => {
           const r = await runOf(ctx, ctx.env.PI_PANE)
+          piState = r?.state
           return r && r.state === 'idle' ? r : null
-        }, { timeout: 60000, message: `pi stayed ${(await runOf(ctx, ctx.env.PI_PANE))?.state} after replying` })
+        }, { timeout: 60000, message: () => `pi stayed ${piState} after replying` })
         return { note: `pi reply "${m}" appeared without a reload; pi run settled to idle (turn ${piLive.activity?.turn}, hook turn counter ${turn0} before)`, shot: await ctx.shot(page, 'chat-stream-pi') }
       })
       await step(ctx, 'pi-spend', async () => {

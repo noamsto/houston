@@ -4,6 +4,8 @@
 const fs = require('node:fs')
 const path = require('node:path')
 
+const sh = require('./_shared.cjs')
+
 const AREA = 5
 
 function skipOut(reason) {
@@ -179,9 +181,10 @@ exports.run = async (ctx) => {
       await send.click()
       await ctx.waitFor(() => paneLines(ctx, WT).includes(out), { timeout: 8000, message: `pane never ran the composed command (output line "${out}" absent)` })
       await ctx.waitFor(async () => (await box.inputValue()) === '', { timeout: 5000, message: 'composer kept its text after a successful send' })
-      const promptsBefore = paneLines(ctx, WT).filter((l) => l === 'qa$').length
+      const prompts = () => ctx.capture(WT, { lines: 300 }).split('\n').filter((l) => l.replace(/\s+$/, '') === 'qa$').length
+      const promptsBefore = prompts()
       await send.click()
-      await ctx.waitFor(() => paneLines(ctx, WT).filter((l) => l === 'qa$').length > promptsBefore || paneLines(ctx, WT).filter((l) => l.startsWith('qa$')).length > 0, { timeout: 5000, message: 'empty Send did not press Enter' })
+      await ctx.waitFor(() => prompts() > promptsBefore, { timeout: 5000, message: () => `empty Send did not press Enter: bare "qa$" prompt lines stayed at ${promptsBefore}` })
       // Multi-line draft: Enter is a newline, only Send submits.
       await box.click()
       await page.keyboard.type('line1')
@@ -337,21 +340,19 @@ exports.run = async (ctx) => {
           `${ctx.baseUrl}/api/runs/${wt.id}/terminal`,
         )
         const paneResized = size()
-        // Put the pane back at its own size for the checks that follow.
-        await p4.evaluate(
-          (url) =>
-            new Promise((resolve) => {
-              const ws = new WebSocket(url.replace(/^http/, 'ws'))
-              ws.onopen = () => setTimeout(() => ws.send(JSON.stringify({ type: 'resize', data: { cols: 80, rows: 24 } })), 400)
-              setTimeout(() => {
-                ws.close()
-                resolve()
-              }, 1500)
-            }),
-          `${ctx.baseUrl}/api/runs/${wt.id}/terminal`,
-        )
+        // CLAUDE.md / server/pane_ws.go: the WS resize message is a no-op by design
+        // (the control client is created with `ignore-size`), so no step may move the pane.
+        const sizes = { before: paneBefore, afterViewport: paneAfter, afterWsResize: paneResized }
+        const moved = Object.values(sizes).some((v) => v !== paneBefore)
+        if (moved) {
+          const [cols, rows] = paneBefore.split('x')
+          try {
+            ctx.tmux('resize-window', '-t', WT, '-x', cols, '-y', rows)
+          } catch {}
+          throw new Error(`the pane was resized although resize is a documented no-op: ${JSON.stringify(sizes)}; restored to ${size()}`)
+        }
         return {
-          note: `viewport 1280x800 -> 900x600 -> 1280x800: pane ${paneBefore} -> ${paneAfter}, client resize frames sent ${resizeSent.length}, dims frames ${dimsBefore} -> ${dimsAfter}, content kept; explicit WS {resize 100x30}: pane ${paneAfter} -> ${paneResized}, server replied ${JSON.stringify(reply)}, restored to 80x24 afterwards (pane now ${size()})`,
+          note: `pane stayed ${paneBefore} through viewport 1280x800 -> 900x600 -> 1280x800 (client resize frames sent ${resizeSent.length}, dims frames ${dimsBefore} -> ${dimsAfter}, content kept) and an explicit WS {resize 100x30} (server replied ${JSON.stringify(reply)}): resize is a no-op`,
           shot: await ctx.shot(p4, 'terminal-resize'),
         }
       })
@@ -403,6 +404,7 @@ exports.run = async (ctx) => {
     const probe = path.join(ctx.S, 'term-probe')
     fs.rmSync(probe, { force: true })
     const { context: c6, page: p6 } = await ctx.newPage(ctx.browser, 'mobile')
+    const promptStatus = async () => (await ctx.api(`/api/runs/${claude.id}/prompt`)).status
     try {
       await p6.goto(termUrl(claude))
       await p6.waitForSelector('.mobile-input-bar', { timeout: 15000 })
@@ -410,14 +412,15 @@ exports.run = async (ctx) => {
       if (r.status !== 204) throw new Error(`POST input -> ${r.status}`)
       const shown = await p6.waitForSelector('[data-testid="choices"] button', { timeout: 90000 }).then(() => true, () => false)
       if (!shown) {
-        const dialog = (await ctx.api(`/api/runs/${claude.id}/prompt`)).status
-        if (dialog !== 200) skipOut(`agent: claude showed no permission dialog (GET /prompt ${dialog}) within 90 s`)
+        const dialog = await ctx.api(`/api/runs/${claude.id}/prompt`)
+        if (dialog.status !== 200) skipOut(`agent: claude showed no permission dialog (GET /prompt ${dialog.status}) within 90 s`)
+        // Hypothesis, unverified: the pane capture houston parses carries ANSI colour
+        // codes around the digits (capture-pane -e), which parser.Parse
+        // (server/server.go getAgentState) does not strip.
         const err = new Error(
-          'expected tappable choice buttons for the open Claude permission dialog (GET /prompt 200, pane shows "1. Yes ... 4. No"), got none: the WS meta frame has no `choices`. The pane capture houston parses carries ANSI colour codes around the digits (capture-pane -e), which parser.Parse (server/server.go getAgentState) does not strip',
+          `expected tappable choice buttons for the open Claude permission dialog, got none: no \`choices\` in the terminal meta frames while GET /prompt is 200 (choices ${JSON.stringify((dialog.json?.choices ?? []).map((c) => c.label ?? c))})`,
         )
         err.shot = await ctx.shot(p6, 'terminal-choices-missing')
-        // Dismiss the dialog so it does not swallow the next prompt.
-        ctx.tmux('send-keys', '-t', ctx.env.CLAUDE_PANE, 'Escape')
         throw err
       }
       const labels = await p6.$$eval('[data-testid="choices"] button', (els) => els.map((e) => e.textContent.trim()))
@@ -425,14 +428,22 @@ exports.run = async (ctx) => {
       const shot = await ctx.shot(p6, 'terminal-choices')
       const noIdx = labels.findIndex((l) => /^\d+\. No\b/.test(l))
       if (noIdx < 0) throw new Error(`no "No" choice: ${labels.join(' | ')}`)
-      const interrupts = () => (ctx.capture(ctx.env.CLAUDE_PANE, { lines: 300 }).match(/Interrupted/g) ?? []).length
-      const interruptsBefore = interrupts()
+      const open = (await ctx.api(`/api/runs/${claude.id}/prompt`)).json
+      if (!sh.dialogIsFor(open ?? {}, probe)) throw new Error(`the open dialog is not for the requested command (detail ${JSON.stringify(String(open?.detail ?? '').slice(0, 160))}); not answering it`)
+      const regionBefore = sh.dialogRegion(ctx, ctx.env.CLAUDE_PANE)
+      if (!/Esc to cancel/.test(regionBefore)) throw new Error(`the region below the last rule is not the permission dialog before tapping No: ${JSON.stringify(regionBefore.slice(-200))}`)
       await p6.locator('[data-testid="choices"] button').nth(noIdx).click()
-      await ctx.waitFor(() => interrupts() > interruptsBefore, { timeout: 20000, message: 'tapping the No choice did not reject the dialog in the pane' })
+      let regionNow = regionBefore
+      await ctx.waitFor(async () => {
+        regionNow = sh.dialogRegion(ctx, ctx.env.CLAUDE_PANE)
+        return !/Esc to cancel/.test(regionNow) && (await promptStatus()) === 404
+      }, { timeout: 20000, message: () => `tapping the No choice did not close the dialog in the pane; region now ${JSON.stringify(regionNow.slice(-200))}` })
       await ctx.sleep(1000)
       if (fs.existsSync(probe)) throw new Error('probe file exists after choosing No')
-      return { note: `choices rendered as ${labels.join(' / ')}; tapping "${labels[noIdx]}" sent its ordinal and the dialog was rejected`, shot }
+      return { note: `choices rendered as ${labels.join(' / ')}; tapping "${labels[noIdx]}" sent its ordinal and the dialog closed without running the command`, shot }
     } finally {
+      // Leave no dialog open for the next scenario.
+      if ((await promptStatus().catch(() => 404)) === 200) ctx.tmux('send-keys', '-t', ctx.env.CLAUDE_PANE, 'Escape')
       await c6.close()
     }
   })

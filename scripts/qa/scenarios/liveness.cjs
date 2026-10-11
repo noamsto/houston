@@ -167,7 +167,12 @@ async function run(ctx) {
     } finally {
       await context.close()
       // houston.sh restart reuses the recorded mode; make sure it is the one we started in.
-      if ((await ctx.api('/api/mode').catch(() => ({ json: {} }))).json?.mode !== startMode) await run_(houstonSh, [ctx.S, startMode], { timeout: 60000 })
+      // A failing restore must not replace the check's own result with a thrown error.
+      try {
+        if ((await ctx.api('/api/mode').catch(() => ({ json: {} }))).json?.mode !== startMode) await run_(houstonSh, [ctx.S, startMode], { timeout: 60000 })
+      } catch (e) {
+        ctx.check(AREA, 'restore-mode', 'fail', `could not restore ${startMode} mode: ${e instanceof Error ? e.message : e}`)
+      }
     }
   })
 }

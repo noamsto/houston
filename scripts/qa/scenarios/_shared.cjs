@@ -1,4 +1,4 @@
-// Helpers shared by the fleet, nav and workspace scenarios. Not a scenario
+// Helpers shared by the scenarios (fleet, nav, workspace, answer, terminal). Not a scenario
 // itself (qa.cjs only loads names from its AREAS list).
 //
 // ensureStates(ctx) adds the run states the loadfixture crews lack, inside the
@@ -278,6 +278,24 @@ function diffSets(got, want, keys, label) {
   return `${label}: missing [${missing.slice(0, 4).join('; ')}] unexpected [${extra.slice(0, 4).join('; ')}]`
 }
 
+// The tool-call bullet above a permission dialog blinks, so only the region
+// below the last full-width rule (the dialog, or the status line once it is
+// gone) is stable enough to compare.
+function dialogRegion(ctx, pane) {
+  const width = Number(ctx.tmux('display-message', '-p', '-t', pane, '#{pane_width}').trim())
+  const lines = ctx.capture(pane, { lines: 80 }).split('\n').map((l) => l.trimEnd())
+  const rule = lines.findLastIndex((l) => l.length >= width && /^─+$/.test(l))
+  if (rule < 0) throw new Error('no full-width rule in the pane capture: no dialog region to compare')
+  return lines.slice(rule + 1).join('\n').trimEnd()
+}
+
+// Whether the dialog GET /prompt reported is for `touch <probeFile>`: a scenario
+// must not approve or reject a different command on the user's behalf.
+function dialogIsFor(dialog, probeFile) {
+  const squash = (t) => String(t ?? '').replace(/\s+/g, '')
+  return squash(dialog.detail).includes(squash(`touch ${probeFile}`))
+}
+
 module.exports = {
   BG_SESSION,
   MEMBER_CAP,
@@ -296,4 +314,6 @@ module.exports = {
   rowOf,
   hexToRgb,
   diffSets,
+  dialogRegion,
+  dialogIsFor,
 }

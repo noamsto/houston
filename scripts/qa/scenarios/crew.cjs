@@ -67,13 +67,16 @@ async function run(ctx) {
   const getRuns = async () => (await ctx.api('/api/runs')).json
   const crewWorkers = (runs) => runs.filter((r) => r.role === 'worker' && r.crew && r.crew.name === crew1)
 
-  const crewCli = (...args) =>
-    execFileSync('env', ['-u', 'TMUX', '-u', 'TMUX_PANE', '-u', 'CREW_WORKER_ID', '-u', 'CREW_ROLE_ID', `TMUX_TMPDIR=${path.join(S, 'tmux')}`, `CREW_ID=${crew1}`, 'crew', ...args], {
+  const crewCli = (...args) => {
+    // Without an existing TMUX_TMPDIR tmux falls back to /tmp and would reach any other server there.
+    if (!fs.existsSync(path.join(S, 'tmux'))) throw new Error(`crew: ${path.join(S, 'tmux')} missing; refusing to run crew without the private tmux dir`)
+    return execFileSync('env', ['-u', 'TMUX', '-u', 'TMUX_PANE', '-u', 'CREW_WORKER_ID', '-u', 'CREW_ROLE_ID', `TMUX_TMPDIR=${path.join(S, 'tmux')}`, `CREW_ID=${crew1}`, 'crew', ...args], {
       cwd: repoDir,
       encoding: 'utf8',
       timeout: 20000,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
+  }
 
   const runs0 = await getRuns()
   const disp = runs0.find((r) => r.role === 'dispatcher' && r.crew && r.crew.name === crew1)
@@ -87,12 +90,23 @@ async function run(ctx) {
 
   const { context, page } = await ctx.newPage(ctx.browser, 'desktop')
   const feedPages = []
-  page.on('response', async (res) => {
+  const feedPending = []
+  const feedErrors = []
+  page.on('response', (res) => {
     const u = new URL(res.url())
     if (!u.pathname.endsWith('/crew/feed') || res.request().method() !== 'GET') return
-    try {
-      feedPages.push({ before: u.searchParams.get('before'), status: res.status(), body: await res.json() })
-    } catch {}
+    const entry = { before: u.searchParams.get('before'), status: res.status(), body: null }
+    feedPages.push(entry)
+    feedPending.push(
+      res.json().then(
+        (b) => {
+          entry.body = b
+        },
+        (e) => {
+          feedErrors.push(`${u.pathname}${u.search} (${entry.status}): ${e instanceof Error ? e.message : e}`)
+        },
+      ),
+    )
   })
 
   try {
@@ -103,9 +117,10 @@ async function run(ctx) {
     await ctx.expect(AREA, 'roster', async () => {
       await page.waitForSelector('.crew-tab .crews-member', { timeout: 15000 })
       const want = crewWorkers(await getRuns())
-      await ctx.waitFor(async () => (await page.locator('.crews-member').count()) === want.length, {
+      let seen = 0
+      await ctx.waitFor(async () => (seen = await page.locator('.crews-member').count()) === want.length, {
         timeout: 15000,
-        message: `roster row count never reached ${want.length} (api workers); saw ${await page.locator('.crews-member').count()}`,
+        message: () => `roster row count never reached ${want.length} (api workers); saw ${seen}`,
       })
       const bad = []
       for (const w of want) {
@@ -140,6 +155,8 @@ async function run(ctx) {
       if (!hadMore) throw new Error(`no "Load older" button with ${n0} rows; the fixture crew has more than one page of events`)
       if (n1 <= n0) throw new Error(`Load older did not grow the list (${n0} -> ${n1})`)
 
+      await Promise.all(feedPending)
+      if (feedErrors.length) throw new Error(`could not parse feed page(s): ${feedErrors.join('; ')}`)
       const ids = feedPages.filter((p) => p.status === 200).flatMap((p) => (p.body.entries || []).map((e) => e.id))
       const dup = ids.filter((id, i) => ids.indexOf(id) !== i)
       if (dup.length) throw new Error(`duplicate entry ids across feed pages: ${[...new Set(dup)].slice(0, 5).join(', ')}`)
@@ -192,10 +209,12 @@ async function run(ctx) {
       if (!liveW) throw new Error('no second crew-1 worker free of a blocked episode / newer reply in the fixture bus')
       const f = facts.get(liveW.branch)
       crewCli('status', f.from, 'blocked', 'qa live?')
+      let detail
       await ctx.waitFor(async () => {
         const r = crewWorkers(await getRuns()).find((x) => x.id === liveW.id)
-        return r && r.crew && r.crew.detail === 'qa live?'
-      }, { timeout: 15000, message: 'houston never picked up the fresh blocked status (crew.detail != "qa live?")' })
+        detail = r?.crew?.detail
+        return detail === 'qa live?'
+      }, { timeout: 15000, message: () => `houston never picked up the fresh blocked status (crew.detail is ${JSON.stringify(detail)}, not "qa live?")` })
       const r = crewWorkers(await getRuns()).find((x) => x.id === liveW.id)
       const row = member(r.crew.codename)
       await row.waitFor({ timeout: 10000 })

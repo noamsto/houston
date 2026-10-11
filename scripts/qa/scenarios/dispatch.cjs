@@ -33,7 +33,7 @@ async function run(ctx) {
         return route.fulfill({
           status: 200,
           contentType: 'application/json',
-          body: JSON.stringify({ worker_id: 'qa', branch: 'qa/branch', crew: crew1, output: '' }),
+          body: JSON.stringify({ worker_id: 'qa-worker-7', branch: 'qa/branch', crew: crew1, output: '' }),
         })
       }
       if (p === '/api/dispatch/dispatcher') {
@@ -60,15 +60,17 @@ async function run(ctx) {
       const hash = `#/dispatch?repo=${encodeURIComponent(repoPath)}&crew=${encodeURIComponent(crew1)}`
       await page.goto(ctx.url(hash), { waitUntil: 'domcontentloaded' })
       await page.waitForSelector('#dispatch-repo', { timeout: 15000 })
-      await ctx.waitFor(async () => (await page.locator('#dispatch-crew').inputValue()) === crew1, {
+      let crewNow = ''
+      await ctx.waitFor(async () => (crewNow = await page.locator('#dispatch-crew').inputValue()) === crew1, {
         timeout: 10000,
-        message: `crew select is "${await page.locator('#dispatch-crew').inputValue()}", expected ${crew1}`,
+        message: () => `crew select is "${crewNow}", expected ${crew1}`,
       })
       const repo = await page.locator('#dispatch-repo').inputValue()
       if (repo !== repoPath) throw new Error(`repo select is ${repo}, expected ${repoPath}`)
-      await ctx.waitFor(async () => (await page.evaluate(() => location.hash)) === '#/dispatch', {
+      let hashNow = ''
+      await ctx.waitFor(async () => (hashNow = await page.evaluate(() => location.hash)) === '#/dispatch', {
         timeout: 5000,
-        message: `hash is ${await page.evaluate(() => location.hash)}, expected it rewritten to #/dispatch`,
+        message: () => `hash is ${hashNow}, expected it rewritten to #/dispatch`,
       })
       const shot = await ctx.shot(page, 'dispatch-prefill')
       return { note: `repo ${repo} and crew ${crew1} selected (default would be ${optsRepo.crews[0]}); hash rewritten to #/dispatch`, shot }
@@ -92,9 +94,10 @@ async function run(ctx) {
       for (const t of opts.tiers) {
         await page.selectOption('#dispatch-tier', t)
         const want = (opts.tier_models[engine] && opts.tier_models[engine][t]) || models[0]
-        await ctx.waitFor(async () => (await page.locator('#dispatch-model').inputValue()) === want, {
+        let modelNow = ''
+        await ctx.waitFor(async () => (modelNow = await page.locator('#dispatch-model').inputValue()) === want, {
           timeout: 5000,
-          message: `tier ${t}: model is ${await page.locator('#dispatch-model').inputValue()}, tier_models says ${want}`,
+          message: () => `tier ${t}: model is ${modelNow}, tier_models says ${want}`,
         })
         seen.push(`${t}=${want}`)
       }
@@ -162,7 +165,8 @@ async function run(ctx) {
       if (wrong.length || extra.length) throw new Error(`request body mismatch: ${wrong.join('; ')}${extra.length ? ` unexpected keys ${extra}` : ''}`)
       await page.waitForSelector('.dispatch-result.success', { timeout: 10000 })
       const text = (await page.locator('.dispatch-result.success').innerText()).replace(/\s+/g, ' ')
-      if (!/qa/.test(text) || !text.includes('qa/branch')) throw new Error(`success panel shows "${text}"`)
+      const strong = (await page.locator('.dispatch-result.success strong').first().innerText()).trim()
+      if (strong !== 'qa-worker-7' || !text.includes('qa/branch') || !text.includes(crew1)) throw new Error(`success panel shows "${text}", want worker qa-worker-7 on qa/branch in crew ${crew1}`)
       const shot = await ctx.shot(page, 'dispatch-body')
       return { note: `POST /api/dispatch body ${JSON.stringify(body)}; success panel "${text}"`, shot }
     })

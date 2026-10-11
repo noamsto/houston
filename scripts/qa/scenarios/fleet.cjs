@@ -57,11 +57,12 @@ async function chooseFilter(page, kind, label) {
 }
 
 async function expandAll(page) {
-  for (;;) {
+  for (let i = 0; i < 20; i++) {
     const more = page.locator('.fleet .fleet-group-more[aria-expanded="false"]')
     if ((await more.count()) === 0) return
     await more.first().click()
   }
+  throw new Error('expandAll: collapsed groups remained after 20 taps of "Show more"')
 }
 
 // viewDiff is '' when the cards and worker rows on screen are exactly what the
@@ -100,16 +101,13 @@ async function expectView(ctx, page, filter) {
       last = await viewDiff(ctx, page, filter)
       return last === ''
     },
-    { timeout: 8000, interval: 300, message: 'view differs from /api/runs rules' },
-  ).catch((e) => {
-    throw new Error(`${e.message}: ${last}`)
-  })
+    { timeout: 8000, interval: 300, message: () => `view differs from /api/runs rules: ${last}` },
+  )
 }
 
 async function run(ctx) {
   await sh.ensureStates(ctx)
   const runs = await sh.runsOf(ctx)
-  const now = Date.now()
 
   const mobile = await openFleet(ctx, 'mobile')
   const { page } = mobile
@@ -141,10 +139,13 @@ async function run(ctx) {
 
     await ctx.expect(AREA, 'badge', async () => {
       await chooseFilter(page, 'mobile', 'Active')
-      const want = (await sh.runsOf(ctx)).filter((r) => sh.needsYou(r, Date.now())).length
-      if (want === 0) throw new Error('fixture has no fresh blocked run, the badge cannot be checked')
-      const text = (await page.locator('.fleet-badge').innerText()).trim()
-      if (text !== `${want} needs you`) throw new Error(`badge reads "${text}", /api/runs has ${want} fresh blocked`)
+      let want = 0
+      let text = ''
+      await ctx.waitFor(async () => {
+        want = (await sh.runsOf(ctx)).filter((r) => sh.needsYou(r, Date.now())).length
+        text = want ? (await page.locator('.fleet-badge').innerText().catch(() => '')).trim() : ''
+        return want > 0 && text === `${want} needs you`
+      }, { timeout: 8000, interval: 300, message: () => (want === 0 ? 'fixture has no fresh blocked run, the badge cannot be checked' : `badge reads "${text}", /api/runs has ${want} fresh blocked`) })
       await page.locator('.fleet-badge').click()
       const pressed = await page.locator('nav[aria-label="filter runs"] button[aria-pressed="true"]').innerText()
       if (pressed.trim() !== 'Needs you') throw new Error(`tapping the badge selected "${pressed}"`)
@@ -195,7 +196,9 @@ async function run(ctx) {
       if (got.length !== 1) throw new Error(`expected one dispatcher group on screen, got ${got.length}`)
       const g = got[0]
       if (g.role !== 'dispatcher') throw new Error(`group head role chip is "${g.role}"`)
-      if (g.rows !== all.length) throw new Error(`dispatcher group holds ${g.rows} worker rows, its crew has ${all.length} workers`)
+      // The Active filter narrows the nested members; the crew line counts live workers whatever the filter.
+      const shownMembers = sh.filterRuns(all, 'active', t)
+      if (g.rows !== shownMembers.length) throw new Error(`dispatcher group holds ${g.rows} worker rows, ${shownMembers.length} of its ${all.length} workers match the Active filter`)
       if (g.line !== wantLine) throw new Error(`crew line "${g.line}", expected "${wantLine}"`)
       if (ny > 0 && (g.badge !== `${ny} need you` || !g.needs)) throw new Error(`needs-you badge "${g.badge}" / class ${g.needs}, expected "${ny} need you"`)
       if (g.nestedInButton) throw new Error('worker rows are inside the head <button>')
@@ -241,6 +244,8 @@ async function run(ctx) {
           const g = await page.evaluate(() =>
             [...document.querySelectorAll('.fleet .fleet-group-card')].map((card) => ({
               crew: card.classList.contains('crew'),
+              idTitle: card.querySelector('.fleet-group-id')?.getAttribute('title') ?? '',
+              codename: card.querySelector('.worker-row-codename')?.textContent ?? '',
               rows: card.querySelectorAll('.worker-row').length,
               more: card.querySelector('.fleet-group-more')?.textContent ?? '',
               expanded: card.querySelector('.fleet-group-more')?.getAttribute('aria-expanded') ?? '',
@@ -251,14 +256,17 @@ async function run(ctx) {
         { message: 'groups did not render rows' },
       )
       const notes = []
-      for (let i = 0; i < groups.length; i++) {
-        const g = groups[i]
+      const apiRuns = await sh.runsOf(ctx)
+      for (const g of groups) {
+        // A group is named by its crew id (a crew group's header, else the crew of its first row's codename).
+        const crewId = g.idTitle || apiRuns.find((r) => r.crew?.codename === g.codename)?.crew?.name || g.codename
         const shownTotal = g.rows + (/^Show (\d+) more$/.exec(g.more)?.[1] ? Number(/(\d+)/.exec(g.more)[1]) : 0)
         if (shownTotal <= sh.COLLAPSE_OVER) continue
-        if (g.rows !== sh.MEMBER_CAP) throw new Error(`group ${i}: ${shownTotal} members but ${g.rows} rows before expanding (cap ${sh.MEMBER_CAP})`)
+        if (g.rows !== sh.MEMBER_CAP) throw new Error(`crew ${crewId}: ${shownTotal} members but ${g.rows} rows before expanding (cap ${sh.MEMBER_CAP})`)
         const want = `Show ${shownTotal - sh.MEMBER_CAP} more`
-        if (g.more !== want || g.expanded !== 'false') throw new Error(`group ${i}: toggle "${g.more}" expanded=${g.expanded}, expected "${want}"`)
-        const card = page.locator('.fleet .fleet-group-card').nth(i)
+        if (g.more !== want || g.expanded !== 'false') throw new Error(`crew ${crewId}: toggle "${g.more}" expanded=${g.expanded}, expected "${want}"`)
+        const card = page.locator('.fleet .fleet-group-card').filter({ has: page.locator('.worker-row-codename', { hasText: new RegExp(`^${g.codename}$`) }) })
+        if ((await card.count()) !== 1) throw new Error(`crew ${crewId}: ${await card.count()} group cards hold the codename ${g.codename}`)
         await card.locator('.fleet-group-more').click()
         const after = await card.evaluate((el) => ({
           rows: el.querySelectorAll('.worker-row').length,
@@ -266,11 +274,11 @@ async function run(ctx) {
           expanded: el.querySelector('.fleet-group-more')?.getAttribute('aria-expanded') ?? '',
         }))
         if (after.rows !== shownTotal || after.expanded !== 'true' || after.more !== 'Show less') {
-          throw new Error(`group ${i} after tap: ${after.rows} rows, "${after.more}", expanded=${after.expanded}; expected ${shownTotal} rows, "Show less"`)
+          throw new Error(`crew ${crewId} after tap: ${after.rows} rows, "${after.more}", expanded=${after.expanded}; expected ${shownTotal} rows, "Show less"`)
         }
         await card.locator('.fleet-group-more').click()
-        if ((await card.locator('.worker-row').count()) !== sh.MEMBER_CAP) throw new Error(`group ${i}: Show less did not collapse back to ${sh.MEMBER_CAP} rows`)
-        notes.push(`group ${i}: ${shownTotal} members -> ${g.rows} rows + "${g.more}" -> ${after.rows} -> collapsed`)
+        if ((await card.locator('.worker-row').count()) !== sh.MEMBER_CAP) throw new Error(`crew ${crewId}: Show less did not collapse back to ${sh.MEMBER_CAP} rows`)
+        notes.push(`crew ${crewId}: ${shownTotal} members -> ${g.rows} rows + "${g.more}" -> ${after.rows} -> collapsed`)
       }
       if (notes.length === 0) throw new Error('no group has more than 6 members, Show N more not exercised')
       return { note: notes.join('; '), shot: await ctx.shot(page, 'fleet-show-more-mobile') }

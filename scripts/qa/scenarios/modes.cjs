@@ -2,13 +2,10 @@
 // (scripts/qa/houston.sh S tmux), checks what the mode removes, then always
 // restores dispatcher mode (finally) and checks `#/crews` there too.
 //
-// Dispatcher-only routes are probed with GET. The POST-only ones
-// (/api/runs/<id>/reply, /api/dispatch, /api/dispatch/dispatcher) get a POST
-// with an empty body only in tmux mode, only right after GET /api/mode said
-// tmux, and the claim under test is that the route is not registered (404).
-// ctx.api refuses a non-GET under /api/dispatch, so those two use rawPost below.
-const fs = require('node:fs')
-const http = require('node:http')
+// Dispatcher-only routes are probed with GET only. Go's method-specific mux
+// answers a GET to a registered POST-only route (/api/runs/<id>/reply,
+// /api/dispatch, /api/dispatch/dispatcher) with 405 and to an unregistered one
+// with its own 404, so a GET tells registered from removed without a POST.
 const path = require('node:path')
 const { execFile } = require('node:child_process')
 const { promisify } = require('node:util')
@@ -18,7 +15,7 @@ const run_ = promisify(execFile)
 const houstonSh = path.join(__dirname, '..', 'houston.sh')
 
 async function run(ctx) {
-  const { S, PORT } = ctx
+  const { S } = ctx
   const mode = async () => (await ctx.api('/api/mode')).json?.mode
 
   const restart = async (m) => {
@@ -28,21 +25,14 @@ async function run(ctx) {
     await ctx.waitFor(async () => ((await ctx.api('/api/runs')).json || []).length > 0, { timeout: 30000, message: 'no runs after restart' })
   }
 
-  function rawPost(p) {
-    const token = fs.readFileSync(path.join(S, 'state', 'token'), 'utf8').trim()
-    return new Promise((resolve, reject) => {
-      const req = http.request(
-        { host: '127.0.0.1', port: Number(PORT), path: p, method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Length': 0 } },
-        (res) => {
-          const chunks = []
-          res.on('data', (c) => chunks.push(c))
-          res.on('end', () => resolve({ status: res.statusCode, text: Buffer.concat(chunks).toString('utf8') }))
-        },
-      )
-      req.setTimeout(15000, () => req.destroy(new Error(`POST ${p} timed out`)))
-      req.on('error', reject)
-      req.end()
-    })
+  // Control for routes-404: in dispatcher mode the POST-only routes answer a GET with 405.
+  const control = {}
+  const controlRuns = (await ctx.api('/api/runs')).json || []
+  const controlId = controlRuns.find((r) => r.id.startsWith('pane-'))?.id ?? controlRuns[0]?.id
+  if ((await mode()) === 'dispatcher' && controlId) {
+    for (const p of ['/api/dispatch', '/api/dispatch/dispatcher', `/api/runs/${controlId}/reply`]) {
+      control[p.replace(controlId, '<id>')] = (await ctx.api(p)).status
+    }
   }
 
   try {
@@ -82,9 +72,10 @@ async function run(ctx) {
         const { context, page } = await ctx.newPage(ctx.browser, 'mobile')
         try {
           await page.goto(ctx.url(hash), { waitUntil: 'domcontentloaded' })
-          await ctx.waitFor(async () => (await page.evaluate(() => location.hash)) === '#/fleet', {
+          let hashNow = ''
+          await ctx.waitFor(async () => (hashNow = await page.evaluate(() => location.hash)) === '#/fleet', {
             timeout: 10000,
-            message: `hash stayed ${await page.evaluate(() => location.hash)} for ${hash}`,
+            message: () => `hash stayed ${hashNow} for ${hash}`,
           })
           const fleetShown = await page.locator('[data-shell-tab="fleet"]:not([hidden])').count()
           if (!fleetShown) throw new Error(`hash is #/fleet but the Fleet pane is not the visible one`)
@@ -110,17 +101,16 @@ async function run(ctx) {
       for (const p of ['/api/dispatch/options', '/api/repos', '/api/repos/candidates', `/api/runs/${id}/crew/feed`, `/api/runs/${id}/crew/feed/stream`]) {
         note(`GET ${p.replace(id, '<id>')}`, await ctx.api(p))
       }
-      const posts = [
-        [`/api/runs/${id}/reply`, (p) => ctx.api(p, { method: 'POST' })],
-        ['/api/dispatch', rawPost],
-        ['/api/dispatch/dispatcher', rawPost],
-      ]
-      for (const [p, send] of posts) {
-        if ((await mode()) !== 'tmux') throw new Error(`refusing to POST ${p}: GET /api/mode is not tmux`)
-        note(`POST ${p.replace(id, '<id>')}`, await send(p))
+      for (const p of ['/api/dispatch', '/api/dispatch/dispatcher', `/api/runs/${id}/reply`]) {
+        note(`GET ${p.replace(id, '<id>')} (POST-only route)`, await ctx.api(p))
       }
       if (bad.length) throw new Error(`routes still answer in tmux mode: ${bad.join('; ')}`)
-      return `all unregistered (404, no handler message): ${out.join(', ')}`
+      const ctl = Object.entries(control)
+      const ctlBad = ctl.filter(([, st]) => st !== 405)
+      if (ctl.length !== 3 || ctlBad.length) {
+        throw new Error(`control failed: in dispatcher mode a GET to the POST-only routes should be 405, got ${JSON.stringify(control)}; a 404 in tmux mode proves nothing`)
+      }
+      return `all unregistered (404, no handler message): ${out.join(', ')}; control in dispatcher mode (registered POST routes, GET): ${ctl.map(([p, st]) => `${p} ${st}`).join(', ')}`
     })
 
     // ---- no-crew-names ----------------------------------------------------
@@ -164,9 +154,10 @@ async function run(ctx) {
       const modeResp = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/mode', { timeout: 15000 })
       await page.goto(ctx.url('#/crews?x=1'), { waitUntil: 'domcontentloaded' })
       await modeResp
-      await ctx.waitFor(async () => (await page.evaluate(() => location.hash)) === '#/fleet', {
+      let hashNow = ''
+      await ctx.waitFor(async () => (hashNow = await page.evaluate(() => location.hash)) === '#/fleet', {
         timeout: 10000,
-        message: `hash stayed ${await page.evaluate(() => location.hash)}`,
+        message: () => `hash stayed ${hashNow}`,
       })
       await page.waitForSelector('nav[aria-label="sections"] button', { timeout: 15000 })
       await ctx.sleep(500)
