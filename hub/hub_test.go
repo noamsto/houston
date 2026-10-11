@@ -558,8 +558,13 @@ func TestHubHealsDismissedPermissionDialog(t *testing.T) {
 		return line("user", `{"type":"tool_result","tool_use_id":"`+id+`","content":"ok"}`)
 	}
 	interrupted := line("user", `{"type":"text","text":"[Request interrupted by user for tool use]"}`)
+	const bashHint = "rm -rf build"
 	pre := func(tool string) (string, map[string]any) {
-		return hook.EventPreToolUse, map[string]any{"tool_name": tool, "tool_input": map[string]any{}}
+		input := map[string]any{}
+		if tool == "Bash" {
+			input["command"] = bashHint
+		}
+		return hook.EventPreToolUse, map[string]any{"tool_name": tool, "tool_input": input}
 	}
 	notify := map[string]any{"notification_type": "permission_prompt", "message": "Claude needs your permission"}
 
@@ -571,6 +576,7 @@ func TestHubHealsDismissedPermissionDialog(t *testing.T) {
 		file    int            // transcript the line and the event's transcript_path use
 		want    hook.State
 		tool    string // view.Tool wanted
+		hint    string // view.ToolInputHint wanted
 		msg     string // view.LastMessage wanted
 	}
 	const (
@@ -580,8 +586,8 @@ func TestHubHealsDismissedPermissionDialog(t *testing.T) {
 	preBash, preBashPayload := pre("Bash")
 	preRead, preReadPayload := pre("Read")
 	preAsk, preAskPayload := pre("AskUserQuestion")
-	notifyStep := func(want hook.State, tool, msg string) step {
-		return step{name: "notification", event: hook.EventNotification, payload: notify, want: want, tool: tool, msg: msg}
+	notifyStep := func(want hook.State, tool, hint, msg string) step {
+		return step{name: "notification", event: hook.EventNotification, payload: notify, want: want, tool: tool, hint: hint, msg: msg}
 	}
 	prompt := step{name: "prompt", event: hook.EventUserPromptSubmit, payload: map[string]any{"prompt": "go on"}, want: hook.StateThinking}
 	const asked = "Claude needs your permission"
@@ -591,88 +597,88 @@ func TestHubHealsDismissedPermissionDialog(t *testing.T) {
 		steps []step
 	}{
 		{"No after the notification heals", []step{
-			{name: "pre", event: preBash, payload: preBashPayload, append: toolUse("tu_1", "Bash"), want: hook.StateToolRunning, tool: "Bash"},
-			notifyStep(blocked, "Bash", asked),
+			{name: "pre", event: preBash, payload: preBashPayload, append: toolUse("tu_1", "Bash"), want: hook.StateToolRunning, tool: "Bash", hint: bashHint},
+			notifyStep(blocked, "Bash", bashHint, asked),
 			{name: "rejected", append: rejected("tu_1"), want: idle},
 			{name: "interrupt text", append: interrupted, want: idle},
 		}},
 		{"No before the notification heals", []step{
-			{name: "pre", event: preBash, payload: preBashPayload, append: toolUse("tu_1", "Bash"), want: hook.StateToolRunning, tool: "Bash"},
-			{name: "rejected", append: rejected("tu_1"), want: hook.StateToolRunning, tool: "Bash"},
-			notifyStep(idle, "", ""),
+			{name: "pre", event: preBash, payload: preBashPayload, append: toolUse("tu_1", "Bash"), want: hook.StateToolRunning, tool: "Bash", hint: bashHint},
+			{name: "rejected", append: rejected("tu_1"), want: hook.StateToolRunning, tool: "Bash", hint: bashHint},
+			notifyStep(idle, "", "", ""),
 		}},
 		{"AskUserQuestion dismissed heals", []step{
 			{name: "pre", event: preAsk, payload: preAskPayload, append: toolUse("tu_1", "AskUserQuestion"), want: hook.StateToolRunning, tool: "AskUserQuestion"},
-			notifyStep(blocked, "AskUserQuestion", asked),
+			notifyStep(blocked, "AskUserQuestion", "", asked),
 			{name: "rejected", append: rejected("tu_1"), want: idle},
 		}},
 		{"another open tool keeps it blocked", []step{
-			{name: "pre", event: preBash, payload: preBashPayload, append: toolUse("tu_1", "Read") + toolUse("tu_2", "Bash"), want: hook.StateToolRunning, tool: "Bash"},
-			notifyStep(blocked, "Bash", asked),
-			{name: "rejected", append: rejected("tu_2"), want: blocked, tool: "Bash", msg: asked},
+			{name: "pre", event: preBash, payload: preBashPayload, append: toolUse("tu_1", "Read") + toolUse("tu_2", "Bash"), want: hook.StateToolRunning, tool: "Bash", hint: bashHint},
+			notifyStep(blocked, "Bash", bashHint, asked),
+			{name: "rejected", append: rejected("tu_2"), want: blocked, tool: "Bash", hint: bashHint, msg: asked},
 			{name: "other finishes", append: finished("tu_1"), want: idle},
 		}},
 		{"the dialog's tool has no tool_use yet", []step{
-			{name: "pre", event: preBash, payload: preBashPayload, append: toolUse("tu_1", "Read"), want: hook.StateToolRunning, tool: "Bash"},
-			notifyStep(blocked, "Bash", asked),
-			{name: "other result", append: finished("tu_1"), want: blocked, tool: "Bash", msg: asked},
+			{name: "pre", event: preBash, payload: preBashPayload, append: toolUse("tu_1", "Read"), want: hook.StateToolRunning, tool: "Bash", hint: bashHint},
+			notifyStep(blocked, "Bash", bashHint, asked),
+			{name: "other result", append: finished("tu_1"), want: blocked, tool: "Bash", hint: bashHint, msg: asked},
 		}},
 		{"a multi-tool message heals once all are resolved", []step{
-			{name: "pre", event: preBash, payload: preBashPayload, append: toolUse("tu_1", "Bash") + toolUse("tu_2", "Read"), want: hook.StateToolRunning, tool: "Bash"},
-			notifyStep(blocked, "Bash", asked),
+			{name: "pre", event: preBash, payload: preBashPayload, append: toolUse("tu_1", "Bash") + toolUse("tu_2", "Read"), want: hook.StateToolRunning, tool: "Bash", hint: bashHint},
+			notifyStep(blocked, "Bash", bashHint, asked),
 			{name: "both resolved", append: rejected("tu_1") + finished("tu_2"), want: idle},
 		}},
 		{"same-name siblings heal once all are resolved", []step{
-			{name: "pre", event: preBash, payload: preBashPayload, append: toolUse("tu_1", "Bash") + toolUse("tu_2", "Bash"), want: hook.StateToolRunning, tool: "Bash"},
-			notifyStep(blocked, "Bash", asked),
+			{name: "pre", event: preBash, payload: preBashPayload, append: toolUse("tu_1", "Bash") + toolUse("tu_2", "Bash"), want: hook.StateToolRunning, tool: "Bash", hint: bashHint},
+			notifyStep(blocked, "Bash", bashHint, asked),
 			{name: "both resolved", append: rejected("tu_1") + rejected("tu_2"), want: idle},
 		}},
 		{"same-name siblings stay blocked while one is unresolved", []step{
-			{name: "pre", event: preBash, payload: preBashPayload, append: toolUse("tu_1", "Bash") + toolUse("tu_2", "Bash"), want: hook.StateToolRunning, tool: "Bash"},
-			notifyStep(blocked, "Bash", asked),
-			{name: "one resolved", append: rejected("tu_1"), want: blocked, tool: "Bash", msg: asked},
+			{name: "pre", event: preBash, payload: preBashPayload, append: toolUse("tu_1", "Bash") + toolUse("tu_2", "Bash"), want: hook.StateToolRunning, tool: "Bash", hint: bashHint},
+			notifyStep(blocked, "Bash", bashHint, asked),
+			{name: "one resolved", append: rejected("tu_1"), want: blocked, tool: "Bash", hint: bashHint, msg: asked},
 		}},
 		{"parallel tools ignore user text", []step{
 			{name: "pre", event: preRead, payload: preReadPayload, append: toolUse("tu_1", "Read") + toolUse("tu_2", "Read"), want: hook.StateToolRunning, tool: "Read"},
-			notifyStep(blocked, "Read", asked),
+			notifyStep(blocked, "Read", "", asked),
 			{name: "other resolved", append: finished("tu_2"), want: blocked, tool: "Read", msg: asked},
 			{name: "user text", append: line("user", `{"type":"text","text":"keep going"}`), want: blocked, tool: "Read", msg: asked},
 		}},
 		{"an interrupted turn's open tool does not outlive its turn", []step{
 			{name: "pre", event: preRead, payload: preReadPayload, append: toolUse("tu_1", "Read"), want: hook.StateToolRunning, tool: "Read"},
 			prompt,
-			{name: "next pre", event: preBash, payload: preBashPayload, append: toolUse("tu_2", "Bash"), want: hook.StateToolRunning, tool: "Bash"},
-			notifyStep(blocked, "Bash", asked),
+			{name: "next pre", event: preBash, payload: preBashPayload, append: toolUse("tu_2", "Bash"), want: hook.StateToolRunning, tool: "Bash", hint: bashHint},
+			notifyStep(blocked, "Bash", bashHint, asked),
 			{name: "rejected", append: rejected("tu_2"), want: idle},
 		}},
 		{"a new transcript starts without the old one's tools", []step{
-			{name: "pre", event: preBash, payload: preBashPayload, append: toolUse("tu_1", "Bash"), want: hook.StateToolRunning, tool: "Bash"},
-			notifyStep(blocked, "Bash", asked),
+			{name: "pre", event: preBash, payload: preBashPayload, append: toolUse("tu_1", "Bash"), want: hook.StateToolRunning, tool: "Bash", hint: bashHint},
+			notifyStep(blocked, "Bash", bashHint, asked),
 			{name: "rejected", append: rejected("tu_1"), want: idle},
-			{name: "next pre", event: preBash, payload: preBashPayload, file: 1, want: hook.StateToolRunning, tool: "Bash"},
-			{name: "next notification", event: hook.EventNotification, payload: notify, file: 1, want: blocked, tool: "Bash", msg: asked},
-			{name: "tool_use lands", append: toolUse("tu_2", "Bash"), file: 1, want: blocked, tool: "Bash", msg: asked},
+			{name: "next pre", event: preBash, payload: preBashPayload, file: 1, want: hook.StateToolRunning, tool: "Bash", hint: bashHint},
+			{name: "next notification", event: hook.EventNotification, payload: notify, file: 1, want: blocked, tool: "Bash", hint: bashHint, msg: asked},
+			{name: "tool_use lands", append: toolUse("tu_2", "Bash"), file: 1, want: blocked, tool: "Bash", hint: bashHint, msg: asked},
 			{name: "rejected", append: rejected("tu_2"), file: 1, want: idle},
 		}},
 		{"notification with no tool behind it", []step{
 			{name: "notification", event: hook.EventNotification, payload: notify, append: toolUse("tu_1", "Bash") + rejected("tu_1"), want: blocked, msg: asked},
 		}},
 		{"no tool_use in the transcript", []step{
-			{name: "pre", event: preBash, payload: preBashPayload, append: line("assistant", `{"type":"text","text":"Running it."}`), want: hook.StateToolRunning, tool: "Bash"},
-			notifyStep(blocked, "Bash", asked),
+			{name: "pre", event: preBash, payload: preBashPayload, append: line("assistant", `{"type":"text","text":"Running it."}`), want: hook.StateToolRunning, tool: "Bash", hint: bashHint},
+			notifyStep(blocked, "Bash", bashHint, asked),
 		}},
 		{"a new dialog after a healed one blocks again", []step{
-			{name: "pre", event: preBash, payload: preBashPayload, append: toolUse("tu_1", "Bash"), want: hook.StateToolRunning, tool: "Bash"},
-			notifyStep(blocked, "Bash", asked),
+			{name: "pre", event: preBash, payload: preBashPayload, append: toolUse("tu_1", "Bash"), want: hook.StateToolRunning, tool: "Bash", hint: bashHint},
+			notifyStep(blocked, "Bash", bashHint, asked),
 			{name: "rejected", append: rejected("tu_1"), want: idle},
 			{name: "next pre", event: preRead, payload: preReadPayload, append: toolUse("tu_2", "Read"), want: hook.StateToolRunning, tool: "Read"},
-			notifyStep(blocked, "Read", asked),
-			{name: "same tool again", event: preBash, payload: preBashPayload, append: toolUse("tu_3", "Bash"), want: hook.StateToolRunning, tool: "Bash"},
-			notifyStep(blocked, "Bash", asked),
+			notifyStep(blocked, "Read", "", asked),
+			{name: "same tool again", event: preBash, payload: preBashPayload, append: toolUse("tu_3", "Bash"), want: hook.StateToolRunning, tool: "Bash", hint: bashHint},
+			notifyStep(blocked, "Bash", bashHint, asked),
 		}},
 		{"a later state is left alone", []step{
-			{name: "pre", event: preBash, payload: preBashPayload, append: toolUse("tu_1", "Bash"), want: hook.StateToolRunning, tool: "Bash"},
-			notifyStep(blocked, "Bash", asked),
+			{name: "pre", event: preBash, payload: preBashPayload, append: toolUse("tu_1", "Bash"), want: hook.StateToolRunning, tool: "Bash", hint: bashHint},
+			notifyStep(blocked, "Bash", bashHint, asked),
 			{name: "rejected", append: rejected("tu_1"), want: idle},
 			{name: "thinking", event: hook.EventPostToolUse, payload: map[string]any{"tool_name": "Bash"}, want: hook.StateThinking},
 			{name: "tool done in transcript", append: line("assistant", `{"type":"text","text":"ok"}`), want: hook.StateThinking},
@@ -717,9 +723,9 @@ func TestHubHealsDismissedPermissionDialog(t *testing.T) {
 					h.refreshTranscript("s1")
 				}
 				v := h.sessions["s1"].view
-				if v.State != s.want || v.Tool != s.tool || v.LastMessage != s.msg {
-					t.Fatalf("after %s: state=%q tool=%q message=%q, want %q %q %q",
-						s.name, v.State, v.Tool, v.LastMessage, s.want, s.tool, s.msg)
+				if v.State != s.want || v.Tool != s.tool || v.ToolInputHint != s.hint || v.LastMessage != s.msg {
+					t.Fatalf("after %s: state=%q tool=%q hint=%q message=%q, want %q %q %q %q",
+						s.name, v.State, v.Tool, v.ToolInputHint, v.LastMessage, s.want, s.tool, s.hint, s.msg)
 				}
 			}
 		})

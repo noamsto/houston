@@ -216,7 +216,8 @@ func apply(s *SessionState, event string, ev Event, now int64) {
 		// with Esc fires no PostToolUse or Stop (an interrupt fires neither),
 		// so idle_prompt heals the card, at the cost of a dialog genuinely
 		// left open past it reading idle. The hub also heals from the
-		// transcript once the guarded tool has a tool_result.
+		// transcript once the named tool has a tool_result and no tool_use
+		// is left unresolved.
 		switch ev.NotificationType {
 		case "permission_prompt", "elicitation_dialog":
 			s.State = StatePermission
