@@ -100,7 +100,8 @@ type Options struct {
 // Session is the hub's per-session bookkeeping. One goroutine owns it via the
 // hub's mutex; external readers take RLock.
 type Session struct {
-	view SessionView
+	view      SessionView
+	hookState hook.SessionState // last merged state file; zero for a discovery-seeded session
 
 	transcriptPath   string
 	transcriptOffset int64
@@ -114,6 +115,9 @@ type Session struct {
 	lastBroadcastSig string // last broadcast view signature; skip duplicates
 
 	bg bgTracker
+
+	openTools map[string]struct{} // tool_use ids with no tool_result yet
+	seenTools map[string]struct{} // names of tools used since the last reset
 
 	chat *chatState // nil until first use, and for agents without a chat.Reader
 }
@@ -412,7 +416,7 @@ func (h *Hub) loadStateFile(path string) {
 		sess = &Session{}
 		h.sessions[s.SessionID] = sess
 	}
-	mergeStateIntoView(&sess.view, s)
+	sess.hookState = s
 
 	// Clear the trail only when a new turn starts (Turn increments on
 	// UserPromptSubmit). Since is bumped by every event, including PostToolUse,
@@ -420,13 +424,19 @@ func (h *Hub) loadStateFile(path string) {
 	if s.Turn > sess.lastTurn {
 		sess.lastTurn = s.Turn
 		sess.trail = []TrailChip{}
+		// An interrupt can leave a tool_use with no result, and a new prompt
+		// ends the previous turn's tools. Keyed on the hook Turn, not on
+		// transcript user text: meta and injected user records appear mid-turn.
+		sess.openTools, sess.seenTools = nil, nil
 	}
 	if sess.transcriptPath != s.TranscriptPath {
 		// The tail's offset and running totals belong to the old file.
 		sess.transcriptOffset = 0
 		sess.spend, sess.maxCtx = nil, 0
 		sess.view.ContextUsed, sess.view.ContextLimit, sess.view.SpendUSD = 0, 0, nil
+		sess.openTools, sess.seenTools = nil, nil
 	}
+	sess.applyHook()
 	sess.transcriptPath = s.TranscriptPath
 	if sess.chat != nil {
 		sess.chat.setPath(s.TranscriptPath)
@@ -520,6 +530,30 @@ func (s *Session) syncTranscriptView(now time.Time) {
 	s.view.Trail = append([]TrailChip(nil), s.trail...)
 	s.view.Asks = s.asks
 	s.view.Background = s.bg.list(now)
+	s.applyHook()
+}
+
+// applyHook merges the hook state into the view and heals a permission dialog
+// the transcript proves is over. A dialog the user answers "No" or dismisses
+// fires no hook event, but the tool it guarded gets an error tool_result. The
+// result is recomputed from the raw hook state each time, so a later unresolved
+// tool_use restores the permission state.
+func (s *Session) applyHook() {
+	if s.hookState.SessionID == "" {
+		return
+	}
+	mergeStateIntoView(&s.view, s.hookState)
+	st := s.hookState
+	if st.State != hook.StatePermission || st.Tool == "" {
+		return
+	}
+	if _, used := s.seenTools[st.Tool]; !used || len(s.openTools) > 0 {
+		return
+	}
+	s.view.State = hook.StateWaiting
+	s.view.Tool = ""
+	s.view.ToolInputHint = ""
+	s.view.LastMessage = ""
 }
 
 // expireBackground drops monitors whose timeout has passed. Nothing is written
@@ -655,6 +689,16 @@ func applyTranscriptEvent(s *Session, ev TranscriptEvent) {
 	switch ev.Type {
 	case EventTypeToolUse:
 		s.asks = ""
+		if ev.ToolUseID != "" {
+			if s.openTools == nil {
+				s.openTools = map[string]struct{}{}
+			}
+			s.openTools[ev.ToolUseID] = struct{}{}
+			if s.seenTools == nil {
+				s.seenTools = map[string]struct{}{}
+			}
+			s.seenTools[ev.ToolName] = struct{}{}
+		}
 		if n := len(s.trail); n > 0 && !s.trail[n-1].Done {
 			s.trail[n-1].Done = true
 		}
@@ -664,6 +708,7 @@ func applyTranscriptEvent(s *Session, ev TranscriptEvent) {
 		}
 	case EventTypeToolResult:
 		s.asks = ""
+		delete(s.openTools, ev.ToolUseID)
 		for i := len(s.trail) - 1; i >= 0; i-- {
 			if !s.trail[i].Done {
 				s.trail[i].Done = true
@@ -686,7 +731,10 @@ func applyTranscriptEvent(s *Session, ev TranscriptEvent) {
 	// Roll up token usage (last observed wins; Claude reports running totals).
 	// A last-wins field added to this roll-up must join readInitial's
 	// tailSuffices, and a sum or maximum its pre-pass (foldPrefix), or a first
-	// read from the tail can miss it.
+	// read from the tail can miss it. openTools and seenTools are tail-sensitive
+	// too: a first read from the tail never sees a tool_use older than it. Missing
+	// an unresolved older tool errs toward healing a dialog; missing an older
+	// same-name tool_use errs toward blocked.
 	if ev.InputTokens > 0 {
 		s.view.InputTokens = ev.InputTokens
 	}
