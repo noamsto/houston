@@ -692,3 +692,29 @@ func TestTruncateRuneSafe(t *testing.T) {
 		}
 	}
 }
+
+// Recorded on a real Claude Code: a Bash permission dialog raises PreToolUse,
+// then (about 6 s later) a permission_prompt Notification. The tool stays on
+// the state because the hub heals from it once the transcript shows a result.
+func TestDispatchPermissionPromptKeepsTheTool(t *testing.T) {
+	for _, tool := range []string{"Bash", "AskUserQuestion"} {
+		t.Run(tool, func(t *testing.T) {
+			dir := t.TempDir()
+			dispatch(t, dir, EventPreToolUse, map[string]any{
+				"session_id": "s", "tool_name": tool, "tool_input": map[string]any{},
+			})
+			got := dispatch(t, dir, EventNotification, map[string]any{
+				"session_id": "s", "notification_type": "permission_prompt", "message": "Claude needs your permission",
+			})
+			if got.State != StatePermission {
+				t.Errorf("State = %q, want waiting:permission", got.State)
+			}
+			if got.Tool != tool {
+				t.Errorf("Tool = %q, want %q", got.Tool, tool)
+			}
+			if got.Since == 0 {
+				t.Error("Since not set")
+			}
+		})
+	}
+}

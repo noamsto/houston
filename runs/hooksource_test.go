@@ -6,6 +6,8 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -60,6 +62,7 @@ func TestRunFromSessionViewCarriesQuestionWhenBlocked(t *testing.T) {
 		SessionID:   "abc",
 		TmuxPane:    "%1",
 		State:       hook.StatePermission,
+		Tool:        "Bash",
 		LastMessage: "Allow Bash(rm -rf)?",
 	}, "")
 	if r.State != StateBlocked {
@@ -92,17 +95,32 @@ func TestRunFromSessionViewTurnEndQuestionNeedsYou(t *testing.T) {
 }
 
 func TestRunFromSessionViewAskUserQuestionNeedsYou(t *testing.T) {
-	_, r := runFromSessionView(hub.SessionView{
-		SessionID: "abc",
-		TmuxPane:  "%1",
-		State:     hook.StateToolRunning,
-		Tool:      "AskUserQuestion",
-	}, "")
-	if r.State != StateBlocked {
-		t.Fatalf("State = %q, want blocked", r.State)
-	}
-	if r.Question == nil || *r.Question != (Question{Text: askUserQuestionNote, Via: "pane", Kind: QuestionAsk}) {
-		t.Fatalf("Question = %+v, want the fixed AskUserQuestion note via pane", r.Question)
+	// Claude Code also fires a permission_prompt Notification for the pending
+	// question, so the hook state is permission while the tool stays
+	// AskUserQuestion; it must still read as a question, not a dialog.
+	for _, tc := range []struct {
+		name string
+		view hub.SessionView
+	}{
+		{"tool running", hub.SessionView{State: hook.StateToolRunning, Tool: "AskUserQuestion"}},
+		{"permission notification", hub.SessionView{
+			State: hook.StatePermission, Tool: "AskUserQuestion", LastMessage: "Claude needs your permission",
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.view.SessionID = "abc"
+			tc.view.TmuxPane = "%1"
+			_, r := runFromSessionView(tc.view, "")
+			if r.State != StateBlocked {
+				t.Fatalf("State = %q, want blocked", r.State)
+			}
+			if r.Question == nil || *r.Question != (Question{Text: askUserQuestionNote, Via: "pane", Kind: QuestionAsk}) {
+				t.Fatalf("Question = %+v, want the fixed AskUserQuestion note via pane", r.Question)
+			}
+			if r.Activity.Message != "" {
+				t.Errorf("Activity.Message = %q, want empty (the notification text must not leak)", r.Activity.Message)
+			}
+		})
 	}
 }
 
@@ -1064,6 +1082,69 @@ func TestHookSourcePiTurnEndIsNotNeedsYou(t *testing.T) {
 	}
 	if d.Run.Question != nil {
 		t.Errorf("Question = %+v, want none", d.Run.Question)
+	}
+}
+
+// TestHookSourceHealsADismissedDialogFromTheTranscript: a permission dialog
+// the user declines fires no hook event, but the guarded tool gets an error
+// tool_result. The run leaves blocked once the transcript shows that, and
+// stays blocked while the tool is still unresolved.
+func TestHookSourceHealsADismissedDialogFromTheTranscript(t *testing.T) {
+	const (
+		toolUse  = `{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu_1","name":"%s","input":{}}]}}` + "\n"
+		declined = `{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu_1","is_error":true,"content":"The user doesn't want to proceed"}]}}` + "\n"
+	)
+	tests := []struct {
+		name       string
+		tool       string
+		resolved   bool
+		wantState  State
+		wantKind   string
+		wantNoQues bool
+	}{
+		{"unresolved dialog stays blocked", "Bash", false, StateBlocked, QuestionDialog, false},
+		{"declined tool heals to idle", "Bash", true, StateIdle, "", true},
+		{"unresolved AskUserQuestion stays blocked", "AskUserQuestion", false, StateBlocked, QuestionAsk, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			transcript := filepath.Join(t.TempDir(), "s1.jsonl")
+			body := strings.Replace(toolUse, "%s", tt.tool, 1)
+			if tt.resolved {
+				body += declined
+			}
+			if err := os.WriteFile(transcript, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			st := blockedState()
+			st.Tool = tt.tool
+			st.TranscriptPath = transcript
+			out, _ := startHookSourceWith(t, nil, st, nil)
+
+			// The trail chip proves the hub has read the transcript, so the
+			// verdict below is not the pre-read one.
+			d := waitDelta(t, out, "run with the transcript read", func(d Delta) bool {
+				return d.Key == "%9" && len(d.Run.Activity.Trail) > 0
+			})
+			if d.Run.State != tt.wantState {
+				t.Errorf("State = %q, want %q", d.Run.State, tt.wantState)
+			}
+			// Attention is composed from State (needs-you iff blocked), not
+			// carried by the layer.
+			if got := d.Run.State.NeedsAttention(); got != !tt.wantNoQues {
+				t.Errorf("NeedsAttention = %v, want %v", got, !tt.wantNoQues)
+			}
+			if tt.wantNoQues {
+				if d.Run.Question != nil {
+					t.Errorf("Question = %+v, want none", d.Run.Question)
+				}
+				return
+			}
+			if d.Run.Question == nil || d.Run.Question.Kind != tt.wantKind {
+				t.Errorf("Question = %+v, want kind %q", d.Run.Question, tt.wantKind)
+			}
+		})
 	}
 }
 

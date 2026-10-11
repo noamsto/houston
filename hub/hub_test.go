@@ -1,12 +1,14 @@
 package hub
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"testing"
@@ -537,5 +539,143 @@ func TestHubBroadcastsTrailChipDoneFlip(t *testing.T) {
 	got := recv(t, sub, 2*time.Second)
 	if len(got.Trail) != 1 || !got.Trail[0].Done {
 		t.Fatalf("broadcast trail = %+v, want one done chip", got.Trail)
+	}
+}
+
+// A permission dialog the user answers "No" fires no hook event; only the
+// guarded tool's error tool_result says it is over.
+func TestHubHealsDismissedPermissionDialog(t *testing.T) {
+	line := func(role, block string) string {
+		return `{"type":"` + role + `","message":{"role":"` + role + `","content":[` + block + `]}}` + "\n"
+	}
+	toolUse := func(id, name string) string {
+		return line("assistant", `{"type":"tool_use","id":"`+id+`","name":"`+name+`","input":{}}`)
+	}
+	rejected := func(id string) string {
+		return line("user", `{"type":"tool_result","tool_use_id":"`+id+`","is_error":true,"content":"The user doesn't want to proceed"}`)
+	}
+	interrupted := line("user", `{"type":"text","text":"[Request interrupted by user for tool use]"}`)
+	pre := func(tool string) (string, map[string]any) {
+		return hook.EventPreToolUse, map[string]any{"tool_name": tool, "tool_input": map[string]any{}}
+	}
+	notify := map[string]any{"notification_type": "permission_prompt", "message": "Claude needs your permission"}
+
+	type step struct {
+		name    string
+		event   string         // hook event to dispatch, if any
+		payload map[string]any // its payload
+		append  string         // transcript lines to append, if any
+		want    hook.State
+		tool    string // view.Tool wanted
+		msg     string // view.LastMessage wanted
+	}
+	const (
+		blocked = hook.StatePermission
+		idle    = hook.StateWaiting
+	)
+	preBash, preBashPayload := pre("Bash")
+	preRead, preReadPayload := pre("Read")
+	preAsk, preAskPayload := pre("AskUserQuestion")
+	notifyStep := func(want hook.State, tool, msg string) step {
+		return step{name: "notification", event: hook.EventNotification, payload: notify, want: want, tool: tool, msg: msg}
+	}
+	const asked = "Claude needs your permission"
+
+	cases := []struct {
+		name  string
+		steps []step
+	}{
+		{"No after the notification heals", []step{
+			{name: "pre", event: preBash, payload: preBashPayload, append: toolUse("tu_1", "Bash"), want: hook.StateToolRunning, tool: "Bash"},
+			notifyStep(blocked, "Bash", asked),
+			{name: "rejected", append: rejected("tu_1"), want: idle},
+			{name: "interrupt text", append: interrupted, want: idle},
+		}},
+		{"No before the notification heals", []step{
+			{name: "pre", event: preBash, payload: preBashPayload, append: toolUse("tu_1", "Bash"), want: hook.StateToolRunning, tool: "Bash"},
+			{name: "rejected", append: rejected("tu_1"), want: hook.StateToolRunning, tool: "Bash"},
+			notifyStep(idle, "", ""),
+		}},
+		{"AskUserQuestion dismissed heals", []step{
+			{name: "pre", event: preAsk, payload: preAskPayload, append: toolUse("tu_1", "AskUserQuestion"), want: hook.StateToolRunning, tool: "AskUserQuestion"},
+			notifyStep(blocked, "AskUserQuestion", asked),
+			{name: "rejected", append: rejected("tu_1"), want: idle},
+		}},
+		{"another open tool keeps it blocked", []step{
+			{name: "pre", event: preBash, payload: preBashPayload, append: toolUse("tu_1", "Read") + toolUse("tu_2", "Bash"), want: hook.StateToolRunning, tool: "Bash"},
+			notifyStep(blocked, "Bash", asked),
+			{name: "rejected", append: rejected("tu_2"), want: blocked, tool: "Bash", msg: asked},
+			{name: "other finishes", append: line("user", `{"type":"tool_result","tool_use_id":"tu_1","content":"ok"}`), want: idle},
+		}},
+		{"last tool is a different tool", []step{
+			{name: "pre", event: preBash, payload: preBashPayload, append: toolUse("tu_1", "Read"), want: hook.StateToolRunning, tool: "Bash"},
+			notifyStep(blocked, "Bash", asked),
+			{name: "other result", append: rejected("tu_1"), want: blocked, tool: "Bash", msg: asked},
+		}},
+		{"notification with no tool behind it", []step{
+			{name: "notification", event: hook.EventNotification, payload: notify, append: toolUse("tu_1", "Bash") + rejected("tu_1"), want: blocked, msg: asked},
+		}},
+		{"no tool_use in the transcript", []step{
+			{name: "pre", event: preBash, payload: preBashPayload, append: line("assistant", `{"type":"text","text":"Running it."}`), want: hook.StateToolRunning, tool: "Bash"},
+			notifyStep(blocked, "Bash", asked),
+		}},
+		{"a new dialog after a healed one blocks again", []step{
+			{name: "pre", event: preBash, payload: preBashPayload, append: toolUse("tu_1", "Bash"), want: hook.StateToolRunning, tool: "Bash"},
+			notifyStep(blocked, "Bash", asked),
+			{name: "rejected", append: rejected("tu_1"), want: idle},
+			{name: "next pre", event: preRead, payload: preReadPayload, append: toolUse("tu_2", "Read"), want: hook.StateToolRunning, tool: "Read"},
+			notifyStep(blocked, "Read", asked),
+			{name: "same tool again", event: preBash, payload: preBashPayload, append: toolUse("tu_3", "Bash"), want: hook.StateToolRunning, tool: "Bash"},
+			notifyStep(blocked, "Bash", asked),
+		}},
+		{"a later state is left alone", []step{
+			{name: "pre", event: preBash, payload: preBashPayload, append: toolUse("tu_1", "Bash"), want: hook.StateToolRunning, tool: "Bash"},
+			notifyStep(blocked, "Bash", asked),
+			{name: "rejected", append: rejected("tu_1"), want: idle},
+			{name: "thinking", event: hook.EventPostToolUse, payload: map[string]any{"tool_name": "Bash"}, want: hook.StateThinking},
+			{name: "tool done in transcript", append: line("assistant", `{"type":"text","text":"ok"}`), want: hook.StateThinking},
+		}},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			stateDir := t.TempDir()
+			path := filepath.Join(t.TempDir(), "t.jsonl")
+			if err := os.WriteFile(path, nil, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			h := New(stateDir, nil)
+			for _, s := range c.steps {
+				if s.append != "" {
+					f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, err := f.WriteString(s.append); err != nil {
+						t.Fatal(err)
+					}
+					_ = f.Close()
+				}
+				if s.event != "" {
+					payload := map[string]any{"session_id": "s1", "transcript_path": path, "hook_event_name": s.event}
+					maps.Copy(payload, s.payload)
+					b, err := json.Marshal(payload)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := hook.Dispatch(s.event, stateDir, bytes.NewReader(b)); err != nil {
+						t.Fatalf("%s: dispatch: %v", s.name, err)
+					}
+					h.loadStateFile(hook.Path(stateDir, "s1"))
+				} else {
+					h.refreshTranscript("s1")
+				}
+				v := h.sessions["s1"].view
+				if v.State != s.want || v.Tool != s.tool || v.LastMessage != s.msg {
+					t.Fatalf("after %s: state=%q tool=%q message=%q, want %q %q %q",
+						s.name, v.State, v.Tool, v.LastMessage, s.want, s.tool, s.msg)
+				}
+			}
+		})
 	}
 }
