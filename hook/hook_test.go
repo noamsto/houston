@@ -718,3 +718,11 @@ func TestDispatchPermissionPromptKeepsTheTool(t *testing.T) {
 		})
 	}
 }
+
+func TestDispatchCompactSessionStartStaysThinking(t *testing.T) {
+	dir := t.TempDir()
+	got := dispatch(t, dir, EventSessionStart, map[string]any{"session_id": "s", "source": "compact"})
+	if got.State != StateThinking {
+		t.Errorf("State = %q, want %q", got.State, StateThinking)
+	}
+}
