@@ -98,6 +98,8 @@ var (
 )
 
 func Parse(output string) Result {
+	// Callers pass a colour-preserving capture; Claude colours the choice digits.
+	output = ansi.Strip(ansi.OSC8Pattern.ReplaceAllString(output, ""))
 	lines := strings.Split(output, "\n")
 	// Look at last 80 lines to capture edit prompts with diffs and choice prompts
 	// (Choice prompts can have long context text above them)
