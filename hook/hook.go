@@ -192,6 +192,10 @@ func apply(s *SessionState, event string, ev Event, now int64) {
 	switch event {
 	case EventSessionStart:
 		s.State = StateStarting
+		if ev.Source == "compact" {
+			// An automatic compaction mid-turn: the agent is still working.
+			s.State = StateThinking
+		}
 		s.Source = ev.Source
 	case EventSessionEnd:
 		s.State = StateEnded

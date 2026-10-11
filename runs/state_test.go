@@ -9,7 +9,7 @@ import (
 func TestFromHookState(t *testing.T) {
 	tests := map[hook.State]State{
 		hook.StateThinking:    StateThinking,
-		hook.StateStarting:    StateThinking,
+		hook.StateStarting:    StateIdle,
 		hook.StateToolRunning: StateRunning,
 		hook.StateWaiting:     StateIdle,
 		hook.StatePermission:  StateBlocked,

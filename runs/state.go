@@ -51,14 +51,15 @@ func (s State) NeedsAttention() bool { return s == StateBlocked }
 
 func FromHookState(s hook.State) State {
 	switch s {
-	case hook.StateThinking, hook.StateStarting:
+	case hook.StateThinking:
 		return StateThinking
 	case hook.StateToolRunning:
 		return StateRunning
 	case hook.StatePermission:
 		return StateBlocked
-	case hook.StateWaiting, hook.StateIdle:
-		// A turn end awaits the next prompt; nobody is blocked. A turn that
+	case hook.StateWaiting, hook.StateIdle, hook.StateStarting:
+		// A session that has started but not yet seen a prompt runs nothing,
+		// and a turn end awaits the next prompt; nobody is blocked. A turn that
 		// ended on a question is promoted to blocked by runFromSessionView.
 		return StateIdle
 	case hook.StateCompacting:
