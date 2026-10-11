@@ -117,10 +117,7 @@ type Session struct {
 	bg bgTracker
 
 	openTools map[string]struct{} // tool_use ids with no tool_result yet; nil until the first
-	lastTool  struct {
-		id, name string
-		resolved bool
-	}
+	seenTools map[string]struct{} // names of tools used this turn; nil until the first
 
 	chat *chatState // nil until first use, and for agents without a chat.Reader
 }
@@ -427,14 +424,17 @@ func (h *Hub) loadStateFile(path string) {
 	if s.Turn > sess.lastTurn {
 		sess.lastTurn = s.Turn
 		sess.trail = []TrailChip{}
+		// An interrupt can leave a tool_use with no result, and a new prompt
+		// ends the previous turn's tools. Keyed on the hook Turn, not on
+		// transcript user text: meta and injected user records appear mid-turn.
+		sess.openTools, sess.seenTools = nil, nil
 	}
 	if sess.transcriptPath != s.TranscriptPath {
 		// The tail's offset and running totals belong to the old file.
 		sess.transcriptOffset = 0
 		sess.spend, sess.maxCtx = nil, 0
 		sess.view.ContextUsed, sess.view.ContextLimit, sess.view.SpendUSD = 0, 0, nil
-		sess.openTools = nil
-		sess.lastTool.id, sess.lastTool.name, sess.lastTool.resolved = "", "", false
+		sess.openTools, sess.seenTools = nil, nil
 	}
 	sess.applyHook()
 	sess.transcriptPath = s.TranscriptPath
@@ -547,7 +547,7 @@ func (s *Session) applyHook() {
 	if st.State != hook.StatePermission || st.Tool == "" {
 		return
 	}
-	if s.lastTool.name != st.Tool || !s.lastTool.resolved || len(s.openTools) > 0 {
+	if _, used := s.seenTools[st.Tool]; !used || len(s.openTools) > 0 {
 		return
 	}
 	s.view.State = hook.StateWaiting
@@ -694,7 +694,10 @@ func applyTranscriptEvent(s *Session, ev TranscriptEvent) {
 				s.openTools = map[string]struct{}{}
 			}
 			s.openTools[ev.ToolUseID] = struct{}{}
-			s.lastTool.id, s.lastTool.name, s.lastTool.resolved = ev.ToolUseID, ev.ToolName, false
+			if s.seenTools == nil {
+				s.seenTools = map[string]struct{}{}
+			}
+			s.seenTools[ev.ToolName] = struct{}{}
 		}
 		if n := len(s.trail); n > 0 && !s.trail[n-1].Done {
 			s.trail[n-1].Done = true
@@ -706,9 +709,6 @@ func applyTranscriptEvent(s *Session, ev TranscriptEvent) {
 	case EventTypeToolResult:
 		s.asks = ""
 		delete(s.openTools, ev.ToolUseID)
-		if ev.ToolUseID == s.lastTool.id {
-			s.lastTool.resolved = true
-		}
 		for i := len(s.trail) - 1; i >= 0; i-- {
 			if !s.trail[i].Done {
 				s.trail[i].Done = true
@@ -723,11 +723,6 @@ func applyTranscriptEvent(s *Session, ev TranscriptEvent) {
 			s.asks = questionTail(ev.Text)
 		} else {
 			s.asks = ""
-			// A new prompt means the previous turn's tools are over (an
-			// interrupt can leave a tool_use with no result).
-			if ev.Role == "user" && !strings.Contains(ev.Text, "<task-notification>") {
-				clear(s.openTools)
-			}
 		}
 	case eventTypePiToolCall:
 		s.asks = ""
@@ -736,11 +731,10 @@ func applyTranscriptEvent(s *Session, ev TranscriptEvent) {
 	// Roll up token usage (last observed wins; Claude reports running totals).
 	// A last-wins field added to this roll-up must join readInitial's
 	// tailSuffices, and a sum or maximum its pre-pass (foldPrefix), or a first
-	// read from the tail can miss it. openTools and lastTool are tail-sensitive
-	// too: a first read from the tail never sees a tool_use older than it, so an
-	// unresolved one there goes uncounted. That can only heal a dialog when the
-	// last tool_use (always in the tail) has finished, so the miss errs toward
-	// idle, never toward blocked.
+	// read from the tail can miss it. openTools and seenTools are tail-sensitive
+	// too: a first read from the tail never sees a tool_use older than it. Missing
+	// an unresolved older tool errs toward healing a dialog; missing an older
+	// same-name tool_use errs toward blocked.
 	if ev.InputTokens > 0 {
 		s.view.InputTokens = ev.InputTokens
 	}
