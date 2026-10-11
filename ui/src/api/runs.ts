@@ -42,6 +42,7 @@ export interface CrewRef {
   model?: string
   detail?: string // latest status detail — the live phase
   sessions?: number // dispatch + resume rows seen for this worker
+  home?: string // project of the repo whose bus holds this crew's dir; absent when none or several do
 }
 
 export interface TrailChip {

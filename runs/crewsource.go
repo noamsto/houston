@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -207,12 +208,20 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 		}
 	}
 
+	homes := crewHomes(slices.Collect(maps.Keys(joins)))
+
 	now := time.Now()
 	out := map[string]Run{}
 	for bus, branches := range s.scanRoots(rootList) {
 		project := ProjectFromCommonDir(filepath.Dir(bus))
 		for branch, r := range branches {
 			routed := routeCrewQuestion(r, dispatcherLive(joins[bus], r.Crew.Name), now)
+			if home := homes[r.Crew.Name]; home != "" {
+				// routed.Crew is shared with the parse cache.
+				c := *routed.Crew
+				c.Home = home
+				routed.Crew = &c
+			}
 			routed.Project = project
 			routed.Role = RoleWorker
 			routed.CrewBus = bus
@@ -238,6 +247,36 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 		}
 	}
 	return out, true
+}
+
+// crewHomes maps each crew id to the project name of the one bus holding
+// crews/<id>. A crew dir present in several buses has no known home and is
+// left out.
+func crewHomes(buses []string) map[string]string {
+	owner := map[string]string{}
+	for _, bus := range buses {
+		entries, err := os.ReadDir(filepath.Join(bus, "crews"))
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			if _, dup := owner[e.Name()]; dup {
+				owner[e.Name()] = ""
+			} else {
+				owner[e.Name()] = bus
+			}
+		}
+	}
+	homes := make(map[string]string, len(owner))
+	for crewID, bus := range owner {
+		if bus != "" {
+			homes[crewID] = ProjectFromCommonDir(filepath.Dir(bus))
+		}
+	}
+	return homes
 }
 
 // scanRoots reads every root's crew bus and folds it into the latest state per
@@ -326,6 +365,11 @@ func (s *CrewSource) crewDir(root string) string {
 	return dir
 }
 
+var (
+	codenameRe  = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)
+	tmuxColorRe = regexp.MustCompile(`^colour[0-9]+$`)
+)
+
 type crewRecord struct {
 	TS     int64  `json:"ts"`
 	CrewID string `json:"crew_id"`
@@ -337,6 +381,10 @@ type crewRecord struct {
 	Tier   string `json:"tier"`
 	Engine string `json:"engine"`
 	Model  string `json:"model"`
+	// Name and TmuxColor are the codename and tmux colour a dispatch row records
+	// for the worker's window.
+	Name      string `json:"name"`
+	TmuxColor string `json:"tmux"`
 	// EngineSession is the engine's own session id on a dispatch or resume row;
 	// null for codex/cursor and absent on rows from an older dispatcher.
 	EngineSession string `json:"engine_session"`
@@ -500,6 +548,12 @@ func deltasFromCrewLog(rd io.Reader) map[string]crewBranch {
 		if rec.Kind == "dispatch" || rec.Kind == "resume" {
 			r.CrewSession = rec.EngineSession
 			r.Crew.Sessions++
+		}
+		// The branch's identity is its last well-formed dispatch row, as the crew
+		// CLI records it. Bus text is untrusted, hence both patterns.
+		if rec.Kind == "dispatch" && codenameRe.MatchString(rec.Name) && tmuxColorRe.MatchString(rec.TmuxColor) {
+			r.Crew.Codename = rec.Name
+			r.Crew.Color = tmuxColorToHex(rec.TmuxColor)
 		}
 		if rec.Kind == "msg" && strings.HasPrefix(rec.From, "dispatcher:") && rec.TS > dispatcherReplyTS[branch] {
 			dispatcherReplyTS[branch] = rec.TS
