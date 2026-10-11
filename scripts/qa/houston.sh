@@ -55,7 +55,7 @@ stop() {
 }
 
 start() {
-	local mode=$1 port token pid i
+	local mode=$1 port pid i
 	[ -f "$S/port" ] && [ -x "$S/houston" ] && [ -d "$S/tmux" ] || {
 		echo "$S is not set up (need port, houston binary and tmux dir)" >&2
 		exit 1
@@ -90,8 +90,9 @@ start() {
 			exit 1
 		}
 		if [ -f "$S/state/token" ]; then
-			token=$(cat "$S/state/token")
-			if [ "$(curl -fsS -H "Authorization: Bearer $token" "http://127.0.0.1:$port/api/mode" 2>/dev/null || true)" = "{\"mode\":\"$mode\"}" ]; then
+			# The token goes in a 0600 header file: argv is readable by every local uid.
+			[ -f "$S/auth.hdr" ] || (umask 077 && printf 'Authorization: Bearer %s\n' "$(cat "$S/state/token")" >"$S/auth.hdr")
+			if [ "$(curl -fsS -H "@$S/auth.hdr" "http://127.0.0.1:$port/api/mode" 2>/dev/null || true)" = "{\"mode\":\"$mode\"}" ]; then
 				echo "houston $mode on 127.0.0.1:$port (pid $pid)"
 				return 0
 			fi

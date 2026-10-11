@@ -1,0 +1,9 @@
+{
+  "name": "houston-qa-pw",
+  "private": true,
+  "version": "0.0.0",
+  "description": "playwright-core for scripts/qa, installed by setup.sh with npm ci",
+  "dependencies": {
+    "playwright-core": "1.57.0"
+  }
+}

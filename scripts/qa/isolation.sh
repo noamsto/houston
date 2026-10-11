@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Content checks that the QA run left the user's live environment untouched.
 #
-#   isolation.sh S               run the checks; exit 1 on any hit
+#   isolation.sh S               run the checks; exit 1 on any hit, 2 when a check
+#                                could not run
 #   isolation.sh S --self-test   prove check (e) detects a planted dir
 #
 #   (b) no live houston hook state has a cwd or transcript_path under $S or a QA
@@ -15,6 +16,8 @@
 # caller's own server, and it refuses to run when the caller's TMUX_TMPDIR
 # points into $S, since it would then inspect the private server. Overrides for
 # tests: ISOLATION_LIVE_STATE, ISOLATION_PROJECTS, ISOLATION_CHECKS (default bce).
+# With no live tmux server to inspect, (c) cannot run: that is exit 2, unless
+# ISOLATION_NO_LIVE_TMUX=1 accepts it (the summary then leaves (c) out).
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -48,12 +51,15 @@ if [ "${2:-}" = --self-test ]; then
 fi
 
 fail=0
+incomplete=
+ran=
 hit() {
 	echo "ISOLATION HIT ($1): $2" >&2
 	fail=1
 }
 
 if [[ $checks == *b* ]]; then
+	ran+=b
 	if [ -d "$live_state" ]; then
 		# Hook state records cwd, transcript_path and the session id. Other
 		# fields (tool_input_hint, last_message) can legitimately quote a command
@@ -86,17 +92,22 @@ if [[ $checks == *c* ]]; then
 		;;
 	esac
 	if panes=$(tmux list-panes -a -F '#{pane_current_path}' 2>/dev/null); then
+		ran+=c
 		while IFS= read -r p; do
 			case $p in
 			"$S" | "$S"/*) hit c "live tmux pane in $p" ;;
 			esac
 		done <<<"$panes"
+	elif [ "${ISOLATION_NO_LIVE_TMUX:-}" = 1 ]; then
+		echo "note: no live tmux server answered; check (c) skipped (ISOLATION_NO_LIVE_TMUX=1)" >&2
 	else
-		echo "note: no live tmux server answered; check (c) has nothing to inspect" >&2
+		echo "could not inspect the live tmux server; check (c) did not run (ISOLATION_NO_LIVE_TMUX=1 accepts that)" >&2
+		incomplete=1
 	fi
 fi
 
 if [[ $checks == *e* ]]; then
+	ran+=e
 	if [ -d "$projects" ]; then
 		while IFS= read -r d; do
 			hit e "$d"
@@ -104,5 +115,6 @@ if [[ $checks == *e* ]]; then
 	fi
 fi
 
-[ "$fail" = 0 ] && echo "isolation ok for $S (checks: $checks)"
-exit "$fail"
+[ "$fail" = 0 ] || exit 1
+[ -z "$incomplete" ] || exit 2
+echo "isolation ok for $S (checks: $ran)"

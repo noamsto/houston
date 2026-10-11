@@ -7,10 +7,13 @@
 //
 // Environment: S (scratch root, or the first non-flag argv) holds qa.env, the
 // KEY=VALUE file setup.sh writes: S PORT TMUX_TMPDIR NODE_PATH CHROMIUM
-// CLAUDE_PANE PI_PANE WT_PANE LESS_PANE CREW1 CREW2 (any may be empty). The
-// process environment wins over the file, except NODE_PATH (the file's
-// is the one holding playwright-core; qa.cjs prepends it). SHOTS overrides the screenshot dir
-// (default $S/shots).
+// CLAUDE_PANE PI_PANE WT_PANE LESS_PANE CREW1 CREW2 (any may be empty). The file
+// is authoritative: a process-environment value that differs from it is a
+// refusal, except NODE_PATH and TMUX_TMPDIR, where the file silently wins
+// (NODE_PATH holds playwright-core and qa.cjs prepends it; the caller's own
+// TMUX_TMPDIR is expected to differ and is never used). S must be a marked
+// /tmp/hqa.<random> dir and PORT within 17470-17499. SHOTS overrides the
+// screenshot dir (default $S/shots).
 //
 // API (ctx.*):
 //   env                   parsed qa.env (strings, '' when absent)
@@ -22,8 +25,10 @@
 //                         kind 'mobile' (390x844, touch, isMobile, DPR 3) or
 //                         'desktop' (1280x800). Installs the guard: only
 //                         http(s)/ws(s) to 127.0.0.1:$PORT passes, anything else is
-//                         recorded in `violations` and aborted/closed. Service
-//                         workers are blocked. Returns the BrowserContext.
+//                         recorded in `violations` and aborted/closed, as is any
+//                         POST to /api/dispatch* that no page.route fixture
+//                         fulfilled first. Service workers are blocked. Returns
+//                         the BrowserContext.
 //   newPage(browser, kind) -> {context, page}   newContext plus one page
 //   url(hash = '')        baseUrl + '/' + hash, e.g. url('#/fleet'). The first load
 //                         of the SPA issues the auth cookie, so pages just goto it.
@@ -39,7 +44,7 @@
 //   tmux(...args)         run `env -u TMUX -u TMUX_PANE TMUX_TMPDIR=$S/tmux tmux
 //                         -f /dev/null ...args` on the private server; returns
 //                         stdout (string), throws on non-zero exit, and refuses when
-//                         $S/tmux is missing.
+//                         $S/tmux is missing or the socket dir is a default one.
 //   capture(pane, opts)   tmux capture-pane -p -t pane (opts.lines = scrollback
 //                         lines to include; opts.escapes adds -e).
 //   check(area, id, result, note, shot)
@@ -52,7 +57,9 @@
 //   shot(page, name)      full-viewport PNG to $SHOTS/<name>.png; returns the path.
 //   waitFor(fn, {timeout=10000, interval=100, message})
 //                         poll an (async) fn until it returns truthy; resolves its
-//                         value, rejects with `message` on timeout.
+//                         value, rejects with `message` on timeout. `message` is a
+//                         string, or a function (sync or async) evaluated at the
+//                         timeout so it can report the state then.
 //   sleep(ms)
 //   results               every check line recorded so far
 //
@@ -82,6 +89,10 @@ function parseEnvFile(file) {
   return out
 }
 
+const PORT_MIN = 17470
+const PORT_MAX = 17499
+const FILE_WINS = new Set(['NODE_PATH', 'TMUX_TMPDIR'])
+
 const KEYS = ['S', 'PORT', 'TMUX_TMPDIR', 'NODE_PATH', 'CHROMIUM', 'CLAUDE_PANE', 'PI_PANE', 'WT_PANE', 'LESS_PANE', 'CREW1', 'CREW2']
 
 const VIEWPORTS = {
@@ -94,12 +105,21 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 function load(argv = process.argv.slice(2)) {
   const S = process.env.S || argv.find((a) => !a.startsWith('-')) || ''
   if (!S) throw new Error('S not set: pass the scratch root as env S or the first argument')
+  if (!/^\/tmp\/hqa\.[A-Za-z0-9]+$/.test(S)) throw new Error(`refusing: S must be a /tmp/hqa.<random> dir, got: ${S}`)
+  if (!fs.existsSync(path.join(S, '.houstonqa'))) throw new Error(`refusing: ${S} is not a QA scratch dir (no .houstonqa marker)`)
   const file = parseEnvFile(path.join(S, 'qa.env'))
   const env = {}
-  for (const k of KEYS) env[k] = (k === 'NODE_PATH' ? file[k] || process.env[k] : process.env[k] || file[k]) || ''
-  env.S = S
+  for (const k of KEYS) {
+    const fromProc = process.env[k]
+    if (!FILE_WINS.has(k) && fromProc && fromProc !== (file[k] ?? '')) {
+      throw new Error(`refusing: ${k} in the process environment differs from ${S}/qa.env; unset it`)
+    }
+    env[k] = file[k] || ''
+  }
+  if (env.S !== S) throw new Error(`refusing: ${S}/qa.env names S=${env.S || '(none)'}`)
   if (!/^\d+$/.test(env.PORT)) throw new Error(`no PORT in ${S}/qa.env`)
-  if (env.PORT === '9090') throw new Error('refusing port 9090')
+  const port = Number(env.PORT)
+  if (port < PORT_MIN || port > PORT_MAX) throw new Error(`refusing port ${port}; only ${PORT_MIN}-${PORT_MAX}`)
   return createLib(env)
 }
 
@@ -123,11 +143,20 @@ function createLib(env) {
     const opts = VIEWPORTS[kind]
     if (!opts) throw new Error(`newContext: unknown kind ${kind} (mobile|desktop)`)
     const context = await browser.newContext({ ...opts, serviceWorkers: 'block' })
+    // Page-level page.route fixtures take precedence over this context route, so
+    // a fulfilled dispatch POST never reaches it; one that does is a stray.
     await context.route('**/*', (route) => {
-      const u = route.request().url()
-      if (sameOrigin(u)) return route.continue()
-      violations.push(u)
-      return route.abort()
+      const req = route.request()
+      const u = req.url()
+      if (!sameOrigin(u)) {
+        violations.push(u)
+        return route.abort()
+      }
+      if (req.method() === 'POST' && new URL(u).pathname.startsWith('/api/dispatch')) {
+        violations.push(`POST ${u}`)
+        return route.abort()
+      }
+      return route.continue()
     })
     await context.routeWebSocket(/.*/, (ws) => {
       const u = ws.url()
@@ -198,6 +227,11 @@ function createLib(env) {
   const tmuxDir = path.join(S, 'tmux')
   function tmux(...args) {
     if (!fs.existsSync(tmuxDir)) throw new Error(`tmux: ${tmuxDir} missing; refusing to touch any other tmux server`)
+    const sockDir = `tmux-${process.getuid()}`
+    const want = path.resolve(tmuxDir, sockDir)
+    for (const d of [path.join('/tmp', sockDir), path.join(process.env.TMUX_TMPDIR || '/tmp', sockDir)]) {
+      if (path.resolve(d) === want) throw new Error(`tmux: refusing ${want}, a default tmux socket dir`)
+    }
     return execFileSync(
       'env',
       ['-u', 'TMUX', '-u', 'TMUX_PANE', `TMUX_TMPDIR=${tmuxDir}`, 'tmux', '-f', '/dev/null', ...args.map(String)],
@@ -245,7 +279,7 @@ function createLib(env) {
     for (;;) {
       const v = await fn()
       if (v) return v
-      if (Date.now() >= end) throw new Error(message)
+      if (Date.now() >= end) throw new Error(typeof message === 'function' ? await message() : message)
       await sleep(interval)
     }
   }

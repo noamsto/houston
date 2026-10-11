@@ -6,7 +6,8 @@
 #   setup.sh [--no-agents] [S]
 #
 # S defaults to a fresh `mktemp -d /tmp/hqa.XXXXXX`; an existing S is accepted
-# only when empty or already marked .houstonqa. Keep it short: the tmux socket
+# only when empty or already marked .houstonqa, and a real directory you own
+# with mode 700 (a new one is created that way). Keep it short: the tmux socket
 # path must fit sun_path. On success it prints PORT=<port> and S=<S> and writes
 # $S/qa.env (sourceable KEY=value lines) for scripts/qa/qa.cjs. --no-agents
 # skips the claude and pi windows for scenarios that need fixture data only.
@@ -51,7 +52,11 @@ fi
 	echo "refusing: S must be a /tmp/hqa.<random> dir, got: $S" >&2
 	exit 2
 }
-mkdir -p -- "$S"
+if [ -e "$S" ] || [ -L "$S" ]; then
+	qa_check_dir
+else
+	mkdir -m 700 -- "$S"
+fi
 touch "$S/.houstonqa"
 qa_check_root
 
@@ -212,8 +217,10 @@ qa_pick_port >"$S/port"
 PORT=$(cat "$S/port")
 
 echo "== playwright"
+# npm ci enforces the integrity hashes in the committed lockfile.
 mkdir -p -- "$S/pw"
-npm i --prefix "$S/pw" --no-audit --no-fund --silent playwright-core@1.57.0
+cp -- "$here/pw/package.json" "$here/pw/package-lock.json" "$S/pw/"
+npm ci --prefix "$S/pw" --no-audit --no-fund --silent
 if [ -z "${CHROMIUM:-}" ]; then
 	CHROMIUM=$(command -v chromium || true)
 fi

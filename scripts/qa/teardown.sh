@@ -7,8 +7,10 @@
 # crewtmux's @crewtmux marker), then checks that no tmux server answers on
 # $S/tmux and that no process names $S in its command line or has
 # HOUSTON_STATE_DIR=$S/state in its environment (a process an agent started in
-# a pane inherits that). Exit 1 lists what is left. The check skips this script,
-# its descendants and its ancestors, whose command lines legitimately name $S.
+# a pane inherits that). Exit 1 lists what is left, or reports that houston
+# would not stop (the tmux kill and the scan still run first). The check skips
+# this script, its descendants and its ancestors, whose command lines
+# legitimately name $S.
 # --purge also moves $S to the trash. Touches nothing outside $S.
 set -euo pipefail
 
@@ -32,7 +34,9 @@ done
 qa_check_root
 qa_scrub_env
 
-"$here/houston.sh" "$S" stop
+# A failed stop (port still busy) must not leave the private tmux server running.
+rc=0
+"$here/houston.sh" "$S" stop || rc=1
 
 if [ -d "$S/tmux" ] && tp ls >/dev/null 2>&1; then
 	"$root/scripts/perf/crewtmux.sh" stop "$S"
@@ -87,6 +91,10 @@ for ((i = 0; i < 100; i++)); do
 done
 if [ -n "$left" ]; then
 	printf 'processes still tied to %s:\n%s' "$S" "$left" >&2
+	exit 1
+fi
+if [ "$rc" != 0 ]; then
+	echo "houston could not be stopped; $S kept" >&2
 	exit 1
 fi
 

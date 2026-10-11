@@ -3,9 +3,9 @@
 //
 //   S=/tmp/hqa.XXXXXX [SCENARIOS=fleet,nav] [SHOTS=dir] node scripts/qa/qa.cjs
 //
-// S (or the first argument) is the scratch root holding qa.env; qa.env also
-// supplies NODE_PATH (playwright-core) and CHROMIUM unless set in the
-// environment. SCENARIOS is a comma list, default all ten, in area order. Each
+// S (or the first argument) is the scratch root holding qa.env, which supplies
+// PORT, NODE_PATH (playwright-core), CHROMIUM and the pane ids; a differing
+// process-environment value is a refusal (see lib.cjs). SCENARIOS is a comma list, default all ten, in area order. Each
 // name loads ./scenarios/<name>.cjs, which exports `async run(ctx)` (ctx is the
 // scripts/qa/lib.cjs API plus `browser`); a missing module is one skip line.
 // A built-in `guard` self-test (area 0) always runs first.
