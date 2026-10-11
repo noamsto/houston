@@ -1,6 +1,6 @@
 // Area 2: navigation stack. Checks: open-tab-back worker-from-dispatcher
 // deeplink-reload back-label long-press-root edge-swipe native-back
-// desktop-select. Plan step 7.
+// desktop-select.
 //
 // Runs come from the loadfixture crews: the joined dispatcher (crew 1) opens on
 // its Crew tab and its workers are reachable from the roster, which gives the

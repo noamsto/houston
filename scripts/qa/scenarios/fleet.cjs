@@ -1,5 +1,5 @@
 // Area 1: Fleet list. Checks: states badge filters nesting orphan-group
-// group-by-project codenames show-more bg-chip. Plan step 6.
+// group-by-project codenames show-more bg-chip.
 //
 // The expected view is computed from /api/runs with the UI's own rules (see
 // _shared.cjs) and compared with the DOM; the run states the loadfixture lacks

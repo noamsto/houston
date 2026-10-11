@@ -1,5 +1,4 @@
 // Area 7: Workspace tab. Checks: group-by-repo needs-you tap-pane deleted-wt.
-// Plan step 12.
 //
 // deleted-wt is destructive to the harness (it removes the qa-wt worktree whose
 // directory the `wt` window sits in), so it runs last.

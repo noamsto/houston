@@ -1,6 +1,6 @@
 // Area 3: the Chat tab, on the real claude and pi agents of the harness plus the
 // loadfixture session with the largest transcript. Agent prompts are one short
-// sentence each (the claude quota is nearly used up).
+// sentence each.
 const fs = require('node:fs')
 const path = require('node:path')
 

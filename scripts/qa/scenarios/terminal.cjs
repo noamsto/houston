@@ -414,9 +414,6 @@ exports.run = async (ctx) => {
       if (!shown) {
         const dialog = await ctx.api(`/api/runs/${claude.id}/prompt`)
         if (dialog.status !== 200) skipOut(`agent: claude showed no permission dialog (GET /prompt ${dialog.status}) within 90 s`)
-        // Hypothesis, unverified: the pane capture houston parses carries ANSI colour
-        // codes around the digits (capture-pane -e), which parser.Parse
-        // (server/server.go getAgentState) does not strip.
         const err = new Error(
           `expected tappable choice buttons for the open Claude permission dialog, got none: no \`choices\` in the terminal meta frames while GET /prompt is 200 (choices ${JSON.stringify((dialog.json?.choices ?? []).map((c) => c.label ?? c))})`,
         )

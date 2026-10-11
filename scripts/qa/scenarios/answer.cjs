@@ -1,6 +1,6 @@
 // Area 4: answering claude's AskUserQuestion pickers and permission dialogs from
 // the Chat tab. Real claude (haiku, default permission mode); each prompt is one
-// short sentence because the claude quota is nearly used up.
+// short sentence.
 const fs = require('node:fs')
 const path = require('node:path')
 
