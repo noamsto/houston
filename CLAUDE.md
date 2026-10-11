@@ -255,6 +255,33 @@ Synthetic load, never real session content:
   - `startup.sh` cannot target this server: it always runs on its own fresh, empty `$work/tmux`, so dispatcher mode there sees no dispatcher or worker windows. Start houston by hand on the fixture state: `env -u TMUX -u TMUX_PANE TMUX_TMPDIR=WORKDIR/tmux HOME=D/home houston -status-dir D/state -addr 127.0.0.1:PORT -mode dispatcher -no-opencode`, then run `client.cjs`'s `fleet` scenario against it.
   - `SCENARIOS=fleet node scripts/perf/client.cjs PORT` (same `NODE_PATH`/`CHROMIUM`; it writes nothing) times the Fleet list at 390x844 (`fleet`) and 1280x800 (`fleet-desktop`), both with the 4x CPU slowdown: `tti`, `nodes` (elements under the list container), `cards` (`.run-card`) and `rows` (`.worker-row`). `FLEET_EXPECT` is the count of run cards plus worker rows to wait for (unset: any count that has stopped changing for 500 ms); `SCREENSHOT_DIR` saves `fleet-mobile.png` and `fleet-desktop.png`. Run it against a main-built binary and this branch on the same fixture to compare.
 
+### QA harness
+
+`scripts/qa/` is an end-to-end pass over the ten UI areas (Fleet, navigation, Chat, answering, Terminal, Crew, Workspace, Dispatch, modes, liveness) against real claude and pi agents, run before releases. **Local only**: it needs real claude/pi credentials and quota, so it is not CI. It runs next to the live houston (`127.0.0.1:9090`) and the live tmux server, which must receive nothing; every rule below keeps the two apart.
+
+- `scripts/qa/setup.sh [--no-agents] [S]`: builds the UI and houston, writes a `loadfixture` (12 sessions, 2 crews of 7 workers), starts the private tmux server, scratch repos `$S/repos/qa-repo` and `qa-wt`, shell windows (`wt`, `less`), a claude window (`--model haiku`) and a pi window (`QA_PI_MODEL`), then houston in dispatcher mode, and installs `playwright-core` into `$S/pw`. `--no-agents` skips claude and pi (enough for Fleet, nav, crew and fixture-only checks). `S` is `mktemp -d /tmp/hqa.XXXXXX` by default and must match `/tmp/hqa.<random>` (a marked `.houstonqa` dir). It prints `PORT=` and `S=` and writes `$S/qa.env` (`PORT`, `TMUX_TMPDIR`, `NODE_PATH`, `CHROMIUM`, pane ids, `CREW1`/`CREW2`). Crew 2 has its `pane` file removed, so it is the orphan crew.
+- `S=$S [SCENARIOS=fleet,nav] [SHOTS=dir] node scripts/qa/qa.cjs`: default is all of `fleet nav chat answer terminal crew workspace dispatch modes liveness`, each from `scripts/qa/scenarios/<name>.cjs`. The built-in `guard` self-test (area 0) runs first and proves a foreign HTTP and WebSocket origin is refused. Stdout is one JSON line per check, `{"area","check","result":"pass|fail|skip","note","shot"}`, then `{"summary":{pass,fail,skip},"guard_violations":[…]}`. Exit 1 on any fail or guard violation, 2 on a setup error. Screenshots go to `$S/shots`.
+- `scripts/qa/houston.sh S dispatcher|tmux|restart|stop` swaps the houston under test (the `modes` and `liveness` scenarios use it and restore dispatcher mode). `scripts/qa/isolation.sh S [--self-test]` reads content, never mtimes, to prove the live hook state, live tmux panes and `~/.claude/projects` hold nothing of `$S`; run it before and after a pass. `scripts/qa/teardown.sh [--purge] S` stops houston, kills the private server (only with its `@crewtmux` marker), fails if any process still names `$S` or carries `HOUSTON_STATE_DIR=$S/state`, and `--purge` removes `$S`.
+
+Isolation rules:
+
+- **Private tmux server** (`crewtmux.sh start`, `@crewtmux 1`): every tmux call goes through `tp` (`lib.sh`) or `ctx.tmux`, which run `env -u TMUX -u TMUX_PANE TMUX_TMPDIR=$S/tmux tmux -f /dev/null`. With `$TMUX` set tmux ignores `TMUX_TMPDIR` and acts on the caller's server; tmux 3.2+ falls back to `/tmp` when the dir is missing, so they refuse unless `$S/tmux` exists and is not a default socket dir. The one plain `tmux` call is `isolation.sh`'s read-only listing of the live server.
+- **Env scrub** (`qa_scrub_env`, plus `set-environment -gu` on the server): `CREW_*`, `DISPATCH_*`, `CLAUDE_CODE_*`, `TMUX*` are dropped, because an agent started with `CREW_WORKER_ID` has hookyard post "exited" for the caller's worker on the real crew bus.
+- **Hook state**: the server's global env sets `HOUSTON_STATE_DIR` and `HOUSTON_STATUS_DIR` to `$S/state` before any agent starts, so the deployed `houston hook` writes there; `setup.sh` fails unless a claude state file for the pane appears under `$S/state`.
+- **Transcripts**: claude and the houston under test run under `bwrap --dev-bind / / --bind $S/home/.claude/projects ~/.claude/projects` (`HOME` unchanged, so credentials, plugins and OAuth refresh stay the single real files). The live houston rescans `~/.claude/projects` every 30 s and would list QA sessions; a hook's `transcript_path` resolves to the scratch dir only inside the bind. pi writes to `$S/pi-sessions`.
+- **`--permission-mode default`** for the QA claude: the user's settings default to auto, which would never show the permission dialogs the `answer` scenario needs.
+- **Browser guard** (`lib.cjs`): `route('**/*')` and `routeWebSocket` let only `127.0.0.1:$PORT` through (anything else is aborted and recorded in `violations`); service workers are blocked; port 9090 and ports outside 17470-17499 are refused. `POST /api/dispatch*` is only ever fulfilled by `page.route` in the browser; `ctx.api` refuses non-GET there.
+- **`crew` CLI against the fixture bus** runs from `$S/repo` with `CREW_WORKER_ID` and `CREW_ROLE_ID` unset and the private tmux env (`TMUX`/`TMUX_PANE` unset, `TMUX_TMPDIR=$S/tmux`): it can nudge and set options on the pane id in `crews/<id>/pane`, which on the caller's server would address a live pane.
+
+Gotchas:
+
+- Claude's workspace-trust dialog starts on "No, exit"; `setup.sh` moves to "Yes" before it sends the first prompt.
+- `gtrash` cannot trash under `/tmp` (no per-uid trash dir there), so `--purge` falls back to `rm -rf` of the validated `/tmp/hqa.*` dir.
+- The crew `question-live` and `question-composer` checks append to `$S`'s bus and skip on a second run; re-run `setup.sh` for a fresh `$S`. The `workspace` scenario ends by removing `$S/repos/qa-wt`.
+- Real-agent checks spend Claude quota: haiku, one-sentence prompts. Keep new prompts short.
+
+Not covered: WebKit and iOS Safari (no WebKit browser launches on this host), so anything Safari-specific stays manual.
+
 ### Vite Proxy
 
 The Vite dev server (`ui/vite.config.ts`) proxies `/api` to `http://localhost:9090`. Change the target port if your Go backend runs on a different port.
