@@ -116,8 +116,8 @@ type Session struct {
 
 	bg bgTracker
 
-	openTools map[string]struct{} // tool_use ids with no tool_result yet; nil until the first
-	seenTools map[string]struct{} // names of tools used this turn; nil until the first
+	openTools map[string]struct{} // tool_use ids with no tool_result yet
+	seenTools map[string]struct{} // names of tools used since the last reset
 
 	chat *chatState // nil until first use, and for agents without a chat.Reader
 }
