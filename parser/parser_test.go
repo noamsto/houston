@@ -82,3 +82,20 @@ $`
 		t.Errorf("expected TypeIdle, got %v", result.Type)
 	}
 }
+
+func TestDetectChoicesColoured(t *testing.T) {
+	output := "Do you want to proceed?\n" +
+		"\x1b[38;5;246m1. \x1b[38;5;153mYes\x1b[0m\n" +
+		"\x1b[38;5;246m2. \x1b[38;5;153mYes, and don't ask again\x1b[0m\n" +
+		"\x1b[38;5;246m3. \x1b[38;5;153mType here to tell Claude\x1b[0m\n" +
+		"\x1b[38;5;246m4. \x1b[38;5;153mNo\x1b[0m\n"
+
+	result := Parse(output)
+
+	if result.Type != TypeChoice {
+		t.Fatalf("expected TypeChoice, got %v", result.Type)
+	}
+	if len(result.Choices) != 4 {
+		t.Errorf("expected 4 choices, got %d: %q", len(result.Choices), result.Choices)
+	}
+}
