@@ -1888,3 +1888,102 @@ func TestScanAdvancesTheFeedForEveryBus(t *testing.T) {
 		t.Errorf("bare bus page = %+v, %v; want an empty page with an epoch", p, err)
 	}
 }
+
+func TestDeltasFromCrewLogTakesCodenameAndColourFromDispatchRow(t *testing.T) {
+	log := `{"ts":1,"crew_id":"c1","kind":"dispatch","branch":"a","engine":"claude","name":"brick","color":"brown","tmux":"colour131"}
+{"ts":2,"crew_id":"c1","kind":"dispatch","branch":"b","engine":"claude","name":"Brick!","color":"red","tmux":"colour131"}
+{"ts":3,"crew_id":"c1","kind":"dispatch","branch":"c","engine":"claude","name":"ok","tmux":"#ff0000"}
+{"ts":4,"crew_id":"c1","kind":"dispatch","branch":"d","engine":"claude","name":"old","tmux":"colour25"}
+{"ts":5,"crew_id":"c1","kind":"dispatch","branch":"d","engine":"claude","name":"Bad name","tmux":"colour131"}
+`
+	got := deltasFromCrewLog(strings.NewReader(log))
+	if c := got["a"].Crew; c.Codename != "brick" || c.Color != tmuxColorToHex("colour131") || c.Color == "" {
+		t.Errorf("a: Crew = %+v, want brick and the colour131 hex", c)
+	}
+	if c := got["b"].Crew; c.Codename != "" || c.Color != "" {
+		t.Errorf("b: Crew = %+v, want no identity for a malformed name", c)
+	}
+	if c := got["c"].Crew; c.Codename != "" || c.Color != "" {
+		t.Errorf("c: Crew = %+v, want no identity for a malformed colour", c)
+	}
+	if c := got["d"].Crew; c.Codename != "old" {
+		t.Errorf("d: Crew = %+v, want the last well-formed row to stand", c)
+	}
+}
+
+func TestBusCodenameYieldsToTmux(t *testing.T) {
+	r := NewRegistry(DefaultOrder)
+	r.Apply(Delta{Source: "tmux", Key: "%1", Run: Run{Agent: "claude", Crew: &CrewRef{Codename: "Ferris", Color: "#ff0000"}}})
+	r.Apply(Delta{Source: "crew", Key: "%1", Run: Run{Crew: &CrewRef{Name: "c1", Codename: "brick", Color: "#af5f5f"}}})
+
+	got := firstRun(t, r).Crew
+	if got.Codename != "Ferris" || got.Color != "#ff0000" {
+		t.Errorf("Crew = %+v, want tmux's codename and colour to win", got)
+	}
+}
+
+func TestScanSetsCrewHomeFromTheBusHoldingTheCrewDir(t *testing.T) {
+	mk := func(name string, crews ...string) string {
+		bus := filepath.Join(t.TempDir(), name, ".git", "crew")
+		for _, c := range crews {
+			if err := os.MkdirAll(filepath.Join(bus, "crews", c), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.MkdirAll(bus, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return bus
+	}
+	log := func(bus, crew, branch string) {
+		rec := fmt.Sprintf(`{"ts":1,"crew_id":%q,"kind":"dispatch","branch":%q,"engine":"claude"}`+"\n", crew, branch)
+		if err := os.WriteFile(filepath.Join(bus, "events.jsonl"), []byte(rec), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	busA := mk("alpha", "c1", "shared")
+	busB := mk("beta", "shared")
+	log(busA, "c1", "on-a")
+	log(busB, "c1", "on-b")
+	// Same crew dir in both buses: no home.
+	if err := os.MkdirAll(filepath.Join(busB, "crews", "shared"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(busA, "crews", "shared"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	logShared := func(bus, branch string) {
+		f, err := os.OpenFile(filepath.Join(bus, "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = f.Close() }()
+		_, _ = fmt.Fprintf(f, `{"ts":2,"crew_id":"shared","kind":"dispatch","branch":%q,"engine":"claude"}`+"\n", branch)
+	}
+	logShared(busA, "sh-a")
+
+	s := crewScanner(map[string]string{"/a": busA, "/b": busB},
+		[]tmux.WindowOptions{{Session: "h", Window: 1, GitRoot: "/a"}, {Session: "h", Window: 2, GitRoot: "/b"}}, nil)
+	got, ok := s.scan()
+	if !ok {
+		t.Fatal("scan reported failure")
+	}
+	home := func(branch string) string {
+		for _, r := range got {
+			if r.Branch == branch {
+				return r.Crew.Home
+			}
+		}
+		t.Fatalf("no run for %q: %v", branch, keysOf(got))
+		return ""
+	}
+	if h := home("on-a"); h != "alpha" {
+		t.Errorf("on-a home = %q, want alpha", h)
+	}
+	if h := home("on-b"); h != "alpha" {
+		t.Errorf("on-b home = %q, want alpha — the crew dir lives only in bus A", h)
+	}
+	if h := home("sh-a"); h != "" {
+		t.Errorf("sh-a home = %q, want none — crew dir in both buses", h)
+	}
+}

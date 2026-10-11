@@ -123,13 +123,14 @@ type PRRef struct {
 
 type CrewRef struct {
 	Name     string `json:"name"`               // crew id — the grouping key. Crew bus only. "" when only tmux knows this run.
-	Codename string `json:"codename,omitempty"` // lazytmux @crew_name: this worker's codename. tmux only.
-	Color    string `json:"color,omitempty"`    // "#rrggbb" or "". tmux only.
+	Codename string `json:"codename,omitempty"` // This worker's codename: lazytmux @crew_name, else the crew bus's recorded dispatch identity.
+	Color    string `json:"color,omitempty"`    // "#rrggbb" or "". Same sources as Codename.
 	Tier     string `json:"tier,omitempty"`     // Crew bus only.
 	Title    string `json:"title,omitempty"`    // Task title from the dispatch record. Crew bus only.
 	Model    string `json:"model,omitempty"`    // Model the worker was dispatched on. Crew bus only.
 	Detail   string `json:"detail,omitempty"`   // Latest status detail — the live phase. Crew bus only.
 	Sessions int    `json:"sessions,omitempty"` // Dispatch and resume rows seen for this worker. Crew bus only.
+	Home     string `json:"home,omitempty"`     // Project of the one bus holding crews/<Name>; unset when none or several do. Crew bus only.
 }
 
 // Activity is what the run is doing right now.

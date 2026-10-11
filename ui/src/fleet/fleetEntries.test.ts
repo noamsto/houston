@@ -114,6 +114,23 @@ describe('fleetEntries: dispatcher groups', () => {
     expect(entryProject(e)).toBe('unknown')
   })
 
+  it('names a mixed-repo crew after its home repo', () => {
+    const runs = [
+      worker('a', '1-1', { project: 'dispatcher', crew: { name: '1-1', home: 'dispatcher' } }),
+      worker('b', '1-1', { project: 'nix-config', crew: { name: '1-1', home: 'dispatcher' } }),
+      worker('c', '1-2', { project: 'p', crew: { name: '1-2', home: 'other' } }),
+    ]
+    const es = fleetEntries(runs, 'all', now, 'dispatcher')
+    const mixed = es.find((e) => e.key === 'crew:local:1-1')!
+    if (mixed.kind !== 'crew') throw new Error('expected a crew entry')
+    expect(mixed.project).toBe('dispatcher')
+    expect(entryProject(mixed)).toBe('dispatcher')
+    expect(groupEntriesByProject(es).map(([p]) => p)).not.toContain('unknown')
+    const sole = es.find((e) => e.key === 'crew:local:1-2')!
+    if (sole.kind !== 'crew') throw new Error('expected a crew entry')
+    expect(sole.project).toBe('p')
+  })
+
   it('keeps a worker with no crew.name as a top-level run', () => {
     const runs = [
       worker('plain', '', { crew: { name: '' } }),

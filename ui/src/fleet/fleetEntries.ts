@@ -53,6 +53,11 @@ function soleProject(members: Run[]): string | undefined {
   return project
 }
 
+// A crew whose workers span repos is named after the repo its dir lives in.
+function crewProject(members: Run[]): string | undefined {
+  return soleProject(members) ?? members.find((m) => m.crew?.home)?.crew?.home
+}
+
 function summarize(members: Run[], now: number) {
   const counts: CrewCounts = { working: 0, needsYou: 0, stuck: 0, done: 0, idle: 0, ended: 0 }
   for (const m of members) counts[bucket(m, now)]++
@@ -144,7 +149,7 @@ export function fleetEntries(runs: Run[], filter: Filter, now: number, mode: Mod
       key: `crew:${host}:${crew}`,
       crew,
       host,
-      project: soleProject(all),
+      project: crewProject(all),
       shown,
       members: all,
       ...summarize(all, now),

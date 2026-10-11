@@ -325,6 +325,7 @@ type signature struct {
 	crewName, crewCodename, crewColor, crewTier, crewTitle string
 	crewModel, crewDetail                                  string
 	crewSessions                                           int
+	crewHome                                               string
 
 	hasQuestion        bool
 	qText, qVia, qKind string
@@ -407,6 +408,7 @@ func runSignature(r Run) signature {
 		s.crewName, s.crewCodename, s.crewColor, s.crewTier = r.Crew.Name, r.Crew.Codename, r.Crew.Color, r.Crew.Tier
 		s.crewTitle, s.crewModel, s.crewDetail = r.Crew.Title, r.Crew.Model, r.Crew.Detail
 		s.crewSessions = r.Crew.Sessions
+		s.crewHome = r.Crew.Home
 	}
 	if r.Question != nil {
 		s.hasQuestion = true
@@ -523,21 +525,26 @@ func mergeInto(dst *Run, src Run) {
 		}
 	}
 	if src.Crew != nil {
-		// Field-wise, not wholesale: tmux owns Codename/Color and the crew bus
-		// owns Name/Tier, so two layers can each set half of this struct on the
-		// same key. Wholesale replacement would let whichever layer merges last
-		// erase the other's half.
+		// Field-wise, not wholesale: tmux owns Codename/Color (the crew bus fills
+		// them when tmux has none) and the crew bus owns Name/Tier, so two layers
+		// can each set half of this struct on the same key. Wholesale replacement
+		// would let whichever layer merges last erase the other's half.
 		if dst.Crew == nil {
 			dst.Crew = &CrewRef{}
 		}
 		if src.Crew.Name != "" {
 			dst.Crew.Name = src.Crew.Name
 		}
-		if src.Crew.Codename != "" {
+		// First opinion wins: tmux merges first, and the crew bus only supplies
+		// an identity for a worker with no window.
+		if src.Crew.Codename != "" && dst.Crew.Codename == "" {
 			dst.Crew.Codename = src.Crew.Codename
 		}
-		if src.Crew.Color != "" {
+		if src.Crew.Color != "" && dst.Crew.Color == "" {
 			dst.Crew.Color = src.Crew.Color
+		}
+		if src.Crew.Home != "" {
+			dst.Crew.Home = src.Crew.Home
 		}
 		if src.Crew.Tier != "" {
 			dst.Crew.Tier = src.Crew.Tier
