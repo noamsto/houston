@@ -232,7 +232,20 @@ exports.run = async (ctx) => {
       await step(ctx, 'stale-409', async () => {
         await page.waitForSelector('.permission-bar-choice', { timeout: 15000 })
         const stale = '0'.repeat(64)
-        const paneBefore = ctx.capture(pane, { lines: 80, escapes: true })
+        // The tool-call bullet above the dialog blinks, so only the dialog
+        // region (below the last full-width rule) can show a typed key.
+        const dialogRegion = () => {
+          const width = Number(ctx.tmux('display-message', '-p', '-t', pane, '#{pane_width}').trim())
+          const lines = ctx.capture(pane, { lines: 80 }).split('\n').map((l) => l.trimEnd())
+          const rule = lines.findLastIndex((l) => l.length >= width && /^─+$/.test(l))
+          if (rule < 0) throw new Error('no full-width rule in the pane capture: no dialog region to compare')
+          return lines.slice(rule + 1).join('\n').trimEnd()
+        }
+        const controlA = dialogRegion()
+        await ctx.sleep(1500)
+        const controlB = dialogRegion()
+        if (controlA !== controlB) throw new Error('dialog region differs between two captures with no input: the comparison itself is unstable')
+        const paneBefore = dialogRegion()
         const res = await page.evaluate(async (id) => {
           const r = await fetch(`/api/runs/${id}/answer`, {
             method: 'POST',
@@ -242,14 +255,14 @@ exports.run = async (ctx) => {
           return { status: r.status, text: (await r.text()).trim() }
         }, run.id)
         await ctx.sleep(1500)
-        const paneAfter = ctx.capture(pane, { lines: 80, escapes: true })
+        const paneAfter = dialogRegion()
         if (res.status !== 409) throw new Error(`stale frame -> ${res.status} ${res.text}, want 409`)
         if (res.text !== 'prompt changed') throw new Error(`409 body "${res.text}", want "prompt changed"`)
-        if (paneBefore !== paneAfter) throw new Error('pane capture changed after the stale answer (something was typed)')
+        if (paneBefore !== paneAfter) throw new Error('dialog region changed after the stale answer (something was typed)')
         if (fs.existsSync(probe2)) throw new Error('probe2 appeared after a stale answer')
         const still = await promptStatus()
         if (still.status !== 200) throw new Error(`dialog no longer open after the stale answer (GET /prompt ${still.status})`)
-        return { note: `409 "${res.text}" for frame ${stale.slice(0, 6)}...; pane capture identical before and after; dialog still open`, shot: await ctx.shot(page, 'answer-stale-409') }
+        return { note: `409 "${res.text}" for frame ${stale.slice(0, 6)}...; dialog region identical before and after; dialog still open`, shot: await ctx.shot(page, 'answer-stale-409') }
       })
 
       try {
