@@ -1,9 +1,20 @@
 package server
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
+	"net/http"
+	"os"
 	"path/filepath"
+	"strconv"
+	"time"
 
+	"github.com/noamsto/houston/answer"
 	"github.com/noamsto/houston/runs"
+	"github.com/noamsto/houston/tmux"
 )
 
 // launcherSettings are the engine, model and effort a running dispatcher was
@@ -101,4 +112,270 @@ func restartBusy(run runs.Run) bool {
 		return false
 	}
 	return false
+}
+
+const restartBusyMsg = "the dispatcher is in the middle of a turn — restart with force to interrupt it"
+
+// handleRunRestart ends a dispatcher run's engine session and starts a new
+// dispatcher on the same crew and repo, keeping its engine, model and effort
+// unless the body overrides them.
+//
+//	POST /api/runs/{id}/restart {"engine"?,"model"?,"effort"?,"force"?}
+//
+// The crew, bus, repo and old pid come from server state only; the body only
+// picks settings, each checked against the same allowlists as a launch.
+func (s *Server) handleRunRestart(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	id := r.PathValue("id")
+	rlog := &restartLog{id: id}
+	defer rlog.emit(start)
+	reply := func(code int, body dispatcherResponse) {
+		rlog.status = code
+		if body.Crew == "" {
+			body.Crew = rlog.crew
+		}
+		writeDispatchJSON(w, code, body)
+	}
+
+	if s.runs == nil {
+		reply(http.StatusServiceUnavailable, dispatcherResponse{Error: "run registry not started"})
+		return
+	}
+	run, ok := s.findRun(id)
+	if !ok {
+		reply(http.StatusNotFound, dispatcherResponse{Error: "no such run"})
+		return
+	}
+	if run.Role != runs.RoleDispatcher {
+		reply(http.StatusNotFound, dispatcherResponse{Error: "run is not a dispatcher"})
+		return
+	}
+	if run.Crew == nil || run.Crew.Name == "" || run.CrewBus == "" {
+		reply(http.StatusNotFound, dispatcherResponse{Error: "dispatcher has no crew"})
+		return
+	}
+	if !dispatchCrewRe.MatchString(run.Crew.Name) {
+		slog.Debug("dispatcher restart: crew id is not of crew's shape", "id", id)
+		reply(http.StatusNotFound, dispatcherResponse{Error: "dispatcher has no crew"})
+		return
+	}
+	crew := run.Crew.Name
+	rlog.crew = crew
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxDispatchBody)
+	var req restartRequest
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		code, msg := http.StatusBadRequest, "malformed request body"
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			code, msg = http.StatusRequestEntityTooLarge, "request body too large"
+		}
+		reply(code, dispatcherResponse{Error: msg})
+		return
+	}
+
+	serverPath, err := s.tmuxServerPath(r.Context())
+	if err != nil {
+		msg := err.Error()
+		if !errors.Is(err, errNoServerPath) {
+			msg = "tmux unavailable: " + msg
+		}
+		reply(http.StatusServiceUnavailable, dispatcherResponse{Error: msg})
+		return
+	}
+	engines, err := s.dispatchEngines(r.Context(), serverPath)
+	if err != nil {
+		reply(http.StatusBadGateway, dispatcherResponse{Error: "could not list dispatcher engines: " + err.Error()})
+		return
+	}
+	models, modelsErr := s.dispatchModelSet(r.Context(), serverPath)
+	if modelsErr != nil {
+		slog.Warn("dispatcher restart: model lookup failed, using built-in models", "error", modelsErr)
+	}
+
+	crewDir := filepath.Join(run.CrewBus, "crews", crew)
+	oldPID := readPIDText(filepath.Join(crewDir, "pid"))
+	pid, err := strconv.Atoi(oldPID)
+	if err != nil || pid < 0 {
+		pid = 0
+	}
+	var inherited launcherSettings
+	if pid > 0 {
+		if argv, ok := s.launcherArgv(pid); ok {
+			inherited = parseLauncherArgv(argv)
+		}
+	}
+	valid, derr := validateDispatcher(restartSettings(req, inherited, run.Agent), engines, models)
+	if derr != nil {
+		reply(derr.code, dispatcherResponse{Error: derr.msg})
+		return
+	}
+	rlog.setValidated(valid, req.Force)
+
+	repos, err := s.dispatchRepos()
+	if err != nil {
+		reply(http.StatusBadGateway, dispatcherResponse{Error: "could not list repos: " + err.Error()})
+		return
+	}
+	commonDir := filepath.Clean(filepath.Dir(run.CrewBus))
+	var repo dispatchRepo
+	found := false
+	for _, cand := range repos {
+		if filepath.Clean(cand.commonDir) == commonDir {
+			repo, found = cand, true
+			break
+		}
+	}
+	if !found {
+		reply(http.StatusNotFound, dispatcherResponse{Error: "repo is not a known repo"})
+		return
+	}
+	rlog.repo = repo.Path
+	if fi, err := os.Stat(crewDir); err != nil || !fi.IsDir() {
+		reply(http.StatusNotFound, dispatcherResponse{Error: "crew is not a crew of this repo"})
+		return
+	}
+
+	if !tmuxSafeArg(repo.Path) {
+		reply(http.StatusUnprocessableEntity, dispatcherResponse{Error: "repo path contains characters tmux would interpret"})
+		return
+	}
+	if s.houstonExe == "" || !tmuxSafeArg(s.houstonExe) || !tmuxSafeArg(s.launchDir) {
+		reply(http.StatusInternalServerError, dispatcherResponse{Error: "houston's own executable or state path cannot be passed to tmux"})
+		return
+	}
+
+	pane, code, detail := s.resolveRunPane(run)
+	if code != 0 {
+		reply(code, dispatcherResponse{Error: detail})
+		return
+	}
+	if run.Tmux == nil {
+		reply(http.StatusConflict, dispatcherResponse{Error: "run has no terminal"})
+		return
+	}
+	oldPaneID, session := run.Tmux.PaneID, run.Tmux.Session
+	oldServer := pane.Server
+	if oldServer == "" {
+		oldServer = run.Tmux.Server
+	}
+	rlog.oldPane = oldPaneID
+	busy := dispatcherResponse{Error: restartBusyMsg, Busy: true}
+
+	if !req.Force {
+		if restartBusy(run) {
+			reply(http.StatusConflict, busy)
+			return
+		}
+		if isClaudeAgent(run.Agent) {
+			capture, width, err := s.runPanes.CapturePaneWidth(pane, answerCaptureLines)
+			if err != nil {
+				slog.Warn("dispatcher restart: capture failed", "id", id, "pane", oldPaneID, "error", err)
+				reply(http.StatusServiceUnavailable, dispatcherResponse{Error: "tmux unavailable"})
+				return
+			}
+			if _, open := answer.PermissionPrompt(capture, width); open {
+				reply(http.StatusConflict, busy)
+				return
+			}
+		}
+	}
+
+	if !s.launcherFound(serverPath) {
+		reply(http.StatusBadGateway, dispatcherResponse{Error: "the dispatcher launcher is not on the tmux server's PATH"})
+		return
+	}
+
+	select {
+	case s.launchSlot <- struct{}{}:
+		defer func() { <-s.launchSlot }()
+	default:
+		reply(http.StatusTooManyRequests, dispatcherResponse{Error: "another dispatcher launch is already running"})
+		return
+	}
+	sweepLaunchDir(s.launchDir)
+
+	file, err := writeLaunchFile(s.launchDir, dispatcherLaunchFile{Args: dispatcherArgs(valid), CrewID: crew, WaitPID: pid})
+	if err != nil {
+		reply(http.StatusInternalServerError, dispatcherResponse{Error: "could not write launch file: " + err.Error()})
+		return
+	}
+
+	// The new window opens first, so a window that fails to open never leaves
+	// the crew without its dispatcher; the wrapper's wait_pid holds the new
+	// launcher back from registering until the old one is dead. kill-pane, not
+	// kill-window, ends only the engine pane (closing a single-pane window).
+	end := func(ctx context.Context) *restartAbort {
+		if !req.Force {
+			// A run missing from the registry is no evidence its pane is gone;
+			// it only skips this re-check.
+			if cur, ok := s.findRun(id); ok && restartBusy(cur) {
+				return &restartAbort{http.StatusConflict, busy}
+			}
+		}
+		p, err := s.runPanes.ResolvePane(oldPaneID)
+		if errors.Is(err, tmux.ErrPaneNotFound) {
+			return nil
+		}
+		if err != nil {
+			slog.Warn("dispatcher restart: resolve old pane failed", "id", id, "pane", oldPaneID, "error", err)
+			return &restartAbort{http.StatusServiceUnavailable, dispatcherResponse{Error: "tmux unavailable"}}
+		}
+		if tmux.ServerMismatch(oldServer, p.Server) {
+			return &restartAbort{http.StatusConflict, dispatcherResponse{Error: "terminal pane belongs to a different tmux server"}}
+		}
+		if _, err := s.tmuxRun(ctx, []string{"kill-pane", "-t", oldPaneID}); err != nil && !tmux.IsGoneMessage(err.Error()) {
+			return &restartAbort{http.StatusBadGateway, dispatcherResponse{Error: "could not end the old dispatcher session: " + err.Error()}}
+		}
+		return nil
+	}
+
+	// Detached from the request: a dropped phone connection must not abort a
+	// half-made window or skip its cleanup.
+	ctx := context.WithoutCancel(r.Context())
+	code, body, newPane := s.openDispatcherWindow(ctx, windowLaunch{
+		repo: repo, serverPath: serverPath, crewID: crew, crewDir: crewDir,
+		prevPID: oldPID, file: file, session: session,
+		wait: s.launchCheck + launchWaitLimit, afterOpen: end,
+	})
+	rlog.newPane = newPane
+	reply(code, body)
+}
+
+// restartLog accumulates one restart's outcome for a single slog.Info call.
+// Settings are logged only once validated.
+type restartLog struct {
+	id, crew, repo, oldPane, newPane string
+	status                           int
+
+	validated             bool
+	engine, model, effort string
+	force                 bool
+}
+
+func (l *restartLog) setValidated(req dispatcherRequest, force bool) {
+	l.validated = true
+	l.engine, l.model, l.effort, l.force = req.Engine, req.Model, req.Effort, force
+}
+
+func (l *restartLog) emit(start time.Time) {
+	args := []any{"id", l.id, "status", l.status, "duration", time.Since(start)}
+	if l.crew != "" {
+		args = append(args, "crew", l.crew)
+	}
+	if l.validated {
+		args = append(args, "engine", l.engine, "model", l.model, "effort", l.effort, "force", l.force)
+	}
+	if l.repo != "" {
+		args = append(args, "repo", l.repo)
+	}
+	if l.oldPane != "" {
+		args = append(args, "old_pane", l.oldPane)
+	}
+	if l.newPane != "" {
+		args = append(args, "new_pane", l.newPane)
+	}
+	slog.Info("dispatcher restart", args...)
 }

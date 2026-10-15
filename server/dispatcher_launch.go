@@ -70,6 +70,8 @@ type dispatcherResponse struct {
 	Window  string `json:"window,omitempty"`
 	Pane    string `json:"pane,omitempty"`
 	RunID   string `json:"run_id,omitempty"`
+	// Busy marks a restart refused because the dispatcher is mid-turn.
+	Busy bool `json:"busy,omitempty"`
 }
 
 // dispatcherLaunchFile is how task text reaches the launcher: through a 0600

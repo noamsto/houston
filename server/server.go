@@ -163,6 +163,11 @@ type Server struct {
 	launchSlot  chan struct{}
 	launchCheck time.Duration
 	launchPoll  time.Duration
+	// launcherArgv reads a running dispatcher's argv and launcherFound looks
+	// for the launcher on the tmux server's PATH: a restart's outside world,
+	// fields so tests replace it.
+	launcherArgv  func(pid int) ([]string, bool)
+	launcherFound func(serverPath string) bool
 
 	auth  *authGate
 	hosts *hostGate
@@ -285,6 +290,8 @@ func New(cfg Config) (*Server, error) {
 		launchSlot:      make(chan struct{}, 1),
 		launchCheck:     3 * time.Second,
 		launchPoll:      200 * time.Millisecond,
+		launcherArgv:    readLauncherArgv,
+		launcherFound:   func(p string) bool { return mode.OnPath("dispatcher", p) },
 		debug:           cfg.Debug,
 	}
 	s.chat = s.hub
@@ -448,6 +455,7 @@ func (s *Server) Handler() http.Handler {
 	// launch, repo registry) unregistered, so they 404.
 	if s.mode != mode.Tmux {
 		apiMux.HandleFunc("POST /api/runs/{id}/reply", s.handleRunReply)
+		apiMux.HandleFunc("POST /api/runs/{id}/restart", s.handleRunRestart)
 		apiMux.HandleFunc("GET /api/runs/{id}/crew/feed", s.handleRunCrewFeed)
 		apiMux.HandleFunc("GET /api/runs/{id}/crew/feed/stream", s.handleRunCrewFeedStream)
 		apiMux.HandleFunc("POST /api/dispatch", s.handleDispatch)
