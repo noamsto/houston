@@ -1000,7 +1000,7 @@ func TestDispatchServerPathFallsBackWithWarning(t *testing.T) {
 		t.Fatalf("status %d (body %s)", rec.Code, rec.Body.String())
 	}
 
-	if want := []string{testServerPath, "", ""}; !slices.Equal(got, want) {
+	if want := []string{testServerPath, "", "", ""}; !slices.Equal(got, want) {
 		t.Errorf("server PATHs = %q, want %q", got, want)
 	}
 	if n := strings.Count(logs.String(), "tmux server PATH unavailable"); n != 2 {
@@ -1151,5 +1151,21 @@ func TestHandleDispatchFallbackValidation(t *testing.T) {
 	req.Model = "haiku"
 	if rec := doDispatch(t, s, dispatchHTTPRequest("POST", dispatchRequestJSON(t, req))); rec.Code != http.StatusOK {
 		t.Fatalf("status %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDispatchRejectsUndispatchableEngine(t *testing.T) {
+	repo := newDispatchTestRepo(t, "1700000000-123")
+	stub := &stubDispatchRunner{}
+	s := newDispatchServer(t, stub.run, stubDispatchRepos([]dispatchRepo{repo}, nil))
+	req := validDispatchRequest(repo, repo.Crews[0])
+	req.Engine, req.Model = "codex", "gpt-5.6-sol"
+
+	rec := doDispatch(t, s, dispatchHTTPRequest("POST", dispatchRequestJSON(t, req)))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status %d, want 400 (body %s)", rec.Code, rec.Body.String())
+	}
+	if n := stub.count(); n != 0 {
+		t.Errorf("runner called %d times, want 0", n)
 	}
 }

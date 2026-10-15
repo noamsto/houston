@@ -42,7 +42,7 @@ const optionsFixture: DispatchOptions = {
     codex: ['gpt-5.6-sol', 'gpt-5.6-terra'],
   },
   engine_order: ['claude', 'codex'],
-  dispatcher_engines: ['claude'],
+  dispatcher_engines: ['claude', 'codex'],
   tier_models: {
     claude: { trivial: 'haiku', standard: 'sonnet', deep: 'opus' },
     codex: { trivial: 'gpt-5.6-sol', standard: 'gpt-5.6-terra', deep: 'gpt-5.6-sol' },
@@ -101,6 +101,32 @@ afterEach(() => {
   localStorage.clear()
   window.location.hash = ''
   vi.unstubAllGlobals()
+})
+
+describe('DispatchView engine select', () => {
+  const engineOptions = (field: Partial<DispatchOptions>) => ({
+    ...optionsFixture,
+    engines: { ...optionsFixture.engines, pi: ['pi-model'] },
+    engine_order: ['claude', 'codex', 'pi'],
+    ...field,
+  })
+  const offered = () => Array.from((field('Engine') as HTMLSelectElement).options).map((o) => o.value)
+
+  it('offers only the dispatchable engines', async () => {
+    fetchDispatchOptionsMock.mockResolvedValue(engineOptions({ dispatcher_engines: ['claude', 'pi'] }))
+    render(<DispatchView runs={[]} />)
+    await screen.findByLabelText('Repo')
+    expect(offered()).toEqual(['claude', 'pi'])
+  })
+
+  it('falls back to engines with models when the lookup failed', async () => {
+    fetchDispatchOptionsMock.mockResolvedValue(
+      engineOptions({ dispatcher_engines: [], dispatcher_engines_error: 'boom', engine_order: ['claude', 'cursor', 'codex'] }),
+    )
+    render(<DispatchView runs={[]} />)
+    await screen.findByLabelText('Repo')
+    expect(offered()).toEqual(['claude', 'codex'])
+  })
 })
 
 describe('DispatchView options', () => {

@@ -29,6 +29,7 @@ const options: DispatchOptions = {
     codex: ['gpt-5.6-sol', 'gpt-5.6-terra'],
   },
   engine_order: ['claude', 'codex'],
+  dispatcher_engines: ['claude', 'codex'],
   tier_models: {
     claude: { trivial: 'haiku', standard: 'sonnet', deep: 'opus' },
     codex: { trivial: 'gpt-5.6-luna', standard: 'gpt-5.6-terra', deep: 'gpt-5.6-sol' },
