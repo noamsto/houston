@@ -869,6 +869,9 @@ func TestPRURLForADifferentNumberIsNotMergedIntoTmuxsPR(t *testing.T) {
 	r.Apply(Delta{Source: "crew", Key: "%1", Run: Run{PR: &PRRef{Number: "7", URL: "https://github.com/x/y/pull/7"}}})
 
 	got := firstRun(t, r).PR
+	if got == nil {
+		t.Fatal("PR dropped")
+	}
 	if got.URL != "" && got.Number == "9" {
 		t.Errorf("PR = %+v, hybrid of tmux #9 and crew's pull/7 URL", got)
 	}
