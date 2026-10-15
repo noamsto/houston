@@ -130,9 +130,10 @@ type toolOutcome struct {
 }
 
 // isRejection reports whether an error tool_result is Claude Code's answer to a
-// permission dialog the user declined.
+// permission dialog the user declined. A "No" with feedback is excluded: the
+// agent keeps working on it with no hook event.
 func isRejection(text string) bool {
-	return strings.HasPrefix(text, "The user doesn't want to")
+	return strings.HasPrefix(text, "The user doesn't want to") && !strings.Contains(text, "the user said:")
 }
 
 // resetTools forgets the tool bookkeeping the dialog heal reads.

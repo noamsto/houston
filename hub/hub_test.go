@@ -779,6 +779,11 @@ func TestHubHealsStaleToolState(t *testing.T) {
 			"Bash", hook.EventNotification, false, hook.StatePermission},
 		{"open AskUserQuestion stays blocked", toolUse(1, "a", "AskUserQuestion"),
 			"AskUserQuestion", hook.EventPreToolUse, false, hook.StateToolRunning},
+		{"a rejection in the hook's own second", toolUse(0, "a", "Bash") + result(0, "a", true),
+			"Bash", hook.EventPreToolUse, false, hook.StateToolRunning},
+		{"a rejection with feedback keeps the agent working", toolUse(1, "a", "Bash") +
+			line(2, "user", `{"type":"tool_result","tool_use_id":"a","is_error":true,"content":"The user doesn't want to proceed. To tell you how to proceed, the user said: use make"}`),
+			"Bash", hook.EventPreToolUse, false, hook.StateToolRunning},
 		{"a failed tool the user did not reject", toolUse(1, "a", "Bash") +
 			line(2, "user", `{"type":"tool_result","tool_use_id":"a","is_error":true,"content":"exit status 1"}`),
 			"Bash", hook.EventPreToolUse, false, hook.StateToolRunning},
