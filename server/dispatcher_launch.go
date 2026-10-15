@@ -34,11 +34,18 @@ const (
 	tmuxTimeout     = 10 * time.Second
 	paneTmuxTimeout = 2 * time.Second
 
-	// The old dispatcher dies on its pane's SIGHUP within milliseconds; the
-	// bound only matters for a recycled pid, where `crew register`'s own
-	// start-time check decides.
-	launchWaitLimit = 5 * time.Second
+	// The wrapper's wait for a restart's old dispatcher is only a backstop
+	// against a process that survives its pane's hangup, so it must outlast
+	// houston's resolve + kill-pane after new-window, each bounded by
+	// tmuxTimeout. On any abort houston kills the new window, which ends the
+	// waiting wrapper.
+	launchWaitLimit = 60 * time.Second
 	launchWaitPoll  = 100 * time.Millisecond
+
+	// restartExitSlack is houston's await past launchCheck after the kill:
+	// the old dispatcher dies on its pane's hangup within milliseconds, so
+	// this only covers a slow exit.
+	restartExitSlack = 5 * time.Second
 
 	// launchFormat is what new-window/new-session print with -P, so the
 	// handler learns where the dispatcher landed without a second lookup.

@@ -14,7 +14,7 @@ import { RunQuestion, RunStatusStrip } from './RunStatusStrip'
 import { tabHash, type DetailTab } from './routes'
 import { back, switchRunTab } from './nav'
 import { DETAIL_TAB_LABEL, offeredTabs } from './runTabs'
-import { isPendingRun } from './pendingRuns'
+import { isPendingRun, restartFailure } from './pendingRuns'
 import './fleet.css'
 
 interface RunDetailProps {
@@ -54,6 +54,7 @@ export function RunDetail({ runs, hasSnapshot, streamConnected, now, id, tab, mo
   // it, every cold deep link would flash "not found" for the one tick before
   // the initial SSE snapshot lands.
   const run = hasSnapshot ? runs.find((r) => r.id === id) : undefined
+  const failedRestart = hasSnapshot && !run ? restartFailure(id, now) : null
 
   return (
     <div className="run-detail" ref={rootRef}>
@@ -79,6 +80,26 @@ export function RunDetail({ runs, hasSnapshot, streamConnected, now, id, tab, mo
 
       {!hasSnapshot ? (
         <div className="run-detail-empty">Loading run…</div>
+      ) : failedRestart ? (
+        <div className="run-detail-empty">
+          <div className="dispatch-result failure">
+            <p>The restart did not come up</p>
+            <pre>{failedRestart.error}</pre>
+            {failedRestart.crew && (
+              <p>
+                Crew <code>{failedRestart.crew}</code> is intact — workers keep running. Relaunch it from a terminal in the
+                repo with CREW_ID={failedRestart.crew} dispatcher.
+              </p>
+            )}
+            {failedRestart.output && (
+              <details>
+                <summary>Output</summary>
+                <pre>{failedRestart.output}</pre>
+              </details>
+            )}
+          </div>
+          <button type="button" className="run-detail-back-cta" onClick={onBack}>Back to {backLabel}</button>
+        </div>
       ) : !run && isPendingRun(id, now) ? (
         <div className="run-detail-empty">Starting the restarted dispatcher…</div>
       ) : !run ? (

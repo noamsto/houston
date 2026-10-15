@@ -10,7 +10,8 @@ import type { Run } from '../api/runs'
 import { isBusy } from './crewsModel'
 import { crewShortId } from './fleetList'
 import { switchRunTab } from './nav'
-import { markPendingRun } from './pendingRuns'
+import { clearPendingRun, clearRestartFailure, markPendingRun, recordRestartFailure } from './pendingRuns'
+import { parseDetailRoute } from './routes'
 
 // Keeps "leave unchanged" apart from "" (the launcher's own default).
 const SAME = '\0same'
@@ -32,13 +33,12 @@ export function RestartDispatcher({ run }: { run: Run }) {
   const [engine, setEngine] = useState(SAME)
   const [model, setModel] = useState(SAME)
   const [effort, setEffort] = useState(SAME)
-  const [busyReply, setBusyReply] = useState(false)
+  const [forceAsked, setForceAsked] = useState(false)
   const [failure, setFailure] = useState<Failure | null>(null)
   const sending = useRef(false)
   const lastReq = useRef<RestartRequest>({})
 
   const crew = run.crew?.name ?? ''
-  const force = busyReply || isBusy(run)
 
   function loadOptions(): void {
     setOptionsState({ status: 'loading' })
@@ -64,14 +64,24 @@ export function RestartDispatcher({ run }: { run: Run }) {
     if (engine !== SAME) req.engine = engine
     if (model !== SAME) req.model = model
     if (effort !== SAME) req.effort = effort
-    if (force) req.force = true
+    if (forceAsked) req.force = true
     return req
+  }
+
+  function openPanel(): void {
+    setForceAsked(isBusy(run))
+    setPhase('confirm')
+  }
+
+  function onRoute(): boolean {
+    const id = parseDetailRoute(window.location.hash)?.id
+    return id === run.id || id === encodeURIComponent(run.id)
   }
 
   function close(): void {
     setPhase('closed')
     setShowSettings(false)
-    setBusyReply(false)
+    setForceAsked(false)
     setFailure(null)
     setEngine(SAME)
     setModel(SAME)
@@ -83,26 +93,30 @@ export function RestartDispatcher({ run }: { run: Run }) {
     sending.current = true
     lastReq.current = req
     setPhase('sending')
+    clearRestartFailure(run.id)
+    markPendingRun(run.id, Date.now())
     const result = await restartDispatcher(run.id, req)
     sending.current = false
+    clearPendingRun(run.id)
     if (result.kind === 'started') {
       markPendingRun(result.runId, Date.now())
-      switchRunTab(result.runId, 'crew')
+      if (onRoute()) switchRunTab(result.runId, 'crew')
       return
     }
     if (result.busy) {
-      setBusyReply(true)
+      setForceAsked(true)
       setFailure(null)
       setPhase('confirm')
       return
     }
+    recordRestartFailure(run.id, { error: result.error, output: result.output, crew: result.crew }, Date.now())
     setFailure(result)
     setPhase('failed')
   }
 
   if (phase === 'closed') {
     return (
-      <button type="button" className="crews-restart" onClick={() => setPhase('confirm')}>
+      <button type="button" className="crews-restart" onClick={openPanel}>
         Restart
       </button>
     )
@@ -141,7 +155,7 @@ export function RestartDispatcher({ run }: { run: Run }) {
       <p>
         Ends this dispatcher&apos;s session and starts a new one on crew {crewShortId(crew)}. Workers keep running.
       </p>
-      {force && <p className="crews-restart-warn">It is in the middle of a turn — restarting interrupts it.</p>}
+      {forceAsked && <p className="crews-restart-warn">It is in the middle of a turn — restarting interrupts it.</p>}
 
       <button
         type="button"
@@ -189,7 +203,7 @@ export function RestartDispatcher({ run }: { run: Run }) {
           disabled={isSending}
           onClick={() => { void send(request()) }}
         >
-          {isSending ? 'Restarting…' : force ? 'Force restart' : 'Restart'}
+          {isSending ? 'Restarting…' : forceAsked ? 'Force restart' : 'Restart'}
         </button>
         <button type="button" className="crews-restart" disabled={isSending} onClick={close}>
           Cancel

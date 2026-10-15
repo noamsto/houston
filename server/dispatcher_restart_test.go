@@ -565,3 +565,63 @@ func TestRestartLauncherDies(t *testing.T) {
 		t.Error("crew dir removed")
 	}
 }
+
+func TestRestartRefusesPIDLessCrew(t *testing.T) {
+	f := newRestartFixture(t)
+	if err := os.Remove(filepath.Join(f.crewDir, "pid")); err != nil {
+		t.Fatal(err)
+	}
+	rec, resp := f.post(t, "{}")
+	wantStatus(t, rec, http.StatusConflict)
+	if resp.Busy || resp.Crew != f.crew || resp.Error != "the crew records no dispatcher pid — restart it from a terminal" {
+		t.Errorf("response %+v", resp)
+	}
+	f.noWindowOrKill(t)
+	if !exists(f.crewDir) {
+		t.Error("crew dir removed")
+	}
+}
+
+func TestRestartBusyAtKill(t *testing.T) {
+	f := newRestartFixture(t)
+	f.tmux.set("new-window", func([]string) (string, error) {
+		f.setState(t, runs.StateRunning)
+		return "proj:@9:%11", nil
+	})
+	rec, resp := f.post(t, "{}")
+	wantStatus(t, rec, http.StatusConflict)
+	if !resp.Busy || resp.Crew != f.crew || resp.Error != restartBusyMsg {
+		t.Errorf("response %+v", resp)
+	}
+	if f.index("kill-pane") >= 0 {
+		t.Errorf("kill-pane called: %v", f.tmux.all())
+	}
+	if kw := f.tmux.find("kill-window"); !slices.Equal(kw, []string{"kill-window", "-t", "@9"}) {
+		t.Errorf("kill-window: %v", kw)
+	}
+	if files := launchFiles(t, f.s.launchDir); len(files) != 0 {
+		t.Errorf("launch files left: %v", files)
+	}
+	if !exists(f.crewDir) {
+		t.Error("crew dir removed")
+	}
+}
+
+func TestRestartRepoThroughSymlink(t *testing.T) {
+	f := newRestartFixture(t)
+	link := filepath.Join(realTempDir(t), "proj-link")
+	if err := os.Symlink(f.repo.Path, link); err != nil {
+		t.Fatal(err)
+	}
+	f.s.runs.Apply(runs.Delta{Source: "crew", Key: "%5", Run: runs.Run{
+		Role: runs.RoleDispatcher, Crew: &runs.CrewRef{Name: f.crew}, CrewBus: filepath.Join(link, ".git", "crew"),
+	}})
+	if got, _ := f.findRun(f.runID); !strings.HasPrefix(got.CrewBus, link) {
+		t.Fatalf("fixture run's bus is not under the symlink: %q", got.CrewBus)
+	}
+	rec, resp := f.post(t, "{}")
+	wantStatus(t, rec, http.StatusOK)
+	if resp.Crew != f.crew || resp.Pane != "%11" {
+		t.Errorf("response %+v", resp)
+	}
+}

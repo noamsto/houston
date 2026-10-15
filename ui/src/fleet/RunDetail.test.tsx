@@ -4,7 +4,7 @@ import { waitFor } from '@testing-library/react'
 import { RunDetail } from './RunDetail'
 import { parseDetailRoute } from './routes'
 import { resetCrewReposCache } from './useCrewRepos'
-import { clearPendingRuns, markPendingRun } from './pendingRuns'
+import { clearPendingRuns, markPendingRun, recordRestartFailure } from './pendingRuns'
 import type { Run } from '../api/runs'
 import type { Terminal } from '@xterm/xterm'
 import { installFakeEventSource } from '../testing/fakeEventSource'
@@ -98,6 +98,20 @@ describe('RunDetail', () => {
     markPendingRun('pane-1', now)
     render(<RunDetail mode={null} runs={[]} hasSnapshot streamConnected now={now} id="pane-1" tab="chat" />)
     expect(screen.getByText(/starting the restarted dispatcher/i)).toBeTruthy()
+    expect(screen.queryByText(/no longer available/i)).toBeNull()
+  })
+
+  it('shows a recorded restart failure for the vanished run, ahead of the pending placeholder', () => {
+    markPendingRun('pane-1', now)
+    recordRestartFailure('pane-1', { error: 'dispatcher exited immediately', output: 'no such launcher', crew: '1700000000-42' }, now)
+    render(<RunDetail mode={null} runs={[]} hasSnapshot streamConnected now={now} id="pane-1" tab="chat" />)
+    expect(screen.getByText('The restart did not come up')).toBeTruthy()
+    expect(screen.getByText('dispatcher exited immediately')).toBeTruthy()
+    expect(screen.getByText('1700000000-42').tagName).toBe('CODE')
+    expect(screen.getByText(/CREW_ID=1700000000-42 dispatcher\./)).toBeTruthy()
+    expect(screen.getByText('no such launcher')).toBeTruthy()
+    expect(screen.getByText('Back to Fleet')).toBeTruthy()
+    expect(screen.queryByText(/starting the restarted dispatcher/i)).toBeNull()
     expect(screen.queryByText(/no longer available/i)).toBeNull()
   })
 

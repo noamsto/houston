@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { RestartDispatcher } from './RestartDispatcher'
-import { clearPendingRuns, isPendingRun } from './pendingRuns'
+import { clearPendingRuns, isPendingRun, restartFailure } from './pendingRuns'
+import { RunDetail } from './RunDetail'
 import type { DispatchOptions } from '../api/dispatch'
 import type { Run } from '../api/runs'
 
@@ -238,5 +239,86 @@ describe('RestartDispatcher', () => {
 
     expect(screen.getByRole('button', { name: 'Restart' })).toBeTruthy()
     expect(screen.queryByText('tmux unavailable')).toBeNull()
+  })
+
+  it('a 422 arriving after the control unmounted is shown on the old run route', async () => {
+    let resolve: (r: Response) => void = () => {}
+    fetchMock.mockImplementationOnce(() => new Promise<Response>((r) => { resolve = r }))
+    const view = render(<RestartDispatcher run={dispatcher()} />)
+    open()
+    confirm()
+    await screen.findByRole('button', { name: 'Restarting…' })
+
+    view.unmount()
+    resolve(reply(422, { error: 'dispatcher exited immediately', output: 'no such launcher', crew: '1700000000-42' }))
+    await waitFor(() => expect(restartFailure('d/1', Date.now())).not.toBeNull())
+
+    render(<RunDetail mode="dispatcher" runs={[]} hasSnapshot streamConnected now={Date.now()} id="d/1" />)
+    expect(screen.getByText('The restart did not come up')).toBeTruthy()
+    expect(screen.getByText('dispatcher exited immediately')).toBeTruthy()
+    expect(screen.getByText('1700000000-42').tagName).toBe('CODE')
+    expect(screen.getByText(/is intact — workers keep running/)).toBeTruthy()
+    expect(screen.getByText('no such launcher')).toBeTruthy()
+    expect(isPendingRun('d/1', Date.now())).toBe(false)
+  })
+
+  it('the old id is pending while the request is in flight', async () => {
+    let resolve: (r: Response) => void = () => {}
+    fetchMock.mockImplementationOnce(() => new Promise<Response>((r) => { resolve = r }))
+    const view = render(<RestartDispatcher run={dispatcher()} />)
+    open()
+    confirm()
+    await screen.findByRole('button', { name: 'Restarting…' })
+    view.unmount()
+
+    render(<RunDetail mode="dispatcher" runs={[]} hasSnapshot streamConnected now={Date.now()} id="d/1" />)
+    expect(screen.getByText(/starting the restarted dispatcher/i)).toBeTruthy()
+    expect(screen.queryByText(/no longer available/i)).toBeNull()
+
+    resolve(reply(200, started))
+    await waitFor(() => expect(isPendingRun('d/1', Date.now())).toBe(false))
+  })
+
+  it('a retry clears the earlier recorded failure', async () => {
+    fetchMock.mockImplementationOnce(() => Promise.resolve(reply(502, { error: 'tmux unavailable' })))
+    render(<RestartDispatcher run={dispatcher()} />)
+    open()
+    confirm()
+    await screen.findByText('tmux unavailable')
+    expect(restartFailure('d/1', Date.now())?.error).toBe('tmux unavailable')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+
+    await waitFor(() => expect(restartFailure('d/1', Date.now())).toBeNull())
+  })
+
+  it('a run that turns busy after the panel opened keeps the plain form and sends no force', async () => {
+    const view = render(<RestartDispatcher run={dispatcher()} />)
+    open()
+
+    view.rerender(<RestartDispatcher run={dispatcher({ state: 'running' })} />)
+
+    expect(screen.queryByText(/in the middle of a turn/)).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Force restart' })).toBeNull()
+    confirm('Restart')
+
+    await waitFor(() => expect(restartCalls()).toHaveLength(1))
+    expect(lastBody()).toEqual({})
+  })
+
+  it('success after the user navigated away leaves the hash alone but still marks the new run pending', async () => {
+    window.location.hash = '#/fleet/d%2F1/crew'
+    let resolve: (r: Response) => void = () => {}
+    fetchMock.mockImplementationOnce(() => new Promise<Response>((r) => { resolve = r }))
+    render(<RestartDispatcher run={dispatcher()} />)
+    open()
+    confirm()
+    await screen.findByRole('button', { name: 'Restarting…' })
+
+    window.location.hash = '#/fleet'
+    resolve(reply(200, started))
+
+    await waitFor(() => expect(isPendingRun('pane-new', Date.now())).toBe(true))
+    expect(window.location.hash).toBe('#/fleet')
   })
 })

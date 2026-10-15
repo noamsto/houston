@@ -198,7 +198,7 @@ func (s *Server) handleRunRestart(w http.ResponseWriter, r *http.Request) {
 	crewDir := filepath.Join(run.CrewBus, "crews", crew)
 	oldPID := readPIDText(filepath.Join(crewDir, "pid"))
 	pid, err := strconv.Atoi(oldPID)
-	if err != nil || pid < 0 {
+	if err != nil {
 		pid = 0
 	}
 	var inherited launcherSettings
@@ -219,7 +219,12 @@ func (s *Server) handleRunRestart(w http.ResponseWriter, r *http.Request) {
 		reply(http.StatusBadGateway, dispatcherResponse{Error: "could not list repos: " + err.Error()})
 		return
 	}
+	// CrewBus comes from the window's @git_root as tmux reports it, while a
+	// known repo's commonDir is symlink-resolved.
 	commonDir := filepath.Clean(filepath.Dir(run.CrewBus))
+	if real, err := filepath.EvalSymlinks(commonDir); err == nil {
+		commonDir = real
+	}
 	var repo dispatchRepo
 	found := false
 	for _, cand := range repos {
@@ -235,6 +240,13 @@ func (s *Server) handleRunRestart(w http.ResponseWriter, r *http.Request) {
 	rlog.repo = repo.Path
 	if fi, err := os.Stat(crewDir); err != nil || !fi.IsDir() {
 		reply(http.StatusNotFound, dispatcherResponse{Error: "crew is not a crew of this repo"})
+		return
+	}
+	// Without the old pid the wrapper cannot hold the new launcher back, so it
+	// would register at once and an aborted kill would leave the crew on the
+	// killed new pane while the old dispatcher runs on.
+	if pid <= 0 {
+		reply(http.StatusConflict, dispatcherResponse{Error: "the crew records no dispatcher pid — restart it from a terminal"})
 		return
 	}
 
@@ -305,8 +317,11 @@ func (s *Server) handleRunRestart(w http.ResponseWriter, r *http.Request) {
 
 	// The new window opens first, so a window that fails to open never leaves
 	// the crew without its dispatcher; the wrapper's wait_pid holds the new
-	// launcher back from registering until the old one is dead. kill-pane, not
-	// kill-window, ends only the engine pane (closing a single-pane window).
+	// launcher back from registering until the old one is dead, for up to
+	// launchWaitLimit, which outlasts the resolve + kill-pane below. kill-pane,
+	// not kill-window, ends only the engine pane (closing a single-pane
+	// window). After the kill houston awaits the new registration for
+	// launchCheck plus restartExitSlack for the old process's exit.
 	end := func(ctx context.Context) *restartAbort {
 		if !req.Force {
 			// A run missing from the registry is no evidence its pane is gone;
@@ -338,7 +353,7 @@ func (s *Server) handleRunRestart(w http.ResponseWriter, r *http.Request) {
 	code, body, newPane := s.openDispatcherWindow(ctx, windowLaunch{
 		repo: repo, serverPath: serverPath, crewID: crew, crewDir: crewDir,
 		prevPID: oldPID, file: file, session: session,
-		wait: s.launchCheck + launchWaitLimit, afterOpen: end,
+		wait: s.launchCheck + restartExitSlack, afterOpen: end,
 	})
 	rlog.newPane = newPane
 	reply(code, body)
