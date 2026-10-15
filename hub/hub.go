@@ -125,8 +125,14 @@ type Session struct {
 // toolOutcome is how a tool's latest call ended, and when the transcript said so.
 type toolOutcome struct {
 	resolved bool
-	failed   bool
+	rejected bool // the user refused the call; an ordinary tool failure is not this
 	at       time.Time
+}
+
+// isRejection reports whether an error tool_result is Claude Code's answer to a
+// permission dialog the user declined.
+func isRejection(text string) bool {
+	return strings.HasPrefix(text, "The user doesn't want to")
 }
 
 // resetTools forgets the tool bookkeeping the dialog heal reads.
@@ -577,8 +583,9 @@ func (s *Session) syncTranscriptView(now time.Time) {
 //
 // A permission state heals once its tool is resolved and nothing is open. A
 // tool-running state (the dialog's Notification has not fired, or the hook
-// events after the call were lost) heals only on evidence newer than the
-// state: AskUserQuestion with any result, any other tool with an error result.
+// events after the call were lost) heals only on evidence from a later second than the last hook event
+// (Since has second granularity): AskUserQuestion with any result, any other tool with a result the user rejected (a plain failed call leaves tool-running, as no
+// PostToolUseFailure hook is handled).
 // Without the timestamp check a call that just started would read as the
 // finished earlier call of the same tool.
 func (s *Session) applyHook() {
@@ -597,10 +604,10 @@ func (s *Session) applyHook() {
 	switch st.State {
 	case hook.StatePermission:
 	case hook.StateToolRunning:
-		if !out.resolved || out.at.IsZero() || out.at.Before(time.Unix(st.Since, 0)) {
+		if !out.resolved || out.at.IsZero() || out.at.Before(time.Unix(st.Since+1, 0)) {
 			return
 		}
-		if st.Tool != "AskUserQuestion" && !out.failed {
+		if st.Tool != "AskUserQuestion" && !out.rejected {
 			return
 		}
 	default:
@@ -763,7 +770,7 @@ func applyTranscriptEvent(s *Session, ev TranscriptEvent) {
 		s.asks = ""
 		if name, ok := s.openTools[ev.ToolUseID]; ok {
 			delete(s.openTools, ev.ToolUseID)
-			s.setOutcome(name, toolOutcome{resolved: true, failed: ev.IsError, at: ev.Timestamp})
+			s.setOutcome(name, toolOutcome{resolved: true, rejected: ev.IsError && isRejection(ev.Text), at: ev.Timestamp})
 		}
 		for i := len(s.trail) - 1; i >= 0; i-- {
 			if !s.trail[i].Done {

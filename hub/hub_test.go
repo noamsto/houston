@@ -744,11 +744,11 @@ func TestHubHealsStaleToolState(t *testing.T) {
 		return line(sec, "assistant", `{"type":"tool_use","id":"`+id+`","name":"`+name+`","input":{}}`)
 	}
 	result := func(sec int, id string, isErr bool) string {
-		e := ""
+		e, body := "", "x"
 		if isErr {
-			e = `"is_error":true,`
+			e, body = `"is_error":true,`, "The user doesn't want to proceed with this tool use."
 		}
-		return line(sec, "user", `{"type":"tool_result","tool_use_id":"`+id+`",`+e+`"content":"x"}`)
+		return line(sec, "user", `{"type":"tool_result","tool_use_id":"`+id+`",`+e+`"content":"`+body+`"}`)
 	}
 	prompt := func(sec int) string { return line(sec, "user", `{"type":"text","text":"go on"}`) }
 	reply := func(sec int) string { return line(sec, "assistant", `{"type":"text","text":"Done."}`) }
@@ -779,6 +779,9 @@ func TestHubHealsStaleToolState(t *testing.T) {
 			"Bash", hook.EventNotification, false, hook.StatePermission},
 		{"open AskUserQuestion stays blocked", toolUse(1, "a", "AskUserQuestion"),
 			"AskUserQuestion", hook.EventPreToolUse, false, hook.StateToolRunning},
+		{"a failed tool the user did not reject", toolUse(1, "a", "Bash") +
+			line(2, "user", `{"type":"tool_result","tool_use_id":"a","is_error":true,"content":"exit status 1"}`),
+			"Bash", hook.EventPreToolUse, false, hook.StateToolRunning},
 		{"a finished tool is not an error", toolUse(1, "a", "Bash") + result(2, "a", false),
 			"Bash", hook.EventPreToolUse, false, hook.StateToolRunning},
 		{"a result older than the hook state", toolUse(-5, "a", "AskUserQuestion") + result(-4, "a", false) + toolUse(1, "b", "AskUserQuestion"),
