@@ -70,9 +70,12 @@ S="${root}x"
 if qa_pid_names_root "$sleeper"; then bad "H3 prefix path matched"; else ok "H3 prefix path does not match"; fi
 S=$root
 
-# H4: the token gate must skip an empty file.
-: >"$root/token"
-if [ -s "$root/token" ]; then bad "H4 -s accepts an empty token"; else ok "H4 -s skips an empty token"; fi
-if [ -f "$root/token" ]; then ok "H4 (the old -f gate would have passed here)"; fi
+# H4: the token cache refuses an empty token and heals a stale header.
+mkdir -p "$root/state"
+: >"$root/state/token"
+if qa_cache_auth; then bad "H4 empty token cached"; elif [ ! -e "$root/auth.hdr" ]; then ok "H4 empty token is not cached"; else bad "H4 auth.hdr written for an empty token"; fi
+echo 'Authorization: Bearer ' >"$root/auth.hdr"
+echo tok123 >"$root/state/token"
+if qa_cache_auth && [ "$(cat "$root/auth.hdr")" = "Authorization: Bearer tok123" ]; then ok "H4 stale header replaced by the real token"; else bad "H4 stale header kept"; fi
 
 exit $((fails > 0))

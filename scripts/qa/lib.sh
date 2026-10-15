@@ -111,6 +111,18 @@ qa_pid_names_root() {
 	[[ $cmd =~ (^|[^A-Za-z0-9])"$S"([^A-Za-z0-9]|$) ]]
 }
 
+# qa_cache_auth writes $S/auth.hdr from $S/state/token and fails while the token is
+# still empty: houston truncates the file before writing it, and an empty token
+# cached once would fail every later start on this $S. The token goes in a 0600
+# header file because argv is readable by every local uid.
+qa_cache_auth() {
+	local token
+	[ -s "$S/state/token" ] || return 1
+	token=$(cat "$S/state/token")
+	[ -n "$token" ] || return 1
+	(umask 077 && printf 'Authorization: Bearer %s\n' "$token" >"$S/auth.hdr")
+}
+
 # qa_ppid prints the parent pid of $1. The comm field may hold spaces and
 # parentheses, so everything up to the last ")" is dropped first.
 qa_ppid() {

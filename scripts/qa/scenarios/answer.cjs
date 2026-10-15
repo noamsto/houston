@@ -91,6 +91,34 @@ exports.run = async (ctx) => {
     if (r.request().method() === 'POST' && /\/answer$/.test(r.url())) answerPosts.push(r.status())
   })
 
+  // tapGuarded clicks a permission choice but lets the answer leave the browser only
+  // when it carries the frame of the dialog the scenario vetted: PermissionBar posts
+  // the frame of its own 2 s poll, which may already be a newer dialog.
+  const tapGuarded = async (locator, expectedFrame) => {
+    let mismatch = null
+    let decided = false
+    const handler = (route) => {
+      let frame
+      try {
+        frame = JSON.parse(route.request().postData() ?? '{}').frame
+      } catch {
+        frame = undefined
+      }
+      decided = true
+      if (frame === expectedFrame) return route.continue()
+      mismatch = frame
+      return route.abort()
+    }
+    await page.route('**/api/runs/*/answer', handler)
+    try {
+      await locator.click()
+      await ctx.waitFor(() => decided, { timeout: 30000, message: 'no POST /answer after the tap' })
+    } finally {
+      await page.unroute('**/api/runs/*/answer', handler)
+    }
+    if (mismatch !== null) throw new Error('refused to send: the tapped frame is not the frame of the dialog that was checked')
+  }
+
   // askQuestion prompts claude and resolves once the Chat picker is up, else
   // retries once and finally skips.
   const askQuestion = async (text) => {
@@ -232,9 +260,8 @@ exports.run = async (ctx) => {
         if (!/^1\. Yes/i.test(labels[0])) throw new Error(`first choice is "${labels[0]}", want 1. Yes`)
         const shot = await ctx.shot(page, 'answer-permission-yes')
         const before = answerPosts.length
-        await page.locator('.permission-bar-choice').first().click()
+        await tapGuarded(page.locator('.permission-bar-choice').first(), dialog1.frame)
         await ctx.waitFor(() => answerPosts.length > before, { timeout: 30000, message: 'no POST /answer after tapping 1. Yes' })
-        if (answerFrames[before] !== dialog1.frame) throw new Error('POSTed frame is not the frame of the dialog that was checked')
         if (answerPosts[answerPosts.length - 1] !== 204) throw new Error(`POST /answer -> ${answerPosts[answerPosts.length - 1]}, want 204`)
         await ctx.waitFor(() => fs.existsSync(probe), { timeout: 60000, message: `${probe} never appeared after Yes` })
         const cap = ctx.capture(pane, { lines: 80 })
@@ -293,9 +320,8 @@ exports.run = async (ctx) => {
         const regionBefore = sh.dialogRegion(ctx, pane)
         if (!/Esc to cancel/.test(regionBefore)) throw new Error(`the region below the last rule is not the permission dialog before tapping No: ${JSON.stringify(regionBefore.slice(-200))}`)
         const before = answerPosts.length
-        await page.locator('.permission-bar-choice').nth(noIdx).click()
+        await tapGuarded(page.locator('.permission-bar-choice').nth(noIdx), dialog2.frame)
         await ctx.waitFor(() => answerPosts.length > before, { timeout: 30000, message: 'no POST /answer after tapping No' })
-        if (answerFrames[before] !== dialog2.frame) throw new Error('POSTed frame is not the frame of the dialog that was checked')
         if (answerPosts[answerPosts.length - 1] !== 204) throw new Error(`POST /answer -> ${answerPosts[answerPosts.length - 1]}, want 204`)
         // A denied dialog fires no Stop, so wait for the dialog itself to go: the
         // region below the last rule loses its "Esc to cancel" footer and GET /prompt is 404.

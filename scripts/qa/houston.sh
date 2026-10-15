@@ -89,17 +89,7 @@ start() {
 			tail -n 5 "$S/houston.log" >&2
 			exit 1
 		}
-		# houston truncates the token file before writing it: -s skips the empty gap.
-		if [ -s "$S/state/token" ]; then
-			# The token goes in a 0600 header file: argv is readable by every local uid.
-			if [ ! -s "$S/auth.hdr" ]; then
-				token=$(cat "$S/state/token")
-				[ -n "$token" ] || {
-					sleep 0.1
-					continue
-				}
-				(umask 077 && printf 'Authorization: Bearer %s\n' "$token" >"$S/auth.hdr")
-			fi
+		if qa_cache_auth; then
 			if [ "$(curl -fsS -H "@$S/auth.hdr" "http://127.0.0.1:$port/api/mode" 2>/dev/null || true)" = "{\"mode\":\"$mode\"}" ]; then
 				echo "houston $mode on 127.0.0.1:$port (pid $pid)"
 				return 0
