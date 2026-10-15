@@ -43,6 +43,7 @@ type TranscriptEvent struct {
 	ToolName         string    // for tool_use / tool_result
 	ToolUseID        string    // links tool_use to tool_result
 	IsError          bool      // tool_result failure
+	Prompt           bool      // a human-typed user prompt, not a tool result or injected record
 	Text             string    // plain text content (assistant text / thinking / tool inputs squashed)
 	CWD              string    // working directory recorded on the record, if any
 	GitBranch        string    // git branch recorded on the record, if any
@@ -80,6 +81,7 @@ type jsonlRecord struct {
 	ToolInput json.RawMessage `json:"tool_input,omitempty"`
 	ToolUseID string          `json:"tool_use_id,omitempty"`
 	IsError   bool            `json:"is_error,omitempty"`
+	IsMeta    bool            `json:"isMeta,omitempty"`
 
 	// queue-operation records carry the queued text as a bare string.
 	Operation string          `json:"operation,omitempty"`
@@ -222,6 +224,7 @@ func parseLine(line string, offset int64) []TranscriptEvent {
 		case EventTypeText:
 			ev.Type = EventTypeText
 			ev.Text = blk.Text
+			ev.Prompt = rec.Message.Role == "user" && !rec.IsMeta && isPromptText(blk.Text)
 		case EventTypeThinking:
 			ev.Type = EventTypeThinking
 			ev.Text = blk.Thinking
@@ -266,6 +269,14 @@ func parseLine(line string, offset int64) []TranscriptEvent {
 		}
 	}
 	return out
+}
+
+// isPromptText reports whether user text looks typed by a human. Interrupt
+// markers and injected records (system reminders, slash-command echoes) start
+// with "[" or "<". A miss only skips a reset, which errs toward blocked.
+func isPromptText(text string) bool {
+	text = strings.TrimSpace(text)
+	return text != "" && text[0] != '[' && text[0] != '<'
 }
 
 // extractToolResultText handles the three shapes Claude writes: bare string,
