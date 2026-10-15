@@ -14,6 +14,44 @@ import (
 	"github.com/noamsto/houston/runs"
 )
 
+// scrubWorkerIdentity removes the pane's crew identity from the process
+// environment for the duration of a test (#292). The reply runner builds the
+// child env from os.Environ(), so when `go test` runs inside a crew worker's
+// tmux pane the child `crew reply` inherits the pane's identity: the crew id
+// variables name its worker, and tmux still reaches the server with TMUX unset
+// via the $TMUX_TMPDIR (else /tmp) default socket, where the window's
+// @crew_branch stamp restricts posting to that worker. The four variables must
+// go outright (an empty-but-set TMUX still counts; os.Setenv cannot remove
+// one), so the scrub rewrites os.Environ() instead of t.Setenv'ing blanks.
+// CREW_ID is not dropped: the handler appends the test's own value.
+func scrubWorkerIdentity(t *testing.T) {
+	t.Helper()
+	drop := map[string]bool{"TMUX": true, "TMUX_PANE": true, "TMUX_TMPDIR": true, "CREW_WORKER_ID": true, "CREW_ROLE_ID": true}
+	prev := append([]string(nil), os.Environ()...)
+	applyEnv(scrubEnv(prev, drop))
+	t.Cleanup(func() { applyEnv(prev) })
+}
+
+func scrubEnv(env []string, drop map[string]bool) []string {
+	kept := make([]string, 0, len(env))
+	for _, kv := range env {
+		name, _, _ := strings.Cut(kv, "=")
+		if !drop[name] {
+			kept = append(kept, kv)
+		}
+	}
+	return kept
+}
+
+func applyEnv(env []string) {
+	os.Clearenv()
+	for _, kv := range env {
+		name, value, _ := strings.Cut(kv, "=")
+		//nolint:errcheck // os.Setenv only fails on a name with '=' or NUL, and these come from os.Environ()
+		os.Setenv(name, value)
+	}
+}
+
 // requireCrew skips when the real CLI is absent. Every other test in this
 // package runs against a stub; this one exists to check the two choices a stub
 // cannot check — the working directory and CREW_ID.
@@ -80,6 +118,7 @@ func lastBusRecord(t *testing.T, log string) busRecord {
 // CREW_ID makes crew exit 1 before it writes anything.
 func TestReplyReachesTheRealCrewBus(t *testing.T) {
 	requireCrew(t)
+	scrubWorkerIdentity(t)
 
 	const session = "s100-1"
 	root, log := newCrewBus(t, session, "blocked")
@@ -132,6 +171,7 @@ func TestReplyReachesTheRealCrewBus(t *testing.T) {
 // A terminal session is the worker's own refusal, not houston's failure.
 func TestReplyToFinishedWorkerIsRefusedWithCrewsWords(t *testing.T) {
 	requireCrew(t)
+	scrubWorkerIdentity(t)
 
 	root, log := newCrewBus(t, "s100-1", "done")
 	before, err := os.ReadFile(log)
