@@ -20,6 +20,20 @@ export function bucket(run: Run, now: number): keyof CrewCounts {
   return run.state === 'idle' ? 'idle' : 'working'
 }
 
+// Mirrors the server's restartBusy: a turn that ended on a question is the agent waiting.
+export function isBusy(run: Run): boolean {
+  switch (run.state) {
+    case 'thinking':
+    case 'running':
+    case 'compacting':
+      return true
+    case 'blocked':
+      return run.question?.kind !== 'turn'
+    default:
+      return false
+  }
+}
+
 const COUNT_LABELS: [keyof CrewCounts, string][] = [
   ['working', 'working'],
   ['needsYou', 'needs you'],

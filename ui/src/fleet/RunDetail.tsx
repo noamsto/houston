@@ -14,6 +14,7 @@ import { RunQuestion, RunStatusStrip } from './RunStatusStrip'
 import { tabHash, type DetailTab } from './routes'
 import { back, switchRunTab } from './nav'
 import { DETAIL_TAB_LABEL, offeredTabs } from './runTabs'
+import { isPendingRun } from './pendingRuns'
 import './fleet.css'
 
 interface RunDetailProps {
@@ -78,6 +79,8 @@ export function RunDetail({ runs, hasSnapshot, streamConnected, now, id, tab, mo
 
       {!hasSnapshot ? (
         <div className="run-detail-empty">Loading run…</div>
+      ) : !run && isPendingRun(id, now) ? (
+        <div className="run-detail-empty">Starting the restarted dispatcher…</div>
       ) : !run ? (
         <div className="run-detail-empty">
           <p>This run is no longer available.</p>

@@ -4,6 +4,7 @@ import { agoLabel, BLOCKED_FALLBACK, isWebUrl } from './format'
 import { crewShortId } from './fleetList'
 import { bucket, countsLabel, dispatchHref, type CrewCounts } from './crewsModel'
 import { CrewFeedList } from './CrewFeedList'
+import { RestartDispatcher } from './RestartDispatcher'
 import { ReplyComposer } from './ReplyComposer'
 import { openRun } from './nav'
 import { isFresh, isHistory, needsYou } from './staleness'
@@ -111,6 +112,7 @@ export function CrewTab({ run, runs, now }: CrewTabProps) {
             Dispatch here
           </a>
         )}
+        {run.crew?.name && <RestartDispatcher run={run} />}
       </div>
       {members.map((m) => (
         <Member key={m.id} run={m} now={now} />

@@ -112,6 +112,7 @@ export type DispatcherOutcome =
       session?: string
       window?: string
       pane?: string
+      busy?: boolean // restart only: the dispatcher is mid-turn and force was not set
     }
 
 interface DispatcherSuccessBody {
@@ -126,19 +127,10 @@ interface DispatcherErrorBody extends DispatchErrorBody {
   session?: string
   window?: string
   pane?: string
+  busy?: boolean
 }
 
-export async function submitDispatcher(req: DispatcherRequest): Promise<DispatcherOutcome> {
-  let res: Response
-  try {
-    res = await fetch('/api/dispatch/dispatcher', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(req),
-    })
-  } catch {
-    return { kind: 'failed', status: 0, error: 'network error' }
-  }
+async function parseDispatcherResponse(res: Response): Promise<DispatcherOutcome> {
   const text = await res.text()
   if (res.ok) {
     try {
@@ -166,8 +158,38 @@ export async function submitDispatcher(req: DispatcherRequest): Promise<Dispatch
       session: body.session,
       window: body.window,
       pane: body.pane,
+      busy: body.busy,
     }
   } catch {
     return { kind: 'failed', status: res.status, error: text.trim() }
   }
+}
+
+async function postDispatcher(url: string, req: object): Promise<DispatcherOutcome> {
+  let res: Response
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    })
+  } catch {
+    return { kind: 'failed', status: 0, error: 'network error' }
+  }
+  return parseDispatcherResponse(res)
+}
+
+export function submitDispatcher(req: DispatcherRequest): Promise<DispatcherOutcome> {
+  return postDispatcher('/api/dispatch/dispatcher', req)
+}
+
+export interface RestartRequest {
+  engine?: string
+  model?: string
+  effort?: string
+  force?: boolean
+}
+
+export function restartDispatcher(runId: string, req: RestartRequest): Promise<DispatcherOutcome> {
+  return postDispatcher(`/api/runs/${encodeURIComponent(runId)}/restart`, req)
 }

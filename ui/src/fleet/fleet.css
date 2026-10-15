@@ -467,6 +467,24 @@
   padding: 0 4px; font-size: 12.5px; font-weight: 600; color: var(--accent); text-decoration: none;
 }
 
+.crews-restart {
+  display: inline-flex; align-items: center; justify-content: center; min-height: var(--tap);
+  padding: 0 12px; border-radius: 8px; border: 1px solid var(--line-strong);
+  background: var(--fill); color: var(--text); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
+}
+.crews-restart:disabled { opacity: 0.5; cursor: default; }
+.crews-restart:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.crews-restart-confirm {
+  flex-basis: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 8px;
+  padding: 10px 12px; border-radius: 10px; background: var(--bg-sunken); border: 1px solid var(--line);
+  font-size: 13px; line-height: 1.5;
+}
+.crews-restart-confirm p { margin: 0; }
+.crews-restart-confirm.dispatch-result { margin: 0; }
+.crews-restart-warn { color: var(--state-blocked); }
+.crews-restart-settings { align-self: stretch; }
+.crews-restart-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
 .crews-member {
   margin-bottom: 8px; border-radius: 10px;
   background: var(--bg-raised); border: 1px solid var(--line);
