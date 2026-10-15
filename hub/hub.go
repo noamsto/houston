@@ -584,11 +584,12 @@ func (s *Session) syncTranscriptView(now time.Time) {
 //
 // A permission state heals once its tool is resolved and nothing is open. A
 // tool-running state (the dialog's Notification has not fired, or the hook
-// events after the call were lost) heals only on evidence from a later second than the last hook event
-// (Since has second granularity): AskUserQuestion with any result, any other tool with a result the user rejected (a plain failed call leaves tool-running, as no
-// PostToolUseFailure hook is handled).
-// Without the timestamp check a call that just started would read as the
-// finished earlier call of the same tool.
+// events after the call were lost) heals only on a result from a later second
+// than the last hook event (Since has second granularity): any result for
+// AskUserQuestion, or a rejection for another tool. A plain failed call leaves
+// tool-running, since no PostToolUseFailure hook is handled. Without the
+// timestamp check a call that just started would read as the finished earlier
+// call of the same tool.
 func (s *Session) applyHook() {
 	if s.hookState.SessionID == "" {
 		return
