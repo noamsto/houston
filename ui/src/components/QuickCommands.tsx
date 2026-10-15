@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { sendText, type TerminalAddress } from '../api/terminal'
+import './composer.css'
 import { commandsDisabledReason, isClaudeAgent } from './quickCommands'
 
 interface Props {
@@ -9,6 +10,8 @@ interface Props {
   suggestion?: string | null
   /** Returns false when the composer refused (it holds a draft). */
   onPrefill: (text: string) => boolean
+  /** Lays the composer below the pills: receives the "/" toggle to place in its action row. */
+  children?: (toggle: ReactNode) => ReactNode
 }
 
 type Feedback = { kind: 'sent' | 'accepted' | 'stalled' | 'error' | 'note'; text: string }
@@ -41,7 +44,7 @@ function stalledText(cmd: string): string {
     : 'Sent — this command may not change the run state; check the terminal.'
 }
 
-export function QuickCommands({ address, agent, state, suggestion, onPrefill }: Props) {
+export function QuickCommands({ address, agent, state, suggestion, onPrefill, children }: Props) {
   const [open, setOpen] = useState(false)
   const [confirmClear, setConfirmClear] = useState(false)
   const [sheet, setSheet] = useState<string | null>(null)
@@ -63,7 +66,7 @@ export function QuickCommands({ address, agent, state, suggestion, onPrefill }: 
     return () => clearTimeout(t)
   }, [feedback])
 
-  if (!isClaudeAgent(agent)) return null
+  if (!isClaudeAgent(agent)) return children ? <>{children(null)}</> : null
 
   const send = async (cmd: string): Promise<boolean> => {
     setBusy(true)
@@ -102,19 +105,25 @@ export function QuickCommands({ address, agent, state, suggestion, onPrefill }: 
     </button>
   )
 
+  const toggle = (
+    <button
+      type="button"
+      className="pill-btn composer-btn"
+      aria-label="Commands"
+      title="Commands"
+      aria-expanded={open}
+      onClick={() => setOpen((o) => !o)}
+    >
+      /
+    </button>
+  )
+  const showPills = open || (suggestion && suggestion !== dismissed)
+
   return (
-    <div data-testid="quick-commands">
-      <div style={{ display: 'flex', gap: 8, padding: '8px 8px 0', overflowX: 'auto' }}>
-        <button
-          type="button"
-          className="pill-btn"
-          aria-label="Commands"
-          aria-expanded={open}
-          onClick={() => setOpen((o) => !o)}
-          style={{ ...pillStyle, ...(open && { color: 'var(--text-primary)' }) }}
-        >
-          /
-        </button>
+    <div data-testid="quick-commands" style={children ? { display: 'flex', flexDirection: 'column', gap: 8 } : undefined}>
+      {!children && <div style={{ display: 'flex', gap: 8, padding: '8px 8px 0' }}>{toggle}</div>}
+      {showPills && (
+      <div style={{ display: 'flex', gap: 8, padding: children ? 0 : '8px 8px 0', overflowX: 'auto' }}>
         {open && (
           <>
             {COMMANDS.map((c) => pill(c, () => void send(c)))}
@@ -127,6 +136,7 @@ export function QuickCommands({ address, agent, state, suggestion, onPrefill }: 
         )}
         {suggestion && suggestion !== dismissed && pill('↳ suggested', () => setSheet(suggestion))}
       </div>
+      )}
 
       {open && reason && <div style={noteStyle}>Commands unavailable: {reason}</div>}
 
@@ -184,6 +194,7 @@ export function QuickCommands({ address, agent, state, suggestion, onPrefill }: 
             {feedback.kind === 'sent' ? `Sent ${feedback.text} — waiting for the agent…` : feedback.text}
           </div>
         ))}
+      {children?.(toggle)}
     </div>
   )
 }

@@ -1,9 +1,11 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { Run } from '../api/runs'
 import { fetchTool } from '../api/chat'
 import type { ChatToolDetail } from '../api/chat'
 import { sendImage, sendKey, sendText } from '../api/terminal'
 import type { TerminalAddress } from '../api/terminal'
+import { AttachButton, SendButton, VoiceButton } from '../components/ComposerControls'
+import { COMPOSER_TAP_PX, autoGrow, useVoiceInput } from '../components/composerHooks'
 import { QuickCommands } from '../components/QuickCommands'
 import { StagedImageChip } from '../components/StagedImageChip'
 import { isClaudeAgent, suggestedCommand } from '../components/quickCommands'
@@ -238,6 +240,10 @@ function Composer({ run, suggestion, onSend }: { run: Run; suggestion: string | 
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const disabled = !run.caps.terminal
   const address: TerminalAddress = { kind: 'run', id: run.id }
+  const voice = useVoiceInput(setText)
+  useLayoutEffect(() => {
+    if (textareaRef.current) autoGrow(textareaRef.current)
+  }, [text])
 
   // Esc is the user's stop-the-agent key, so it never takes the in-flight
   // gate; only text/image sends do. A failure is shown until the next action
@@ -309,38 +315,42 @@ function Composer({ run, suggestion, onSend }: { run: Run; suggestion: string | 
   }
 
   return (
-    <div className="chat-composer">
-      {disabled && <div className="chat-composer-reason">No live terminal for this run</div>}
-      {error && <div className="chat-composer-error" role="alert">{error}</div>}
-      {staged && <StagedImageChip staged={staged} onRemove={clear} disabled={sending} />}
-      {!disabled && <QuickCommands address={address} agent={run.agent} state={run.state} suggestion={suggestion} onPrefill={prefill} />}
-      <div className="chat-composer-row">
-        <button type="button" className="chat-composer-esc" disabled={disabled} onClick={() => void attempt(() => sendKey(address, 'Escape'), null)}>
-          Esc
-        </button>
-        <textarea
-          className="chat-composer-textarea"
-          ref={textareaRef}
-          value={text}
-          disabled={disabled}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-              e.preventDefault()
-              handleSend()
-            }
-          }}
-          placeholder="Message…"
-          rows={1}
-        />
-        <input ref={fileInputRef} type="file" style={{ display: 'none' }} onChange={handleFile} />
-        <button type="button" className="chat-composer-attach" aria-label="Attach image" disabled={disabled || sending} onClick={() => fileInputRef.current?.click()}>
-          <span aria-hidden="true">⊕</span>
-        </button>
-        <button type="button" className="chat-composer-send" disabled={disabled || sending} onClick={handleSend}>
-          Send
-        </button>
-      </div>
+    <div className="chat-composer composer">
+      <QuickCommands address={address} agent={disabled ? undefined : run.agent} state={run.state} suggestion={suggestion} onPrefill={prefill}>
+        {(commandsToggle) => (
+          <>
+            {disabled && <div className="chat-composer-reason">No live terminal for this run</div>}
+            {error && <div className="chat-composer-error" role="alert">{error}</div>}
+            {staged && <StagedImageChip staged={staged} onRemove={clear} disabled={sending} />}
+            <textarea
+              className="composer-field chat-composer-textarea"
+              ref={textareaRef}
+              value={text}
+              disabled={disabled}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                  e.preventDefault()
+                  handleSend()
+                }
+              }}
+              placeholder="Message…"
+              rows={1}
+            />
+            <div className="composer-actions">
+              <input ref={fileInputRef} type="file" style={{ display: 'none' }} onChange={handleFile} />
+              <AttachButton disabled={disabled || sending} onClick={() => fileInputRef.current?.click()} />
+              {voice.supported && <VoiceButton listening={voice.listening} disabled={disabled} onClick={voice.toggle} />}
+              {!disabled && commandsToggle}
+              <button type="button" className="composer-btn" style={{ minWidth: COMPOSER_TAP_PX, minHeight: COMPOSER_TAP_PX }} disabled={disabled} onClick={() => void attempt(() => sendKey(address, 'Escape'), null)}>
+                Esc
+              </button>
+              <div className="composer-spacer" />
+              <SendButton disabled={disabled || sending} onClick={handleSend} />
+            </div>
+          </>
+        )}
+      </QuickCommands>
     </div>
   )
 }

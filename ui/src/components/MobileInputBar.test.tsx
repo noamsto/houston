@@ -431,7 +431,7 @@ describe('composer auto-grow', () => {
     vi.stubGlobal('visualViewport', { height: 500 })
     render(<MobileInputBar address={runAddress} />)
     const field = screen.getByPlaceholderText('Send a message...') as HTMLTextAreaElement
-    expect(field.style.touchAction).toBe('pan-y')
+    expect(field.className).toContain('composer-field')
 
     Object.defineProperty(field, 'scrollHeight', { configurable: true, value: 120 })
     fireEvent.change(field, { target: { value: 'a\nb\nc' } })
@@ -452,10 +452,10 @@ describe('composer auto-grow', () => {
     for (const el of [
       screen.getByRole('button', { name: 'Send' }),
       screen.getByTitle('Voice input'),
-      screen.getByTitle('Attach file'),
+      screen.getByTitle('Attach image'),
     ]) {
-      expect(parseInt(el.style.width, 10)).toBeGreaterThanOrEqual(44)
-      expect(parseInt(el.style.height, 10)).toBeGreaterThanOrEqual(44)
+      expect(parseInt(el.style.minWidth, 10)).toBeGreaterThanOrEqual(44)
+      expect(parseInt(el.style.minHeight, 10)).toBeGreaterThanOrEqual(44)
     }
   })
 })
