@@ -102,12 +102,25 @@ qa_pick_port() {
 }
 
 # qa_pid_names_root succeeds when /proc/$1/cmdline mentions $S as a whole path:
-# /tmp/hqa.ab must not match /tmp/hqa.abc.
+# /tmp/hqa.ab must not match /tmp/hqa.abc (mktemp suffixes are alphanumeric, so any
+# other character ends the path, a quote included).
 qa_pid_names_root() {
 	local cmd
 	[ -r "/proc/$1/cmdline" ] || return 1
 	cmd=$(tr '\0' ' ' <"/proc/$1/cmdline" 2>/dev/null) || return 1
-	[[ $cmd =~ (^|[^A-Za-z0-9])"$S"(/|[[:space:]]|$) ]]
+	[[ $cmd =~ (^|[^A-Za-z0-9])"$S"([^A-Za-z0-9]|$) ]]
+}
+
+# qa_cache_auth writes $S/auth.hdr from $S/state/token and fails while the token is
+# still empty: houston truncates the file before writing it, and an empty token
+# cached once would fail every later start on this $S. The token goes in a 0600
+# header file because argv is readable by every local uid.
+qa_cache_auth() {
+	local token
+	[ -s "$S/state/token" ] || return 1
+	token=$(cat "$S/state/token")
+	[ -n "$token" ] || return 1
+	(umask 077 && printf 'Authorization: Bearer %s\n' "$token" >"$S/auth.hdr")
 }
 
 # qa_ppid prints the parent pid of $1. The comm field may hold spaces and

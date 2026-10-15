@@ -89,9 +89,7 @@ start() {
 			tail -n 5 "$S/houston.log" >&2
 			exit 1
 		}
-		if [ -f "$S/state/token" ]; then
-			# The token goes in a 0600 header file: argv is readable by every local uid.
-			[ -f "$S/auth.hdr" ] || (umask 077 && printf 'Authorization: Bearer %s\n' "$(cat "$S/state/token")" >"$S/auth.hdr")
+		if qa_cache_auth; then
 			if [ "$(curl -fsS -H "@$S/auth.hdr" "http://127.0.0.1:$port/api/mode" 2>/dev/null || true)" = "{\"mode\":\"$mode\"}" ]; then
 				echo "houston $mode on 127.0.0.1:$port (pid $pid)"
 				return 0
