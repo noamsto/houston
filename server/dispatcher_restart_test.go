@@ -198,6 +198,7 @@ func newRestartFixture(t *testing.T) *restartFixture {
 	s := lf.s
 	s.runPanes = f.panes
 	s.launcherFound = func(string) bool { return true }
+	s.pidAlive = func(int) bool { return false }
 	s.launcherArgv = func(int) ([]string, bool) {
 		return []string{"/nix/store/x-bash/bin/bash", "/nix/store/y/bin/dispatcher", "--agent", "claude", "--model", "opus", "--effort", "high"}, true
 	}
@@ -320,8 +321,8 @@ func TestRestartNoSuchRun(t *testing.T) {
 	f := newRestartFixture(t)
 	rec, resp := f.postTo(t, "pane-99", "{}")
 	wantStatus(t, rec, http.StatusNotFound)
-	if resp.Error != "no such run" {
-		t.Errorf("error %q", resp.Error)
+	if resp.Error != "no such run" || resp.OldEnded {
+		t.Errorf("response %+v", resp)
 	}
 	f.noWindowOrKill(t)
 }
@@ -333,8 +334,8 @@ func TestRestartNotADispatcher(t *testing.T) {
 	}})
 	rec, resp := f.postTo(t, runs.PaneRunID("%6"), "{}")
 	wantStatus(t, rec, http.StatusNotFound)
-	if resp.Error != "run is not a dispatcher" {
-		t.Errorf("error %q", resp.Error)
+	if resp.Error != "run is not a dispatcher" || resp.OldEnded {
+		t.Errorf("response %+v", resp)
 	}
 	f.noWindowOrKill(t)
 }
@@ -344,8 +345,8 @@ func TestRestartDispatcherWithoutCrew(t *testing.T) {
 	f.addRun(t, "%7", runs.StateIdle, false)
 	rec, resp := f.postTo(t, runs.PaneRunID("%7"), "{}")
 	wantStatus(t, rec, http.StatusNotFound)
-	if resp.Error != "dispatcher has no crew" {
-		t.Errorf("error %q", resp.Error)
+	if resp.Error != "dispatcher has no crew" || resp.OldEnded {
+		t.Errorf("response %+v", resp)
 	}
 	f.noWindowOrKill(t)
 }
@@ -368,8 +369,11 @@ func TestRestartRefusesBusy(t *testing.T) {
 			}
 			rec, resp := f.post(t, "{}")
 			wantStatus(t, rec, http.StatusConflict)
-			if !resp.Busy || resp.Crew != f.crew || resp.Error != restartBusyMsg {
+			if !resp.Busy || resp.Crew != f.crew || resp.Error != restartBusyMsg || resp.OldEnded {
 				t.Errorf("response %+v", resp)
+			}
+			if strings.Contains(rec.Body.String(), "old_ended") {
+				t.Errorf("a refusal before the kill carries old_ended: %s", rec.Body)
 			}
 			f.noWindowOrKill(t)
 		})
@@ -382,7 +386,7 @@ func TestRestartIdle(t *testing.T) {
 			f := newRestartFixture(t)
 			rec, resp := f.post(t, body)
 			wantStatus(t, rec, http.StatusOK)
-			want := dispatcherResponse{Crew: f.crew, Session: "proj", Window: "@9", Pane: "%11", RunID: runs.PaneRunID("%11")}
+			want := dispatcherResponse{Crew: f.crew, Session: "proj", Window: "@9", Pane: "%11", RunID: runs.PaneRunID("%11"), OldEnded: true}
 			if resp != want {
 				t.Errorf("response %+v, want %+v", resp, want)
 			}
@@ -447,7 +451,7 @@ func TestRestartRejectsBadBody(t *testing.T) {
 			f := newRestartFixture(t)
 			rec, resp := f.post(t, tc.body)
 			wantStatus(t, rec, http.StatusBadRequest)
-			if resp.Error == "" || resp.Crew != f.crew {
+			if resp.Error == "" || resp.Crew != f.crew || resp.OldEnded {
 				t.Errorf("response %+v", resp)
 			}
 			f.noWindowOrKill(t)
@@ -486,7 +490,7 @@ func TestRestartLauncherNotOnPath(t *testing.T) {
 	f.s.launcherFound = func(string) bool { return false }
 	rec, resp := f.post(t, "{}")
 	wantStatus(t, rec, http.StatusBadGateway)
-	if resp.Crew != f.crew {
+	if resp.Crew != f.crew || resp.OldEnded {
 		t.Errorf("response %+v", resp)
 	}
 	f.noWindowOrKill(t)
@@ -499,7 +503,7 @@ func TestRestartKillFailureRollsBack(t *testing.T) {
 	})
 	rec, resp := f.post(t, "{}")
 	wantStatus(t, rec, http.StatusBadGateway)
-	if resp.Crew != f.crew || !strings.Contains(resp.Error, "some failure") {
+	if resp.Crew != f.crew || !strings.Contains(resp.Error, "some failure") || resp.OldEnded {
 		t.Errorf("response %+v", resp)
 	}
 	if kw := f.tmux.find("kill-window"); !slices.Equal(kw, []string{"kill-window", "-t", "@9"}) {
@@ -523,7 +527,7 @@ func TestRestartServerMismatchAtKill(t *testing.T) {
 	}
 	rec, resp := f.post(t, "{}")
 	wantStatus(t, rec, http.StatusConflict)
-	if resp.Crew != f.crew {
+	if resp.Crew != f.crew || resp.OldEnded {
 		t.Errorf("response %+v", resp)
 	}
 	if f.index("kill-pane") >= 0 {
@@ -545,8 +549,11 @@ func TestRestartOldPaneAlreadyGone(t *testing.T) {
 		}
 		return tmux.Pane{ID: "%5", Server: "100"}, nil
 	}
-	rec, _ := f.post(t, "{}")
+	rec, resp := f.post(t, "{}")
 	wantStatus(t, rec, http.StatusOK)
+	if !resp.OldEnded {
+		t.Errorf("response %+v", resp)
+	}
 	if f.index("kill-pane") >= 0 {
 		t.Errorf("kill-pane called: %v", f.tmux.all())
 	}
@@ -558,7 +565,7 @@ func TestRestartLauncherDies(t *testing.T) {
 	f.tmux.set("display-message", func([]string) (string, error) { return "1 3", nil })
 	rec, resp := f.post(t, "{}")
 	wantStatus(t, rec, http.StatusUnprocessableEntity)
-	if resp.Crew != f.crew || !strings.Contains(resp.Error, "status 3") {
+	if resp.Crew != f.crew || !strings.Contains(resp.Error, "status 3") || !resp.OldEnded {
 		t.Errorf("response %+v", resp)
 	}
 	if !exists(f.crewDir) {
@@ -573,7 +580,7 @@ func TestRestartRefusesPIDLessCrew(t *testing.T) {
 	}
 	rec, resp := f.post(t, "{}")
 	wantStatus(t, rec, http.StatusConflict)
-	if resp.Busy || resp.Crew != f.crew || resp.Error != "the crew records no dispatcher pid — restart it from a terminal" {
+	if resp.Busy || resp.Crew != f.crew || resp.Error != "the crew records no dispatcher pid — restart it from a terminal" || resp.OldEnded {
 		t.Errorf("response %+v", resp)
 	}
 	f.noWindowOrKill(t)
@@ -590,7 +597,7 @@ func TestRestartBusyAtKill(t *testing.T) {
 	})
 	rec, resp := f.post(t, "{}")
 	wantStatus(t, rec, http.StatusConflict)
-	if !resp.Busy || resp.Crew != f.crew || resp.Error != restartBusyMsg {
+	if !resp.Busy || resp.Crew != f.crew || resp.Error != restartBusyMsg || resp.OldEnded {
 		t.Errorf("response %+v", resp)
 	}
 	if f.index("kill-pane") >= 0 {
@@ -623,5 +630,68 @@ func TestRestartRepoThroughSymlink(t *testing.T) {
 	wantStatus(t, rec, http.StatusOK)
 	if resp.Crew != f.crew || resp.Pane != "%11" {
 		t.Errorf("response %+v", resp)
+	}
+}
+
+// stillStarting makes the new window open without registering, so the old
+// pid stays in the crew's pid file.
+func (f *restartFixture) stillStarting() {
+	f.tmux.set("new-window", func([]string) (string, error) { return "proj:@9:%11", nil })
+	f.tmux.set("display-message", func([]string) (string, error) { return "0 ", nil })
+}
+
+func TestRestartOldPIDOutlivesPane(t *testing.T) {
+	f := newRestartFixture(t)
+	f.stillStarting()
+	var asked []int
+	f.s.pidAlive = func(pid int) bool {
+		asked = append(asked, pid)
+		return true
+	}
+	rec, resp := f.post(t, "{}")
+	wantStatus(t, rec, http.StatusBadGateway)
+	want := "the old dispatcher process is still running after its pane was ended — the new launcher could not register; stop pid 123 and relaunch with CREW_ID=" + f.crew + " dispatcher"
+	if resp.Error != want || resp.Crew != f.crew || !resp.OldEnded {
+		t.Errorf("response %+v", resp)
+	}
+	if !slices.Equal(asked, []int{123}) {
+		t.Errorf("pidAlive asked %v, want [123]", asked)
+	}
+	if kw := f.tmux.find("kill-window"); !slices.Equal(kw, []string{"kill-window", "-t", "@9"}) {
+		t.Errorf("kill-window: %v", kw)
+	}
+	if files := launchFiles(t, f.s.launchDir); len(files) != 0 {
+		t.Errorf("launch files left: %v", files)
+	}
+	if !exists(f.crewDir) {
+		t.Error("crew dir removed")
+	}
+	if got := readPIDText(filepath.Join(f.crewDir, "pid")); got != "123" {
+		t.Errorf("pid file %q, want 123", got)
+	}
+}
+
+func TestRestartStillStarting(t *testing.T) {
+	f := newRestartFixture(t)
+	f.stillStarting()
+	rec, resp := f.post(t, "{}")
+	wantStatus(t, rec, http.StatusOK)
+	want := dispatcherResponse{Crew: f.crew, Session: "proj", Window: "@9", Pane: "%11", RunID: runs.PaneRunID("%11"), OldEnded: true}
+	if resp != want {
+		t.Errorf("response %+v, want %+v", resp, want)
+	}
+	if f.index("kill-window") >= 0 {
+		t.Errorf("kill-window called: %v", f.tmux.all())
+	}
+}
+
+func TestDispatcherLaunchNeverSetsOldEnded(t *testing.T) {
+	f := newLaunchFixture(t)
+	f.tmux.set("has-session", func([]string) (string, error) { return "", nil })
+	f.tmux.set("display-message", func([]string) (string, error) { return "1 2", nil })
+	rec, _ := f.post(t, f.request())
+	wantStatus(t, rec, http.StatusUnprocessableEntity)
+	if strings.Contains(rec.Body.String(), "old_ended") {
+		t.Errorf("launch response carries old_ended: %s", rec.Body)
 	}
 }

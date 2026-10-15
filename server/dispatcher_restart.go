@@ -129,11 +129,13 @@ func (s *Server) handleRunRestart(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	rlog := &restartLog{id: id}
 	defer rlog.emit(start)
+	oldEnded := false
 	reply := func(code int, body dispatcherResponse) {
 		rlog.status = code
 		if body.Crew == "" {
 			body.Crew = rlog.crew
 		}
+		body.OldEnded = oldEnded
 		writeDispatchJSON(w, code, body)
 	}
 
@@ -321,7 +323,7 @@ func (s *Server) handleRunRestart(w http.ResponseWriter, r *http.Request) {
 	// launchWaitLimit, which outlasts the resolve + kill-pane below. kill-pane,
 	// not kill-window, ends only the engine pane (closing a single-pane
 	// window). After the kill houston awaits the new registration for
-	// launchCheck plus restartExitSlack for the old process's exit.
+	// launchCheck plus restartSlack for the old process's exit.
 	end := func(ctx context.Context) *restartAbort {
 		if !req.Force {
 			// A run missing from the registry is no evidence its pane is gone;
@@ -332,6 +334,7 @@ func (s *Server) handleRunRestart(w http.ResponseWriter, r *http.Request) {
 		}
 		p, err := s.runPanes.ResolvePane(oldPaneID)
 		if errors.Is(err, tmux.ErrPaneNotFound) {
+			oldEnded = true
 			return nil
 		}
 		if err != nil {
@@ -344,7 +347,16 @@ func (s *Server) handleRunRestart(w http.ResponseWriter, r *http.Request) {
 		if _, err := s.tmuxRun(ctx, []string{"kill-pane", "-t", oldPaneID}); err != nil && !tmux.IsGoneMessage(err.Error()) {
 			return &restartAbort{http.StatusBadGateway, dispatcherResponse{Error: "could not end the old dispatcher session: " + err.Error()}}
 		}
+		oldEnded = true
 		return nil
+	}
+	// A launcher still waiting on an old pid that outlived its pane cannot
+	// register; reporting it as merely starting would hide that.
+	oldOutlived := func(context.Context) *restartAbort {
+		if !s.pidAlive(pid) {
+			return nil
+		}
+		return &restartAbort{http.StatusBadGateway, dispatcherResponse{Error: "the old dispatcher process is still running after its pane was ended — the new launcher could not register; stop pid " + strconv.Itoa(pid) + " and relaunch with CREW_ID=" + crew + " dispatcher"}}
 	}
 
 	// Detached from the request: a dropped phone connection must not abort a
@@ -353,7 +365,7 @@ func (s *Server) handleRunRestart(w http.ResponseWriter, r *http.Request) {
 	code, body, newPane := s.openDispatcherWindow(ctx, windowLaunch{
 		repo: repo, serverPath: serverPath, crewID: crew, crewDir: crewDir,
 		prevPID: oldPID, file: file, session: session,
-		wait: s.launchCheck + restartExitSlack, afterOpen: end,
+		wait: s.launchCheck + s.restartSlack, afterOpen: end, onStarting: oldOutlived,
 	})
 	rlog.newPane = newPane
 	reply(code, body)

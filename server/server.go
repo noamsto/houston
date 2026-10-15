@@ -168,6 +168,12 @@ type Server struct {
 	// fields so tests replace it.
 	launcherArgv  func(pid int) ([]string, bool)
 	launcherFound func(serverPath string) bool
+	// pidAlive reports whether a restart's old dispatcher pid still runs.
+	pidAlive func(pid int) bool
+	// restartSlack is a restart's await past launchCheck after the kill: the
+	// old dispatcher dies on its pane's hangup within milliseconds, so this
+	// only covers a slow exit.
+	restartSlack time.Duration
 
 	auth  *authGate
 	hosts *hostGate
@@ -292,6 +298,8 @@ func New(cfg Config) (*Server, error) {
 		launchPoll:      200 * time.Millisecond,
 		launcherArgv:    readLauncherArgv,
 		launcherFound:   func(p string) bool { return mode.OnPath("dispatcher", p) },
+		pidAlive:        processAlive,
+		restartSlack:    5 * time.Second,
 		debug:           cfg.Debug,
 	}
 	s.chat = s.hub

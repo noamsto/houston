@@ -243,6 +243,19 @@ describe('restartDispatcher', () => {
     })
   })
 
+  it('maps old_ended to oldEnded', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.resolve(jsonResponse(502, '{"error":"could not check the dispatcher pane","old_ended":true}'))),
+    )
+    expect(await restartDispatcher('r1', {})).toEqual({
+      kind: 'failed',
+      status: 502,
+      error: 'could not check the dispatcher pane',
+      oldEnded: true,
+    })
+  })
+
   it('network rejection returns failed with status 0', async () => {
     vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('network down'))))
     expect(await restartDispatcher('r1', {})).toEqual({ kind: 'failed', status: 0, error: 'network error' })

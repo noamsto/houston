@@ -39,7 +39,7 @@ describe('pendingRuns', () => {
 })
 
 describe('restart failures', () => {
-  const failure = { error: 'dispatcher exited', output: 'out', crew: '1-2' }
+  const failure = { error: 'dispatcher exited', output: 'out', crew: '1-2', status: 422 }
 
   it('is readable before the TTL and gone after, and an expired entry is dropped for good', () => {
     recordRestartFailure('a', failure, 1000)

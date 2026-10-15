@@ -103,7 +103,7 @@ describe('RunDetail', () => {
 
   it('shows a recorded restart failure for the vanished run, ahead of the pending placeholder', () => {
     markPendingRun('pane-1', now)
-    recordRestartFailure('pane-1', { error: 'dispatcher exited immediately', output: 'no such launcher', crew: '1700000000-42' }, now)
+    recordRestartFailure('pane-1', { error: 'dispatcher exited immediately', output: 'no such launcher', crew: '1700000000-42', status: 422 }, now)
     render(<RunDetail mode={null} runs={[]} hasSnapshot streamConnected now={now} id="pane-1" tab="chat" />)
     expect(screen.getByText('The restart did not come up')).toBeTruthy()
     expect(screen.getByText('dispatcher exited immediately')).toBeTruthy()
@@ -113,6 +113,20 @@ describe('RunDetail', () => {
     expect(screen.getByText('Back to Fleet')).toBeTruthy()
     expect(screen.queryByText(/starting the restarted dispatcher/i)).toBeNull()
     expect(screen.queryByText(/no longer available/i)).toBeNull()
+  })
+
+  it('shows the relaunch line for the old-process 502 too', () => {
+    recordRestartFailure('pane-1', { error: 'the old dispatcher process is still running after its pane was ended — stop pid 7', crew: '1700000000-42', status: 502 }, now)
+    render(<RunDetail mode={null} runs={[]} hasSnapshot streamConnected now={now} id="pane-1" tab="chat" />)
+    expect(screen.getByText(/CREW_ID=1700000000-42 dispatcher\./)).toBeTruthy()
+  })
+
+  it('tells the user to check Fleet, not to relaunch, for an unchecked 502', () => {
+    recordRestartFailure('pane-1', { error: 'could not check the dispatcher pane', crew: '1700000000-42', status: 502 }, now)
+    render(<RunDetail mode={null} runs={[]} hasSnapshot streamConnected now={now} id="pane-1" tab="chat" />)
+    expect(screen.getByText(/is intact — workers keep running\./)).toBeTruthy()
+    expect(screen.getByText(/Check Fleet for the new dispatcher before relaunching\./)).toBeTruthy()
+    expect(screen.queryByText(/CREW_ID=/)).toBeNull()
   })
 
   it('shows "not found" again once the pending mark has expired', () => {

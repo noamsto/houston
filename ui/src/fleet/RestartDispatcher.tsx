@@ -16,7 +16,7 @@ import { parseDetailRoute } from './routes'
 // Keeps "leave unchanged" apart from "" (the launcher's own default).
 const SAME = '\0same'
 
-type Phase = 'closed' | 'confirm' | 'sending' | 'failed'
+type Phase = 'closed' | 'confirm' | 'sending' | 'failed' | 'dropped'
 type OptionsState =
   | { status: 'idle' }
   | { status: 'loading' }
@@ -83,6 +83,7 @@ export function RestartDispatcher({ run }: { run: Run }) {
     setShowSettings(false)
     setForceAsked(false)
     setFailure(null)
+    clearRestartFailure(run.id)
     setEngine(SAME)
     setModel(SAME)
     setEffort(SAME)
@@ -97,6 +98,12 @@ export function RestartDispatcher({ run }: { run: Run }) {
     markPendingRun(run.id, Date.now())
     const result = await restartDispatcher(run.id, req)
     sending.current = false
+    if (result.kind === 'failed' && result.status === 0) {
+      // The server may still be running the restart; the pending mark stays so
+      // the old id reads as starting instead of a false verdict.
+      setPhase('dropped')
+      return
+    }
     clearPendingRun(run.id)
     if (result.kind === 'started') {
       markPendingRun(result.runId, Date.now())
@@ -109,7 +116,13 @@ export function RestartDispatcher({ run }: { run: Run }) {
       setPhase('confirm')
       return
     }
-    recordRestartFailure(run.id, { error: result.error, output: result.output, crew: result.crew }, Date.now())
+    if (result.oldEnded) {
+      recordRestartFailure(
+        run.id,
+        { error: result.error, output: result.output, crew: result.crew, status: result.status },
+        Date.now(),
+      )
+    }
     setFailure(result)
     setPhase('failed')
   }
@@ -119,6 +132,22 @@ export function RestartDispatcher({ run }: { run: Run }) {
       <button type="button" className="crews-restart" onClick={openPanel}>
         Restart
       </button>
+    )
+  }
+
+  if (phase === 'dropped') {
+    return (
+      <div className="crews-restart-confirm dispatch-result failure">
+        <p>
+          The connection dropped — the restart may still be running on the server. Watch Fleet for the new dispatcher
+          before retrying.
+        </p>
+        <div className="crews-restart-actions">
+          <button type="button" className="crews-restart" onClick={close}>
+            Close
+          </button>
+        </div>
+      </div>
     )
   }
 

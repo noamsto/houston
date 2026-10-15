@@ -35,17 +35,13 @@ const (
 	paneTmuxTimeout = 2 * time.Second
 
 	// The wrapper's wait for a restart's old dispatcher is only a backstop
-	// against a process that survives its pane's hangup, so it must outlast
-	// houston's resolve + kill-pane after new-window, each bounded by
-	// tmuxTimeout. On any abort houston kills the new window, which ends the
-	// waiting wrapper.
+	// against a process that survives its pane's hangup. While houston awaits
+	// the registration it answers first: when the old pid outlives the await,
+	// the restart answers 502 and kills the new window, ending the waiting
+	// wrapper. So the wait only runs past houston's await when houston itself
+	// dies mid-request.
 	launchWaitLimit = 60 * time.Second
 	launchWaitPoll  = 100 * time.Millisecond
-
-	// restartExitSlack is houston's await past launchCheck after the kill:
-	// the old dispatcher dies on its pane's hangup within milliseconds, so
-	// this only covers a slow exit.
-	restartExitSlack = 5 * time.Second
 
 	// launchFormat is what new-window/new-session print with -P, so the
 	// handler learns where the dispatcher landed without a second lookup.
@@ -79,6 +75,9 @@ type dispatcherResponse struct {
 	RunID   string `json:"run_id,omitempty"`
 	// Busy marks a restart refused because the dispatcher is mid-turn.
 	Busy bool `json:"busy,omitempty"`
+	// OldEnded is restart only: the old dispatcher's pane was ended (killed,
+	// or already gone) before this response.
+	OldEnded bool `json:"old_ended,omitempty"`
 }
 
 // dispatcherLaunchFile is how task text reaches the launcher: through a 0600
@@ -516,6 +515,9 @@ type windowLaunch struct {
 	// session). A non-nil result aborts: the new window or session is killed,
 	// the launch file removed, and the result is the response.
 	afterOpen func(ctx context.Context) *restartAbort
+	// onStarting runs when the launcher has neither registered nor died
+	// within wait; a non-nil result aborts like afterOpen's.
+	onStarting func(ctx context.Context) *restartAbort
 }
 
 type restartAbort struct {
@@ -596,14 +598,18 @@ func (s *Server) openDispatcherWindow(ctx context.Context, l windowLaunch) (code
 		}
 	}
 
+	aborted := func(abort *restartAbort) (int, dispatcherResponse, string) {
+		killWindow()
+		_ = os.Remove(l.file)
+		if abort.body.Crew == "" {
+			abort.body.Crew = l.crewID
+		}
+		return abort.code, abort.body, pane
+	}
+
 	if l.afterOpen != nil {
 		if abort := l.afterOpen(ctx); abort != nil {
-			killWindow()
-			_ = os.Remove(l.file)
-			if abort.body.Crew == "" {
-				abort.body.Crew = l.crewID
-			}
-			return abort.code, abort.body, pane
+			return aborted(abort)
 		}
 	}
 
@@ -626,12 +632,18 @@ func (s *Server) openDispatcherWindow(ctx context.Context, l windowLaunch) (code
 		// The window may still be running the launcher, which may not have
 		// read its file yet: keep both, and the crew.
 		return http.StatusBadGateway, dispatcherResponse{Error: "could not check the dispatcher pane: " + detail, Crew: l.crewID, Session: created, Window: window, Pane: pane}, pane
-	default:
-		if _, err := s.repoReg.Add(l.repo.Path); err != nil {
-			slog.Debug("dispatcher launch: repo not remembered", "repo", l.repo.Path, "reason", err)
+	case launchRegistered:
+	case launchStarting:
+		if l.onStarting != nil {
+			if abort := l.onStarting(ctx); abort != nil {
+				return aborted(abort)
+			}
 		}
-		return http.StatusOK, dispatcherResponse{Crew: l.crewID, Session: created, Window: window, Pane: pane, RunID: runs.PaneRunID(pane)}, pane
 	}
+	if _, err := s.repoReg.Add(l.repo.Path); err != nil {
+		slog.Debug("dispatcher launch: repo not remembered", "repo", l.repo.Path, "reason", err)
+	}
+	return http.StatusOK, dispatcherResponse{Crew: l.crewID, Session: created, Window: window, Pane: pane, RunID: runs.PaneRunID(pane)}, pane
 }
 
 // removeLaunchLeftovers drops the launch file (the wrapper may never have

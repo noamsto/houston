@@ -1,6 +1,10 @@
 // A run houston just started (a dispatcher restart) is not listed until its
 // engine reports, so its detail shows a starting placeholder instead of "no
 // longer available" while the id is pending.
+//
+// A failure is recorded only when the server attests that it already ended the
+// old session; a refusal before that leaves the old run alive, so nothing is
+// recorded for it.
 export const PENDING_RUN_TTL_MS = 60_000
 export const RESTART_FAILURE_TTL_MS = 10 * 60_000
 
@@ -8,6 +12,7 @@ export interface RestartFailure {
   error: string
   output?: string
   crew?: string
+  status: number
 }
 
 const pending = new Map<string, number>()

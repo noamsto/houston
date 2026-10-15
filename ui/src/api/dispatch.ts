@@ -113,6 +113,7 @@ export type DispatcherOutcome =
       window?: string
       pane?: string
       busy?: boolean // restart only: the dispatcher is mid-turn and force was not set
+      oldEnded?: boolean // restart only: the server had already ended the old dispatcher's pane
     }
 
 interface DispatcherSuccessBody {
@@ -128,6 +129,7 @@ interface DispatcherErrorBody extends DispatchErrorBody {
   window?: string
   pane?: string
   busy?: boolean
+  old_ended?: boolean
 }
 
 async function parseDispatcherResponse(res: Response): Promise<DispatcherOutcome> {
@@ -159,6 +161,7 @@ async function parseDispatcherResponse(res: Response): Promise<DispatcherOutcome
       window: body.window,
       pane: body.pane,
       busy: body.busy,
+      oldEnded: body.old_ended,
     }
   } catch {
     return { kind: 'failed', status: res.status, error: text.trim() }

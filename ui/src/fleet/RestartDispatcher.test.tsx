@@ -250,7 +250,7 @@ describe('RestartDispatcher', () => {
     await screen.findByRole('button', { name: 'Restarting…' })
 
     view.unmount()
-    resolve(reply(422, { error: 'dispatcher exited immediately', output: 'no such launcher', crew: '1700000000-42' }))
+    resolve(reply(422, { error: 'dispatcher exited immediately', output: 'no such launcher', crew: '1700000000-42', old_ended: true }))
     await waitFor(() => expect(restartFailure('d/1', Date.now())).not.toBeNull())
 
     render(<RunDetail mode="dispatcher" runs={[]} hasSnapshot streamConnected now={Date.now()} id="d/1" />)
@@ -260,6 +260,50 @@ describe('RestartDispatcher', () => {
     expect(screen.getByText(/is intact — workers keep running/)).toBeTruthy()
     expect(screen.getByText('no such launcher')).toBeTruthy()
     expect(isPendingRun('d/1', Date.now())).toBe(false)
+  })
+
+  it.each([
+    [409, { error: 'dispatcher is mid-turn' }],
+    [422, { error: 'repo path not allowed', crew: '1700000000-42' }],
+  ])('a pre-kill %i records no failure for the old run', async (status, body) => {
+    fetchMock.mockImplementationOnce(() => Promise.resolve(reply(status, body)))
+    render(<RestartDispatcher run={dispatcher()} />)
+    open()
+    confirm()
+    await screen.findByText(body.error)
+
+    expect(restartFailure('d/1', Date.now())).toBeNull()
+    expect(isPendingRun('d/1', Date.now())).toBe(false)
+  })
+
+  it('Cancel clears a recorded failure', async () => {
+    fetchMock.mockImplementationOnce(() => Promise.resolve(reply(502, { error: 'tmux unavailable', old_ended: true })))
+    render(<RestartDispatcher run={dispatcher()} />)
+    open()
+    confirm()
+    await screen.findByText('tmux unavailable')
+    expect(restartFailure('d/1', Date.now())).not.toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    expect(restartFailure('d/1', Date.now())).toBeNull()
+  })
+
+  it('a dropped connection shows a notice with no Retry, keeps the old id pending and records nothing', async () => {
+    fetchMock.mockImplementationOnce(() => Promise.reject(new Error('network down')))
+    render(<RestartDispatcher run={dispatcher()} />)
+    open()
+    confirm()
+
+    await screen.findByText(/The connection dropped — the restart may still be running on the server\./)
+    expect(screen.getByText(/Watch Fleet for the new dispatcher before retrying\./)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
+    expect(isPendingRun('d/1', Date.now())).toBe(true)
+    expect(restartFailure('d/1', Date.now())).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+
+    expect(screen.getByRole('button', { name: 'Restart' })).toBeTruthy()
   })
 
   it('the old id is pending while the request is in flight', async () => {
@@ -280,12 +324,12 @@ describe('RestartDispatcher', () => {
   })
 
   it('a retry clears the earlier recorded failure', async () => {
-    fetchMock.mockImplementationOnce(() => Promise.resolve(reply(502, { error: 'tmux unavailable' })))
+    fetchMock.mockImplementationOnce(() => Promise.resolve(reply(502, { error: 'tmux unavailable', old_ended: true })))
     render(<RestartDispatcher run={dispatcher()} />)
     open()
     confirm()
     await screen.findByText('tmux unavailable')
-    expect(restartFailure('d/1', Date.now())?.error).toBe('tmux unavailable')
+    expect(restartFailure('d/1', Date.now())).toEqual({ error: 'tmux unavailable', output: undefined, crew: undefined, status: 502 })
 
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
 
