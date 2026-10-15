@@ -58,6 +58,9 @@ type CrewSource struct {
 	// feed tails every resolved bus's events.jsonl for the activity feed; nil
 	// disables it (tests, tmux mode).
 	feed *crewfeed.Store
+
+	// now is the clock scan uses; nil means time.Now. A field so tests can pin it.
+	now func() time.Time
 }
 
 type crewLog struct {
@@ -111,6 +114,12 @@ func (s *CrewSource) Run(ctx context.Context, out chan<- Delta) error {
 // finished runs out during a normal session.
 const crewEvictionGrace = 10 * time.Minute
 
+// crewStaleAfter is how long a windowless branch with no live dispatcher may go
+// without a dispatch, resume or status row before scan stops listing it: the bus
+// is append-only, so a worker that died without a final status would otherwise
+// stay listed forever.
+const crewStaleAfter = 6 * time.Hour
+
 // crewRunFinished reports whether r's bus status has been terminal for
 // longer than crewEvictionGrace. UpdatedAt == 0 covers both a malformed
 // status record and a dispatch-only branch with no status yet — neither is
@@ -153,6 +162,17 @@ func tickCrewDeltas(current map[string]Run, seen map[string]bool, now time.Time)
 	return deltas, newSeen
 }
 
+// crewRunAbandoned reports whether a branch has been silent past crewStaleAfter
+// with nothing to revive it: no window, no live dispatcher, not waiting on a
+// human. b.State must be the post-routing state. lastActivity == 0 (no row with
+// a timestamp) is never abandoned.
+func crewRunAbandoned(b crewBranch, windowless, dispatcherAlive bool, now time.Time) bool {
+	if !windowless || dispatcherAlive || b.State == StateBlocked || b.lastActivity == 0 {
+		return false
+	}
+	return now.Sub(time.UnixMilli(b.lastActivity)) > crewStaleAfter
+}
+
 // scan returns this tick's runs under their final registry keys: the pane id
 // where the branch joins exactly one agent pane, otherwise "crew/<bus>/<branch>".
 // It also returns, under its pane id, a dispatcher layer for every crew that
@@ -174,6 +194,11 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 		return nil, false
 	}
 
+	now := time.Now()
+	if s.now != nil {
+		now = s.now()
+	}
+
 	roots := map[string]bool{}
 	for _, w := range wins {
 		if w.GitRoot != "" {
@@ -191,7 +216,7 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 	// paneHookSessions).
 	var paneSessions map[string]string
 	if s.sessions != nil {
-		paneSessions = paneHookSessions(s.sessions.Snapshot(), paneSetFrom(panes, time.Now()))
+		paneSessions = paneHookSessions(s.sessions.Snapshot(), paneSetFrom(panes, now))
 	}
 
 	// Every bus, not only those whose log names a branch: a dispatcher that
@@ -210,12 +235,26 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 
 	homes := crewHomes(slices.Collect(maps.Keys(joins)))
 
-	now := time.Now()
+	// A dispatcher joined on any bus keeps its crew's windowless workers, even
+	// those reporting on another bus.
+	joinedCrews := map[string]bool{}
+	for _, j := range joins {
+		for crewID, paneID := range j {
+			if paneID != "" {
+				joinedCrews[crewID] = true
+			}
+		}
+	}
+
 	out := map[string]Run{}
 	for bus, branches := range s.scanRoots(rootList) {
 		project := ProjectFromCommonDir(filepath.Dir(bus))
 		for branch, r := range branches {
-			routed := routeCrewQuestion(r, dispatcherLive(joins[bus], r.Crew.Name), now)
+			if r.reaped {
+				continue
+			}
+			alive := dispatcherLive(joins[bus], r.Crew.Name)
+			routed := routeCrewQuestion(r, alive, now)
 			if home := homes[r.Crew.Name]; home != "" {
 				// routed.Crew is shared with the parse cache.
 				c := *routed.Crew
@@ -227,6 +266,9 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 			routed.CrewBus = bus
 			routed.Worktree = worktreeFor(bus, branch, wins, s.crewDir)
 			paneID, candidates := resolvePane(bus, branch, r.State, r.UpdatedAt, r.session, r.CrewSession, paneSessions, wins, panes, s.crewDir, s.procStart)
+			if crewRunAbandoned(crewBranch{Run: routed, lastActivity: r.lastActivity}, candidates != 1, joinedCrews[r.Crew.Name], now) {
+				continue
+			}
 			key := paneID
 			if candidates != 1 {
 				key = "crew/" + bus + "/" + branch
@@ -483,6 +525,11 @@ type crewBranch struct {
 	// current episode: kept across re-stamps, restarted by any other status or
 	// a dispatcher reply, 0 when the branch is not asking its dispatcher.
 	blockedSince int64
+	// reaped is set by a "reaped" status or a reap row and cleared by a later
+	// dispatch, resume or other status: the branch was torn down and is not listed.
+	reaped bool
+	// lastActivity is the newest bus ts (ms) of a dispatch, resume or status row.
+	lastActivity int64
 }
 
 // deltasFromCrewLog folds one bus log into the latest state per branch. The bus
@@ -548,6 +595,16 @@ func deltasFromCrewLog(rd io.Reader) map[string]crewBranch {
 		if rec.Kind == "dispatch" || rec.Kind == "resume" {
 			r.CrewSession = rec.EngineSession
 			r.Crew.Sessions++
+			if r.reaped {
+				r.reaped, r.State, r.UpdatedAt = false, "", 0
+				r.Crew.Detail, r.PR = "", nil
+			}
+		}
+		if rec.Kind == "reap" {
+			r.reaped = true
+		}
+		if rec.Kind == "dispatch" || rec.Kind == "resume" || rec.Kind == "status" {
+			r.lastActivity = max(r.lastActivity, rec.TS)
 		}
 		// The branch's identity is its last well-formed dispatch row, as the crew
 		// CLI records it. Bus text is untrusted, hence both patterns.
@@ -562,6 +619,7 @@ func deltasFromCrewLog(rd io.Reader) map[string]crewBranch {
 			var body crewStatusBody
 			if err := json.Unmarshal(rec.Body, &body); err == nil && body.State != "" {
 				r.State = FromCrewState(body.State)
+				r.reaped = body.State == "reaped"
 				r.UpdatedAt = rec.TS / 1000
 				r.session = sessionEpoch(rec.From)
 				lastStatusTS[branch] = rec.TS

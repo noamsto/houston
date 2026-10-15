@@ -33,6 +33,7 @@ func TestFromCrewState(t *testing.T) {
 		"blocked": StateBlocked,
 		"pr_open": StateReview,
 		"done":    StateDone,
+		"reaped":  StateDone,
 		"failed":  StateFailed,
 		"exited":  StateFailed,
 	}
