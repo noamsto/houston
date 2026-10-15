@@ -99,7 +99,7 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
   const handleDragEndRef = useRef<(info: { movedX: boolean; startedAtBottom: boolean }) => void>(() => {})
 
   // Set while the pane's app is on the alternate screen: scroll input goes to
-  // the app instead of xterm's (empty) history. Filled in once sendInput exists.
+  // the app instead of xterm's (empty) history. Filled in once sendScroll exists.
   const altScrollRef = useRef<AltScrollTarget | null>(null)
 
   const {

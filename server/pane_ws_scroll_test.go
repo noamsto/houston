@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -28,23 +29,28 @@ func TestPaneWSScrollGate(t *testing.T) {
 	tests := []struct {
 		name               string
 		alt, mouse, inMode bool
+		stateErr           bool
 		mode, data         string
 		wantSent           bool
 	}{
-		{"alt screen wheel with mouse", true, true, false, "wheel", wheel, true},
-		{"alt screen page without mouse", true, false, false, "page", page, true},
-		{"app quit, wheel", false, false, false, "wheel", wheel, false},
-		{"app quit, page", false, false, false, "page", page, false},
-		{"copy mode", true, true, true, "wheel", wheel, false},
-		{"copy mode, page", true, false, true, "page", page, false},
-		{"wheel to pane no longer tracking the mouse", true, false, false, "wheel", wheel, false},
-		{"unknown mode", true, true, false, "bogus", wheel, false},
+		{"alt screen wheel with mouse", true, true, false, false, "wheel", wheel, true},
+		{"alt screen page without mouse", true, false, false, false, "page", page, true},
+		{"app quit, wheel", false, false, false, false, "wheel", wheel, false},
+		{"app quit, page", false, false, false, false, "page", page, false},
+		{"copy mode", true, true, true, false, "wheel", wheel, false},
+		{"copy mode, page", true, false, true, false, "page", page, false},
+		{"wheel to pane no longer tracking the mouse", true, false, false, false, "wheel", wheel, false},
+		{"unknown mode", true, true, false, false, "bogus", wheel, false},
+		{"state unreadable", true, true, false, true, "wheel", wheel, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			fakeTmux := newFakeTmux()
 			fakeTmux.paneID = "%7"
 			fakeTmux.altScreen, fakeTmux.mouseSGR, fakeTmux.inMode = tt.alt, tt.mouse, tt.inMode
+			if tt.stateErr {
+				fakeTmux.scrollStateErr = errors.New("tmux unavailable")
+			}
 			fakeCC := newFakeControlClient()
 			conn, cleanup := startPaneWS(t, fakeTmux, newFakeControlManager(fakeCC))
 			defer cleanup()
