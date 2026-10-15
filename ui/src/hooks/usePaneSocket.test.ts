@@ -28,7 +28,11 @@ class FakeWebSocket {
     FakeWebSocket.instances.push(this)
   }
 
-  send() {}
+  sent: string[] = []
+
+  send(data: string) {
+    this.sent.push(data)
+  }
 
   close() {
     this.readyState = FakeWebSocket.CLOSED
@@ -52,6 +56,20 @@ afterEach(() => {
 })
 
 describe('usePaneSocket', () => {
+  it('sendScroll goes out as a scroll message carrying its mode, apart from input', () => {
+    const { result } = renderHook(() => usePaneSocket('/api/runs/r1/terminal', noopCallbacks))
+    const ws = FakeWebSocket.instances[0]
+    ws.readyState = FakeWebSocket.OPEN
+
+    act(() => { result.current.sendScroll('page', '\x1b[6~') })
+    act(() => { result.current.sendInput('a') })
+
+    expect(ws.sent.map((m) => JSON.parse(m))).toEqual([
+      { type: 'scroll', data: { mode: 'page', data: '\x1b[6~' } },
+      { type: 'input', data: { data: 'a' } },
+    ])
+  })
+
   it('4409 sets ended and does not reconnect after the backoff window', () => {
     const { result } = renderHook(() => usePaneSocket('/api/runs/r1/terminal', noopCallbacks))
     const ws = FakeWebSocket.instances[0]

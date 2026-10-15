@@ -11,7 +11,7 @@ vi.mock('./useWorkspace', () => ({
   useWorkspace: () => ({ workspace: null, error: null, loading: false }),
 }))
 vi.mock('../hooks/usePaneSocket', () => ({
-  usePaneSocket: () => ({ connected: true, sendInput: vi.fn(), sendResize: vi.fn() }),
+  usePaneSocket: () => ({ connected: true, sendInput: vi.fn(), sendScroll: vi.fn(), sendResize: vi.fn() }),
 }))
 // DispatchView is kept mounted like Crews/Workspace, so it fetches on every
 // render of this shell — never a real fetch in tests.

@@ -18,6 +18,7 @@ type tmuxOps interface {
 	ListPanes(session string, window int) ([]tmux.PaneInfo, error)
 	ListWindows(session string) ([]tmux.Window, error)
 	ResolvePane(paneID string) (tmux.Pane, error)
+	PaneScrollState(p tmux.Pane) (tmux.ScrollState, error)
 }
 
 // paneSub is one subscriber's handle on a pane's output stream.

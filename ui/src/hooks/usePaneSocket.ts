@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import type { AltScrollMode } from '../lib/altScroll'
 import type { WSCursor, WSMeta, WSOutput, WSSeed } from '../api/types'
 import { WS_CLOSE_SERVER_CHANGED } from '../api/terminal'
 import { RESYNC_AFTER_HIDDEN_MS, trackHidden } from './streamLiveness'
@@ -39,6 +40,16 @@ export function usePaneSocket(path: string | null, callbacks: PaneSocketCallback
       console.debug('[input] sent via WS:', JSON.stringify(data))
     } else {
       console.warn('[input] DROPPED — WS not open, readyState:', ws?.readyState, 'data:', JSON.stringify(data))
+    }
+  }, [])
+
+  // Scroll for an app on the alternate screen. Marked apart from `input` so
+  // the server can re-check the pane still wants it: the mode it was derived
+  // from is up to a second old.
+  const sendScroll = useCallback((mode: AltScrollMode, data: string) => {
+    const ws = wsRef.current
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'scroll', data: { mode, data } }))
     }
   }, [])
 
@@ -156,5 +167,5 @@ export function usePaneSocket(path: string | null, callbacks: PaneSocketCallback
     }
   }, [path])
 
-  return { connected, ended, sendInput, sendResize }
+  return { connected, ended, sendInput, sendScroll, sendResize }
 }

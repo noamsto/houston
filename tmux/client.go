@@ -653,6 +653,37 @@ func parsePaneInMode(s string) bool {
 	return err != nil || n > 0
 }
 
+// ScrollState is what decides whether forwarded scroll input may reach a pane.
+type ScrollState struct {
+	AltScreen bool // the app is on the alternate screen
+	MouseSGR  bool // the app tracks the mouse and wants SGR encoding
+	InMode    bool // a mode such as copy mode takes the pane's keys
+}
+
+// PaneScrollState reads the pane's scroll-relevant state in one tmux call, so
+// the flags cannot disagree with each other.
+func (c *Client) PaneScrollState(p Pane) (ScrollState, error) {
+	out, err := c.output("display-message", "-t", p.Target(), "-p", "#{alternate_on},#{mouse_any_flag},#{mouse_sgr_flag},#{pane_in_mode}")
+	if err != nil {
+		return ScrollState{}, err
+	}
+	return parseScrollState(string(out))
+}
+
+// parseScrollState reads PaneScrollState's format. MouseSGR needs both mouse
+// flags, as in CapturePaneWithMode.
+func parseScrollState(s string) (ScrollState, error) {
+	parts := strings.Split(strings.TrimSpace(s), ",")
+	if len(parts) != 4 {
+		return ScrollState{}, fmt.Errorf("scroll state %q: want 4 fields", s)
+	}
+	return ScrollState{
+		AltScreen: parts[0] == "1",
+		MouseSGR:  parts[1] == "1" && parts[2] == "1",
+		InMode:    parsePaneInMode(parts[3]),
+	}, nil
+}
+
 // WindowPaneCount returns the number of panes in the pane's window.
 func (c *Client) WindowPaneCount(p Pane) (int, error) {
 	out, err := c.output("display-message", "-t", p.Target(), "-p", "#{window_panes}")

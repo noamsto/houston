@@ -39,7 +39,7 @@ const sendInput = vi.fn()
 vi.mock('../hooks/usePaneSocket', () => ({
   usePaneSocket: (path: string | null) => {
     lastSocketPath = path
-    return { connected: mockConnected, ended: mockEnded, sendInput, sendResize: vi.fn() }
+    return { connected: mockConnected, ended: mockEnded, sendInput, sendScroll: vi.fn(), sendResize: vi.fn() }
   },
 }))
 
