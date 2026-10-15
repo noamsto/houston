@@ -47,6 +47,18 @@ type WSOutput struct {
 	Data string `json:"data"`
 }
 
+// WSCursor is a 0-based position within the pane's visible screen.
+type WSCursor struct {
+	X int `json:"x"`
+	Y int `json:"y"`
+}
+
+// WSSeed is a capture-pane snapshot and the cursor the pane had when it was taken.
+type WSSeed struct {
+	Data   string   `json:"data"`
+	Cursor WSCursor `json:"cursor"`
+}
+
 type WSMeta struct {
 	Agent      agents.AgentType `json:"agent"`
 	Mode       string           `json:"mode"`
@@ -194,10 +206,10 @@ func servePane(conn *websocket.Conn, tm tmuxOps, cm controlManagerOps, registry 
 	if !reverify() {
 		return
 	}
+	var sent WSDims
 	if sizeErr == nil && w > 0 && h > 0 {
-		dimsJSON, _ := json.Marshal(WSDims{Cols: w, Rows: h})
-		dimsMsg, _ := json.Marshal(WSMessage{Type: "dims", Data: dimsJSON})
-		if err := conn.WriteMessage(websocket.TextMessage, dimsMsg); err != nil {
+		sent = WSDims{Cols: w, Rows: h}
+		if err := writeDims(conn, sent); err != nil {
 			return
 		}
 	}
@@ -232,7 +244,7 @@ func servePane(conn *websocket.Conn, tm tmuxOps, cm controlManagerOps, registry 
 	}
 
 	go paneWSReadLoop(conn, cc, paneID, verified)
-	serverChanged = paneWSWriteLoop(conn, tm, cc, registry, pane, paneID, sub, verified, connDone, metaEvery)
+	serverChanged = paneWSWriteLoop(conn, tm, cc, registry, pane, paneID, sub, verified, connDone, metaEvery, sent)
 }
 
 // serverStillMatches checks pane's tmux server is still the one paneID
@@ -261,36 +273,58 @@ func serverStillMatches(conn wsWriter, tm tmuxOps, pane tmux.Pane, paneID string
 	return true
 }
 
+// paneSeed is a capture-pane snapshot plus where the pane's cursor sits in its
+// visible screen.
+type paneSeed struct {
+	data             string
+	cursorX, cursorY int
+}
+
 // captureSeed takes a capture-pane snapshot. The bool reports whether a
 // non-empty seed was captured; neither a capture failure nor an empty pane
 // is an error.
-func captureSeed(tm tmuxOps, pane tmux.Pane) (string, bool) {
-	seed, capErr := tm.CapturePane(pane, 500)
+func captureSeed(tm tmuxOps, pane tmux.Pane) (paneSeed, bool) {
+	data, x, y, capErr := tm.CapturePaneCursor(pane, 500)
 	if capErr != nil {
 		slog.Debug("capture-pane failed", "target", pane.Target(), "error", capErr)
-		return "", false
+		return paneSeed{}, false
 	}
-	if seed == "" {
-		return "", false
+	if data == "" {
+		return paneSeed{}, false
 	}
-	return seed, true
+	return paneSeed{data: data, cursorX: x, cursorY: y}, true
 }
 
-func writeSeed(conn wsWriter, seed string) error {
-	outputJSON, _ := json.Marshal(WSOutput{Data: seed})
-	msg, _ := json.Marshal(WSMessage{Type: "seed", Data: outputJSON})
+func writeDims(conn wsWriter, dims WSDims) error {
+	dimsJSON, _ := json.Marshal(dims)
+	msg, _ := json.Marshal(WSMessage{Type: "dims", Data: dimsJSON})
 	return conn.WriteMessage(websocket.TextMessage, msg)
 }
 
-// paneWSWriteLoop streams pane output to conn until it exits. serverChanged
-// reports whether it exited because the pane's server changed.
-func paneWSWriteLoop(conn wsWriter, tm tmuxOps, cc controlClientOps, registry *agents.Registry, pane tmux.Pane, paneID string, sub paneSub, verified *atomic.Uint64, connDone <-chan struct{}, metaEvery time.Duration) (serverChanged bool) {
+func writeSeed(conn wsWriter, seed paneSeed) error {
+	seedJSON, _ := json.Marshal(WSSeed{Data: seed.data, Cursor: WSCursor{X: seed.cursorX, Y: seed.cursorY}})
+	msg, _ := json.Marshal(WSMessage{Type: "seed", Data: seedJSON})
+	return conn.WriteMessage(websocket.TextMessage, msg)
+}
+
+// metaTick is one poll of the pane: its detected state and its current size
+// (zero when tmux could not report it).
+type metaTick struct {
+	meta       WSMeta
+	cols, rows int
+}
+
+// paneWSWriteLoop streams pane output to conn until it exits. sent is the size
+// last reported to the client; a pane that is later resized gets a new `dims`
+// and a fresh seed, because the TUI redraws relative to the new screen height.
+// serverChanged reports whether it exited because the pane's server changed.
+func paneWSWriteLoop(conn wsWriter, tm tmuxOps, cc controlClientOps, registry *agents.Registry, pane tmux.Pane, paneID string, sub paneSub, verified *atomic.Uint64, connDone <-chan struct{}, metaEvery time.Duration, sent WSDims) (serverChanged bool) {
 	pingTicker := time.NewTicker(30 * time.Second)
 	defer pingTicker.Stop()
 
 	// Meta polling runs in its own goroutine so capture-pane calls
 	// never block output delivery to the WebSocket client.
-	metaCh := make(chan WSMeta, 1)
+	metaCh := make(chan metaTick, 1)
 	go metaPollLoop(tm, registry, pane, connDone, metaCh, metaEvery)
 
 	var lastMeta WSMeta
@@ -359,7 +393,16 @@ func paneWSWriteLoop(conn wsWriter, tm tmuxOps, cc controlClientOps, registry *a
 				return
 			}
 
-		case meta := <-metaCh:
+		case tick := <-metaCh:
+			if tick.cols > 0 && tick.rows > 0 && (tick.cols != sent.Cols || tick.rows != sent.Rows) {
+				sent = WSDims{Cols: tick.cols, Rows: tick.rows}
+				if err := writeDims(conn, sent); err != nil {
+					return
+				}
+				// Discards output drawn for the old size and queues the re-seed.
+				cc.MarkPendingReseed(sub)
+			}
+			meta := tick.meta
 			if !metaEqual(meta, lastMeta) {
 				lastMeta = meta
 				metaJSON, _ := json.Marshal(meta)
@@ -382,7 +425,7 @@ func paneWSWriteLoop(conn wsWriter, tm tmuxOps, cc controlClientOps, registry *a
 
 // metaPollLoop runs agent detection in its own goroutine, sending
 // results to metaCh. Exits when done closes.
-func metaPollLoop(tm tmuxOps, registry *agents.Registry, pane tmux.Pane, done <-chan struct{}, metaCh chan<- WSMeta, every time.Duration) {
+func metaPollLoop(tm tmuxOps, registry *agents.Registry, pane tmux.Pane, done <-chan struct{}, metaCh chan<- metaTick, every time.Duration) {
 	ticker := time.NewTicker(every)
 	defer ticker.Stop()
 
@@ -442,7 +485,7 @@ func metaPollLoop(tm tmuxOps, registry *agents.Registry, pane tmux.Pane, done <-
 			meta.Status = resultTypeToString(parseResult.Type)
 
 			select {
-			case metaCh <- meta:
+			case metaCh <- metaTick{meta: meta, cols: capture.PaneWidth, rows: capture.PaneHeight}:
 			default:
 			}
 

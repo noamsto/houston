@@ -330,7 +330,7 @@ func TestPaneWSAckBeforeWrite(t *testing.T) {
 		started: make(chan struct{}),
 	}
 
-	go paneWSWriteLoop(gw, fakeTmux, fakeCC, agents.NewRegistry(generic.New()), harnessPane, fakeTmux.paneID, sub, new(atomic.Uint64), connDone, metaPollInterval)
+	go paneWSWriteLoop(gw, fakeTmux, fakeCC, agents.NewRegistry(generic.New()), harnessPane, fakeTmux.paneID, sub, new(atomic.Uint64), connDone, metaPollInterval, WSDims{})
 
 	<-gw.started
 

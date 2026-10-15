@@ -12,7 +12,7 @@ type tmuxOps interface {
 	IsZoomed(p tmux.Pane) (bool, error)
 	ZoomPane(p tmux.Pane) error
 	GetPaneSize(p tmux.Pane) (width, height int, err error)
-	CapturePane(p tmux.Pane, lines int) (string, error)
+	CapturePaneCursor(p tmux.Pane, lines int) (capture string, cursorX, cursorY int, err error)
 	CapturePaneWithMode(p tmux.Pane, lines int) (tmux.CaptureResult, error)
 	ForceRedraw(p tmux.Pane) error
 	ListPanes(session string, window int) ([]tmux.PaneInfo, error)

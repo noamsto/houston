@@ -287,6 +287,40 @@ func (c *Client) CapturePane(p Pane, lines int) (string, error) {
 	return result.Output, nil
 }
 
+// CapturePaneCursor captures the pane like CapturePane and also returns the
+// cursor's 0-based column and row within the visible screen. One tmux
+// invocation reads both, so the cursor cannot move between them.
+func (c *Client) CapturePaneCursor(p Pane, lines int) (string, int, int, error) {
+	out, err := c.output("display-message", "-t", p.Target(), "-p", "#{cursor_x},#{cursor_y}", ";",
+		"capture-pane", "-t", p.Target(), "-p", "-e", "-N", "-S", fmt.Sprintf("-%d", lines))
+	if err != nil {
+		return "", 0, 0, fmt.Errorf("capture-pane failed: %w", err)
+	}
+	return splitCursorCapture(string(out))
+}
+
+// splitCursorCapture splits CapturePaneCursor's output: the cursor line, then
+// the capture.
+func splitCursorCapture(out string) (string, int, int, error) {
+	first, capture, ok := strings.Cut(out, "\n")
+	if !ok {
+		return "", 0, 0, fmt.Errorf("capture-pane cursor: no newline in output")
+	}
+	xs, ys, ok := strings.Cut(first, ",")
+	if !ok {
+		return "", 0, 0, fmt.Errorf("capture-pane cursor %q: want x,y", first)
+	}
+	x, err := strconv.Atoi(xs)
+	if err != nil {
+		return "", 0, 0, fmt.Errorf("capture-pane cursor %q: %w", first, err)
+	}
+	y, err := strconv.Atoi(ys)
+	if err != nil {
+		return "", 0, 0, fmt.Errorf("capture-pane cursor %q: %w", first, err)
+	}
+	return strings.ReplaceAll(capture, "␛", "\x1b"), x, y, nil
+}
+
 // CapturePaneWidth captures the pane like CapturePane and also returns the
 // pane's width in cells. One tmux invocation reads both, so the width and the
 // content cannot disagree after a resize.

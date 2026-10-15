@@ -9,6 +9,16 @@ export interface WSOutput {
   data: string
 }
 
+// Pane cursor, 0-based within the visible screen
+export interface WSCursor {
+  x: number
+  y: number
+}
+
+export interface WSSeed extends WSOutput {
+  cursor?: WSCursor
+}
+
 export interface WSMeta {
   agent: AgentType
   mode: string

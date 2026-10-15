@@ -31,6 +31,10 @@ type fakeTmux struct {
 	// to send," which would silently skip the write loop's reseed branch.
 	seed string
 
+	// cursorX and cursorY are the pane cursor CapturePaneCursor reports with
+	// the seed (0-based, within the visible screen).
+	cursorX, cursorY int
+
 	captureModeOutput string
 	altScreen         bool
 	mouseSGR          bool
@@ -100,26 +104,26 @@ func (f *fakeTmux) GetPaneSize(p tmux.Pane) (width, height int, err error) {
 	return width, height, nil
 }
 
-// CapturePane is deliberately independent of CapturePaneWithMode: the real
-// tmux.Client delegates one to the other, but doing that here would let the
-// one-time seed capture pollute captureModeCalls(), which a later test uses
-// to measure per-second polling rate.
-func (f *fakeTmux) CapturePane(p tmux.Pane, lines int) (string, error) {
+// CapturePaneCursor is deliberately independent of CapturePaneWithMode:
+// delegating here would let the one-time seed capture pollute
+// captureModeCalls(), which a later test uses to measure per-second polling
+// rate.
+func (f *fakeTmux) CapturePaneCursor(p tmux.Pane, lines int) (string, int, int, error) {
 	f.mu.Lock()
 	onCapture := f.onCapture
-	seed := f.seed
+	seed, x, y := f.seed, f.cursorX, f.cursorY
 	f.mu.Unlock()
 	if onCapture != nil {
 		onCapture()
 	}
-	return seed, nil
+	return seed, x, y, nil
 }
 
 func (f *fakeTmux) CapturePaneWithMode(p tmux.Pane, lines int) (tmux.CaptureResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.captureModeN++
-	return tmux.CaptureResult{Output: f.captureModeOutput, AltScreen: f.altScreen, MouseSGR: f.mouseSGR, ModeKnown: true}, nil
+	return tmux.CaptureResult{Output: f.captureModeOutput, PaneWidth: f.paneWidth, PaneHeight: f.paneHeight, AltScreen: f.altScreen, MouseSGR: f.mouseSGR, ModeKnown: true}, nil
 }
 
 func (f *fakeTmux) ForceRedraw(p tmux.Pane) error {
