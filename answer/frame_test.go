@@ -186,24 +186,28 @@ func TestPlanWalk(t *testing.T) {
 		qs     []Question
 		as     []Answer
 		frames []string
+		named  bool
 	}{
 		{
 			name:   "plain option",
 			qs:     []Question{colorPlain},
 			as:     []Answer{{Options: []int{1}}},
 			frames: []string{"plain-q"},
+			named:  true,
 		},
 		{
 			name:   "plain Other with a leading digit",
 			qs:     []Question{colorPlain},
 			as:     []Answer{{Text: "2 more"}},
 			frames: []string{"plain-q", "plain-other-cursor", "plain-other-typed"},
+			named:  true,
 		},
 		{
 			name:   "tabbed options",
 			qs:     []Question{colorTab, toppings},
 			as:     []Answer{{Options: []int{1}}, {Options: []int{2, 0}}},
 			frames: []string{"tab-q1", "tab-q2", "tab-q2-checked", "tab-q2-checked-submit", "tab-review"},
+			named:  true,
 		},
 		{
 			name: "tabbed Other on single and multi",
@@ -233,6 +237,7 @@ func TestPlanWalk(t *testing.T) {
 			qs:     []Question{layout},
 			as:     []Answer{{Options: []int{2}}},
 			frames: []string{"prev-q", "prev-q-split"},
+			named:  true,
 		},
 		{
 			name:   "preview tabbed mixed",
@@ -252,14 +257,15 @@ func TestPlanWalk(t *testing.T) {
 			prefix = dir + "/"
 		}
 		for _, tt := range tests {
+			if dir == "2.1.299-named" && !tt.named {
+				continue
+			}
 			frames := make([]string, len(tt.frames))
-			complete := true
 			for i, f := range tt.frames {
 				frames[i] = prefix + f
-				complete = complete && have[frames[i]]
-			}
-			if !complete {
-				continue
+				if !have[frames[i]] {
+					t.Fatalf("%s: fixture %s missing", prefix+tt.name, frames[i])
+				}
 			}
 			t.Run(prefix+tt.name, func(t *testing.T) {
 				steps, err := Plan(tt.qs, tt.as)
