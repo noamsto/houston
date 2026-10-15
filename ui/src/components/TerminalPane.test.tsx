@@ -26,6 +26,7 @@ async function lastTerminalInstance(): Promise<Terminal> {
 }
 
 const sendInput = vi.fn()
+const sendScroll = vi.fn()
 const sendResize = vi.fn()
 
 interface CapturedCallbacks {
@@ -41,7 +42,7 @@ let capturedCallbacks: CapturedCallbacks | null = null
 vi.mock('../hooks/usePaneSocket', () => ({
   usePaneSocket: (_path: string, callbacks: CapturedCallbacks) => {
     capturedCallbacks = callbacks
-    return { connected: false, sendInput, sendResize }
+    return { connected: false, sendInput, sendScroll, sendResize }
   },
 }))
 
@@ -137,6 +138,23 @@ describe('TerminalPane input', () => {
       term.input('a')
     })
     expect(sendInput).toHaveBeenCalledWith('a')
+  })
+})
+
+describe('TerminalPane alternate-screen scroll', () => {
+  it('sends forwarded scroll as a scroll message with its mode, not as input', async () => {
+    desktop = false
+    render(<TerminalPane address={address} isFocused onFocus={() => {}} onClose={() => {}} />)
+    await lastTerminalInstance()
+    act(() => {
+      capturedCallbacks?.onMeta({ agent: 'generic', mode: 'unknown', status: 'idle', alternate_on: true, mouse_on: true })
+    })
+    // useTouchGestures' 8th argument is the ref the drag handler reads.
+    const alt = (touchGestureArgs[7] as { current: { mode: string; send: (d: string) => void } | null }).current
+    expect(alt?.mode).toBe('wheel')
+    alt?.send('\x1b[<65;1;1M')
+    expect(sendScroll).toHaveBeenCalledWith('wheel', '\x1b[<65;1;1M')
+    expect(sendInput).not.toHaveBeenCalled()
   })
 })
 

@@ -99,7 +99,7 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
   const handleDragEndRef = useRef<(info: { movedX: boolean; startedAtBottom: boolean }) => void>(() => {})
 
   // Set while the pane's app is on the alternate screen: scroll input goes to
-  // the app instead of xterm's (empty) history. Filled in once sendInput exists.
+  // the app instead of xterm's (empty) history. Filled in once sendScroll exists.
   const altScrollRef = useRef<AltScrollTarget | null>(null)
 
   const {
@@ -334,7 +334,7 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
     }
   }
 
-  const { connected, ended, sendInput, sendResize } = usePaneSocket(terminalSocketPath(address), {
+  const { connected, ended, sendInput, sendScroll, sendResize } = usePaneSocket(terminalSocketPath(address), {
     onDims: ({ cols, rows }) => {
       const term = termRef.current
       if (!term) return
@@ -406,8 +406,8 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
 
   useEffect(() => {
     const mode = altScrollMode(meta)
-    altScrollRef.current = mode ? { mode, send: sendInput } : null
-  }, [meta, sendInput])
+    altScrollRef.current = mode ? { mode, send: (data) => sendScroll(mode, data) } : null
+  }, [meta, sendScroll])
 
   // Desktop wheel: forwarded to the app while it is on the alternate screen;
   // otherwise xterm scrolls its own history as before.

@@ -80,6 +80,14 @@ type WSInput struct {
 	Data string `json:"data"`
 }
 
+// WSScroll is scroll the UI turned into app input (SGR wheel reports for
+// Mode "wheel", PageUp/PageDown for "page"). Unlike WSInput the server checks
+// the pane still wants it just before sending.
+type WSScroll struct {
+	Mode string `json:"mode"`
+	Data string `json:"data"`
+}
+
 type WSResize struct {
 	Cols int `json:"cols"`
 	Rows int `json:"rows"`
@@ -243,7 +251,7 @@ func servePane(conn *websocket.Conn, tm tmuxOps, cm controlManagerOps, registry 
 		paused = false
 	}
 
-	go paneWSReadLoop(conn, cc, paneID, verified)
+	go paneWSReadLoop(conn, tm, cc, pane, paneID, verified)
 	serverChanged = paneWSWriteLoop(conn, tm, cc, registry, pane, paneID, sub, verified, connDone, metaEvery, sent)
 }
 
@@ -501,7 +509,7 @@ func metaPollLoop(tm tmuxOps, registry *agents.Registry, pane tmux.Pane, done <-
 	}
 }
 
-func paneWSReadLoop(conn *websocket.Conn, cc controlClientOps, paneID string, verified *atomic.Uint64) {
+func paneWSReadLoop(conn *websocket.Conn, tm tmuxOps, cc controlClientOps, pane tmux.Pane, paneID string, verified *atomic.Uint64) {
 	defer func() { _ = conn.Close() }()
 
 	for {
@@ -525,22 +533,17 @@ func paneWSReadLoop(conn *websocket.Conn, cc controlClientOps, paneID string, ve
 			if err := json.Unmarshal(msg.Data, &input); err != nil {
 				continue
 			}
-			if err := cc.SendKeys(verified.Load(), paneID, input.Data); err != nil {
-				// A generation that moved mid-input writes a prefix and refuses
-				// the rest; that partial delivery is worth an operator's
-				// attention, unlike the full drop below.
-				var partial *tmux.PartialSendError
-				if errors.As(err, &partial) && partial.Sent > 0 {
-					slog.Warn("partial input delivery pending tmux server check",
-						"paneID", paneID, "sent", partial.Sent, "total", partial.Total)
-					continue
-				}
-				if errors.Is(err, tmux.ErrStaleGeneration) {
-					slog.Debug("dropping input pending tmux server check", "paneID", paneID)
-					continue
-				}
-				slog.Error("send keys failed", "error", err)
+			sendPaneKeys(cc, verified, paneID, input.Data)
+
+		case "scroll":
+			var scroll WSScroll
+			if err := json.Unmarshal(msg.Data, &scroll); err != nil {
+				continue
 			}
+			if !scrollAllowed(tm, pane, paneID, scroll.Mode) {
+				continue
+			}
+			sendPaneKeys(cc, verified, paneID, scroll.Data)
 
 		case "resize":
 			// No-op by design: the CC client is created with
@@ -548,6 +551,51 @@ func paneWSReadLoop(conn *websocket.Conn, cc controlClientOps, paneID string, ve
 			// pane a human is attached to. The browser absorbs the mismatch.
 		}
 	}
+}
+
+// scrollAllowed re-reads the pane's state just before forwarded scroll is
+// sent: the UI acts on a meta sample up to a second old, and bytes meant for
+// an app that has since quit would be typed at the shell. An unreadable state
+// drops the scroll.
+func scrollAllowed(tm tmuxOps, pane tmux.Pane, paneID, mode string) bool {
+	// Address the pane SendKeys writes to, not the session:window.index target.
+	pane.ID = paneID
+	st, err := tm.PaneScrollState(pane)
+	if err != nil {
+		slog.Debug("dropping scroll: pane state unreadable", "paneID", paneID, "error", err)
+		return false
+	}
+	if !st.AltScreen || st.InMode {
+		return false
+	}
+	switch mode {
+	case "wheel":
+		return st.MouseSGR
+	case "page":
+		return true
+	}
+	return false
+}
+
+func sendPaneKeys(cc controlClientOps, verified *atomic.Uint64, paneID, data string) {
+	err := cc.SendKeys(verified.Load(), paneID, data)
+	if err == nil {
+		return
+	}
+	// A generation that moved mid-input writes a prefix and refuses
+	// the rest; that partial delivery is worth an operator's
+	// attention, unlike the full drop below.
+	var partial *tmux.PartialSendError
+	if errors.As(err, &partial) && partial.Sent > 0 {
+		slog.Warn("partial input delivery pending tmux server check",
+			"paneID", paneID, "sent", partial.Sent, "total", partial.Total)
+		return
+	}
+	if errors.Is(err, tmux.ErrStaleGeneration) {
+		slog.Debug("dropping input pending tmux server check", "paneID", paneID)
+		return
+	}
+	slog.Error("send keys failed", "error", err)
 }
 
 func metaEqual(a, b WSMeta) bool {

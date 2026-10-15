@@ -38,6 +38,8 @@ type fakeTmux struct {
 	captureModeOutput string
 	altScreen         bool
 	mouseSGR          bool
+	inMode            bool
+	scrollStateErr    error
 
 	panes   []tmux.PaneInfo
 	windows []tmux.Window
@@ -124,6 +126,15 @@ func (f *fakeTmux) CapturePaneWithMode(p tmux.Pane, lines int) (tmux.CaptureResu
 	defer f.mu.Unlock()
 	f.captureModeN++
 	return tmux.CaptureResult{Output: f.captureModeOutput, PaneWidth: f.paneWidth, PaneHeight: f.paneHeight, AltScreen: f.altScreen, MouseSGR: f.mouseSGR, ModeKnown: true}, nil
+}
+
+func (f *fakeTmux) PaneScrollState(p tmux.Pane) (tmux.ScrollState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.scrollStateErr != nil {
+		return tmux.ScrollState{}, f.scrollStateErr
+	}
+	return tmux.ScrollState{AltScreen: f.altScreen, MouseSGR: f.mouseSGR, InMode: f.inMode}, nil
 }
 
 func (f *fakeTmux) ForceRedraw(p tmux.Pane) error {

@@ -732,3 +732,27 @@ func TestSplitCursorCapture(t *testing.T) {
 		}
 	}
 }
+
+func TestParseScrollState(t *testing.T) {
+	tests := []struct {
+		in      string
+		want    ScrollState
+		wantErr bool
+	}{
+		{"1,1,1,0\n", ScrollState{AltScreen: true, MouseSGR: true}, false},
+		{"1,1,0,0\n", ScrollState{AltScreen: true}, false},
+		{"1,0,1,0\n", ScrollState{AltScreen: true}, false},
+		{"0,0,0,0\n", ScrollState{}, false},
+		{"1,1,1,1\n", ScrollState{AltScreen: true, MouseSGR: true, InMode: true}, false},
+		{"1,1,1,2\n", ScrollState{AltScreen: true, MouseSGR: true, InMode: true}, false},
+		{"1,1,1,\n", ScrollState{AltScreen: true, MouseSGR: true, InMode: true}, false},
+		{"1,1,1\n", ScrollState{}, true},
+		{"", ScrollState{}, true},
+	}
+	for _, tt := range tests {
+		got, err := parseScrollState(tt.in)
+		if (err != nil) != tt.wantErr || got != tt.want {
+			t.Errorf("parseScrollState(%q) = %+v, %v; want %+v, err=%v", tt.in, got, err, tt.want, tt.wantErr)
+		}
+	}
+}
