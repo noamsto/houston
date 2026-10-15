@@ -66,7 +66,9 @@ export function QuickCommands({ address, agent, state, suggestion, onPrefill, ch
     return () => clearTimeout(t)
   }, [feedback])
 
-  if (!isClaudeAgent(agent)) return children ? <>{children(null)}</> : null
+  const columnStyle = children ? ({ display: 'flex', flexDirection: 'column', gap: 8 } as const) : undefined
+  // Same wrapper as below so the composer's DOM survives the agent changing.
+  if (!isClaudeAgent(agent)) return children ? <div style={columnStyle}>{children(null)}</div> : null
 
   const send = async (cmd: string): Promise<boolean> => {
     setBusy(true)
@@ -120,7 +122,7 @@ export function QuickCommands({ address, agent, state, suggestion, onPrefill, ch
   const showPills = open || (suggestion && suggestion !== dismissed)
 
   return (
-    <div data-testid="quick-commands" style={children ? { display: 'flex', flexDirection: 'column', gap: 8 } : undefined}>
+    <div data-testid="quick-commands" style={columnStyle}>
       {!children && <div style={{ display: 'flex', gap: 8, padding: '8px 8px 0' }}>{toggle}</div>}
       {showPills && (
       <div style={{ display: 'flex', gap: 8, padding: children ? 0 : '8px 8px 0', overflowX: 'auto' }}>
