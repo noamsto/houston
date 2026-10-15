@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { sendImage, sendKey, sendText, terminalKey, type TerminalAddress } from '../api/terminal'
-import { composerMaxHeight } from './composerMaxHeight'
+import { AttachButton, SendButton, VoiceButton } from './ComposerControls'
+import { autoGrow, useVoiceInput } from './composerHooks'
 import { QuickCommands } from './QuickCommands'
 import { StagedImageChip } from './StagedImageChip'
 import { useComposerDraft } from './useComposerDraft'
@@ -16,40 +17,6 @@ interface Props {
   suggestion?: string | null
   draftKey?: string
 }
-
-// Web Speech API types (not in TS lib by default)
-interface SpeechRecognitionEvent extends Event {
-  results: SpeechRecognitionResultList
-}
-interface SpeechRecognitionResultList {
-  readonly length: number
-  item(index: number): SpeechRecognitionResult
-  [index: number]: SpeechRecognitionResult
-}
-interface SpeechRecognitionResult {
-  readonly length: number
-  item(index: number): SpeechRecognitionAlternative
-  [index: number]: SpeechRecognitionAlternative
-  readonly isFinal: boolean
-}
-interface SpeechRecognitionAlternative {
-  readonly transcript: string
-  readonly confidence: number
-}
-
-type SpeechRecognitionLike = {
-  lang: string
-  continuous: boolean
-  interimResults: boolean
-  start: () => void
-  stop: () => void
-  onresult: ((e: SpeechRecognitionEvent) => void) | null
-  onend: (() => void) | null
-}
-
-const SpeechRecognitionCtor = (window as unknown as Record<string, unknown>).SpeechRecognition as
-  | (new () => SpeechRecognitionLike)
-  | undefined
 
 type QuickAction = { label: string; action: 'text' | 'special'; value: string; title?: string }
 
@@ -85,7 +52,7 @@ const pillStyle: React.CSSProperties = {
   fontSize: 14,
   fontFamily: 'var(--font-mono)',
   padding: '0 14px',
-  minHeight: 40,
+  minHeight: 44,
   cursor: 'pointer',
   whiteSpace: 'nowrap',
   flexShrink: 0,
@@ -100,7 +67,6 @@ const errorStyle: React.CSSProperties = {
 export function MobileInputBar({ address, choices, inputText, agent, runAgent, runState, suggestion, draftKey }: Props) {
   const [text, setText, clearIf] = useComposerDraft(draftKey !== undefined ? `run:${draftKey}` : terminalKey(address))
   const { staged, stage, clear: clearStaged } = useStagedImage()
-  const [listening, setListening] = useState(false)
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState<string | null>(null)
   const [keyError, setKeyError] = useState<string | null>(null)
@@ -108,7 +74,6 @@ export function MobileInputBar({ address, choices, inputText, agent, runAgent, r
   const sendingRef = useRef(false)
   const keyErrorTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   useEffect(() => () => clearTimeout(keyErrorTimer.current), [])
-  const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -166,39 +131,11 @@ export function MobileInputBar({ address, choices, inputText, agent, runAgent, r
     return true
   }
 
-  const handleVoice = () => {
-    if (!SpeechRecognitionCtor) return
-
-    if (listening) {
-      recognitionRef.current?.stop()
-      setListening(false)
-      return
-    }
-
-    const rec = new SpeechRecognitionCtor()
-    rec.lang = 'en-US'
-    rec.continuous = false
-    rec.interimResults = false
-
-    rec.onresult = (e: SpeechRecognitionEvent) => {
-      const transcript = e.results[0]?.[0]?.transcript ?? ''
-      setText(transcript)
-      setSendError(null)
-    }
-
-    rec.onend = () => setListening(false)
-
-    recognitionRef.current = rec
-    setListening(true)
-    rec.start()
-  }
-
-  const autoGrow = (el: HTMLTextAreaElement) => {
-    el.style.height = 'auto'
-    const max = composerMaxHeight(window.visualViewport?.height ?? window.innerHeight)
-    el.style.height = Math.min(el.scrollHeight, max) + 'px'
-    el.style.overflowY = el.scrollHeight > max ? 'auto' : 'hidden'
-  }
+  const onTranscript = useCallback((transcript: string) => {
+    setText(transcript)
+    setSendError(null)
+  }, [setText])
+  const voice = useVoiceInput(onTranscript)
 
   const handleFileAttach = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -213,8 +150,6 @@ export function MobileInputBar({ address, choices, inputText, agent, runAgent, r
     stage(file)
   }
 
-  const hasSpeech = !!SpeechRecognitionCtor
-  const canSend = !!text.trim() || !!staged
 
   return (
     <div
@@ -250,10 +185,10 @@ export function MobileInputBar({ address, choices, inputText, agent, runAgent, r
               style={{
                 background: 'var(--bg-surface)',
                 border: '1px solid var(--accent-attention)',
-                borderRadius: 6,
+                borderRadius: 8,
                 color: 'var(--accent-attention)',
                 fontSize: 14,
-                minHeight: 40,
+                minHeight: 44,
                 padding: '0 12px',
                 cursor: 'pointer',
               }}
@@ -270,12 +205,7 @@ export function MobileInputBar({ address, choices, inputText, agent, runAgent, r
         </div>
       )}
 
-      <QuickCommands address={address} agent={runAgent} state={runState} suggestion={suggestion} onPrefill={prefill} />
-
-      <div
-        data-testid="quick-keys"
-        style={{ display: 'flex', gap: 6, padding: '8px 8px 0', overflowX: 'auto' }}
-      >
+      <div data-testid="quick-keys" className="composer-strip" style={{ marginTop: 8 }}>
         {quickActions.map((qa) => (
           <button
             key={qa.label}
@@ -291,7 +221,7 @@ export function MobileInputBar({ address, choices, inputText, agent, runAgent, r
       </div>
 
       {confirmInterrupt && (
-        <div role="group" aria-label="Confirm ^C" style={{ ...errorStyle, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 6 }}>
+        <div role="group" aria-label="Confirm ^C" style={{ ...errorStyle, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 8 }}>
           <span>Send ^C?</span>
           <button
             type="button"
@@ -310,133 +240,51 @@ export function MobileInputBar({ address, choices, inputText, agent, runAgent, r
         </div>
       )}
 
-      {sendError && (
-        <div role="alert" data-testid="send-error" style={errorStyle}>
-          Not sent: {sendError}
-        </div>
-      )}
+      <div className="composer">
+        <QuickCommands address={address} agent={runAgent} state={runState} suggestion={suggestion} onPrefill={prefill}>
+          {(commandsToggle) => (
+            <>
+              {sendError && (
+                <div role="alert" data-testid="send-error" style={errorStyle}>
+                  Not sent: {sendError}
+                </div>
+              )}
 
-      {staged && (
-        <div style={{ padding: '6px 8px 0' }}>
-          <StagedImageChip staged={staged} onRemove={clearStaged} disabled={sending} />
-        </div>
-      )}
+              {staged && <StagedImageChip staged={staged} onRemove={clearStaged} disabled={sending} />}
 
-      {/* Text input row */}
-      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, padding: 8 }}>
-        <textarea
-          ref={textareaRef}
-          value={text}
-          onChange={(e) => {
-            setText(e.target.value)
-            setSendError(null)
-            autoGrow(e.target)
-          }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-              e.preventDefault()
-              void handleSend()
-            }
-          }}
-          autoCapitalize="off"
-          autoCorrect="off"
-          spellCheck={false}
-          placeholder={inputText || 'Send a message...'}
-          rows={1}
-          style={{
-            flex: 1,
-            background: 'var(--bg-surface)',
-            border: '1px solid var(--border)',
-            borderRadius: 6,
-            padding: '6px 10px',
-            color: 'var(--text-primary)',
-            fontSize: 16,
-            lineHeight: '24px',
-            outline: 'none',
-            resize: 'none',
-            fontFamily: 'inherit',
-            overflowY: 'hidden',
-            // Native touch scrolling inside the field; never chain to the terminal.
-            touchAction: 'pan-y',
-            overscrollBehavior: 'contain',
-          }}
-        />
+              <textarea
+                className="composer-field"
+                ref={textareaRef}
+                value={text}
+                onChange={(e) => {
+                  setText(e.target.value)
+                  setSendError(null)
+                  autoGrow(e.target)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                    e.preventDefault()
+                    void handleSend()
+                  }
+                }}
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+                placeholder={inputText || 'Send a message...'}
+                rows={1}
+              />
 
-        {hasSpeech && (
-          <button
-            onClick={handleVoice}
-            style={{
-              background: listening ? 'var(--accent-attention)' : 'var(--bg-surface)',
-              border: '1px solid var(--border)',
-              borderRadius: 6,
-              color: listening ? '#000' : 'var(--text-secondary)',
-              cursor: 'pointer',
-              fontSize: 16,
-              width: 36,
-              height: 36,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              flexShrink: 0,
-            }}
-            title={listening ? 'Stop recording' : 'Voice input'}
-          >
-            🎤
-          </button>
-        )}
-
-        <input
-          ref={fileInputRef}
-          type="file"
-          onChange={handleFileAttach}
-          style={{ display: 'none' }}
-        />
-        <button
-          onClick={() => fileInputRef.current?.click()}
-          disabled={sending}
-          style={{
-            background: 'var(--bg-surface)',
-            border: '1px solid var(--border)',
-            borderRadius: 6,
-            color: 'var(--text-secondary)',
-            cursor: sending ? 'default' : 'pointer',
-            fontSize: 16,
-            width: 44,
-            height: 44,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            flexShrink: 0,
-            opacity: sending ? 0.6 : 1,
-          }}
-          title="Attach file"
-        >
-          📎
-        </button>
-
-        <button
-          onClick={() => void handleSend()}
-          disabled={sending}
-          title="Send"
-          aria-label="Send"
-          style={{
-            background: canSend ? 'var(--accent-working)' : 'var(--bg-surface)',
-            border: canSend ? 'none' : '1px solid var(--border)',
-            borderRadius: 6,
-            color: canSend ? '#fff' : 'var(--text-secondary)',
-            cursor: sending ? 'default' : 'pointer',
-            opacity: sending ? 0.6 : 1,
-            fontSize: 16,
-            width: 44,
-            height: 44,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            flexShrink: 0,
-          }}
-        >
-          ↵
-        </button>
+              <div className="composer-actions">
+                <input ref={fileInputRef} type="file" onChange={handleFileAttach} style={{ display: 'none' }} />
+                <AttachButton onClick={() => fileInputRef.current?.click()} disabled={sending} />
+                {voice.supported && <VoiceButton listening={voice.listening} onClick={voice.toggle} />}
+                {commandsToggle}
+                <div className="composer-spacer" />
+                <SendButton onClick={() => void handleSend()} disabled={sending} />
+              </div>
+            </>
+          )}
+        </QuickCommands>
       </div>
     </div>
   )

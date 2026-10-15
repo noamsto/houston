@@ -1,0 +1,33 @@
+/* Shared layout of the Chat and Terminal composers. Mocha tokens first, the legacy ones where no .mocha ancestor exists. */
+.composer {
+  flex: none; display: flex; flex-direction: column; gap: 8px; padding: 8px;
+  --composer-line: var(--line, var(--border));
+  --composer-bg: var(--bg-raised, var(--bg-surface));
+}
+.composer-field {
+  box-sizing: border-box; width: 100%; min-height: var(--tap, 44px); max-height: 142px; padding: 10px 12px;
+  border-radius: 10px; border: 1px solid var(--composer-line); background: var(--composer-bg);
+  color: var(--text, var(--text-primary)); font: inherit; font-size: 16px; line-height: 24px; resize: none;
+  overflow-y: auto !important; touch-action: pan-y; overscroll-behavior: contain;
+}
+.composer-field:disabled { opacity: 0.6; }
+.composer-actions { display: flex; align-items: center; gap: 8px; }
+.composer-spacer { flex: 1; }
+.composer-btn {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  min-width: var(--tap, 44px); min-height: var(--tap, 44px); padding: 0 12px; border-radius: 10px;
+  border: 1px solid var(--line-strong, var(--border)); background: var(--composer-bg);
+  color: var(--text-dim, var(--text-secondary)); font: inherit; font-size: 16px; cursor: pointer;
+}
+.composer-btn[aria-pressed="true"], .composer-btn[aria-expanded="true"] { color: var(--text, var(--text-primary)); }
+.composer-btn--send {
+  min-width: 88px; border-color: transparent; background: var(--accent-working, var(--accent));
+  color: #fff; font-size: 15px; font-weight: 600;
+}
+.composer-btn--recording { background: var(--accent-attention, var(--accent)); color: #000; }
+.composer-btn:disabled { opacity: 0.5; cursor: default; }
+.composer-field:focus-visible, .composer-btn:focus-visible { outline: 2px solid var(--accent, var(--accent-working)); outline-offset: 2px; }
+.composer-strip {
+  display: flex; gap: 8px; padding: 8px; overflow-x: auto; border-top: 1px solid var(--composer-line, var(--border));
+  background: var(--bg-sunken, var(--bg-header));
+}
