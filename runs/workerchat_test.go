@@ -98,6 +98,7 @@ func TestCrewWorkerRunOffersChat(t *testing.T) {
 				SessionID: paneSID, TmuxPane: lead, TmuxServer: server, UpdatedAt: now, State: tc.hookState,
 			}}})
 			cs.procStart = startAt(session + 2)
+			cs.now = func() time.Time { return time.Unix(record+60, 0) }
 			crew, ok := cs.scan()
 			if !ok {
 				t.Fatal("crew scan reported failure")

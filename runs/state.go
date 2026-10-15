@@ -79,7 +79,7 @@ func FromCrewState(s string) State {
 		return StateBlocked
 	case "pr_open":
 		return StateReview
-	case "done":
+	case "done", "reaped":
 		return StateDone
 	case "failed", "exited":
 		return StateFailed
