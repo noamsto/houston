@@ -346,6 +346,12 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
       firstSeedDoneRef.current = true
       const term = termRef.current
       if (!term) return
+      // Output still waiting for its frame predates the seed on the wire, so the
+      // capture already holds it; replaying it over the seed would redraw a
+      // TUI's relative moves a second time.
+      if (rafIdRef.current) cancelAnimationFrame(rafIdRef.current)
+      rafIdRef.current = 0
+      outputBufRef.current = ''
       // If dims haven't arrived yet, buffer the seed
       if (!paneDimsRef.current) {
         pendingSeedRef.current = { data, cursor }

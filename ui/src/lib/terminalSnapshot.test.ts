@@ -5,13 +5,16 @@ import { writeSnapshot } from './terminalSnapshot'
 // later, in order, on flush(), while clear() acts on the buffer at once.
 function fakeTerm() {
   const ops: string[] = []
+  const eolWhenParsed: Array<[string, boolean]> = []
   const queue: Array<() => void> = []
-  return {
+  const term = {
     ops,
+    eolWhenParsed,
     options: { convertEol: false },
     write(data: string | Uint8Array, cb?: () => void) {
       queue.push(() => {
         ops.push(`write:${data}`)
+        eolWhenParsed.push([String(data), term.options.convertEol])
         cb?.()
       })
     },
@@ -22,6 +25,7 @@ function fakeTerm() {
       while (queue.length) queue.shift()?.()
     },
   }
+  return term
 }
 
 describe('writeSnapshot', () => {
@@ -46,17 +50,19 @@ describe('writeSnapshot', () => {
     expect(term.ops.indexOf('clear')).toBeGreaterThan(0)
   })
 
-  it('treats a bare newline as a line break only while the seed is written', () => {
+  it('treats a bare newline as a line break only while a seed is parsed, even with two queued', () => {
+    // xterm reads convertEol when it parses a chunk, so each seed's lines must
+    // be parsed under it; a first seed's reset must not reach the second's.
     const term = fakeTerm()
-    let during: boolean | undefined
-    const write = term.write.bind(term)
-    term.write = (data, cb) => {
-      if (typeof data === 'string' && data.includes('seed')) during = term.options.convertEol
-      write(data, cb)
-    }
-    writeSnapshot(term, 'seed', undefined)
+    writeSnapshot(term, 'one', undefined)
+    writeSnapshot(term, 'two', undefined)
     term.flush()
-    expect(during).toBe(true)
+    expect(term.eolWhenParsed).toEqual([
+      ['\x1b[?25l', false],
+      ['\x1b[2J\x1b[Hone', true],
+      ['\x1b[?25l', false],
+      ['\x1b[2J\x1b[Htwo', true],
+    ])
     expect(term.options.convertEol).toBe(false)
   })
 

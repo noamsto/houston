@@ -17,8 +17,6 @@ export function writeSnapshot(
   cursor: SnapshotCursor | undefined,
   onDone?: () => void,
 ) {
-  term.options.convertEol = true
-
   const lines = data.split('\n')
   if (lines[lines.length - 1] === '') lines.pop()
 
@@ -28,7 +26,13 @@ export function writeSnapshot(
   // would run ahead of output still queued, so it rides the write queue;
   // \x1b[3J would do the same but shifts the viewport offset, rendering the
   // content one line low.
-  term.write('\x1b[?25l', () => term.clear())
+  // convertEol is read while xterm parses, not when write() is called, so it
+  // is flipped in queue order too: a second seed queued behind this one must
+  // not see the first one's reset.
+  term.write('\x1b[?25l', () => {
+    term.clear()
+    term.options.convertEol = true
+  })
 
   // \x1b[2J — clear viewport (doesn't affect terminal modes)
   // \x1b[H  — cursor to (1,1)

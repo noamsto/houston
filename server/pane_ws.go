@@ -395,6 +395,12 @@ func paneWSWriteLoop(conn wsWriter, tm tmuxOps, cc controlClientOps, registry *a
 
 		case tick := <-metaCh:
 			if tick.cols > 0 && tick.rows > 0 && (tick.cols != sent.Cols || tick.rows != sent.Rows) {
+				// The size was read by session:window.index, which after a tmux
+				// restart can name another session's pane before the control
+				// client's generation moves; check before it reaches the client.
+				if !serverStillMatches(conn, tm, pane, paneID) {
+					return true
+				}
 				sent = WSDims{Cols: tick.cols, Rows: tick.rows}
 				if err := writeDims(conn, sent); err != nil {
 					return

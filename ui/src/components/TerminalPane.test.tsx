@@ -183,6 +183,31 @@ describe('TerminalPane column scrubber', () => {
 })
 
 describe('TerminalPane mid-session reseed', () => {
+  it('does not replay output that arrived before the seed on top of it', async () => {
+    // Output is held until the next animation frame, but a seed is written at
+    // once. Everything the server sent before the seed is already in its
+    // capture, so replaying it afterwards redraws a TUI's relative moves twice.
+    desktop = true
+    render(<TerminalPane address={address} isFocused onFocus={() => {}} onClose={() => {}} />)
+    const callbacks = capturedCallbacks!
+    act(() => {
+      callbacks.onDims({ cols: 40, rows: 5 })
+    })
+    const term = await lastTerminalInstance()
+
+    act(() => {
+      callbacks.onOutput('STALE')
+      callbacks.onSeed('fresh\n')
+    })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    })
+
+    const screen = Array.from({ length: term.rows }, (_, i) => term.buffer.active.getLine(i)?.translateToString(true)).join('\n')
+    expect(screen).toContain('fresh')
+    expect(screen).not.toContain('STALE')
+  })
+
   it('resets pan to column 0 on a reseed, but not on the first seed since connect', async () => {
     desktop = false
     render(<TerminalPane address={address} isFocused onFocus={() => {}} onClose={() => {}} />)
