@@ -289,11 +289,15 @@ function dialogRegion(ctx, pane) {
   return lines.slice(rule + 1).join('\n').trimEnd()
 }
 
-// Whether the dialog GET /prompt reported is for `touch <probeFile>`: a scenario
-// must not approve or reject a different command on the user's behalf.
+// Whether the dialog GET /prompt reported is for exactly `touch <probeFile>`: a
+// scenario must not approve or reject a different command on the user's behalf,
+// so a chained `touch <probeFile> && ...` does not count. The detail is the
+// dialog text above the question: title, tip, description, then the command and
+// an "approval" note, so the command is the last line before that note.
 function dialogIsFor(dialog, probeFile) {
-  const squash = (t) => String(t ?? '').replace(/\s+/g, '')
-  return squash(dialog.detail).includes(squash(`touch ${probeFile}`))
+  const lines = String(dialog.detail ?? '').split('\n').map((l) => l.trim().replace(/\s+/g, ' ')).filter(Boolean)
+  if (/^This command requires approval$/i.test(lines.at(-1) ?? '')) lines.pop()
+  return lines.at(-1) === `touch ${probeFile}`
 }
 
 module.exports = {

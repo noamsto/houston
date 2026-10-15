@@ -102,12 +102,13 @@ qa_pick_port() {
 }
 
 # qa_pid_names_root succeeds when /proc/$1/cmdline mentions $S as a whole path:
-# /tmp/hqa.ab must not match /tmp/hqa.abc.
+# /tmp/hqa.ab must not match /tmp/hqa.abc (mktemp suffixes are alphanumeric, so any
+# other character ends the path, a quote included).
 qa_pid_names_root() {
 	local cmd
 	[ -r "/proc/$1/cmdline" ] || return 1
 	cmd=$(tr '\0' ' ' <"/proc/$1/cmdline" 2>/dev/null) || return 1
-	[[ $cmd =~ (^|[^A-Za-z0-9])"$S"(/|[[:space:]]|$) ]]
+	[[ $cmd =~ (^|[^A-Za-z0-9])"$S"([^A-Za-z0-9]|$) ]]
 }
 
 # qa_ppid prints the parent pid of $1. The comm field may hold spaces and

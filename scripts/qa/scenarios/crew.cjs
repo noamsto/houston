@@ -69,7 +69,7 @@ async function run(ctx) {
 
   const crewCli = (...args) => {
     // Without an existing TMUX_TMPDIR tmux falls back to /tmp and would reach any other server there.
-    if (!fs.existsSync(path.join(S, 'tmux'))) throw new Error(`crew: ${path.join(S, 'tmux')} missing; refusing to run crew without the private tmux dir`)
+    ctx.checkPrivateTmux()
     return execFileSync('env', ['-u', 'TMUX', '-u', 'TMUX_PANE', '-u', 'CREW_WORKER_ID', '-u', 'CREW_ROLE_ID', `TMUX_TMPDIR=${path.join(S, 'tmux')}`, `CREW_ID=${crew1}`, 'crew', ...args], {
       cwd: repoDir,
       encoding: 'utf8',

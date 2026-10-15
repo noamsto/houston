@@ -107,6 +107,10 @@ function load(argv = process.argv.slice(2)) {
   const S = process.env.S || argv.find((a) => !a.startsWith('-')) || ''
   if (!S) throw new Error('S not set: pass the scratch root as env S or the first argument')
   if (!/^\/tmp\/hqa\.[A-Za-z0-9]+$/.test(S)) throw new Error(`refusing: S must be a /tmp/hqa.<random> dir, got: ${S}`)
+  const st = fs.lstatSync(S, { throwIfNoEntry: false })
+  if (!st || !st.isDirectory() || st.isSymbolicLink() || st.uid !== process.getuid() || (st.mode & 0o777) !== 0o700) {
+    throw new Error(`refusing: ${S} must be a real directory owned by you with mode 700`)
+  }
   if (!fs.existsSync(path.join(S, '.houstonqa'))) throw new Error(`refusing: ${S} is not a QA scratch dir (no .houstonqa marker)`)
   const file = parseEnvFile(path.join(S, 'qa.env'))
   const env = {}
@@ -226,13 +230,25 @@ function createLib(env) {
   }
 
   const tmuxDir = path.join(S, 'tmux')
-  function tmux(...args) {
+  // Refuses a missing private tmux dir, or one that resolves to a default socket dir.
+  function checkPrivateTmux() {
     if (!fs.existsSync(tmuxDir)) throw new Error(`tmux: ${tmuxDir} missing; refusing to touch any other tmux server`)
     const sockDir = `tmux-${process.getuid()}`
-    const want = path.resolve(tmuxDir, sockDir)
-    for (const d of [path.join('/tmp', sockDir), path.join(process.env.TMUX_TMPDIR || '/tmp', sockDir)]) {
-      if (path.resolve(d) === want) throw new Error(`tmux: refusing ${want}, a default tmux socket dir`)
+    const real = (d) => {
+      try {
+        return fs.realpathSync(d)
+      } catch {
+        return path.resolve(d)
+      }
     }
+    const want = path.join(real(tmuxDir), sockDir)
+    for (const d of [path.join('/tmp', sockDir), path.join(process.env.TMUX_TMPDIR || '/tmp', sockDir)]) {
+      if (path.join(real(path.dirname(d)), sockDir) === want) throw new Error(`tmux: refusing ${want}, a default tmux socket dir`)
+    }
+  }
+
+  function tmux(...args) {
+    checkPrivateTmux()
     return execFileSync(
       'env',
       ['-u', 'TMUX', '-u', 'TMUX_PANE', `TMUX_TMPDIR=${tmuxDir}`, 'tmux', '-f', '/dev/null', ...args.map(String)],
@@ -285,7 +301,7 @@ function createLib(env) {
     }
   }
 
-  return { env, S, PORT, baseUrl, violations, results, newContext, newPage, url, api, tmux, capture, check, expect, shot, waitFor, sleep }
+  return { env, S, PORT, baseUrl, violations, results, newContext, newPage, url, api, tmux, checkPrivateTmux, capture, check, expect, shot, waitFor, sleep }
 }
 
 module.exports = { load, createLib, parseEnvFile }

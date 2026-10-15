@@ -115,7 +115,7 @@ exports.run = async (ctx) => {
     await step(ctx, 'seed', async () => {
       await page.goto(termUrl(wt))
       await page.waitForSelector('.xterm-rows', { timeout: 15000 })
-      await ctx.waitFor(async () => (await termText(page)).includes(seedMarker), { timeout: 10000, message: `terminal never showed ${seedMarker}; shows ${JSON.stringify((await termText(page)).slice(0, 120))}` })
+      await ctx.waitFor(async () => (await termText(page)).includes(seedMarker), { timeout: 10000, message: async () => `terminal never showed ${seedMarker}; shows ${JSON.stringify((await termText(page)).slice(0, 120))}` })
       const first = socks[0]?.received.find((m) => /"type":"seed"/.test(m))
       return { note: `marker ${seedMarker} (echoed before opening) is in the terminal; seed frame ${first ? 'received' : 'missing'}`, shot: await ctx.shot(page, 'terminal-seed') }
     })
@@ -146,11 +146,11 @@ exports.run = async (ctx) => {
       await tap(/^Esc$/)
       await tap(/^Tab$/)
       await tap(/^1$/)
-      await ctx.waitFor(() => ['Escape', 'Tab', '1'].every((k) => keyPosts.some((p) => p.includes(`"key":"${k}"`))), { timeout: 5000, message: `key requests seen: ${keyPosts.join(' ')}` })
+      await ctx.waitFor(() => ['Escape', 'Tab', '1'].every((k) => keyPosts.some((p) => p.includes(`"key":"${k}"`))), { timeout: 5000, message: () => `key requests seen: ${keyPosts.join(' ')}` })
       await ctx.sleep(400)
       if (ctx.capture(WT).includes('^[^I1')) throw new Error('keys were already submitted without an Enter')
       press(ctx, WT, 'Enter')
-      await ctx.waitFor(() => paneLines(ctx, WT).includes('^[^I1'), { timeout: 5000, message: `Esc, Tab, 1 did not arrive as ^[ ^I 1; pane tail ${JSON.stringify(paneLines(ctx, WT).filter(Boolean).slice(-3))}` })
+      await ctx.waitFor(() => paneLines(ctx, WT).includes('^[^I1'), { timeout: 5000, message: () => `Esc, Tab, 1 did not arrive as ^[ ^I 1; pane tail ${JSON.stringify(paneLines(ctx, WT).filter(Boolean).slice(-3))}` })
       notes.push('Esc, Tab and 1 reached the tty as ^[ ^I 1 with no implicit Enter')
 
       // ^C asks first; Cancel sends nothing, Confirm sends C-c.
@@ -165,7 +165,7 @@ exports.run = async (ctx) => {
       if (/qa\$\s*$/.test(lastNonEmpty(ctx, WT))) throw new Error('cat ended before ^C was confirmed')
       await tap(/^\^C$/)
       await group.locator('button', { hasText: 'Confirm' }).click()
-      await ctx.waitFor(() => /qa\$\s*$/.test(lastNonEmpty(ctx, WT)), { timeout: 8000, message: `^C did not interrupt cat; last line "${lastNonEmpty(ctx, WT)}"` })
+      await ctx.waitFor(() => /qa\$\s*$/.test(lastNonEmpty(ctx, WT)), { timeout: 8000, message: () => `^C did not interrupt cat; last line "${lastNonEmpty(ctx, WT)}"` })
       if (!ctx.capture(WT).includes('^C')) throw new Error('pane shows no ^C echo')
       notes.push('^C asked Confirm/Cancel; Cancel sent nothing; Confirm interrupted cat')
       return { note: notes.join('; '), shot }
@@ -440,7 +440,11 @@ exports.run = async (ctx) => {
       return { note: `choices rendered as ${labels.join(' / ')}; tapping "${labels[noIdx]}" sent its ordinal and the dialog closed without running the command`, shot }
     } finally {
       // Leave no dialog open for the next scenario.
-      if ((await promptStatus().catch(() => 404)) === 200) ctx.tmux('send-keys', '-t', ctx.env.CLAUDE_PANE, 'Escape')
+      try {
+        if ((await promptStatus().catch(() => 404)) === 200) ctx.tmux('send-keys', '-t', ctx.env.CLAUDE_PANE, 'Escape')
+      } catch {
+        // cleanup only: a failed Escape must not replace the result
+      }
       await c6.close()
     }
   })
