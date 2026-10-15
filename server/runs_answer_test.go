@@ -173,17 +173,61 @@ func wantPartial(t *testing.T, rec *httptest.ResponseRecorder, code int) {
 }
 
 func TestRunAnswerQuestionPlainOption(t *testing.T) {
-	panes := &fakeRunPanes{}
-	screen(t, panes, "plain-q", [3]string{"plain-q", "2", "plain-done"})
-	s, _ := newAnswerServer(t, panes, "claude")
+	for _, frame := range []string{"plain-q", "2.1.299/plain-q", "2.1.299-named/plain-q"} {
+		t.Run(frame, func(t *testing.T) {
+			panes := &fakeRunPanes{}
+			screen(t, panes, frame, [3]string{frame, "2", "plain-done"})
+			s, _ := newAnswerServer(t, panes, "claude")
 
-	rec := postAnswer(t, s, questionBody(t, plainCall, []answerEntry{{Question: 0, Options: []int{1}}}))
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("status %d, want 204 (%q)", rec.Code, rec.Body.String())
+			rec := postAnswer(t, s, questionBody(t, plainCall, []answerEntry{{Question: 0, Options: []int{1}}}))
+			if rec.Code != http.StatusNoContent {
+				t.Fatalf("status %d, want 204 (%q)", rec.Code, rec.Body.String())
+			}
+			if got, want := keyLog(panes), []string{"2"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("keys %q, want %q", got, want)
+			}
+		})
 	}
-	if got, want := keyLog(panes), []string{"2"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("keys %q, want %q", got, want)
-	}
+}
+
+// A session started with `claude --name` ends its dialog with the input box's
+// named top rule.
+func TestRunAnswerQuestionNamedSession(t *testing.T) {
+	t.Run("tabbed options", func(t *testing.T) {
+		panes := &fakeRunPanes{}
+		screen(t, panes, "2.1.299-named/tab-q1",
+			[3]string{"2.1.299-named/tab-q1", "2", "2.1.299-named/tab-q2"},
+			[3]string{"2.1.299-named/tab-q2", "1 3", "2.1.299-named/tab-q2-checked"},
+			[3]string{"2.1.299-named/tab-q2-checked", "Down Down Down Down", "2.1.299-named/tab-q2-checked-submit"},
+			[3]string{"2.1.299-named/tab-q2-checked-submit", "Enter", "2.1.299-named/tab-review"},
+			[3]string{"2.1.299-named/tab-review", "1", "plain-done"},
+		)
+		s, _ := newAnswerServer(t, panes, "claude")
+
+		rec := postAnswer(t, s, questionBody(t, tabbedCall, []answerEntry{{Question: 0, Options: []int{1}}, {Question: 1, Options: []int{2, 0}}}))
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("status %d, want 204 (%q)", rec.Code, rec.Body.String())
+		}
+		want := []string{"2", "1", "3", "Down", "Down", "Down", "Down", "Enter", "1"}
+		if got := keyLog(panes); !reflect.DeepEqual(got, want) {
+			t.Fatalf("keys %q, want %q", got, want)
+		}
+	})
+
+	t.Run("plain Other", func(t *testing.T) {
+		panes := &fakeRunPanes{}
+		screen(t, panes, "2.1.299-named/plain-q",
+			[3]string{"2.1.299-named/plain-q", "4", "2.1.299-named/plain-other-cursor"},
+			[3]string{"2.1.299-named/plain-other-cursor", "text:2 more", "2.1.299-named/plain-other-typed"},
+			[3]string{"2.1.299-named/plain-other-typed", "Enter", "plain-done"},
+		)
+		s, _ := newAnswerServer(t, panes, "claude")
+
+		rec := postAnswer(t, s, questionBody(t, plainCall, []answerEntry{{Question: 0, Text: "2 more"}}))
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("status %d, want 204 (%q)", rec.Code, rec.Body.String())
+		}
+	})
 }
 
 // In the preview layout a digit only moves the cursor; Enter submits.
@@ -339,6 +383,21 @@ func TestRunAnswerQuestionFirstFrameMismatch(t *testing.T) {
 			wantRefusal(t, rec, http.StatusConflict, "prompt changed")
 			if _, sent := panes.calls(); len(sent) != 0 {
 				t.Fatalf("sent %+v on a mismatched first frame", sent)
+			}
+		})
+	}
+
+	for _, base := range []string{"2.1.299/plain-q", "2.1.299-named/plain-q"} {
+		t.Run("changed option "+base, func(t *testing.T) {
+			panes := &fakeRunPanes{}
+			screen(t, panes, base)
+			panes.frames[base] = strings.Replace(panes.frames[base], "     Cool", "     Very cool", 1)
+			s, _ := newAnswerServer(t, panes, "claude")
+
+			rec := postAnswer(t, s, questionBody(t, plainCall, []answerEntry{{Question: 0, Options: []int{1}}}))
+			wantRefusal(t, rec, http.StatusConflict, "prompt changed")
+			if _, sent := panes.calls(); len(sent) != 0 {
+				t.Fatalf("sent %+v on a changed dialog", sent)
 			}
 		})
 	}

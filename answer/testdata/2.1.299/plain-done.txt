@@ -1,0 +1,22 @@
+❯ Call AskUserQuestion exactly once: one single-select
+  question "Which color do you prefer?" header "Color",
+  options label "Red" description "Warm", label "Blue"
+  description "Cool", label "Green" description "Natural".
+  Nothing else.
+
+● User answered Claude's questions:
+  ⎿  · Which color do you prefer? → 2 more
+
+● The question came back with "2 more" as the answer, which
+  isn't one of the options (Red, Blue, Green). I called the
+  tool once, as you asked, so I haven't retried it. Do you
+  want two more color options added, or did you mean
+  something else?
+
+✻ Cogitated for 4s · done 5:25 PM
+
+
+────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────
+  -- INSERT --

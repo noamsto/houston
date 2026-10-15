@@ -1,0 +1,27 @@
+❯ Call AskUserQuestion exactly once with two questions. Q1
+  single-select "Which of these deliberately long-winded
+  and verbose option labels should we pick for the release
+  notes?" header "Notes", options label "A very long first
+  option label that keeps going past the edge" description
+  "First", label "Short" description "Second". Q2
+  multiSelect "Which toppings do you want?" header
+  "Toppings", options "Cheese" (description "Melty"),
+  "Olives" (description "Salty"), "Basil" (description
+  "Fresh"). Nothing else.
+
+────────────────────────────────────────────────────────────
+←  ☒ Notes  ☒ Toppings  ✔ Submit  →
+
+Review your answers
+
+ │ ● Which of these deliberately long-winded and verbose
+ │   option labels should we pick for the release notes?
+   → A very long first option label that keeps going past
+   the edge
+ ● Which toppings do you want?
+   → Olives
+
+Ready to submit your answers?
+
+❯ 1. Submit answers
+  2. Cancel

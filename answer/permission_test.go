@@ -210,3 +210,29 @@ func TestPermissionPromptRefusesNarrowerThanPane(t *testing.T) {
 		}
 	}
 }
+
+func TestPermissionPrompt299(t *testing.T) {
+	for name, target := range map[string]string{
+		"2.1.299/perm-bash":       "toppings.txt",
+		"2.1.299-named/perm-bash": "basil.txt",
+	} {
+		t.Run(name, func(t *testing.T) {
+			p, ok := PermissionPrompt(fixture(t, name), fixtureWidth)
+			if !ok {
+				t.Fatal("no prompt")
+			}
+			if p.Question != "Do you want to proceed?" {
+				t.Errorf("Question = %q", p.Question)
+			}
+			wantChoices := []string{
+				"Yes",
+				"Yes, and don’t ask again for: ln -s colours.txt " + target,
+				"Yes, and switch to auto mode · auto mode handles these prompts for you",
+				"No",
+			}
+			if !reflect.DeepEqual(p.Choices, wantChoices) {
+				t.Errorf("Choices = %q, want %q", p.Choices, wantChoices)
+			}
+		})
+	}
+}

@@ -60,15 +60,21 @@ func fixture(t *testing.T, name string) string {
 	return string(b)
 }
 
-func fixtureNames(t *testing.T) []string {
+// fixtureNames lists the fixtures in testdata/<dir>, named as fixture takes
+// them.
+func fixtureNames(t *testing.T, dir string) []string {
 	t.Helper()
-	paths, err := filepath.Glob(filepath.Join("testdata", "*.txt"))
+	paths, err := filepath.Glob(filepath.Join("testdata", dir, "*.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	var names []string
 	for _, p := range paths {
-		names = append(names, strings.TrimSuffix(filepath.Base(p), ".txt"))
+		name := strings.TrimSuffix(filepath.Base(p), ".txt")
+		if dir != "" {
+			name = dir + "/" + name
+		}
+		names = append(names, name)
 	}
 	sort.Strings(names)
 	return names
@@ -137,6 +143,24 @@ func TestQuestionChecks(t *testing.T) {
 		{"preview expected, non-preview shown", newSpec([]Question{size, speed}, 1, true).check(tabState{cursor: 1}), "prevtab-q2", true},
 		{"preview cursor on another row", newSpec([]Question{layout}, 0, false).check(tabState{cursor: 1}), "prev-q-list", false},
 		{"preview cursor row 2", newSpec([]Question{layout}, 0, false).check(tabState{cursor: 2, touched: true}), "prev-q-list", true},
+		{"299 plain initial", newSpec([]Question{colorPlain}, 0, false).check(tabState{cursor: 1}), "2.1.299/plain-q", true},
+		{"299 last tab shows Submit", newSpec(tabbed, 1, true).check(tabState{cursor: 1}), "2.1.299/tab-q2", true},
+		{"299 non-last tab shows Next", newSpec(mfirst, 0, true).check(tabState{cursor: 1}), "2.1.299/mfirst-q1", true},
+		{"299 review", reviewCheck(tabbed, []Answer{{Options: []int{1}}, {Options: []int{2, 0}}}), "2.1.299/tab-review", true},
+		{"299 preview cursor row 2", newSpec([]Question{layout}, 0, false).check(tabState{cursor: 2, touched: true}), "2.1.299/prev-q-list", true},
+		{"299 smulti", newSpec([]Question{toppings}, 0, true).check(tabState{cursor: 1}), "2.1.299/smulti-q", true},
+		{"299 markdown", newSpec([]Question{race}, 0, false).check(tabState{cursor: 1}), "2.1.299/md-q", true},
+		{"299 wrapped", newSpec([]Question{notes, toppings}, 0, true).check(tabState{cursor: 1}), "2.1.299/wrap-q1", true},
+		{"299 wrapped review", reviewCheck([]Question{notes, toppings}, []Answer{{Options: []int{0}}, {Options: []int{1}}}), "2.1.299/wrap-review", true},
+		{"299 multi cursor not on row 1", newSpec(tabbed, 1, true).check(tabState{cursor: 1}), "2.1.299/tab-q2-cursor-row2", false},
+		{"named plain initial", newSpec([]Question{colorPlain}, 0, false).check(tabState{cursor: 1}), "2.1.299-named/plain-q", true},
+		{"named plain initial, ANSI", newSpec([]Question{colorPlain}, 0, false).check(tabState{cursor: 1}), "2.1.299-named/plain-q@ansi", true},
+		{"named plain, tabbed expected", newSpec([]Question{colorPlain, toppings}, 0, true).check(tabState{cursor: 1}), "2.1.299-named/plain-q", false},
+		{"named last tab shows Submit", newSpec(tabbed, 1, true).check(tabState{cursor: 1}), "2.1.299-named/tab-q2", true},
+		{"named review", reviewCheck(tabbed, []Answer{{Options: []int{1}}, {Options: []int{2, 0}}}), "2.1.299-named/tab-review", true},
+		{"named review, ANSI", reviewCheck(tabbed, []Answer{{Options: []int{1}}, {Options: []int{2, 0}}}), "2.1.299-named/tab-review@ansi", true},
+		{"named review with another answer", reviewCheck(tabbed, []Answer{{Options: []int{0}}, {Options: []int{2, 0}}}), "2.1.299-named/tab-review", false},
+		{"named preview", newSpec([]Question{layout}, 0, false).check(tabState{cursor: 1}), "2.1.299-named/prev-q", true},
 		{"typed text must match exactly", newSpec([]Question{colorPlain}, 0, false).check(tabState{cursor: 4, other: Normalize("2 mor")}), "plain-other-typed", false},
 	}
 	for _, tt := range tests {
@@ -162,24 +186,28 @@ func TestPlanWalk(t *testing.T) {
 		qs     []Question
 		as     []Answer
 		frames []string
+		named  bool
 	}{
 		{
 			name:   "plain option",
 			qs:     []Question{colorPlain},
 			as:     []Answer{{Options: []int{1}}},
 			frames: []string{"plain-q"},
+			named:  true,
 		},
 		{
 			name:   "plain Other with a leading digit",
 			qs:     []Question{colorPlain},
 			as:     []Answer{{Text: "2 more"}},
 			frames: []string{"plain-q", "plain-other-cursor", "plain-other-typed"},
+			named:  true,
 		},
 		{
 			name:   "tabbed options",
 			qs:     []Question{colorTab, toppings},
 			as:     []Answer{{Options: []int{1}}, {Options: []int{2, 0}}},
 			frames: []string{"tab-q1", "tab-q2", "tab-q2-checked", "tab-q2-checked-submit", "tab-review"},
+			named:  true,
 		},
 		{
 			name: "tabbed Other on single and multi",
@@ -209,6 +237,7 @@ func TestPlanWalk(t *testing.T) {
 			qs:     []Question{layout},
 			as:     []Answer{{Options: []int{2}}},
 			frames: []string{"prev-q", "prev-q-split"},
+			named:  true,
 		},
 		{
 			name:   "preview tabbed mixed",
@@ -217,25 +246,53 @@ func TestPlanWalk(t *testing.T) {
 			frames: []string{"prevtab-q1", "prevtab-q1-large", "prevtab-q2", "prevtab-review"},
 		},
 	}
-	all := fixtureNames(t)
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			steps, err := Plan(tt.qs, tt.as)
-			if err != nil {
-				t.Fatal(err)
+	for _, dir := range []string{"", "2.1.299", "2.1.299-named"} {
+		all := fixtureNames(t, dir)
+		have := map[string]bool{}
+		for _, name := range all {
+			have[name] = true
+		}
+		prefix := ""
+		if dir != "" {
+			prefix = dir + "/"
+		}
+		for _, tt := range tests {
+			if dir == "2.1.299-named" && !tt.named {
+				continue
 			}
-			if len(steps) != len(tt.frames) {
-				t.Fatalf("%d steps, want %d", len(steps), len(tt.frames))
-			}
-			for i, s := range steps {
-				for _, name := range all {
-					want := name == tt.frames[i]
-					if got := s.Expect(fixture(t, name), fixtureWidth); got != want {
-						t.Errorf("step %d Expect(%s) = %v, want %v", i, name, got, want)
-					}
+			frames := make([]string, len(tt.frames))
+			for i, f := range tt.frames {
+				frames[i] = prefix + f
+				if !have[frames[i]] {
+					t.Fatalf("%s: fixture %s missing", prefix+tt.name, frames[i])
 				}
 			}
-		})
+			t.Run(prefix+tt.name, func(t *testing.T) {
+				steps, err := Plan(tt.qs, tt.as)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(steps) != len(frames) {
+					t.Fatalf("%d steps, want %d", len(steps), len(frames))
+				}
+				for i, s := range steps {
+					for _, name := range all {
+						want := name == frames[i]
+						if got := s.Expect(fixture(t, name), fixtureWidth); got != want {
+							t.Errorf("step %d Expect(%s) = %v, want %v", i, name, got, want)
+						}
+					}
+					if dir == "" {
+						continue
+					}
+					for _, other := range []string{"stale-negative", "scrollback-negative"} {
+						if s.Expect(fixture(t, other), fixtureWidth) {
+							t.Errorf("step %d Expect(%s) = true", i, other)
+						}
+					}
+				}
+			})
+		}
 	}
 }
 
@@ -245,6 +302,13 @@ func TestDialogLinesIgnoresInputBox(t *testing.T) {
 			t.Errorf("dialogLines(%s) found a question dialog", name)
 		}
 	}
+}
+
+// lastReplace swaps the last occurrence of old, the one inside the dialog
+// rather than in scrollback.
+func lastReplace(s, old, repl string) string {
+	i := strings.LastIndex(s, old)
+	return s[:i] + repl + s[i+len(old):]
 }
 
 // An option row must spell its label and description exactly.
@@ -264,6 +328,14 @@ func TestQuestionCheckOptionRowsExactly(t *testing.T) {
 			strings.Replace(fixture(t, "plain-q"), "❯ 1. Red\n", "❯ 1. Red-team the prod DB\n", 1)},
 		{"another description", with(colorPlain, 0, Option{Label: "Red", Description: "Hot"}), false, fixture(t, "plain-q")},
 		{"description missing from the call", with(colorPlain, 0, Option{Label: "Red"}), false, fixture(t, "plain-q")},
+		{"299 extra description word", []Question{colorPlain}, false,
+			strings.Replace(fixture(t, "2.1.299/plain-q"), "     Warm\n", "     Warm sun\n", 1)},
+		{"299 named extra description word", []Question{colorPlain}, false,
+			strings.Replace(fixture(t, "2.1.299-named/plain-q"), "     Warm\n", "     Warm sun\n", 1)},
+		{"299 named label differs by a word", []Question{colorPlain}, false,
+			lastReplace(fixture(t, "2.1.299-named/plain-q"), "Which color do you prefer?", "Which color do you really prefer?")},
+		{"299 label differs by a word", []Question{colorPlain}, false,
+			lastReplace(fixture(t, "2.1.299/plain-q"), "Which color do you prefer?", "Which color do you really prefer?")},
 		{"multi-select label is a prefix", with(toppings, 1, Option{Label: "Olive", Description: "Salty"}), true, fixture(t, "smulti-q")},
 	}
 	for _, tt := range tests {
@@ -352,5 +424,60 @@ func TestQuestionRefusesWithoutFullWidthRule(t *testing.T) {
 	}
 	if check(base, fixtureWidth+1) {
 		t.Error("check passed on a pane wider than the rule")
+	}
+}
+
+func TestSessionRule(t *testing.T) {
+	tests := []struct {
+		line string
+		want bool
+	}{
+		{"────────────── dispatcher · qa · 10-15 17:40 ─", true},
+		{" dispatcher · qa … ─", true},
+		{" dispatcher · qa · 10-1… ─", true},
+		{"── x ─", true},
+		{"────────────────────", false},
+		{"  5. Chat about this", false},
+		{"Enter to select · Esc to cancel", false},
+		{"  indented name ─", false},
+		{"────── dispatcher", false},
+		{"──────x ─", false},
+		{"─── ─ ─", false},
+		{"──── ─", false},
+		{" ─", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		if got := isSessionRule(tt.line); got != tt.want {
+			t.Errorf("isSessionRule(%q) = %v, want %v", tt.line, got, tt.want)
+		}
+	}
+}
+
+// Only the pane's last line may be the session-name rule: anything else after
+// the footer, or text wedged above the rule, keeps the dialog from matching.
+func TestQuestionCheckSessionRuleOnlyAtBottom(t *testing.T) {
+	check := newSpec([]Question{colorPlain}, 0, false).check(tabState{cursor: 1})
+	base := fixture(t, "2.1.299-named/plain-q")
+	if !check(base, fixtureWidth) {
+		t.Fatal("named plain-q does not match its own question")
+	}
+	lines := strings.Split(strings.TrimRight(base, "\n"), "\n")
+	rule := lines[len(lines)-1]
+	if !isSessionRule(rule) {
+		t.Fatalf("last fixture line %q is not a session rule", rule)
+	}
+	tests := []struct{ name, capture string }{
+		{"text after the rule", base + "\nsomething else\n"},
+		{"second rule after the rule", base + "\n" + rule + "\n"},
+		{"extra option above the rule", strings.Replace(base, "\n"+rule, "\n  6. Extra\n"+rule, 1)},
+		{"extra line below the footer, above the rule", strings.Replace(base, "\n"+rule, "\nrm -rf /\n"+rule, 1)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if check(tt.capture, fixtureWidth) {
+				t.Error("check passed")
+			}
+		})
 	}
 }

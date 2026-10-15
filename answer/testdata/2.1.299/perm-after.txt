@@ -1,0 +1,18 @@
+❯ Call the Bash tool exactly once with the command: touch
+  colours.txt && ln -s colours.txt toppings.txt
+  (description "Link toppings.txt to colours.txt"). Nothing
+  else.
+
+  Ran 1 shell command
+
+● I ran touch colours.txt && ln -s colours.txt toppings.txt
+  once. It finished with no output, so colours.txt was
+  created (or left as it was) and toppings.txt is now a
+  symlink to it in the working directory.
+
+✻ Sautéed for 3s · done 5:32 PM
+
+────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────
+  -- INSERT --
