@@ -35,11 +35,11 @@ const (
 	paneTmuxTimeout = 2 * time.Second
 
 	// The wrapper's wait for a restart's old dispatcher is only a backstop
-	// against a process that survives its pane's hangup. While houston awaits
-	// the registration it answers first: when the old pid outlives the await,
-	// the restart answers 502 and kills the new window, ending the waiting
-	// wrapper. So the wait only runs past houston's await when houston itself
-	// dies mid-request.
+	// against a process that survives its pane's hangup: when the old pid
+	// outlives houston's await, the restart answers 502 and kills the new
+	// window, ending the waiting wrapper. The wait runs to its limit only when
+	// houston dies mid-request or answers without killing the new window (a
+	// pane it could not check, or a window tmux printed no pane for).
 	launchWaitLimit = 60 * time.Second
 	launchWaitPoll  = 100 * time.Millisecond
 
@@ -279,8 +279,8 @@ const (
 )
 
 // awaitDispatcher polls until the launcher registers (crew register writes
-// <crew dir>/pid, so a pid text other than prevPID, the file's text before the
-// launch and "" for a fresh crew), its pane dies, or wait passes. A dead pane
+// <crew dir>/pid text other than prevPID, the text before the launch, "" for
+// a fresh crew), its pane dies, or wait passes. A dead pane
 // lingers only because the wrapper sets remain-on-exit failed. detail is a
 // dead pane's exit status, or why the pane could not be checked.
 func (s *Server) awaitDispatcher(ctx context.Context, crewDir, pane, prevPID string, wait time.Duration) (state launchState, detail string) {

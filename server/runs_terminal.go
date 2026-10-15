@@ -70,7 +70,7 @@ func (s *Server) runPane(w http.ResponseWriter, r *http.Request) (runs.Run, tmux
 }
 
 // resolveRunPane is runPane's resolution ladder without writing a response, so
-// a JSON route can reuse it. It returns the pane, or a zero code with the HTTP
+// a JSON route can reuse it. It returns the pane with code 0, or the HTTP
 // status and detail to refuse with.
 func (s *Server) resolveRunPane(run runs.Run) (tmux.Pane, int, string) {
 	if !run.Caps.Terminal || run.Tmux == nil || run.Tmux.PaneID == "" {

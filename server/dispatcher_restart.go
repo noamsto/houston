@@ -26,9 +26,8 @@ type launcherSettings struct {
 }
 
 // parseLauncherArgv reads the settings back from a dispatcher process's argv.
-// It mirrors the launcher's own flag loop: the launcher parses flags anywhere
-// after its name, so a task text between flags must be skipped, not treated as
-// the end of the flags. The last occurrence of a flag wins.
+// It mirrors the launcher's own flag loop, which takes flags anywhere after
+// its name with task text between them; the last occurrence of a flag wins.
 func parseLauncherArgv(argv []string) launcherSettings {
 	var s launcherSettings
 	start := -1
