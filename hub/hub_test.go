@@ -731,3 +731,110 @@ func TestHubHealsDismissedPermissionDialog(t *testing.T) {
 		})
 	}
 }
+
+// The hook file can lag the transcript: a quick "No" fires no Notification, a
+// restart folds earlier turns, and a lost PostToolUse leaves tool-running.
+func TestHubHealsStaleToolState(t *testing.T) {
+	base := time.Now().Add(time.Hour).Truncate(time.Second)
+	at := func(sec int) string { return base.Add(time.Duration(sec) * time.Second).Format(time.RFC3339Nano) }
+	line := func(sec int, role, block string) string {
+		return `{"type":"` + role + `","timestamp":"` + at(sec) + `","message":{"role":"` + role + `","content":[` + block + `]}}` + "\n"
+	}
+	toolUse := func(sec int, id, name string) string {
+		return line(sec, "assistant", `{"type":"tool_use","id":"`+id+`","name":"`+name+`","input":{}}`)
+	}
+	result := func(sec int, id string, isErr bool) string {
+		e, body := "", "x"
+		if isErr {
+			e, body = `"is_error":true,`, "The user doesn't want to proceed with this tool use."
+		}
+		return line(sec, "user", `{"type":"tool_result","tool_use_id":"`+id+`",`+e+`"content":"`+body+`"}`)
+	}
+	prompt := func(sec int) string { return line(sec, "user", `{"type":"text","text":"go on"}`) }
+	reply := func(sec int) string { return line(sec, "assistant", `{"type":"text","text":"Done."}`) }
+
+	cases := []struct {
+		name       string
+		transcript string
+		tool       string
+		event      string
+		restart    bool // a fresh hub reads the transcript from byte 0
+		want       hook.State
+	}{
+		{"answered AskUserQuestion, later turns, turn end", toolUse(1, "a", "AskUserQuestion") + result(2, "a", false) +
+			prompt(3) + toolUse(4, "b", "Bash") + result(5, "b", false) + reply(6),
+			"AskUserQuestion", hook.EventPreToolUse, false, hook.StateWaiting},
+		{"quick No before the notification", toolUse(1, "a", "Bash") + result(2, "a", true),
+			"Bash", hook.EventPreToolUse, false, hook.StateWaiting},
+		{"Esc on AskUserQuestion before the notification", toolUse(1, "a", "AskUserQuestion") + result(2, "a", true),
+			"AskUserQuestion", hook.EventPreToolUse, false, hook.StateWaiting},
+		{"restart: earlier turn's unresolved tool", toolUse(1, "old", "Read") + prompt(2) + toolUse(3, "a", "Bash") + result(4, "a", true),
+			"Bash", hook.EventNotification, true, hook.StateWaiting},
+		{"restart: interrupt text is not a prompt", toolUse(1, "a", "Bash") + result(2, "a", true) +
+			line(3, "user", `{"type":"text","text":"[Request interrupted by user for tool use]"}`),
+			"Bash", hook.EventNotification, true, hook.StateWaiting},
+		{"restart: unresolved tool of the same turn", toolUse(1, "old", "Read") + prompt(2) + toolUse(3, "other", "Read") + toolUse(4, "a", "Bash") + result(5, "a", true),
+			"Bash", hook.EventNotification, true, hook.StatePermission},
+		{"open permission dialog stays blocked", toolUse(1, "a", "Bash"),
+			"Bash", hook.EventNotification, false, hook.StatePermission},
+		{"open AskUserQuestion stays blocked", toolUse(1, "a", "AskUserQuestion"),
+			"AskUserQuestion", hook.EventPreToolUse, false, hook.StateToolRunning},
+		{"a rejection in the hook's own second", toolUse(0, "a", "Bash") + result(0, "a", true),
+			"Bash", hook.EventPreToolUse, false, hook.StateToolRunning},
+		{"a rejection with feedback keeps the agent working", toolUse(1, "a", "Bash") +
+			line(2, "user", `{"type":"tool_result","tool_use_id":"a","is_error":true,"content":"The user doesn't want to proceed. To tell you how to proceed, the user said: use make"}`),
+			"Bash", hook.EventPreToolUse, false, hook.StateToolRunning},
+		{"a failed tool the user did not reject", toolUse(1, "a", "Bash") +
+			line(2, "user", `{"type":"tool_result","tool_use_id":"a","is_error":true,"content":"exit status 1"}`),
+			"Bash", hook.EventPreToolUse, false, hook.StateToolRunning},
+		{"a finished tool is not an error", toolUse(1, "a", "Bash") + result(2, "a", false),
+			"Bash", hook.EventPreToolUse, false, hook.StateToolRunning},
+		{"a result older than the hook state", toolUse(-5, "a", "AskUserQuestion") + result(-4, "a", false) + toolUse(1, "b", "AskUserQuestion"),
+			"AskUserQuestion", hook.EventPreToolUse, false, hook.StateToolRunning},
+		{"a result older than the hook state, tool_use not yet read", toolUse(-5, "a", "AskUserQuestion") + result(-4, "a", false),
+			"AskUserQuestion", hook.EventPreToolUse, false, hook.StateToolRunning},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			stateDir := t.TempDir()
+			path := filepath.Join(t.TempDir(), "t.jsonl")
+			if err := os.WriteFile(path, []byte(c.transcript), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			payload := map[string]any{"session_id": "s1", "transcript_path": path, "hook_event_name": c.event, "tool_name": c.tool, "tool_input": map[string]any{}}
+			if c.event == hook.EventNotification {
+				payload["notification_type"] = "permission_prompt"
+				payload["message"] = "Claude needs your permission"
+				// The notification needs a tool behind it.
+				pre, _ := json.Marshal(map[string]any{"session_id": "s1", "transcript_path": path, "hook_event_name": hook.EventPreToolUse, "tool_name": c.tool, "tool_input": map[string]any{}})
+				if err := hook.Dispatch(hook.EventPreToolUse, stateDir, bytes.NewReader(pre)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			b, _ := json.Marshal(payload)
+			if err := hook.Dispatch(c.event, stateDir, bytes.NewReader(b)); err != nil {
+				t.Fatal(err)
+			}
+			// The hook state's Since is wall-clock now; the transcript clock is
+			// base, an hour ahead for events after it and (negative) before it.
+			sp := hook.Path(stateDir, "s1")
+			st, err := hook.Read(sp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			st.Since = base.Unix()
+			if err := hook.Write(sp, st); err != nil {
+				t.Fatal(err)
+			}
+			h := New(stateDir, nil)
+			h.loadStateFile(sp)
+			if !c.restart {
+				// Live: the hook arrived first, the transcript is read afterwards.
+				h.refreshTranscript("s1")
+			}
+			if got := h.sessions["s1"].view.State; got != c.want {
+				t.Fatalf("state = %q, want %q", got, c.want)
+			}
+		})
+	}
+}

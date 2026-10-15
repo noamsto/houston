@@ -116,10 +116,48 @@ type Session struct {
 
 	bg bgTracker
 
-	openTools map[string]struct{} // tool_use ids with no tool_result yet
-	seenTools map[string]struct{} // names of tools used since the last reset
+	openTools map[string]string      // tool_use id -> tool name, no tool_result yet
+	tools     map[string]toolOutcome // latest call per tool name since the last reset
 
 	chat *chatState // nil until first use, and for agents without a chat.Reader
+}
+
+// toolOutcome is how a tool's latest call ended, and when the transcript said so.
+type toolOutcome struct {
+	resolved bool
+	rejected bool // the user refused the call; an ordinary tool failure is not this
+	at       time.Time
+}
+
+// isRejection reports whether an error tool_result is Claude Code's answer to a
+// permission dialog the user declined. A "No" with feedback is excluded: the
+// agent keeps working on it with no hook event.
+func isRejection(text string) bool {
+	return strings.HasPrefix(text, "The user doesn't want to") && !strings.Contains(text, "the user said:")
+}
+
+// resetTools forgets the tool bookkeeping the dialog heal reads.
+func (s *Session) resetTools() {
+	s.openTools, s.tools = nil, nil
+}
+
+// endTurn drops the tool_uses a new prompt leaves behind (an interrupt can
+// strand one with no result) but keeps resolved outcomes, which a hook file
+// that missed its later events may still be pointing at.
+func (s *Session) endTurn() {
+	s.openTools = nil
+	for name, out := range s.tools {
+		if !out.resolved {
+			delete(s.tools, name)
+		}
+	}
+}
+
+func (s *Session) setOutcome(name string, out toolOutcome) {
+	if s.tools == nil {
+		s.tools = map[string]toolOutcome{}
+	}
+	s.tools[name] = out
 }
 
 // New creates a hub rooted at stateDir with default options. Call Run to start it.
@@ -427,14 +465,14 @@ func (h *Hub) loadStateFile(path string) {
 		// An interrupt can leave a tool_use with no result, and a new prompt
 		// ends the previous turn's tools. Keyed on the hook Turn, not on
 		// transcript user text: meta and injected user records appear mid-turn.
-		sess.openTools, sess.seenTools = nil, nil
+		sess.resetTools()
 	}
 	if sess.transcriptPath != s.TranscriptPath {
 		// The tail's offset and running totals belong to the old file.
 		sess.transcriptOffset = 0
 		sess.spend, sess.maxCtx = nil, 0
 		sess.view.ContextUsed, sess.view.ContextLimit, sess.view.SpendUSD = 0, 0, nil
-		sess.openTools, sess.seenTools = nil, nil
+		sess.resetTools()
 	}
 	sess.applyHook()
 	sess.transcriptPath = s.TranscriptPath
@@ -516,6 +554,11 @@ func (h *Hub) refreshTranscript(sessionID string) {
 	}
 	sess.transcriptOffset = newOffset
 	for _, ev := range events {
+		// A prompt ends the previous turn's tools. Live, the hook Turn says so;
+		// a first read has no such signal and folds every turn at once.
+		if initial != nil && ev.Prompt {
+			sess.endTurn()
+		}
 		applyTranscriptEvent(sess, ev)
 	}
 	sess.syncTranscriptView(time.Now())
@@ -533,21 +576,43 @@ func (s *Session) syncTranscriptView(now time.Time) {
 	s.applyHook()
 }
 
-// applyHook merges the hook state into the view and heals a permission dialog
-// the transcript proves is over. A dialog the user answers "No" or dismisses
-// fires no hook event, but the tool it guarded gets an error tool_result. The
-// result is recomputed from the raw hook state each time, so a later unresolved
-// tool_use restores the permission state.
+// applyHook merges the hook state into the view and heals a dialog the
+// transcript proves is over. A dialog the user answers "No" or dismisses fires
+// no hook event, but the tool it guarded gets an error tool_result. The result
+// is recomputed from the raw hook state each time, so a later unresolved
+// tool_use restores the blocked state.
+//
+// A permission state heals once its tool is resolved and nothing is open. A
+// tool-running state (the dialog's Notification has not fired, or the hook
+// events after the call were lost) heals only on a result from a later second
+// than the last hook event (Since has second granularity): any result for
+// AskUserQuestion, or a rejection for another tool. A plain failed call leaves
+// tool-running, since no PostToolUseFailure hook is handled. Without the
+// timestamp check a call that just started would read as the finished earlier
+// call of the same tool.
 func (s *Session) applyHook() {
 	if s.hookState.SessionID == "" {
 		return
 	}
 	mergeStateIntoView(&s.view, s.hookState)
 	st := s.hookState
-	if st.State != hook.StatePermission || st.Tool == "" {
+	if st.Tool == "" {
 		return
 	}
-	if _, used := s.seenTools[st.Tool]; !used || len(s.openTools) > 0 {
+	out, used := s.tools[st.Tool]
+	if !used || len(s.openTools) > 0 {
+		return
+	}
+	switch st.State {
+	case hook.StatePermission:
+	case hook.StateToolRunning:
+		if !out.resolved || out.at.IsZero() || out.at.Before(time.Unix(st.Since+1, 0)) {
+			return
+		}
+		if st.Tool != "AskUserQuestion" && !out.rejected {
+			return
+		}
+	default:
 		return
 	}
 	s.view.State = hook.StateWaiting
@@ -691,13 +756,10 @@ func applyTranscriptEvent(s *Session, ev TranscriptEvent) {
 		s.asks = ""
 		if ev.ToolUseID != "" {
 			if s.openTools == nil {
-				s.openTools = map[string]struct{}{}
+				s.openTools = map[string]string{}
 			}
-			s.openTools[ev.ToolUseID] = struct{}{}
-			if s.seenTools == nil {
-				s.seenTools = map[string]struct{}{}
-			}
-			s.seenTools[ev.ToolName] = struct{}{}
+			s.openTools[ev.ToolUseID] = ev.ToolName
+			s.setOutcome(ev.ToolName, toolOutcome{})
 		}
 		if n := len(s.trail); n > 0 && !s.trail[n-1].Done {
 			s.trail[n-1].Done = true
@@ -708,7 +770,10 @@ func applyTranscriptEvent(s *Session, ev TranscriptEvent) {
 		}
 	case EventTypeToolResult:
 		s.asks = ""
-		delete(s.openTools, ev.ToolUseID)
+		if name, ok := s.openTools[ev.ToolUseID]; ok {
+			delete(s.openTools, ev.ToolUseID)
+			s.setOutcome(name, toolOutcome{resolved: true, rejected: ev.IsError && isRejection(ev.Text), at: ev.Timestamp})
+		}
 		for i := len(s.trail) - 1; i >= 0; i-- {
 			if !s.trail[i].Done {
 				s.trail[i].Done = true
@@ -731,7 +796,7 @@ func applyTranscriptEvent(s *Session, ev TranscriptEvent) {
 	// Roll up token usage (last observed wins; Claude reports running totals).
 	// A last-wins field added to this roll-up must join readInitial's
 	// tailSuffices, and a sum or maximum its pre-pass (foldPrefix), or a first
-	// read from the tail can miss it. openTools and seenTools are tail-sensitive
+	// read from the tail can miss it. openTools and tools are tail-sensitive
 	// too: a first read from the tail never sees a tool_use older than it. Missing
 	// an unresolved older tool errs toward healing a dialog; missing an older
 	// same-name tool_use errs toward blocked.
