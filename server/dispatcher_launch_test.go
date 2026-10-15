@@ -288,6 +288,63 @@ func exists(path string) bool {
 	return err == nil
 }
 
+func TestAwaitDispatcherPIDChange(t *testing.T) {
+	ptr := func(s string) *string { return &s }
+	cases := []struct {
+		name, prev string
+		file       *string
+		want       launchState
+	}{
+		{"fresh absent", "", nil, launchStarting},
+		{"fresh written", "", ptr("123\n"), launchRegistered},
+		{"unchanged", "123", ptr("123\n"), launchStarting},
+		{"changed", "123", ptr("456\n"), launchRegistered},
+		{"empty file", "", ptr(""), launchStarting},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newLaunchFixture(t)
+			if err := os.MkdirAll(f.crewDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if tc.file != nil {
+				if err := os.WriteFile(filepath.Join(f.crewDir, "pid"), []byte(*tc.file), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, _ := f.s.awaitDispatcher(context.Background(), f.crewDir, "%7", tc.prev, 30*time.Millisecond)
+			if got != tc.want {
+				t.Errorf("state = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestReadPIDText(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, content string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	cases := []struct{ name, path, want string }{
+		{"trimmed", write("ok", " 42\n"), "42"},
+		{"64 bytes", write("max", strings.Repeat("1", 64)), strings.Repeat("1", 64)},
+		{"over 64 bytes", write("big", strings.Repeat("1", 65)), ""},
+		{"directory", dir, ""},
+		{"missing", filepath.Join(dir, "nope"), ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := readPIDText(tc.path); got != tc.want {
+				t.Errorf("readPIDText = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestDispatcherLaunchNewSessionSuccess(t *testing.T) {
 	f := newLaunchFixture(t)
 	f.registerOnStart(t, "new-session")
@@ -448,6 +505,77 @@ func TestDispatcherLaunchExistingSessionByName(t *testing.T) {
 	}
 	if f.tmux.find("new-session") != nil {
 		t.Error("new-session ran although has-session found the session")
+	}
+}
+
+// launchFor writes a launch file for an existing crew and returns the
+// windowLaunch openDispatcherWindow takes for it.
+func (f launchFixture) launchFor(t *testing.T) windowLaunch {
+	t.Helper()
+	if err := os.MkdirAll(f.crewDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file, err := writeLaunchFile(f.s.launchDir, dispatcherLaunchFile{Args: []string{"--agent", "claude"}, CrewID: dispatchTestNewCrewID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return windowLaunch{
+		repo: f.repo, serverPath: testServerPath, crewID: dispatchTestNewCrewID,
+		crewDir: f.crewDir, file: file, wait: f.s.launchCheck,
+	}
+}
+
+func TestOpenDispatcherWindowKeepsPreferredSession(t *testing.T) {
+	f := newLaunchFixture(t)
+	f.s.wsTmux = &fakeWorkspaceLister{wins: []tmux.WindowOptions{
+		{Session: "work", GitRoot: f.repo.Path},
+		{Session: "work", GitRoot: f.repo.Path},
+	}}
+	f.tmux.set("has-session", func([]string) (string, error) { return "", nil })
+	f.registerOnStart(t, "new-window")
+	l := f.launchFor(t)
+	l.session = "mine"
+
+	code, _, pane := f.s.openDispatcherWindow(context.Background(), l)
+	if code != http.StatusOK || pane != "%7" {
+		t.Fatalf("code = %d, pane = %q", code, pane)
+	}
+	if got := f.tmux.find("has-session"); !slices.Equal(got, []string{"has-session", "-t", "=mine"}) {
+		t.Errorf("has-session argv = %q", got)
+	}
+	got := f.tmux.find("new-window")
+	if len(got) < 7 || got[6] != "=mine:" {
+		t.Errorf("new-window argv = %q, want -t =mine: over the repo's busiest session", got)
+	}
+}
+
+func TestOpenDispatcherWindowAfterOpenAborts(t *testing.T) {
+	f := newLaunchFixture(t)
+	f.tmux.set("has-session", func([]string) (string, error) { return "", nil })
+	l := f.launchFor(t)
+	l.afterOpen = func(context.Context) *restartAbort {
+		return &restartAbort{code: http.StatusConflict, body: dispatcherResponse{Error: "old dispatcher would not stop"}}
+	}
+
+	code, body, pane := f.s.openDispatcherWindow(context.Background(), l)
+	if code != http.StatusConflict || pane != "%7" {
+		t.Errorf("code = %d, pane = %q", code, pane)
+	}
+	want := dispatcherResponse{Error: "old dispatcher would not stop", Crew: dispatchTestNewCrewID}
+	if body != want {
+		t.Errorf("body = %+v, want %+v", body, want)
+	}
+	if got := f.tmux.find("kill-window"); !slices.Equal(got, []string{"kill-window", "-t", "@3"}) {
+		t.Errorf("kill-window argv = %q", got)
+	}
+	if f.tmux.find("display-message") != nil {
+		t.Error("awaited the launcher after afterOpen aborted")
+	}
+	if files := launchFiles(t, f.s.launchDir); len(files) != 0 {
+		t.Errorf("launch files left behind: %q", files)
+	}
+	if !exists(f.crewDir) {
+		t.Error("crew dir removed although houston did not mint it")
 	}
 }
 

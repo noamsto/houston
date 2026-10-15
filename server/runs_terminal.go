@@ -61,28 +61,36 @@ func (s *Server) runPane(w http.ResponseWriter, r *http.Request) (runs.Run, tmux
 		terminalRefusal(w, id, http.StatusNotFound, "no such run")
 		return runs.Run{}, tmux.Pane{}, false
 	}
-	if !run.Caps.Terminal || run.Tmux == nil || run.Tmux.PaneID == "" {
-		terminalRefusal(w, id, http.StatusConflict, "run has no terminal")
+	pane, code, detail := s.resolveRunPane(run)
+	if code != 0 {
+		terminalRefusal(w, id, code, detail)
 		return runs.Run{}, tmux.Pane{}, false
+	}
+	return run, pane, true
+}
+
+// resolveRunPane is runPane's resolution ladder without writing a response, so
+// a JSON route can reuse it. It returns the pane, or a zero code with the HTTP
+// status and detail to refuse with.
+func (s *Server) resolveRunPane(run runs.Run) (tmux.Pane, int, string) {
+	if !run.Caps.Terminal || run.Tmux == nil || run.Tmux.PaneID == "" {
+		return tmux.Pane{}, http.StatusConflict, "run has no terminal"
 	}
 
 	pane, err := s.runPanes.ResolvePane(run.Tmux.PaneID)
 	if err != nil {
 		if errors.Is(err, tmux.ErrPaneNotFound) {
-			slog.Debug("resolve run pane failed", "id", id, "pane_id", run.Tmux.PaneID, "error", err)
-			terminalRefusal(w, id, http.StatusConflict, "terminal pane is gone")
-			return runs.Run{}, tmux.Pane{}, false
+			slog.Debug("resolve run pane failed", "id", run.ID, "pane_id", run.Tmux.PaneID, "error", err)
+			return tmux.Pane{}, http.StatusConflict, "terminal pane is gone"
 		}
-		slog.Warn("resolve run pane failed", "id", id, "pane_id", run.Tmux.PaneID, "error", err)
-		terminalRefusal(w, id, http.StatusServiceUnavailable, "tmux unavailable")
-		return runs.Run{}, tmux.Pane{}, false
+		slog.Warn("resolve run pane failed", "id", run.ID, "pane_id", run.Tmux.PaneID, "error", err)
+		return tmux.Pane{}, http.StatusServiceUnavailable, "tmux unavailable"
 	}
 	if tmux.ServerMismatch(run.Tmux.Server, pane.Server) {
-		slog.Info("resolve run pane refused: server mismatch", "id", id, "pane_id", run.Tmux.PaneID, "run_server", run.Tmux.Server, "pane_server", pane.Server)
-		terminalRefusal(w, id, http.StatusConflict, "terminal pane belongs to a different tmux server")
-		return runs.Run{}, tmux.Pane{}, false
+		slog.Info("resolve run pane refused: server mismatch", "id", run.ID, "pane_id", run.Tmux.PaneID, "run_server", run.Tmux.Server, "pane_server", pane.Server)
+		return tmux.Pane{}, http.StatusConflict, "terminal pane belongs to a different tmux server"
 	}
-	return run, pane, true
+	return pane, 0, ""
 }
 
 func terminalRefusal(w http.ResponseWriter, id string, code int, detail string) {

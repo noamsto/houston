@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -32,6 +33,12 @@ const (
 
 	tmuxTimeout     = 10 * time.Second
 	paneTmuxTimeout = 2 * time.Second
+
+	// The old dispatcher dies on its pane's SIGHUP within milliseconds; the
+	// bound only matters for a recycled pid, where `crew register`'s own
+	// start-time check decides.
+	launchWaitLimit = 5 * time.Second
+	launchWaitPoll  = 100 * time.Millisecond
 
 	// launchFormat is what new-window/new-session print with -P, so the
 	// handler learns where the dispatcher landed without a second lookup.
@@ -71,6 +78,8 @@ type dispatcherResponse struct {
 type dispatcherLaunchFile struct {
 	Args   []string `json:"args"`
 	CrewID string   `json:"crew_id"`
+	// WaitPID is a restart's old dispatcher pid, which this launch must outlive.
+	WaitPID int `json:"wait_pid,omitempty"`
 }
 
 // tmuxRunner runs one tmux command with no shell, adding env (KEY=value) to
@@ -262,13 +271,14 @@ const (
 )
 
 // awaitDispatcher polls until the launcher registers (crew register writes
-// <crew dir>/pid), its pane dies, or launchCheck passes. A dead pane lingers
-// only because the wrapper sets remain-on-exit failed. detail is a dead
-// pane's exit status, or why the pane could not be checked.
-func (s *Server) awaitDispatcher(ctx context.Context, crewDir, pane string) (state launchState, detail string) {
-	deadline := time.Now().Add(s.launchCheck)
+// <crew dir>/pid, so a pid text other than prevPID, the file's text before the
+// launch and "" for a fresh crew), its pane dies, or wait passes. A dead pane
+// lingers only because the wrapper sets remain-on-exit failed. detail is a
+// dead pane's exit status, or why the pane could not be checked.
+func (s *Server) awaitDispatcher(ctx context.Context, crewDir, pane, prevPID string, wait time.Duration) (state launchState, detail string) {
+	deadline := time.Now().Add(wait)
 	for {
-		if _, err := os.Stat(filepath.Join(crewDir, "pid")); err == nil {
+		if t := readPIDText(filepath.Join(crewDir, "pid")); t != "" && t != prevPID {
 			return launchRegistered, ""
 		}
 		out, err := s.tmuxRun(ctx, []string{"display-message", "-p", "-t", pane, "#{pane_dead} #{pane_dead_status}"})
@@ -292,6 +302,24 @@ func (s *Server) awaitDispatcher(ctx context.Context, crewDir, pane string) (sta
 		}
 		time.Sleep(s.launchPoll)
 	}
+}
+
+// readPIDText returns the trimmed text of a crew's pid file, or "" when it is
+// missing, not a regular file, unreadable or over 64 bytes.
+func readPIDText(path string) string {
+	f, err := os.Open(path) //nolint:gosec // path is a crew dir under houston's own resolved bus, not from a request
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() {
+		return ""
+	}
+	b, err := io.ReadAll(io.LimitReader(f, 65))
+	if err != nil || len(b) > 64 {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
 }
 
 // launchSession picks where the dispatcher window goes: the session holding
@@ -456,12 +484,70 @@ func (s *Server) handleDispatcherLaunch(w http.ResponseWriter, r *http.Request) 
 	// half-made window or skip the cleanup below.
 	ctx := context.WithoutCancel(r.Context())
 
-	session, exists, err := s.launchSession(ctx, repo)
+	code, body, pane := s.openDispatcherWindow(ctx, windowLaunch{
+		repo: repo, serverPath: serverPath, crewID: id, crewDir: crewDir,
+		ownsCrew: true, file: file, wait: s.launchCheck,
+	})
+	llog.pane = pane
+	reply(code, body)
+}
+
+// windowLaunch is everything openDispatcherWindow needs after validation.
+type windowLaunch struct {
+	repo       dispatchRepo
+	serverPath string
+	crewID     string
+	crewDir    string
+	ownsCrew   bool          // launch route: houston minted crewDir and removes it if the launcher never registered
+	prevPID    string        // pid file text before the launch ("" for a fresh crew)
+	file       string        // launch file already written
+	session    string        // preferred existing session ("" → launchSession rule)
+	wait       time.Duration // awaitDispatcher bound
+	// afterOpen runs once the new window exists (restart: end the old
+	// session). A non-nil result aborts: the new window or session is killed,
+	// the launch file removed, and the result is the response.
+	afterOpen func(ctx context.Context) *restartAbort
+}
+
+type restartAbort struct {
+	code int
+	body dispatcherResponse
+}
+
+// openDispatcherWindow opens the window running `houston launch-dispatcher
+// <file>`, waits for the launcher to register and builds the response, so the
+// launch and restart routes share one tmux sequence and its cleanup. pane is
+// the new pane id once tmux printed one ("" before), for the caller's log.
+func (s *Server) openDispatcherWindow(ctx context.Context, l windowLaunch) (code int, body dispatcherResponse, pane string) {
+	// The crew of a restart is not houston's to delete, so its id still names
+	// something real after a failure.
+	leftCrew := ""
+	if !l.ownsCrew {
+		leftCrew = l.crewID
+	}
+	// A restart keeps its old session while that session still exists.
+	var (
+		session string
+		exists  bool
+		err     error
+	)
+	if l.session != "" && tmuxSafeArg(l.session) {
+		_, err = s.tmuxRun(ctx, []string{"has-session", "-t", "=" + l.session})
+		switch {
+		case err == nil:
+			session, exists = l.session, true
+		case strings.Contains(err.Error(), "can't find session"):
+			session, exists, err = s.launchSession(ctx, l.repo)
+		}
+	} else {
+		session, exists, err = s.launchSession(ctx, l.repo)
+	}
 	if err != nil {
-		_ = os.Remove(file)
-		_ = os.Remove(crewDir)
-		reply(http.StatusServiceUnavailable, dispatcherResponse{Error: "tmux unavailable: " + err.Error()})
-		return
+		_ = os.Remove(l.file)
+		if l.ownsCrew {
+			_ = os.Remove(l.crewDir)
+		}
+		return http.StatusServiceUnavailable, dispatcherResponse{Error: "tmux unavailable: " + err.Error(), Crew: leftCrew}, ""
 	}
 	// -E: tmux would otherwise copy houston's (service) values of every
 	// update-environment variable into the new session, or mark the absent
@@ -474,32 +560,24 @@ func (s *Server) handleDispatcherLaunch(w http.ResponseWriter, r *http.Request) 
 		// becoming current and switching a client that is viewing the session.
 		argv = []string{"new-window", "-d", "-P", "-F", launchFormat, "-t", "=" + session + ":"}
 	}
-	argv = append(argv, "-n", "dispatcher", "-c", repo.Path, "--", s.houstonExe, "launch-dispatcher", file)
+	argv = append(argv, "-n", "dispatcher", "-c", l.repo.Path, "--", s.houstonExe, "launch-dispatcher", l.file)
 
 	// tmux hands a pane created by a session-less client that client's PATH,
 	// over the global environment and even over -e PATH.
-	out, err := s.tmuxRun(ctx, argv, "PATH="+serverPath)
+	out, err := s.tmuxRun(ctx, argv, "PATH="+l.serverPath)
 	if err != nil {
-		_ = os.Remove(file)
-		_ = os.Remove(crewDir)
-		reply(http.StatusBadGateway, dispatcherResponse{Error: "tmux could not start the dispatcher window: " + err.Error()})
-		return
+		_ = os.Remove(l.file)
+		if l.ownsCrew {
+			_ = os.Remove(l.crewDir)
+		}
+		return http.StatusBadGateway, dispatcherResponse{Error: "tmux could not start the dispatcher window: " + err.Error(), Crew: leftCrew}, ""
 	}
 	parts := strings.Split(out, ":")
 	if len(parts) != 3 {
-		reply(http.StatusBadGateway, dispatcherResponse{Error: "tmux started a window but printed no pane for it", Output: out, Crew: id})
-		return
+		return http.StatusBadGateway, dispatcherResponse{Error: "tmux started a window but printed no pane for it", Output: out, Crew: l.crewID}, ""
 	}
 	created, window, pane := parts[0], parts[1], parts[2]
-	llog.pane = pane
-
-	state, detail := s.awaitDispatcher(ctx, crewDir, pane)
-	switch state {
-	case launchDead:
-		output, err := s.tmuxRun(ctx, []string{"capture-pane", "-p", "-J", "-t", pane, "-S", "-40"})
-		if err != nil {
-			slog.Warn("dispatcher launch: capture failed", "pane", pane, "error", err)
-		}
+	killWindow := func() {
 		kill := []string{"kill-window", "-t", window}
 		if !exists {
 			kill = []string{"kill-session", "-t", "=" + created}
@@ -507,30 +585,54 @@ func (s *Server) handleDispatcherLaunch(w http.ResponseWriter, r *http.Request) 
 		if _, err := s.tmuxRun(ctx, kill); err != nil {
 			slog.Warn("dispatcher launch: cleanup failed", "pane", pane, "error", err)
 		}
+	}
+
+	if l.afterOpen != nil {
+		if abort := l.afterOpen(ctx); abort != nil {
+			killWindow()
+			_ = os.Remove(l.file)
+			if abort.body.Crew == "" {
+				abort.body.Crew = l.crewID
+			}
+			return abort.code, abort.body, pane
+		}
+	}
+
+	state, detail := s.awaitDispatcher(ctx, l.crewDir, pane, l.prevPID, l.wait)
+	switch state {
+	case launchDead:
+		output, err := s.tmuxRun(ctx, []string{"capture-pane", "-p", "-J", "-t", pane, "-S", "-40"})
+		if err != nil {
+			slog.Warn("dispatcher launch: capture failed", "pane", pane, "error", err)
+		}
+		killWindow()
 		msg := "dispatcher exited"
 		if detail != "" {
 			msg += " with status " + detail
 		}
-		reply(http.StatusUnprocessableEntity, dispatcherResponse{Error: msg, Output: output, Crew: removeLaunchLeftovers(file, crewDir, id)})
+		return http.StatusUnprocessableEntity, dispatcherResponse{Error: msg, Output: output, Crew: removeLaunchLeftovers(l.file, l.crewDir, l.crewID, l.ownsCrew)}, pane
 	case launchGone:
-		reply(http.StatusUnprocessableEntity, dispatcherResponse{Error: "dispatcher exited immediately", Crew: removeLaunchLeftovers(file, crewDir, id)})
+		return http.StatusUnprocessableEntity, dispatcherResponse{Error: "dispatcher exited immediately", Crew: removeLaunchLeftovers(l.file, l.crewDir, l.crewID, l.ownsCrew)}, pane
 	case launchUnchecked:
 		// The window may still be running the launcher, which may not have
 		// read its file yet: keep both, and the crew.
-		reply(http.StatusBadGateway, dispatcherResponse{Error: "could not check the dispatcher pane: " + detail, Crew: id, Session: created, Window: window, Pane: pane})
+		return http.StatusBadGateway, dispatcherResponse{Error: "could not check the dispatcher pane: " + detail, Crew: l.crewID, Session: created, Window: window, Pane: pane}, pane
 	default:
-		if _, err := s.repoReg.Add(repo.Path); err != nil {
-			slog.Debug("dispatcher launch: repo not remembered", "repo", repo.Path, "reason", err)
+		if _, err := s.repoReg.Add(l.repo.Path); err != nil {
+			slog.Debug("dispatcher launch: repo not remembered", "repo", l.repo.Path, "reason", err)
 		}
-		reply(http.StatusOK, dispatcherResponse{Crew: id, Session: created, Window: window, Pane: pane, RunID: runs.PaneRunID(pane)})
+		return http.StatusOK, dispatcherResponse{Crew: l.crewID, Session: created, Window: window, Pane: pane, RunID: runs.PaneRunID(pane)}, pane
 	}
 }
 
 // removeLaunchLeftovers drops the launch file (the wrapper may never have
-// read it) and the crew dir if the launcher left it empty, returning the crew
-// id only when its dir still exists.
-func removeLaunchLeftovers(file, crewDir, id string) string {
+// read it) and, when houston minted the crew, its dir if the launcher left it
+// empty, returning the crew id only when its dir still exists.
+func removeLaunchLeftovers(file, crewDir, id string, ownsCrew bool) string {
 	_ = os.Remove(file)
+	if !ownsCrew {
+		return id
+	}
 	if err := os.Remove(crewDir); err == nil || errors.Is(err, os.ErrNotExist) {
 		return ""
 	}
@@ -587,6 +689,9 @@ func ExecDispatcherLaunch(file string) error {
 	if err := json.Unmarshal(b, &lf); err != nil {
 		return fmt.Errorf("parse %s: %w", file, err)
 	}
+	if lf.WaitPID > 0 {
+		waitForExit(lf.WaitPID, launchWaitLimit, launchWaitPoll, processAlive)
+	}
 	launcher, err := exec.LookPath("dispatcher")
 	if err != nil {
 		return fmt.Errorf("dispatcher launcher not found on the tmux server's PATH: %w", err)
@@ -602,6 +707,19 @@ func ExecDispatcherLaunch(file string) error {
 	paneTmux(pane, "set-option", "-w", "-t", pane, "@crew_color", "colour99")
 
 	return syscall.Exec(launcher, append([]string{launcher}, lf.Args...), launchEnv(os.Environ(), lf.CrewID)) //nolint:gosec // the launcher on the tmux server's own PATH
+}
+
+// waitForExit returns once alive(pid) is false or limit has passed.
+func waitForExit(pid int, limit, poll time.Duration, alive func(int) bool) {
+	deadline := time.Now().Add(limit)
+	for alive(pid) && time.Now().Before(deadline) {
+		time.Sleep(poll)
+	}
+}
+
+func processAlive(pid int) bool {
+	err := syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 // paneTmux runs one best-effort tmux command about the wrapper's own pane; it
