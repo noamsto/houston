@@ -1,0 +1,22 @@
+❯ Call AskUserQuestion exactly once with two single-select
+  questions. Q1 "Pick a size?" header "Size", options label
+  "Small" description "Compact", label "Large" description
+  "Roomy"; each Q1 option has a preview that is a 3-line
+  ASCII box using only + - | and letters. Q2 "Pick a
+  speed?" header "Speed", options label "Slow" description
+  "Careful", label "Fast" description "Quick", no previews.
+  Nothing else.
+────────────────────────────────────────────────────────────
+←  ☒ Size  ☐ Speed  ✔ Submit  →
+
+Pick a speed?
+
+❯ 1. Slow
+     Careful
+  2. Fast
+     Quick
+  3. Type something.
+────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · Tab/Arrow keys to navigate · Esc to cancel

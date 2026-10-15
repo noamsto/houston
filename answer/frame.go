@@ -66,6 +66,24 @@ func isAnchorRule(line string, width int) bool {
 	return width > 0 && isDialogRule(line, "─") && ruleWidth(line) >= width
 }
 
+// isSessionRule reports whether a capture line is the top rule of the input
+// box of a named session (claude --name): rule runes, then the name between
+// spaces, then a closing " ─". A narrow pane shrinks the leading rule to
+// nothing and cuts the name with "…". It takes the ANSI-stripped line, not
+// Normalize's output, which has no spaces left.
+func isSessionRule(line string) bool {
+	body, ok := strings.CutSuffix(strings.TrimRightFunc(line, unicode.IsSpace), " ─")
+	if !ok {
+		return false
+	}
+	name, ok := strings.CutPrefix(strings.TrimLeft(body, "─"), " ")
+	if !ok || name == "" {
+		return false
+	}
+	r, _ := utf8.DecodeRuneInString(name)
+	return !unicode.IsSpace(r) && r != '─'
+}
+
 func isTabBar(line string) bool {
 	return strings.HasPrefix(line, "←") && strings.HasSuffix(line, "✔Submit→")
 }
@@ -84,7 +102,8 @@ type dialogLine struct {
 // bottom of capture, starting with its tab bar or header line: the lines after
 // the last "─" dialog rule (see isAnchorRule) that is directly followed by one.
 // Each later dialog rule's norm is dialogRule. width is the pane's width in
-// cells.
+// cells. A named session's input-box rule (see isSessionRule) as the last line
+// of the capture belongs to no dialog and is dropped.
 func dialogLines(capture string, width int) ([]dialogLine, bool) {
 	raw := captureLines(capture)
 	lines := make([]dialogLine, 0, len(raw))
@@ -94,6 +113,9 @@ func dialogLines(capture string, width int) ([]dialogLine, bool) {
 		} else if n := Normalize(l); n != "" {
 			lines = append(lines, dialogLine{l, n})
 		}
+	}
+	if n := len(lines); n > 0 && isSessionRule(lines[n-1].raw) {
+		lines = lines[:n-1]
 	}
 	for i := len(lines) - 2; i >= 0; i-- {
 		if lines[i].norm == dialogRule && (isTabBar(lines[i+1].norm) || isHeader(lines[i+1].norm)) {

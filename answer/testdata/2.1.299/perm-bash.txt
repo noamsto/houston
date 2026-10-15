@@ -1,0 +1,27 @@
+❯ Call the Bash tool exactly once with the command: touch
+  colours.txt && ln -s colours.txt toppings.txt
+  (description "Link toppings.txt to colours.txt"). Nothing
+  else.
+
+● Link toppings.txt to colours.txt
+  ⎿  $ touch colours.txt && ln -s colours.txt toppings.txt
+
+────────────────────────────────────────────────────────────
+ Bash command
+ Tip: auto mode handles these prompts for you — choose
+ "switch to auto mode" below
+ Link toppings.txt to colours.txt
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ touch colours.txt && ln -s colours.txt toppings.txt
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ This command requires approval
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and don’t ask again for: ln -s colours.txt
+      toppings.txt
+   3. Yes, and switch to auto mode · auto mode handles these
+      prompts for you
+   4. No
+
+ Esc to cancel · Tab to amend

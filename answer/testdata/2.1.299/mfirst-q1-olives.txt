@@ -1,0 +1,24 @@
+❯ Call AskUserQuestion exactly once with two questions. Q1
+  multiSelect "Which toppings do you want?" header
+  "Toppings", options "Cheese" (description "Melty"),
+  "Olives" (description "Salty"), "Basil" (description
+  "Fresh"). Q2 single-select "Which color do you prefer?"
+  header "Color", options "Red" (description "Warm"),
+  "Blue" (description "Cool"). Nothing else.
+────────────────────────────────────────────────────────────
+←  ☒ Toppings  ☐ Color  ✔ Submit  →
+
+Which toppings do you want?
+
+❯ 1. [ ] Cheese
+         Melty
+  2. [✔] Olives
+         Salty
+  3. [ ] Basil
+         Fresh
+  4. [ ] Type something
+     Next
+────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · Tab/Arrow keys to navigate · Esc to cancel
