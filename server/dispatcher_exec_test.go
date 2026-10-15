@@ -199,6 +199,60 @@ func TestDispatcherLaunchWrapperStampsWindow(t *testing.T) {
 	}
 }
 
+func reapedPID(t *testing.T) int {
+	t.Helper()
+	cmd := exec.Command("true")
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+	return cmd.Process.Pid
+}
+
+func TestWaitForExitReturnsOnceDead(t *testing.T) {
+	calls := 0
+	start := time.Now()
+	waitForExit(7, time.Minute, time.Millisecond, func(pid int) bool {
+		calls++
+		return calls <= 2
+	})
+	if calls != 3 {
+		t.Errorf("alive called %d times, want 3", calls)
+	}
+	if time.Since(start) > time.Second {
+		t.Errorf("waited %v after the pid died", time.Since(start))
+	}
+}
+
+func TestWaitForExitGivesUpAtLimit(t *testing.T) {
+	const limit = 30 * time.Millisecond
+	start := time.Now()
+	waitForExit(7, limit, 5*time.Millisecond, func(int) bool { return true })
+	if d := time.Since(start); d < limit || d >= limit+200*time.Millisecond {
+		t.Errorf("waited %v, want [%v, %v)", d, limit, limit+200*time.Millisecond)
+	}
+}
+
+func TestProcessAlive(t *testing.T) {
+	if !processAlive(os.Getpid()) {
+		t.Error("own pid reads dead")
+	}
+	if processAlive(reapedPID(t)) {
+		t.Error("reaped child reads alive")
+	}
+}
+
+func TestDispatcherLaunchWrapperWaitPIDGone(t *testing.T) {
+	f := newWrapperFixture(t, []string{"--agent", "pi"})
+	f.file = writeTestLaunchFile(t, dispatcherLaunchFile{Args: []string{"--agent", "pi"}, CrewID: dispatchTestNewCrewID, WaitPID: reapedPID(t)})
+
+	if out, err := runWrapper(t, f.file, t.TempDir()); err != nil {
+		t.Fatalf("wrapper failed: %v\n%s", err, out)
+	}
+	if got := readFile(t, filepath.Join(f.out, "argv")); got != "--agent\npi\n" {
+		t.Errorf("launcher argv = %q", got)
+	}
+}
+
 func TestDispatcherLaunchWrapperFailures(t *testing.T) {
 	noLauncher := writeTestLaunchFile(t, dispatcherLaunchFile{Args: []string{"--agent", "pi"}, CrewID: dispatchTestNewCrewID})
 	for _, tc := range []struct {
@@ -239,7 +293,7 @@ func TestDispatcherLaunchWithRealTmuxRunner(t *testing.T) {
 case "$1" in
 has-session) echo "can't find session: proj" >&2; exit 1 ;;
 show-environment) echo "PATH=$PATH" ;;
-new-session) mkdir -p '`+f.crewDir+`' && : > '`+f.crewDir+`/pid'; printf 'proj:@3:%%7\n' ;;
+new-session) mkdir -p '`+f.crewDir+`' && echo 123 > '`+f.crewDir+`/pid'; printf 'proj:@3:%%7\n' ;;
 esac
 `)
 	f.s.tmuxRun = execTmux
@@ -311,7 +365,7 @@ func TestDispatcherLaunchNewSessionKeepsServerEnv(t *testing.T) {
 	f.s.tmuxRun = execTmux
 	out := filepath.Join(t.TempDir(), "agent")
 	f.s.houstonExe = filepath.Join(t.TempDir(), "houston")
-	script := "#!" + bash + "\nprintf '%s' \"${SSH_AUTH_SOCK-unset}\" > '" + out + "'\n: > '" + f.crewDir + "/pid'\nsleep 30\n"
+	script := "#!" + bash + "\nprintf '%s' \"${SSH_AUTH_SOCK-unset}\" > '" + out + "'\necho 123 > '" + f.crewDir + "/pid'\nsleep 30\n"
 	if err := os.WriteFile(f.s.houstonExe, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -347,7 +401,7 @@ func TestDispatcherLaunchPaneGetsServerPath(t *testing.T) {
 			f.s.tmuxRun = execTmux
 			out := filepath.Join(t.TempDir(), "path")
 			f.s.houstonExe = filepath.Join(t.TempDir(), "houston")
-			script := "#!" + bash + "\nprintf '%s' \"$PATH\" > '" + out + "'\n: > '" + f.crewDir + "/pid'\nsleep 30\n"
+			script := "#!" + bash + "\nprintf '%s' \"$PATH\" > '" + out + "'\necho 123 > '" + f.crewDir + "/pid'\nsleep 30\n"
 			if err := os.WriteFile(f.s.houstonExe, []byte(script), 0o755); err != nil {
 				t.Fatal(err)
 			}
@@ -381,7 +435,7 @@ func TestDispatcherLaunchKeepsCurrentWindow(t *testing.T) {
 	f := newLaunchFixture(t)
 	f.s.tmuxRun = execTmux
 	f.s.houstonExe = filepath.Join(t.TempDir(), "houston")
-	script := "#!" + bash + "\n: > '" + f.crewDir + "/pid'\nsleep 30\n"
+	script := "#!" + bash + "\necho 123 > '" + f.crewDir + "/pid'\nsleep 30\n"
 	if err := os.WriteFile(f.s.houstonExe, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}

@@ -4,6 +4,7 @@ import { waitFor } from '@testing-library/react'
 import { RunDetail } from './RunDetail'
 import { parseDetailRoute } from './routes'
 import { resetCrewReposCache } from './useCrewRepos'
+import { clearPendingRuns, markPendingRun, recordRestartFailure } from './pendingRuns'
 import type { Run } from '../api/runs'
 import type { Terminal } from '@xterm/xterm'
 import { installFakeEventSource } from '../testing/fakeEventSource'
@@ -70,6 +71,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   cleanup()
+  clearPendingRuns()
   mockConnected = true
   mockEnded = null
   lastSocketPath = null
@@ -88,6 +90,47 @@ describe('RunDetail', () => {
   })
 
   it('shows "not found" once a snapshot has arrived and the id is not in it', () => {
+    render(<RunDetail mode={null} runs={[]} hasSnapshot streamConnected now={now} id="pane-1" tab="chat" />)
+    expect(screen.getByText(/no longer available/i)).toBeTruthy()
+  })
+
+  it('shows a starting placeholder for a pending run missing from the snapshot', () => {
+    markPendingRun('pane-1', now)
+    render(<RunDetail mode={null} runs={[]} hasSnapshot streamConnected now={now} id="pane-1" tab="chat" />)
+    expect(screen.getByText(/starting the restarted dispatcher/i)).toBeTruthy()
+    expect(screen.queryByText(/no longer available/i)).toBeNull()
+  })
+
+  it('shows a recorded restart failure for the vanished run, ahead of the pending placeholder', () => {
+    markPendingRun('pane-1', now)
+    recordRestartFailure('pane-1', { error: 'dispatcher exited immediately', output: 'no such launcher', crew: '1700000000-42', status: 422 }, now)
+    render(<RunDetail mode={null} runs={[]} hasSnapshot streamConnected now={now} id="pane-1" tab="chat" />)
+    expect(screen.getByText('The restart did not come up')).toBeTruthy()
+    expect(screen.getByText('dispatcher exited immediately')).toBeTruthy()
+    expect(screen.getByText('1700000000-42').tagName).toBe('CODE')
+    expect(screen.getByText(/CREW_ID=1700000000-42 dispatcher\./)).toBeTruthy()
+    expect(screen.getByText('no such launcher')).toBeTruthy()
+    expect(screen.getByText('Back to Fleet')).toBeTruthy()
+    expect(screen.queryByText(/starting the restarted dispatcher/i)).toBeNull()
+    expect(screen.queryByText(/no longer available/i)).toBeNull()
+  })
+
+  it('shows the relaunch line for the old-process 502 too', () => {
+    recordRestartFailure('pane-1', { error: 'the old dispatcher process is still running after its pane was ended — stop pid 7', crew: '1700000000-42', status: 502 }, now)
+    render(<RunDetail mode={null} runs={[]} hasSnapshot streamConnected now={now} id="pane-1" tab="chat" />)
+    expect(screen.getByText(/CREW_ID=1700000000-42 dispatcher\./)).toBeTruthy()
+  })
+
+  it('tells the user to check Fleet, not to relaunch, for an unchecked 502', () => {
+    recordRestartFailure('pane-1', { error: 'could not check the dispatcher pane', crew: '1700000000-42', status: 502 }, now)
+    render(<RunDetail mode={null} runs={[]} hasSnapshot streamConnected now={now} id="pane-1" tab="chat" />)
+    expect(screen.getByText(/is intact — workers keep running\./)).toBeTruthy()
+    expect(screen.getByText(/Check Fleet for the new dispatcher before relaunching\./)).toBeTruthy()
+    expect(screen.queryByText(/CREW_ID=/)).toBeNull()
+  })
+
+  it('shows "not found" again once the pending mark has expired', () => {
+    markPendingRun('pane-1', now - 120_000)
     render(<RunDetail mode={null} runs={[]} hasSnapshot streamConnected now={now} id="pane-1" tab="chat" />)
     expect(screen.getByText(/no longer available/i)).toBeTruthy()
   })
@@ -587,6 +630,24 @@ describe('RunDetail crew tab', () => {
       unmount()
     }
     expect(vi.mocked(fetch).mock.calls.some((c) => String(c[0]).includes('/crew/feed'))).toBe(false)
+  })
+
+  it('offers Restart only on a joined dispatcher in dispatcher mode', async () => {
+    const d = dispatcher()
+    const { unmount } = render(<RunDetail mode="dispatcher" runs={[d]} hasSnapshot streamConnected now={now} id={d.id} tab="crew" />)
+    expect(screen.getByRole('button', { name: 'Restart' })).toBeTruthy()
+    unmount()
+
+    const cases: [Run, 'dispatcher' | 'tmux'][] = [
+      [worker(), 'dispatcher'],
+      [dispatcher({ crew: undefined }), 'dispatcher'],
+      [dispatcher(), 'tmux'],
+    ]
+    for (const [r, mode] of cases) {
+      const { unmount: u } = render(<RunDetail mode={mode} runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="crew" />)
+      expect(screen.queryByRole('button', { name: 'Restart' })).toBeNull()
+      u()
+    }
   })
 
   it('a crew route on a run that does not qualify degrades to the default tab', () => {

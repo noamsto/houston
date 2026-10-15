@@ -53,7 +53,7 @@ houston runs in one of two modes, chosen by `-mode auto|dispatcher|tmux` (defaul
 - `server.Config.Mode` must be `mode.Dispatcher` or `mode.Tmux`; `server.New` errors otherwise.
 - **Dispatcher mode** is everything described below.
 - **Tmux mode** is plain tmux plus hooks monitoring:
-  - `POST /api/runs/:id/reply`, `GET /api/runs/:id/crew/feed`, `GET /api/runs/:id/crew/feed/stream`, `POST /api/dispatch`, `GET /api/dispatch/options`, `POST /api/dispatch/dispatcher`, `GET|POST|DELETE /api/repos` and `GET /api/repos/candidates` are not registered (404): the command-execution surface is gone, not hidden.
+  - `POST /api/runs/:id/reply`, `POST /api/runs/:id/restart`, `GET /api/runs/:id/crew/feed`, `GET /api/runs/:id/crew/feed/stream`, `POST /api/dispatch`, `GET /api/dispatch/options`, `POST /api/dispatch/dispatcher`, `GET|POST|DELETE /api/repos` and `GET /api/repos/candidates` are not registered (404): the command-execution surface is gone, not hidden.
   - No `CrewSource` (`runSources`) and no `crewfeed.Store`; the registry order `runs.Order` is tmux, hooks, so nothing reads `<git-common-dir>/crew`.
   - The tmux layer ignores `@crew_name`/`@crew_color` (`tmux.WithoutCrew`): no `role`, no codename or colour, no dispatcher ↔ crew join (so no nested workers or crew line), and the Workspace response carries no `crew_codename`. Role-grid panes (`@crew_role` other than `lead`) are still skipped in both modes.
 - `GET /api/mode` → `{"mode":"dispatcher"|"tmux"}` in both modes, behind the auth gate. The UI (`useMode`) fetches it once and retries every 5 s on failure; until it is known only Fleet and Workspace show, so in dispatcher mode Dispatch appears a moment after load. In tmux mode that tab is absent because of the `mode === 'dispatcher'` gates in `MobileShell` / `ConsoleShell`, and `#/dispatch` (with any query) is rewritten in place to `#/fleet` by `tabsFor` via `useShellTab(mode)`; while the mode is unknown such a hash is left alone. There is no Crews tab in any mode: `#/crews` (with any query) is rewritten in place to `#/fleet` at once, mode known or not (the crew roster lives in the dispatcher's detail, see "Crew activity feed"). Adding a dispatcher-only tab means touching both shells.
@@ -76,6 +76,7 @@ houston runs in one of two modes, chosen by `-mode auto|dispatcher|tmux` (defaul
 │  GET  /api/mode               - Mode (both modes)     │
 │  GET  /api/runs*              - Run list + SSE stream │
 │  POST /api/runs/:id/reply     - Reply to a run (D)    │
+│  POST /api/runs/:id/restart   - Restart dispatcher (D)│
 │  GET  /api/runs/:id/crew/feed* - Crew feed, SSE (D)   │
 │  WS   /api/runs/:id/terminal  - Run terminal I/O      │
 │  POST /api/runs/:id/input     - Send text/key/image   │
@@ -861,8 +862,10 @@ unknown fields 400, body over 256 KiB 413.
   `tmux unavailable: …`; nothing created, never a fallback to houston's
   `PATH`. The value is never logged.
 - **Startup check** (≤ 3 s, 200 ms poll of `display-message #{pane_dead}`):
-  success as soon as `<crew>/pid` exists (the launcher passed its own gates and
-  registered). A dead pane → 422 `dispatcher exited with status N` with the
+  success as soon as `<crew>/pid` holds non-empty text (`readPIDText`: a regular
+  file of at most 64 bytes; the launcher passed its own gates and registered; a
+  restart also needs the text to differ from what it held before the launch, see
+  "Restart dispatcher"). A dead pane → 422 `dispatcher exited with status N` with the
   captured `output`, the window (or the session, when this request created it)
   killed. A gone pane — a tmux error matching `tmux.IsGoneMessage` (`can't
   find`, no socket, `no server running`), or blank fields from a live server
@@ -884,6 +887,41 @@ unknown fields 400, body over 256 KiB 413.
   enters Fleet only once its agent sets `@claude_status` or `@agent_screen`.
 - houston's own `PATH` needs `tmux` and `dispatch` (for `--engines`);
   `dispatcher` and `claude`/`pi` come from the tmux server's global `PATH`.
+
+### Restart dispatcher
+
+`POST /api/runs/{id}/restart` (`server/dispatcher_restart.go`, dispatcher mode, behind the auth gate) ends a dispatcher run's engine session and starts a new dispatcher on the same crew in the same repo. Workers are untouched.
+
+- **Server state only:** the crew id (`Run.Crew.Name`, which must match `dispatchCrewRe`) and the bus (`Run.CrewBus`) come from the dispatcher ↔ crew join; the repo is the dispatch repo whose common dir is the bus's parent (symlink-resolved before matching, so a repo reached through a symlink still matches), and `crews/<id>` must be a directory there. The crew reaches the launcher through the launch file's `crew_id` (`launchEnv` sets `CREW_ID`); it is never minted and houston never removes it, whatever fails.
+- **Body** `{engine?, model?, effort?, force?}`, unknown fields 400. An absent field inherits; `""` for model or effort is the launcher default. Inheritance reads the old launcher's argv (`/proc/<pid>/cmdline` of the crew's recorded `pid`, Linux only; `parseLauncherArgv` mirrors the launcher's flag loop). Without it the engine is the run's `agent` and model/effort the launcher defaults. A changed engine does not inherit the model (models are per engine). The resolved values pass `validateDispatcher` exactly like the launch route; an inherited value that no longer validates is a 400, never a silent change. A restart carries no task prompt. `--autocompact` and a `/model` toggled inside the session are not carried.
+- **Busy** (`restartBusy`): `thinking`/`running`/`compacting`, or `blocked` unless the question kind is `turn`; for a Claude run also a permission dialog on screen (`answer.PermissionPrompt` over a capture, since a dialog left open past `idle_prompt` reads `idle`). Busy without `force` → 409 `{busy: true}`, nothing touched; the state check (not the capture) repeats just before the kill. Residual: an `AskUserQuestion` dialog left open past `idle_prompt` reads `idle` and is not detected.
+- **Order** (`handleRunRestart`; only the window, kill and startup steps are `openDispatcherWindow`, shared with the launch route, as is `launchSlot`): registry 503 → run, dispatcher and crew 404 → body 400/413 → tmux server `PATH` 503 → engines 502 → settings 400 → repo list 502 → repo and crew 404 → crew records no dispatcher pid 409 (`the crew records no dispatcher pid — restart it from a terminal`; fail closed: without the pid the wrapper could not wait for the old dispatcher, and an abort would leave the crew registered to the killed new pane) → unsafe repo path 422 → houston exe/launch dir 500 → old pane re-resolved (`resolveRunPane`) 409/503 → busy 409, or 503 when the Claude pane capture for the dialog check fails → launcher on the tmux server's `PATH` 502 (checked before anything is touched) → slot 429 → launch file 500. Then the new window opens first (the old pane's session while it exists, else the launch route's session rule), the old pane is re-resolved (point-of-use server check) and ended with `kill-pane` by pane id, then the startup check runs. A pane already gone at the kill is fine.
+  - The launch file carries `wait_pid` (the old recorded pid): the wrapper waits for that pid to exit before exec, because `crew register` refuses while the recorded pid is alive and the old launcher's `crew deregister` would otherwise remove the new registration. `launchWaitLimit` (60 s) is only a backstop that matters if houston itself dies mid-request (the wrapper then stops waiting and registers): on every houston-side outcome, including the post-await check below, houston has already answered or killed the new window, which ends the waiting wrapper.
+  - Killing first was rejected: a failed new window would leave the crew without a dispatcher, and killing a session's last window can take the tmux server down with it. A failure between opening and the kill (busy again, different server, `kill-pane` failed) kills the new window and leaves the old one running.
+  - `kill-pane`, not `kill-window`: a dispatcher window has one pane, so the window closes; a user's extra panes in it survive.
+- **Startup check:** `awaitDispatcher` counts the launcher as registered when the crew's `pid` file text is non-empty and differs from the text before the launch (a restart's pid file already exists); houston's own await, after the kill, is `launchCheck + restartSlack` (`Server.restartSlack`, 5 s in production, covering a slow exit of the old process).
+  - **Post-await check** (restart only, `windowLaunch.onStarting`, runs only when the startup check is still "starting"): if the old recorded pid is still alive (`Server.pidAlive`, default `processAlive`), the wrapper is still waiting on it and cannot register, so the new window is killed and the restart answers 502 `the old dispatcher process is still running after its pane was ended — the new launcher could not register; stop pid N and relaunch with CREW_ID=<crew> dispatcher`, with `old_ended`. Old pid dead → the 200 "still starting" is genuine.
+- **`old_ended`** (`dispatcherResponse.OldEnded`, `omitempty`, restart only; the launch route never sets it): true exactly when the restart's `afterOpen` killed the old pane or found it already gone. So every post-kill status carries it (200, 422 dead/gone, 502 unchecked, the 502 above) and no pre-kill refusal does (those leave the old dispatcher running).
+- **Statuses:**
+
+  | status | meaning |
+  |---|---|
+  | 200 | `{crew, session, window, pane, run_id, old_ended}` |
+  | 400 | malformed body or a setting outside the allowlists |
+  | 404 | `no such run`, `run is not a dispatcher`, `dispatcher has no crew`, `repo is not a known repo`, `crew is not a crew of this repo` |
+  | 409 | busy (`busy: true`), crew records no dispatcher pid, run has no terminal, pane gone, pane on a different tmux server (at the first check or just before the kill) |
+  | 413 | body too large |
+  | 422 | repo path not tmux-safe; the new launcher exited (`output` carries its pane text; `old_ended`) |
+  | 429 | another launch or restart is running (`launchSlot`) |
+  | 500 | houston exe/launch dir not passable to tmux, launch file not written |
+  | 502 | engines or repo list failed; launcher not on the tmux server's `PATH`; tmux could not open the window; could not end the old session (new window killed, old left running); could not check the new pane (`old_ended`); the old dispatcher process still running after its pane was ended (new window killed, `old_ended`) |
+  | 503 | no run registry; tmux server `PATH` missing; tmux unavailable (including a failed pane capture in the busy check) |
+
+- **Residuals:** once the old pane is killed, a launcher failure leaves the crew without a dispatcher; the 422 carries the pane output and the crew, and `CREW_ID=<id> dispatcher` in the repo recovers. An old engine's `crew stream` child can outlive the pane; the protocol's `--status`/`--force` reclaims it.
+  - A pid recycled between validation and the post-await check reads alive: a spurious 502 and a killed new window although the old dispatcher is dead (a manual relaunch, never a wrong claim).
+  - houston dying between the kill and its reply leaves no record; the UI's pending mark expires to "no longer available".
+  - A dropped request the server completes never tells the phone the new run id; the new dispatcher simply appears in Fleet.
+- **UI:** a `Restart` control in the Crew tab header (`RestartDispatcher`, so only on a joined dispatcher in dispatcher mode). An inline confirm says the session ends and workers keep running; force is decided when the confirm opens (`isBusy` at that moment, mirroring `restartBusy` minus the pane check) or by a 409 `busy`, never by a state change after opening; either turns it into `Force restart`. An optional Settings disclosure offers engine/model/effort (`same as now` = omitted, `launcher default` = `""`). While the request is in flight the old run id is marked pending (`pendingRuns.ts`, 60 s). A failure is recorded per old run id (`recordRestartFailure`, 10 min) only when the response carries `old_ended`; pre-kill refusals leave the old dispatcher running and record nothing. Cancel clears the record. A network error (status 0) shows "The connection dropped — the restart may still be running on the server…", records nothing and keeps the old id pending. When the old run has left the list, `RunDetail` shows "The restart did not come up" with the error and output instead of "no longer available", and the `CREW_ID=<crew> dispatcher` relaunch line only for 422 or the old-process 502 (the launcher is definitely not running), else "Check Fleet for the new dispatcher before relaunching.". On success the new id is marked pending (`RunDetail` shows "Starting the restarted dispatcher…" instead of "no longer available") and `switchRunTab(newId, 'crew')` replaces the history entry, only while the route still names the old run, so Back never returns to the killed run.
 
 ### Repo registry
 

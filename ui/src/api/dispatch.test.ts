@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { submitDispatch, submitDispatcher, type DispatchRequest, type DispatcherRequest } from './dispatch'
+import { restartDispatcher, submitDispatch, submitDispatcher, type DispatchRequest, type DispatcherRequest } from './dispatch'
 
 function jsonResponse(status: number, body: string): Response {
   return { ok: status >= 200 && status < 300, status, text: () => Promise.resolve(body) } as Response
@@ -189,5 +189,75 @@ describe('submitDispatcher', () => {
   it('network rejection returns failed with status 0', async () => {
     vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('network down'))))
     expect(await submitDispatcher(dreq)).toEqual({ kind: 'failed', status: 0, error: 'network error' })
+  })
+})
+
+describe('restartDispatcher', () => {
+  it('posts JSON to the run restart route and maps 200 to started', async () => {
+    const fetchMock = vi.fn<typeof fetch>(() =>
+      Promise.resolve(
+        jsonResponse(200, '{"crew":"1700000000-42","session":"repo","window":"@3","pane":"%7","run_id":"abc123"}'),
+      ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const outcome = await restartDispatcher('pane/%1', { engine: 'pi', force: true })
+    expect(outcome).toEqual({
+      kind: 'started',
+      crew: '1700000000-42',
+      session: 'repo',
+      window: '@3',
+      pane: '%7',
+      runId: 'abc123',
+    })
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/api/runs/pane%2F%251/restart')
+    expect(init?.method).toBe('POST')
+    expect(JSON.parse(init?.body as string)).toEqual({ engine: 'pi', force: true })
+  })
+
+  it('maps a busy 409 with the crew', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.resolve(jsonResponse(409, '{"error":"dispatcher is mid-turn","busy":true,"crew":"1-2"}'))),
+    )
+    expect(await restartDispatcher('r1', {})).toEqual({
+      kind: 'failed',
+      status: 409,
+      error: 'dispatcher is mid-turn',
+      busy: true,
+      crew: '1-2',
+    })
+  })
+
+  it('maps a 422 with the launcher output', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.resolve(jsonResponse(422, '{"error":"died at startup","output":"pane text"}'))),
+    )
+    expect(await restartDispatcher('r1', {})).toEqual({
+      kind: 'failed',
+      status: 422,
+      error: 'died at startup',
+      output: 'pane text',
+    })
+  })
+
+  it('maps old_ended to oldEnded', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.resolve(jsonResponse(502, '{"error":"could not check the dispatcher pane","old_ended":true}'))),
+    )
+    expect(await restartDispatcher('r1', {})).toEqual({
+      kind: 'failed',
+      status: 502,
+      error: 'could not check the dispatcher pane',
+      oldEnded: true,
+    })
+  })
+
+  it('network rejection returns failed with status 0', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('network down'))))
+    expect(await restartDispatcher('r1', {})).toEqual({ kind: 'failed', status: 0, error: 'network error' })
   })
 })

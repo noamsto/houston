@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Run } from '../api/runs'
-import { bucket, countsLabel, dispatchHref, type CrewCounts } from './crewsModel'
+import { bucket, countsLabel, dispatchHref, isBusy, type CrewCounts } from './crewsModel'
 
 const now = 1_800_000_000_000 // ms
 const nowSec = now / 1000
@@ -51,5 +51,21 @@ describe('dispatchHref', () => {
 
   it('omits the repo when unknown', () => {
     expect(dispatchHref(undefined, 'a/b')).toBe('#/dispatch?crew=a%2Fb')
+  })
+})
+
+describe('isBusy', () => {
+  it('is true while the agent works', () => {
+    for (const state of ['thinking', 'running', 'compacting'] as const) expect(isBusy(run({ state }))).toBe(true)
+  })
+
+  it('is false when idle, done, failed or in review', () => {
+    for (const state of ['idle', 'done', 'failed', 'review'] as const) expect(isBusy(run({ state }))).toBe(false)
+  })
+
+  it('is true when blocked, except on a question the turn ended with', () => {
+    expect(isBusy(run({ state: 'blocked' }))).toBe(true)
+    expect(isBusy(run({ state: 'blocked', question: { text: 'ok?', via: 'pane', kind: 'dialog' } }))).toBe(true)
+    expect(isBusy(run({ state: 'blocked', question: { text: 'ok?', via: 'pane', kind: 'turn' } }))).toBe(false)
   })
 })

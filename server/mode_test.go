@@ -70,6 +70,7 @@ func TestTmuxModeUnregistersDispatcherRoutes(t *testing.T) {
 		{"POST", "/api/runs/x/reply"},
 		{"GET", "/api/runs/x/crew/feed"},
 		{"GET", "/api/runs/x/crew/feed/stream"},
+		{"POST", "/api/runs/x/restart"},
 	} {
 		t.Run(r.method+" "+r.path, func(t *testing.T) {
 			if rec := modeRequest(t, h, r.method, r.path, "{}"); rec.Code != http.StatusNotFound {
@@ -113,6 +114,10 @@ func TestDispatcherModeKeepsRoutes(t *testing.T) {
 	}
 	if rec := modeRequest(t, h, "POST", "/api/dispatch", "{}"); rec.Code == http.StatusNotFound {
 		t.Fatalf("POST /api/dispatch is 404 in dispatcher mode — body %s", rec.Body.String())
+	}
+	// An unknown run is the handler's own JSON 404, not the mux's.
+	if rec := modeRequest(t, h, "POST", "/api/runs/x/restart", "{}"); rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "no such run") {
+		t.Fatalf("POST /api/runs/{id}/restart status %d, want the handler's 404 no such run — body %s", rec.Code, rec.Body.String())
 	}
 }
 
