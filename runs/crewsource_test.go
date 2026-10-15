@@ -2030,6 +2030,33 @@ func TestDeltasFromCrewLogReapedAndRedispatched(t *testing.T) {
 	}
 }
 
+func TestDeltasFromCrewLogReapRowAloneMarksReaped(t *testing.T) {
+	reap := dispatchRow(1000, "b") + statusRow(1100, "b", "done") +
+		`{"ts":1150,"crew_id":"c1","kind":"reap","branch":"b"}` + "\n"
+	r := deltasFromCrewLog(strings.NewReader(reap))["b"]
+	if !r.reaped || r.lastActivity != 1100 {
+		t.Errorf("reaped = %v lastActivity = %d, want true and 1100", r.reaped, r.lastActivity)
+	}
+	r = deltasFromCrewLog(strings.NewReader(reap + dispatchRow(1300, "b")))["b"]
+	if r.reaped {
+		t.Error("a redispatch did not clear a reap row")
+	}
+	r = deltasFromCrewLog(strings.NewReader(reap + statusRow(1300, "b", "working")))["b"]
+	if r.reaped {
+		t.Error("a later status did not clear a reap row")
+	}
+}
+
+func TestDeltasFromCrewLogRevivalClearsDetailAndPR(t *testing.T) {
+	log := dispatchRow(1000, "b") +
+		`{"ts":1100,"crew_id":"c1","from":"worker:b#s1","kind":"status","body":{"state":"pr_open","detail":"waiting on review","pr_url":"https://github.com/o/r/pull/7"}}` + "\n" +
+		statusRow(1200, "b", "reaped") + dispatchRow(1300, "b")
+	r := deltasFromCrewLog(strings.NewReader(log))["b"]
+	if r.Crew.Detail != "" || r.PR != nil {
+		t.Errorf("after a revival Detail = %q PR = %+v, want both cleared", r.Crew.Detail, r.PR)
+	}
+}
+
 func TestScanListsNoReapedBranch(t *testing.T) {
 	bus := t.TempDir()
 	writeEvents(t, bus, dispatchRow(1000, "fix/412")+statusRow(1100, "fix/412", "done")+
@@ -2148,5 +2175,34 @@ func TestScanDropsALongSilentWindowlessBranch(t *testing.T) {
 	panes := []tmux.PaneOptions{{PaneID: "%1", Target: "h:2", ClaudeStatus: "idle 1 "}}
 	if _, found := scanAt(bus, crewStaleAfter+time.Minute, panes, withDispatcher)[key]; !found {
 		t.Error("a branch whose dispatcher is alive was dropped")
+	}
+}
+
+func TestScanKeepsAStaleWindowlessWorkerWhoseDispatcherIsJoinedOnAnotherBus(t *testing.T) {
+	const t0 = int64(1_000_000_000_000)
+	busA, busB := t.TempDir(), t.TempDir()
+	writeEvents(t, busB, dispatchRow(t0, "fix/412")+statusRow(t0+1000, "fix/412", "working"))
+	crewDir := filepath.Join(busA, "crews", "c1")
+	if err := os.MkdirAll(crewDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(crewDir, "pane"), []byte("%1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wins := []tmux.WindowOptions{
+		{Session: "h", Window: 1, Branch: "other", GitRoot: "/wt/a"},
+		{Session: "h", Window: 3, Branch: "other2", GitRoot: "/wt/b"},
+		{Session: "h", Window: 2, CrewName: "dispatcher"},
+	}
+	panes := []tmux.PaneOptions{{PaneID: "%1", Target: "h:2", ClaudeStatus: "idle 1 "}}
+	s := crewScanner(map[string]string{"/wt/a": busA, "/wt/b": busB}, wins, panes)
+	s.now = func() time.Time { return time.UnixMilli(t0 + 1000).Add(crewStaleAfter + time.Minute) }
+
+	got, ok := s.scan()
+	if !ok {
+		t.Fatal("scan reported failure")
+	}
+	if _, found := got["crew/"+busB+"/fix/412"]; !found {
+		t.Errorf("worker dropped although its crew's dispatcher is joined on another bus; keys %v", keysOf(got))
 	}
 }

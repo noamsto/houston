@@ -235,6 +235,17 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 
 	homes := crewHomes(slices.Collect(maps.Keys(joins)))
 
+	// A dispatcher joined on any bus keeps its crew's windowless workers, even
+	// those reporting on another bus.
+	joinedCrews := map[string]bool{}
+	for _, j := range joins {
+		for crewID, paneID := range j {
+			if paneID != "" {
+				joinedCrews[crewID] = true
+			}
+		}
+	}
+
 	out := map[string]Run{}
 	for bus, branches := range s.scanRoots(rootList) {
 		project := ProjectFromCommonDir(filepath.Dir(bus))
@@ -255,7 +266,7 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 			routed.CrewBus = bus
 			routed.Worktree = worktreeFor(bus, branch, wins, s.crewDir)
 			paneID, candidates := resolvePane(bus, branch, r.State, r.UpdatedAt, r.session, r.CrewSession, paneSessions, wins, panes, s.crewDir, s.procStart)
-			if crewRunAbandoned(crewBranch{Run: routed, lastActivity: r.lastActivity}, candidates != 1, alive, now) {
+			if crewRunAbandoned(crewBranch{Run: routed, lastActivity: r.lastActivity}, candidates != 1, joinedCrews[r.Crew.Name], now) {
 				continue
 			}
 			key := paneID
@@ -514,8 +525,8 @@ type crewBranch struct {
 	// current episode: kept across re-stamps, restarted by any other status or
 	// a dispatcher reply, 0 when the branch is not asking its dispatcher.
 	blockedSince int64
-	// reaped is set by a "reaped" status and cleared by a later dispatch, resume
-	// or other status: the branch was torn down and is not listed.
+	// reaped is set by a "reaped" status or a reap row and cleared by a later
+	// dispatch, resume or other status: the branch was torn down and is not listed.
 	reaped bool
 	// lastActivity is the newest bus ts (ms) of a dispatch, resume or status row.
 	lastActivity int64
@@ -586,7 +597,11 @@ func deltasFromCrewLog(rd io.Reader) map[string]crewBranch {
 			r.Crew.Sessions++
 			if r.reaped {
 				r.reaped, r.State, r.UpdatedAt = false, "", 0
+				r.Crew.Detail, r.PR = "", nil
 			}
+		}
+		if rec.Kind == "reap" {
+			r.reaped = true
 		}
 		if rec.Kind == "dispatch" || rec.Kind == "resume" || rec.Kind == "status" {
 			r.lastActivity = max(r.lastActivity, rec.TS)
