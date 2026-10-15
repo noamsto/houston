@@ -23,7 +23,7 @@ const pillStyle: React.CSSProperties = {
   fontSize: 14,
   fontFamily: 'var(--font-mono)',
   padding: '0 14px',
-  minHeight: 40,
+  minHeight: 44,
   cursor: 'pointer',
   whiteSpace: 'nowrap',
   flexShrink: 0,
@@ -104,7 +104,7 @@ export function QuickCommands({ address, agent, state, suggestion, onPrefill }: 
 
   return (
     <div data-testid="quick-commands">
-      <div style={{ display: 'flex', gap: 6, padding: '8px 8px 0', overflowX: 'auto' }}>
+      <div style={{ display: 'flex', gap: 8, padding: '8px 8px 0', overflowX: 'auto' }}>
         <button
           type="button"
           className="pill-btn"
@@ -131,7 +131,7 @@ export function QuickCommands({ address, agent, state, suggestion, onPrefill }: 
       {open && reason && <div style={noteStyle}>Commands unavailable: {reason}</div>}
 
       {confirmClear && (
-        <div role="group" aria-label="Confirm /clear" style={{ ...noteStyle, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+        <div role="group" aria-label="Confirm /clear" style={{ ...noteStyle, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <span>Send /clear? This wipes the session context.</span>
           {pill('Confirm', () => {
             setConfirmClear(false)
@@ -144,7 +144,7 @@ export function QuickCommands({ address, agent, state, suggestion, onPrefill }: 
       )}
 
       {sheet !== null && (
-        <div style={{ padding: '8px 8px 0', display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div style={{ padding: '8px 8px 0', display: 'flex', flexDirection: 'column', gap: 8 }}>
           <label htmlFor="quick-suggested" style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
             Suggested command
           </label>
@@ -167,7 +167,7 @@ export function QuickCommands({ address, agent, state, suggestion, onPrefill }: 
               resize: 'none',
             }}
           />
-          <div style={{ display: 'flex', gap: 6 }}>
+          <div style={{ display: 'flex', gap: 8 }}>
             {pill('Send command', () => void sendSheet())}
             <button type="button" className="pill-btn" style={pillStyle} onClick={() => setSheet(null)}>
               Cancel

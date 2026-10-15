@@ -85,7 +85,7 @@ const pillStyle: React.CSSProperties = {
   fontSize: 14,
   fontFamily: 'var(--font-mono)',
   padding: '0 14px',
-  minHeight: 40,
+  minHeight: 44,
   cursor: 'pointer',
   whiteSpace: 'nowrap',
   flexShrink: 0,
@@ -250,10 +250,10 @@ export function MobileInputBar({ address, choices, inputText, agent, runAgent, r
               style={{
                 background: 'var(--bg-surface)',
                 border: '1px solid var(--accent-attention)',
-                borderRadius: 6,
+                borderRadius: 8,
                 color: 'var(--accent-attention)',
                 fontSize: 14,
-                minHeight: 40,
+                minHeight: 44,
                 padding: '0 12px',
                 cursor: 'pointer',
               }}
@@ -274,7 +274,7 @@ export function MobileInputBar({ address, choices, inputText, agent, runAgent, r
 
       <div
         data-testid="quick-keys"
-        style={{ display: 'flex', gap: 6, padding: '8px 8px 0', overflowX: 'auto' }}
+        style={{ display: 'flex', gap: 8, padding: '8px 8px 0', overflowX: 'auto' }}
       >
         {quickActions.map((qa) => (
           <button
@@ -291,7 +291,7 @@ export function MobileInputBar({ address, choices, inputText, agent, runAgent, r
       </div>
 
       {confirmInterrupt && (
-        <div role="group" aria-label="Confirm ^C" style={{ ...errorStyle, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 6 }}>
+        <div role="group" aria-label="Confirm ^C" style={{ ...errorStyle, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 8 }}>
           <span>Send ^C?</span>
           <button
             type="button"
@@ -323,7 +323,7 @@ export function MobileInputBar({ address, choices, inputText, agent, runAgent, r
       )}
 
       {/* Text input row */}
-      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, padding: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, padding: 8 }}>
         <textarea
           ref={textareaRef}
           value={text}
@@ -347,8 +347,10 @@ export function MobileInputBar({ address, choices, inputText, agent, runAgent, r
             flex: 1,
             background: 'var(--bg-surface)',
             border: '1px solid var(--border)',
-            borderRadius: 6,
-            padding: '6px 10px',
+            borderRadius: 8,
+            padding: '9px 12px',
+            minHeight: 44,
+            boxSizing: 'border-box',
             color: 'var(--text-primary)',
             fontSize: 16,
             lineHeight: '24px',
@@ -368,12 +370,12 @@ export function MobileInputBar({ address, choices, inputText, agent, runAgent, r
             style={{
               background: listening ? 'var(--accent-attention)' : 'var(--bg-surface)',
               border: '1px solid var(--border)',
-              borderRadius: 6,
+              borderRadius: 8,
               color: listening ? '#000' : 'var(--text-secondary)',
               cursor: 'pointer',
               fontSize: 16,
-              width: 36,
-              height: 36,
+              width: 44,
+              height: 44,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -397,7 +399,7 @@ export function MobileInputBar({ address, choices, inputText, agent, runAgent, r
           style={{
             background: 'var(--bg-surface)',
             border: '1px solid var(--border)',
-            borderRadius: 6,
+            borderRadius: 8,
             color: 'var(--text-secondary)',
             cursor: sending ? 'default' : 'pointer',
             fontSize: 16,
@@ -422,7 +424,7 @@ export function MobileInputBar({ address, choices, inputText, agent, runAgent, r
           style={{
             background: canSend ? 'var(--accent-working)' : 'var(--bg-surface)',
             border: canSend ? 'none' : '1px solid var(--border)',
-            borderRadius: 6,
+            borderRadius: 8,
             color: canSend ? '#fff' : 'var(--text-secondary)',
             cursor: sending ? 'default' : 'pointer',
             opacity: sending ? 0.6 : 1,

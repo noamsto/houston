@@ -443,4 +443,19 @@ describe('composer auto-grow', () => {
     expect(field.style.height).toBe('200px')
     expect(field.style.overflowY).toBe('auto')
   })
+
+  it('Send, voice and attach have a hit area of at least 44px', async () => {
+    vi.resetModules()
+    vi.stubGlobal('SpeechRecognition', class {})
+    const { MobileInputBar: Bar } = await import('./MobileInputBar')
+    render(<Bar address={runAddress} />)
+    for (const el of [
+      screen.getByRole('button', { name: 'Send' }),
+      screen.getByTitle('Voice input'),
+      screen.getByTitle('Attach file'),
+    ]) {
+      expect(parseInt(el.style.width, 10)).toBeGreaterThanOrEqual(44)
+      expect(parseInt(el.style.height, 10)).toBeGreaterThanOrEqual(44)
+    }
+  })
 })
