@@ -717,3 +717,18 @@ func TestSplitWidthCapture(t *testing.T) {
 		}
 	}
 }
+
+func TestSplitCursorCapture(t *testing.T) {
+	got, x, y, err := splitCursorCapture("6,23\nline one\n␛[1mbold\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if x != 6 || y != 23 || got != "line one\n\x1b[1mbold\n" {
+		t.Errorf("got %q, %d,%d", got, x, y)
+	}
+	for _, bad := range []string{"6,x\ncapture\n", "x,6\ncapture\n", "6\ncapture\n", "6,23"} {
+		if _, _, _, err := splitCursorCapture(bad); err == nil {
+			t.Errorf("splitCursorCapture(%q) succeeded", bad)
+		}
+	}
+}

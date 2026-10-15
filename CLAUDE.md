@@ -559,8 +559,8 @@ The run route carries a JSON envelope, `{"type":"...","data":{...}}`
 `ui/src/api/terminal.ts` for address/URL selection):
 
 **Server → Client:**
-- `dims` — Pane dimensions (cols/rows) to resize xterm.js to match
-- `seed` — Full snapshot of pane content; also used for a mid-stream re-seed (e.g. after a resize) — there is no separate `reseed` type on the wire
+- `dims` — Pane dimensions (cols/rows) to resize xterm.js to match. Sent at connect and again whenever the 1 s meta poll sees the pane's size change (another client attaching, a zoom toggled elsewhere), each time followed by a fresh `seed`: a TUI redraws relative to the screen height, so an xterm left at the old size scrolls Claude's prompt box and status bar instead of repainting them in place.
+- `seed` — Full snapshot of pane content plus `cursor` (`{x, y}`, 0-based within the visible screen, read in the same tmux call as the capture); also used for a mid-stream re-seed (a dropped-output gap or a resize) — there is no separate `reseed` type on the wire. The UI clears scrollback in the write queue before every seed (the seed repeats the pane's history, so keeping the old scrollback shows it twice) and parks the cursor at `cursor` (the lines are written one after another, which leaves it at the end of the last line, and a shell echoes keystrokes without positioning them).
 - `output` — Incremental terminal data
 - `meta` — Pane metadata (agent type, status, mode, activity, choices)
 

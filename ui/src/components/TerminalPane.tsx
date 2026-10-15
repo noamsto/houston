@@ -18,6 +18,7 @@ import {
 } from '../hooks/useTouchGestures'
 import { darkTheme, lightTheme } from '../lib/xterm'
 import { mobileFitScale } from '../lib/mobileFitScale'
+import { writeSnapshot, type SnapshotCursor } from '../lib/terminalSnapshot'
 import { desktopFillScale } from '../lib/desktopFillScale'
 import { altScrollMode, cellAt, clampSteps, pxPerStep, scrollInput, takeSteps, wheelDeltaPx } from '../lib/altScroll'
 import { PaneHeader } from './PaneHeader'
@@ -38,27 +39,9 @@ interface Props {
   draftKey?: string
 }
 
-/** Write a capture-pane snapshot into xterm.js.
- *  Clears scrollback + viewport via escape sequences (NOT term.reset() which
- *  would destroy terminal modes that the program set up before we connected).
- *  Content flows sequentially — natural scrolling moves earlier lines into
- *  the scrollback buffer, leaving the last term.rows lines visible. */
-function writeSnapshot(term: Terminal, data: string, onDone?: () => void) {
-  term.options.convertEol = true
-
-  const lines = data.split('\n')
-  if (lines[lines.length - 1] === '') lines.pop()
-
-  // \x1b[?25l — hide cursor (program output will restore it)
-  // \x1b[2J   — clear viewport (doesn't affect terminal modes)
-  // \x1b[H    — cursor to (1,1)
-  // NOTE: \x1b[3J (clear scrollback) intentionally omitted — it shifts the
-  // viewport offset in xterm.js, causing content to render one line below.
-  // Old scrollback is cleaned up by term.clear() on pane target switch.
-  term.write('\x1b[?25l\x1b[2J\x1b[H' + lines.join('\n'), () => {
-    term.options.convertEol = false
-    onDone?.()
-  })
+interface Seed {
+  data: string
+  cursor?: SnapshotCursor
 }
 
 // Mobile: wide terminal (~120 columns) with pinch-to-zoom and pan gestures
@@ -287,14 +270,14 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
 
   // Cache last seed so we can replay it when xterm remounts (e.g. isDesktop changes)
   // without waiting for the server to send a fresh seed.
-  const lastSeedRef = useRef<string | null>(null)
+  const lastSeedRef = useRef<Seed | null>(null)
 
   // When server sends pane dimensions, lock xterm.js to those dims.
   // FitAddon must not override — CC %output uses absolute cursor positions
   // based on the real pane size (controlled by kitty).
   const paneDimsRef = useRef<{ cols: number; rows: number } | null>(null)
   // Buffer seed until dims arrive — writing seed at wrong dimensions causes garbling
-  const pendingSeedRef = useRef<string | null>(null)
+  const pendingSeedRef = useRef<Seed | null>(null)
   // First-seed/reseed distinction for the buffered seed above, captured at
   // receipt time (see onSeed) since that's what reflects "is this the first
   // seed for this connection" — not whenever the buffered write lands.
@@ -344,10 +327,10 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
     }
     // Flush buffered seed now that dims are applied
     if (pendingSeedRef.current) {
-      const data = pendingSeedRef.current
+      const seed = pendingSeedRef.current
       const isReseed = pendingSeedIsReseedRef.current
       pendingSeedRef.current = null
-      writeSnapshot(term, data, () => afterSeedWritten(term, isReseed))
+      writeSnapshot(term, seed.data, seed.cursor, () => afterSeedWritten(term, isReseed))
     }
   }
 
@@ -357,15 +340,21 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
       if (!term) return
       applyDimsAndSeed(term, cols, rows)
     },
-    onSeed: (data) => {
-      lastSeedRef.current = data
+    onSeed: (data, cursor) => {
+      lastSeedRef.current = { data, cursor }
       const isReseed = firstSeedDoneRef.current
       firstSeedDoneRef.current = true
       const term = termRef.current
       if (!term) return
+      // Output still waiting for its frame predates the seed on the wire, so the
+      // capture already holds it; replaying it over the seed would redraw a
+      // TUI's relative moves a second time.
+      if (rafIdRef.current) cancelAnimationFrame(rafIdRef.current)
+      rafIdRef.current = 0
+      outputBufRef.current = ''
       // If dims haven't arrived yet, buffer the seed
       if (!paneDimsRef.current) {
-        pendingSeedRef.current = data
+        pendingSeedRef.current = { data, cursor }
         pendingSeedIsReseedRef.current = isReseed
         return
       }
@@ -373,10 +362,10 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
       // scrolled-up user was before it lands.
       const buf = term.buffer.active
       const keepDistFromBottom = holdingView() && buf.viewportY < buf.baseY ? buf.baseY - buf.viewportY : null
-      writeSnapshot(term, data, () => afterSeedWritten(term, isReseed, keepDistFromBottom))
+      writeSnapshot(term, data, cursor, () => afterSeedWritten(term, isReseed, keepDistFromBottom))
     },
     onReseed: (data) => {
-      lastSeedRef.current = data
+      lastSeedRef.current = { data }
       const term = termRef.current
       if (!term) return
       // Post-resize reseed: write data directly (contains its own \033[2J\033[H).
@@ -543,7 +532,7 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
         fittedWidthRef.current = innerRef.current.clientWidth
       }
       if (lastSeedRef.current && paneDimsRef.current) {
-        writeSnapshot(term, lastSeedRef.current)
+        writeSnapshot(term, lastSeedRef.current.data, lastSeedRef.current.cursor)
       }
       if (isDesktop) term.focus()
       setTermMounted(true)

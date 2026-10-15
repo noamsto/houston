@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { WSMeta, WSOutput } from '../api/types'
+import type { WSCursor, WSMeta, WSOutput, WSSeed } from '../api/types'
 import { WS_CLOSE_SERVER_CHANGED } from '../api/terminal'
 import { RESYNC_AFTER_HIDDEN_MS, trackHidden } from './streamLiveness'
 
@@ -10,7 +10,7 @@ interface WSDims {
 
 interface PaneSocketCallbacks {
   onDims: (dims: WSDims) => void    // pane dimensions — resize xterm.js to match
-  onSeed: (data: string) => void    // full snapshot — write via writeSnapshot (clears scrollback)
+  onSeed: (data: string, cursor?: WSCursor) => void  // full snapshot — write via writeSnapshot (clears scrollback)
   onReseed: (data: string) => void  // post-resize snapshot — write without clearing scrollback
   onOutput: (data: string) => void  // incremental terminal data — write via term.write
   onMeta: (meta: WSMeta) => void
@@ -102,8 +102,8 @@ export function usePaneSocket(path: string | null, callbacks: PaneSocketCallback
               break
             }
             case 'seed': {
-              const output = msg.data as WSOutput
-              callbacksRef.current.onSeed(output.data)
+              const seed = msg.data as WSSeed
+              callbacksRef.current.onSeed(seed.data, seed.cursor)
               break
             }
             case 'reseed': {
