@@ -420,6 +420,15 @@ func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A failed lookup falls back to the model allowlist validateDispatch
+	// already applied, as the options endpoint does.
+	if listed, err := s.dispatchEngines(r.Context(), serverPath); err == nil && !slices.Contains(listed, valid.Engine) {
+		dlog.field = "engine"
+		dlog.status = http.StatusBadRequest
+		writeDispatchJSON(w, http.StatusBadRequest, dispatchResponse{Error: "engine is not available on this host"})
+		return
+	}
+
 	repos, err := s.dispatchRepos()
 	if err != nil {
 		dlog.status = http.StatusBadGateway

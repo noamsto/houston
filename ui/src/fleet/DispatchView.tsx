@@ -10,6 +10,7 @@ import {
   isValidIssue,
   loadPrefs,
   resolveInitial,
+  workerEngines,
   savePrefs,
   taskMaxHeight,
   type DispatchPrefs,
@@ -334,7 +335,7 @@ export function DispatchView({ runs }: { runs: Run[] }) {
             <div className="dispatch-field">
               <label htmlFor="dispatch-engine">Engine</label>
               <select id="dispatch-engine" value={engine} onChange={(e) => chooseEngine(e.target.value)}>
-                {options.engine_order.map((eng) => <option key={eng} value={eng}>{eng}</option>)}
+                {workerEngines(options).map((eng) => <option key={eng} value={eng}>{eng}</option>)}
               </select>
             </div>
 

@@ -34,6 +34,14 @@ export function savePrefs(p: DispatchPrefs): void {
   }
 }
 
+/** Engines the worker form offers: those with models, narrowed to what this
+ *  host can dispatch unless that lookup failed. */
+export function workerEngines(o: DispatchOptions): string[] {
+  const withModels = o.engine_order.filter((e) => (o.engines[e] ?? []).length > 0)
+  if (o.dispatcher_engines_error) return withModels
+  return withModels.filter((e) => (o.dispatcher_engines ?? []).includes(e))
+}
+
 /** The default model for an engine+tier, falling back to the engine's first
  *  model when the tier map's pick isn't (or is no longer) one of them. */
 export function defaultModel(o: DispatchOptions, engine: string, tier: string): string {
@@ -71,12 +79,13 @@ export function resolveInitial(
         ? prefs.repo
         : (o.repos[0]?.path ?? '')
 
+  const offered = workerEngines(o)
   const engine =
-    prefs.engine && o.engine_order.includes(prefs.engine)
+    prefs.engine && offered.includes(prefs.engine)
       ? prefs.engine
-      : o.engine_order.includes('claude')
+      : offered.includes('claude')
         ? 'claude'
-        : (o.engine_order[0] ?? '')
+        : (offered[0] ?? '')
 
   const tier =
     prefs.tier && o.tiers.includes(prefs.tier)
