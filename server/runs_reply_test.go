@@ -178,34 +178,44 @@ func TestReplyGatesLeaveNoPathToACommand(t *testing.T) {
 	})
 }
 
-// The reply is an argv element, so shell metacharacters are inert and a
-// leading dash is an operand rather than a flag.
+// The reply is one argv element, so shell metacharacters are inert, and the
+// `--` before it makes a body that starts with a dash the body rather than an
+// option to crew.
 func TestReplyArgvIsOneLiteralElement(t *testing.T) {
 	const nasty = "-n; rm -rf / `id` $(id) \"quoted\" && echo pwned\nsecond line"
 
-	stub := &stubRunner{}
-	s := newReplyServer(t, stub.run, crewDelta(nil))
+	for _, tc := range []struct{ name, body string }{
+		{"shell metacharacters", nasty},
+		{"leading double dash", "-- rebase onto main"},
+		{"leading dash", "-5"},
+		{"plain", "plain answer"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &stubRunner{}
+			s := newReplyServer(t, stub.run, crewDelta(nil))
 
-	rec := doReply(t, s, replyRequest("POST", replyPath(t, s), replyBody(t, nasty)))
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("status %d, want 204", rec.Code)
-	}
+			rec := doReply(t, s, replyRequest("POST", replyPath(t, s), replyBody(t, tc.body)))
+			if rec.Code != http.StatusNoContent {
+				t.Fatalf("status %d, want 204", rec.Code)
+			}
 
-	got := stub.last(t)
-	want := []string{"crew", "reply", "worker:" + replyBranch, nasty}
-	if len(got.Argv) != len(want) {
-		t.Fatalf("argv %q, want %q", got.Argv, want)
-	}
-	for i := range want {
-		if got.Argv[i] != want[i] {
-			t.Errorf("argv[%d] = %q, want %q", i, got.Argv[i], want[i])
-		}
-	}
-	if got.Dir != replyDir {
-		t.Errorf("Dir = %q, want %q", got.Dir, replyDir)
-	}
-	if got.CrewID != replyCrew {
-		t.Errorf("CrewID = %q, want %q", got.CrewID, replyCrew)
+			got := stub.last(t)
+			want := []string{"crew", "reply", "worker:" + replyBranch, "--", tc.body}
+			if len(got.Argv) != len(want) {
+				t.Fatalf("argv %q, want %q", got.Argv, want)
+			}
+			for i := range want {
+				if got.Argv[i] != want[i] {
+					t.Errorf("argv[%d] = %q, want %q", i, got.Argv[i], want[i])
+				}
+			}
+			if got.Dir != replyDir {
+				t.Errorf("Dir = %q, want %q", got.Dir, replyDir)
+			}
+			if got.CrewID != replyCrew {
+				t.Errorf("CrewID = %q, want %q", got.CrewID, replyCrew)
+			}
+		})
 	}
 }
 

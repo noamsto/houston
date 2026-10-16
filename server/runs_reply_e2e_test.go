@@ -130,9 +130,9 @@ func TestReplyReachesTheRealCrewBus(t *testing.T) {
 
 	s := newReplyServer(t, execCrewReply, crewDelta(func(r *runs.Run) { r.Worktree = root }))
 
-	// Leading "--" on purpose: crew reply does no option parsing, so the
-	// endpoint must not insert a separator of its own — one would be consumed
-	// as the recipient. Nothing but the real CLI can check that.
+	// Leading "--" on purpose: crew reply parses options and refuses a
+	// dash-led body unless "--" precedes it, so the endpoint must always supply
+	// one. Nothing but the real CLI can check that.
 	const answer = "-- rebase onto main, not merge; `id` $(id)"
 	rec := doReply(t, s, replyRequest("POST", replyPath(t, s), replyBody(t, answer)))
 	if rec.Code != http.StatusNoContent {
@@ -157,6 +157,18 @@ func TestReplyReachesTheRealCrewBus(t *testing.T) {
 	}
 	if body != answer {
 		t.Errorf("body %q, want %q — the answer must round-trip verbatim", body, answer)
+	}
+
+	const plain = "go ahead with main"
+	rec = doReply(t, s, replyRequest("POST", replyPath(t, s), replyBody(t, plain)))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("plain status %d, want 204 (body %q)", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(lastBusRecord(t, log).Body, &body); err != nil {
+		t.Fatalf("plain body is not a JSON string: %v", err)
+	}
+	if body != plain {
+		t.Errorf("plain body %q, want %q — the answer must round-trip verbatim", body, plain)
 	}
 
 	otherAfter, err := os.ReadFile(otherLog)
