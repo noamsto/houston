@@ -10,7 +10,7 @@ import type { Run } from '../api/runs'
 import { isBusy } from './crewsModel'
 import { crewShortId } from './fleetList'
 import { switchRunTab } from './nav'
-import { clearPendingRun, clearRestartFailure, markPendingRun, recordRestartFailure } from './pendingRuns'
+import { clearPendingRun, clearRestartFailure, markPendingRun, recordRestartFailure, relaunchAdvice } from './pendingRuns'
 import { parseDetailRoute } from './routes'
 
 // Keeps "leave unchanged" apart from "" (the launcher's own default).
@@ -78,12 +78,12 @@ export function RestartDispatcher({ run }: { run: Run }) {
     return id === run.id || id === encodeURIComponent(run.id)
   }
 
-  function close(): void {
+  function close(keepRecord = false): void {
     setPhase('closed')
     setShowSettings(false)
     setForceAsked(false)
     setFailure(null)
-    clearRestartFailure(run.id)
+    if (!keepRecord) clearRestartFailure(run.id)
     setEngine(SAME)
     setModel(SAME)
     setEffort(SAME)
@@ -143,7 +143,7 @@ export function RestartDispatcher({ run }: { run: Run }) {
           before retrying.
         </p>
         <div className="crews-restart-actions">
-          <button type="button" className="crews-restart" onClick={close}>
+          <button type="button" className="crews-restart" onClick={() => close()}>
             Close
           </button>
         </div>
@@ -152,10 +152,17 @@ export function RestartDispatcher({ run }: { run: Run }) {
   }
 
   if (phase === 'failed' && failure) {
+    const ended = failure.oldEnded
     return (
       <div className="crews-restart-confirm dispatch-result failure">
         <pre>{failure.error}</pre>
-        {failure.crew && <p>Crew <code>{failure.crew}</code> is unchanged.</p>}
+        {failure.crew && ended && (
+          <p>
+            Crew <code>{failure.crew}</code> is intact — workers keep running.{' '}
+            {relaunchAdvice(failure, failure.crew)}
+          </p>
+        )}
+        {failure.crew && !ended && <p>Crew <code>{failure.crew}</code> is unchanged.</p>}
         {failure.output && (
           <details>
             <summary>Output</summary>
@@ -163,10 +170,12 @@ export function RestartDispatcher({ run }: { run: Run }) {
           </details>
         )}
         <div className="crews-restart-actions">
-          <button type="button" className="crews-restart" onClick={() => { void send(lastReq.current) }}>
-            Retry
-          </button>
-          <button type="button" className="crews-restart" onClick={close}>
+          {!ended && (
+            <button type="button" className="crews-restart" onClick={() => { void send(lastReq.current) }}>
+              Retry
+            </button>
+          )}
+          <button type="button" className="crews-restart" onClick={() => close(ended)}>
             Cancel
           </button>
         </div>
@@ -234,7 +243,7 @@ export function RestartDispatcher({ run }: { run: Run }) {
         >
           {isSending ? 'Restarting…' : forceAsked ? 'Force restart' : 'Restart'}
         </button>
-        <button type="button" className="crews-restart" disabled={isSending} onClick={close}>
+        <button type="button" className="crews-restart" disabled={isSending} onClick={() => close()}>
           Cancel
         </button>
       </div>
