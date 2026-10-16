@@ -60,3 +60,15 @@ export function clearPendingRuns(): void {
   pending.clear()
   failures.clear()
 }
+
+// Only these two failures prove the new launcher is not running, so only they
+// make a manual relaunch safe.
+function launcherNotRunning(f: RestartFailure): boolean {
+  return f.status === 422 || (f.status === 502 && f.error.startsWith('the old dispatcher process is still running'))
+}
+
+export function relaunchAdvice(f: RestartFailure, crew: string): string {
+  return launcherNotRunning(f)
+    ? `Relaunch it from a terminal in the repo with CREW_ID=${crew} dispatcher.`
+    : 'Check Fleet for the new dispatcher before relaunching.'
+}
