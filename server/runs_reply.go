@@ -30,7 +30,7 @@ const (
 type replyExec struct {
 	Dir    string   // Run.Worktree — the working directory; never "" by the time a runner sees it
 	CrewID string   // Run.Crew.Name — passed as CREW_ID=<CrewID> appended to os.Environ()
-	Argv   []string // exactly {"crew", "reply", "worker:" + Run.Branch, text}; no shell, no "--"
+	Argv   []string // exactly {"crew", "reply", "worker:" + Run.Branch, "--", text}; no shell
 }
 
 type replyResult struct {
@@ -41,10 +41,10 @@ type replyResult struct {
 
 type replyRunner func(ctx context.Context, x replyExec) replyResult
 
-// execCrewReply is the real runner. The argv slice reaches execve untouched:
-// no shell, and no "--" — crew reply takes its two operands positionally and
-// does no option parsing, so a leading-dash answer is already literal and a
-// "--" would be consumed as the recipient.
+// execCrewReply is the real runner. The argv slice reaches execve untouched,
+// with no shell. crew reply parses options, so the "--" ahead of the answer is
+// what keeps one that starts with a dash the body; the recipient goes before
+// it and always starts with "worker:", so it never reads as an option either.
 func execCrewReply(ctx context.Context, x replyExec) replyResult {
 	cmd := exec.CommandContext(ctx, x.Argv[0], x.Argv[1:]...) //nolint:gosec // argv is built by the handler from validated run ids; recipient is guarded against option parsing
 	cmd.Dir = x.Dir
@@ -138,7 +138,7 @@ func (s *Server) handleRunReply(w http.ResponseWriter, r *http.Request) {
 	res := s.replyRunner(ctx, replyExec{
 		Dir:    run.Worktree,
 		CrewID: run.Crew.Name,
-		Argv:   []string{"crew", "reply", "worker:" + run.Branch, body.Text},
+		Argv:   []string{"crew", "reply", "worker:" + run.Branch, "--", body.Text},
 	})
 
 	switch {
