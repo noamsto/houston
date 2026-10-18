@@ -240,7 +240,7 @@ describe('MobileShell run tabs', () => {
     window.location.hash = '#/fleet/r/chat'
     const { container } = render(<MobileShell runs={[run]} connected hasSnapshot now={nowSec * 1000} mode="dispatcher" />)
 
-    expect(within(bar()).getAllByRole('tab').map((t) => t.textContent)).toEqual(['✉Chat', '▸Terminal'])
+    expect(within(bar()).getAllByRole('tab').map((t) => t.textContent)).toEqual(['Chat', 'Terminal'])
     expect(within(bar()).getByRole('tab', { name: /chat/i }).getAttribute('aria-selected')).toBe('true')
     expect(screen.queryByRole('navigation', { name: 'sections' })).toBeNull()
     expect(container.querySelector('.run-detail-tabs')).toBeNull()
@@ -251,6 +251,31 @@ describe('MobileShell run tabs', () => {
     act(() => { window.location.hash = '#/fleet' })
     expect(screen.queryByRole('tablist', { name: 'run tabs' })).toBeNull()
     expect(screen.getByRole('navigation', { name: 'sections' })).toBeTruthy()
+  })
+
+  it('draws every bar button, including Back, with one aria-hidden svg icon', () => {
+    window.location.hash = '#/fleet/d/crew'
+    const d = { ...run, id: 'd', role: 'dispatcher', crew: { name: '1-1' } } as Run
+    const { unmount } = render(<MobileShell runs={[d]} connected hasSnapshot now={nowSec * 1000} mode="dispatcher" />)
+    const tabs = within(bar()).getAllByRole('tab')
+    expect(tabs.map((t) => t.textContent)).toEqual(['Crew', 'Chat', 'Terminal'])
+    const buttons = [...tabs, document.querySelector('.run-tabs-back') as HTMLElement]
+    for (const b of buttons) {
+      const icons = b.querySelectorAll('svg')
+      expect(icons).toHaveLength(1)
+      expect(icons[0].getAttribute('aria-hidden')).toBe('true')
+    }
+    unmount()
+
+    window.location.hash = '#/fleet'
+    render(<MobileShell runs={[d]} connected hasSnapshot now={nowSec * 1000} mode="dispatcher" />)
+    const sections = within(screen.getByRole('navigation', { name: 'sections' })).getAllByRole('button')
+    expect(sections.map((b) => b.textContent)).toEqual(['Fleet', 'Workspace', 'Dispatch'])
+    for (const b of sections) {
+      const icons = b.querySelectorAll('svg')
+      expect(icons).toHaveLength(1)
+      expect(icons[0].getAttribute('aria-hidden')).toBe('true')
+    }
   })
 
   it('a joined dispatcher defaults to the Crew tab; a run with no tabs shows only Back in the bar', () => {

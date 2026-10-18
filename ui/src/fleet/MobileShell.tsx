@@ -10,6 +10,7 @@ import { tabHash, useDetailRoute, useShellTab, type ShellTab } from './routes'
 import { back, backLabel, openRun, popToRoot, rootLabel, switchRunTab, useNavEntry } from './nav'
 import { activeTab, DETAIL_TAB_LABEL, offeredTabs } from './runTabs'
 import { useKeyboardInset } from '../hooks/useKeyboardInset'
+import { BackIcon, ChatIcon, CrewIcon, DispatchIcon, FleetIcon, TerminalIcon, WorkspaceIcon } from './TabIcons'
 
 export interface ShellData {
   runs: Run[]
@@ -19,7 +20,7 @@ export interface ShellData {
   mode: Mode | null
 }
 
-const RUN_TAB_GLYPH = { crew: '◉', chat: '✉', terminal: '▸' } as const
+const RUN_TAB_ICON = { crew: CrewIcon, chat: ChatIcon, terminal: TerminalIcon } as const
 const LONG_PRESS_MS = 500
 
 /** The bottom bar's Back, in thumb reach; a long press pops to the root. */
@@ -55,7 +56,7 @@ function BarBack({ label, root, onBack, onRoot }: { label: string; root: string;
         else onBack()
       }}
     >
-      <span className="glyph" aria-hidden>‹</span>
+      <BackIcon />
       <span className="run-tabs-back-label">{label}</span>
     </button>
   )
@@ -143,7 +144,9 @@ export function MobileShell({ runs, connected, hasSnapshot, now, mode }: ShellDa
         <div className="shell-tabs run-tabs">
           <BarBack label={parentLabel} root={root} onBack={goBack} onRoot={goRoot} />
           <div className="run-tabs-list" role="tablist" aria-label="run tabs">
-            {runTabs.map((t) => (
+            {runTabs.map((t) => {
+              const RunTabIcon = RUN_TAB_ICON[t]
+              return (
               <button
                 key={t}
                 type="button"
@@ -152,24 +155,25 @@ export function MobileShell({ runs, connected, hasSnapshot, now, mode }: ShellDa
                 aria-selected={activeRunTab === t}
                 onClick={() => switchRunTab(detail.id, t)}
               >
-                <span className="glyph" aria-hidden>{RUN_TAB_GLYPH[t]}</span>{DETAIL_TAB_LABEL[t]}
+                <RunTabIcon />{DETAIL_TAB_LABEL[t]}
               </button>
-            ))}
+              )
+            })}
           </div>
         </div>
       ) : (
       <nav className="shell-tabs" aria-label="sections">
         <button className={tab === 'fleet' ? 'on' : ''} aria-current={tab === 'fleet' ? 'true' : undefined} onClick={() => selectTab('fleet')}>
-          <span className="glyph" aria-hidden>▤</span>
+          <FleetIcon />
           Fleet
           {attention && tab !== 'fleet' && <span className="dot" role="status" aria-label="runs need you" />}
         </button>
         <button className={tab === 'workspace' ? 'on' : ''} aria-current={tab === 'workspace' ? 'true' : undefined} onClick={() => selectTab('workspace')}>
-          <span className="glyph" aria-hidden>▣</span>Workspace
+          <WorkspaceIcon />Workspace
         </button>
         {dispatcherMode && (
           <button className={tab === 'dispatch' ? 'on' : ''} aria-current={tab === 'dispatch' ? 'true' : undefined} onClick={() => selectTab('dispatch')}>
-            <span className="glyph" aria-hidden>✦</span>Dispatch
+            <DispatchIcon />Dispatch
           </button>
         )}
       </nav>
