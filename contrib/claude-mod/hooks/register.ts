@@ -158,14 +158,10 @@ function startTimer($: EngineInterface) {
   })
 }
 
-function evictOldest() {
-  queue.shift()
-}
-
 // seq is taken when the record is built, so it follows hook order; the timer
 // sends in queue order.
 function post($: EngineInterface, ev: string, fields: Rec = {}) {
-  if (queue.length >= queueCap) evictOldest()
+  if (queue.length >= queueCap) queue.shift()
   queue.push({ gen, body: { v: 1, boot, seq: ++seq, ts: Date.now(), ev, ...fields } })
   quietTicks = 0
   if (!timer || Date.now() - lastTick > timerStaleMs) startTimer($)

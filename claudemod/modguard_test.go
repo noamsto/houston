@@ -545,7 +545,6 @@ func TestScanMod(t *testing.T) {
 		{"commented line", reads + "// $.prompt.submit({ text: 'x' })\n", ""},
 		{"commented block", reads + "/* $.tool.call()\n   $.prompt.submit() */\n", ""},
 		{"commented hook", reads + "// on('x', (api, e, next) => {})\n", ""},
-		// Strings are not exempt: the scan runs on them, which is simpler and safer.
 		{"forbidden name in a string", reads + "const s = '$.prompt.submit'\n", "forbidden API"},
 		{"// in a string is no comment", reads + "const u = 'http://x'; $.prompt.submit()\n", "forbidden API"},
 		{"// in a template is no comment", reads + "const s = `//`; $.prompt.submit()\n", "forbidden API"},
