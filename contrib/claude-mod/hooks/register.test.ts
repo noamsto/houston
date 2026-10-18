@@ -426,6 +426,23 @@ test('a notification carries its type, message and transcript', async ($, on) =>
   })
 })
 
+test('a subagent notification carries its agent id', async ($, on) => {
+  const { bodies, flush } = rig(on)
+  on('classic.Notification', () => ({}))
+
+  await $.classic.Notification({
+    message: 'Claude needs your permission to use Edit',
+    notification_type: 'permission_prompt',
+    agent_id: 'agent-1',
+  })
+  await $.classic.Notification({ message: 'main', notification_type: 'permission_prompt' })
+  await flush()
+
+  const [sub, main] = bodies('notification')
+  expect(sub).toMatchObject({ agent: 'agent-1', message: 'Claude needs your permission to use Edit' })
+  expect(main!.agent).toBeUndefined()
+})
+
 test('a tool check returns the beneath decision unchanged and posts it', async ($, on) => {
   const { bodies, flush } = rig(on)
   on('tool.check', () => ({ decision: 'ask', reason: 'needs a human' }))

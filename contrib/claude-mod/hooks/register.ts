@@ -299,6 +299,7 @@ export const register: Register = on => {
   on('classic.Notification', ($, e, next) => {
     post($, 'notification', {
       type: e.notification_type,
+      agent: e.agent_id,
       message: cut(e.message, 500),
       transcript: e.transcript_path,
       cwd: e.cwd,
