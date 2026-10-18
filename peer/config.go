@@ -169,7 +169,6 @@ func plainHopOK(local, remote net.Addr) bool {
 // goos is runtime.GOOS; a var so tests can check both platforms' names.
 var goos = runtime.GOOS
 
-// onTailscaleInterface fails closed: a lookup error refuses the hop.
 func onTailscaleInterface(addr netip.Addr) bool {
 	name, err := interfaceOf(addr)
 	if err != nil {
