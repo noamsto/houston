@@ -165,6 +165,132 @@ func TestNotificationAloneRaisesDialog(t *testing.T) {
 	f.wantState(hook.StateThinking)
 }
 
+func TestElicitationWithoutCandidateClearsOnToolEnd(t *testing.T) {
+	f := newFeeder(t)
+	f.apply(1, evTurnStart, nil)
+	f.toolStart(2, "m", "mcp__docs__search")
+	f.apply(3, evToolCheck, func(r *Record) { r.ID, r.Tool, r.Decision = "m", "mcp__docs__search", "allow" })
+	f.apply(4, evNotification, func(r *Record) { r.Type, r.Message = "elicitation_dialog", "Pick a source" })
+	if s := f.session(); s.State != hook.StatePermission || s.Tool != "" || s.Message != "Pick a source" {
+		t.Fatalf("after elicitation: %+v", s)
+	}
+	f.apply(5, evToolEnd, func(r *Record) { r.ID, r.Tool, r.Agent = "x", "Read", "sub1" })
+	f.wantState(hook.StatePermission)
+	f.apply(6, evToolEnd, func(r *Record) { r.ID, r.Tool = "m", "mcp__docs__search" })
+	f.wantState(hook.StateThinking)
+}
+
+func TestNewDialogDoesNotInheritMessage(t *testing.T) {
+	f := newFeeder(t)
+	f.apply(1, evTurnStart, nil)
+	f.toolStart(2, "a", "Bash")
+	f.check(3, "a", "Bash", "")
+	f.permission(4, "Bash", "", nil)
+	f.apply(5, evNotification, func(r *Record) { r.Type, r.Message = "permission_prompt", "A text" })
+	if s := f.session(); s.Message != "A text" {
+		t.Fatalf("dialog A: %+v", s)
+	}
+	f.permission(6, "Bash", "", nil)
+	if s := f.session(); s.Message != "A text" {
+		t.Fatalf("dialog A re-raised: %+v", s)
+	}
+	f.apply(7, evToolStart, func(r *Record) { r.ID, r.Tool, r.Agent = "x", "Edit", "sub1" })
+	f.permission(8, "Edit", "sub1", nil)
+	if s := f.session(); s.Tool != "Edit" || s.Message != "Claude needs your permission to use Edit" {
+		t.Fatalf("dialog B: %+v", s)
+	}
+	f.apply(9, evNotification, func(r *Record) { r.Type, r.Message = "permission_prompt", "B text" })
+	if s := f.session(); s.Message != "B text" {
+		t.Fatalf("dialog B's notification: %+v", s)
+	}
+}
+
+func TestCompactEndResumesPhase(t *testing.T) {
+	t.Run("auto compaction mid-turn", func(t *testing.T) {
+		f := newFeeder(t)
+		f.apply(1, evTurnStart, nil)
+		f.apply(2, evCompact, func(r *Record) { r.Trigger = "auto" })
+		f.wantState(hook.StateCompacting)
+		f.apply(3, evCompactEnd, nil)
+		f.wantState(hook.StateThinking)
+	})
+	t.Run("manual compaction at idle", func(t *testing.T) {
+		f := newFeeder(t)
+		f.apply(1, evTurnStart, nil)
+		f.apply(2, evTurnComplete, nil)
+		f.apply(3, evCompact, func(r *Record) { r.Trigger = "manual" })
+		f.wantState(hook.StateCompacting)
+		f.apply(4, evCompactEnd, nil)
+		f.wantState(hook.StateWaiting)
+	})
+	t.Run("compaction before the first prompt", func(t *testing.T) {
+		f := newFeeder(t)
+		f.apply(1, evSessionStart, nil)
+		f.apply(2, evCompact, nil)
+		f.apply(3, evCompactEnd, nil)
+		f.wantState(hook.StateWaiting)
+	})
+	t.Run("late compact.end", func(t *testing.T) {
+		f := newFeeder(t)
+		f.apply(1, evTurnStart, nil)
+		f.apply(2, evCompact, nil)
+		f.apply(3, evTurnComplete, nil)
+		f.apply(4, evCompactEnd, nil)
+		f.wantState(hook.StateWaiting)
+	})
+	t.Run("subagent compact.end", func(t *testing.T) {
+		f := newFeeder(t)
+		f.apply(1, evTurnStart, nil)
+		f.apply(2, evCompact, nil)
+		f.apply(3, evCompactEnd, func(r *Record) { r.Agent = "sub1" })
+		f.wantState(hook.StateCompacting)
+	})
+	t.Run("compact.end alone is not known", func(t *testing.T) {
+		f := newFeeder(t)
+		f.apply(1, evCompactEnd, nil)
+		if s := f.session(); s.Known {
+			t.Fatalf("session = %+v", s)
+		}
+	})
+}
+
+func TestHeartbeatRefreshesUpdatedOnly(t *testing.T) {
+	clock := time.Unix(1_000_000, 0)
+	f := newFeeder(t)
+	f.store.now = func() time.Time { return clock }
+	f.apply(1, evHeartbeat, nil)
+	if s := f.session(); s.Known || s.State != "" || s.Applied != 1 || s.Updated != ts0+1000 || s.MainUpdated != ts0+1000 {
+		t.Fatalf("after first heartbeat: %+v", s)
+	}
+	f.apply(2, evTurnComplete, nil)
+	before := f.session()
+	f.store.TakeDirty()
+	<-f.store.Notify()
+
+	clock = clock.Add(time.Minute)
+	if !f.apply(3, evHeartbeat, nil) {
+		t.Fatal("heartbeat rejected")
+	}
+	s := f.session()
+	if s.State != hook.StateWaiting || s.Since != before.Since || !s.Known || s.Turns != before.Turns ||
+		s.Updated != ts0+3000 || s.MainUpdated != ts0+3000 || s.Applied != 3 {
+		t.Fatalf("after heartbeat: %+v, before: %+v", s, before)
+	}
+	select {
+	case <-f.store.Notify():
+	default:
+		t.Fatal("no signal after a heartbeat")
+	}
+	if got := f.store.TakeDirty(); !slices.Equal(got, []string{"s1"}) {
+		t.Fatalf("dirty = %v", got)
+	}
+	f.store.mu.Lock()
+	defer f.store.mu.Unlock()
+	if ss := f.store.sessions["s1"]; ss == nil || !ss.lastApply.Equal(clock) {
+		t.Fatalf("session = %+v, want lastApply %v", ss, clock)
+	}
+}
+
 func TestToolRunningShowsNewestMainCall(t *testing.T) {
 	f := newFeeder(t)
 	f.apply(1, evTurnStart, nil)

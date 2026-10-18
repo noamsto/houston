@@ -60,6 +60,8 @@ type fold struct {
 	bg       map[string]bgEntry
 	bgStarts map[string]bgStart // keyed by the starting tool_use id
 
+	preCompact hook.State // main-loop phase a compaction interrupted
+
 	cwd, transcript, pane, tmuxServer string
 
 	known, bgKnown bool
@@ -175,9 +177,14 @@ func (f *fold) applyMain(rec Record) {
 		f.clearTurn()
 		f.known = true
 	case evCompact:
+		if f.phase != hook.StateCompacting {
+			f.preCompact = f.phase
+		}
 		f.phase = hook.StateCompacting
 		f.clearTurn()
 		f.known = true
+	case evCompactEnd:
+		f.endCompact()
 	case evSessionEnd:
 		f.phase = hook.StateEnded
 		f.clearTurn()
@@ -188,6 +195,8 @@ func (f *fold) applyMain(rec Record) {
 			f.snapshotBackground(rec)
 			f.bgKnown = true
 		}
+	case evHeartbeat:
+		// Liveness only: the store counts it as applied, the fold keeps its state.
 	case evTaskEnd:
 		for _, t := range rec.Tasks {
 			delete(f.bg, t.ID)
@@ -201,6 +210,21 @@ func (f *fold) applyMain(rec Record) {
 			}
 		}
 	}
+}
+
+// endCompact resumes the phase a compaction interrupted. A compact.end that
+// finds the phase moved on is late and changes nothing.
+func (f *fold) endCompact() {
+	if f.phase != hook.StateCompacting {
+		return
+	}
+	switch f.preCompact {
+	case hook.StateThinking, hook.StateToolRunning, hook.StateWaiting:
+		f.phase = f.preCompact
+	default:
+		f.phase = hook.StateWaiting
+	}
+	f.known = true
 }
 
 func (f *fold) clearTurn() {
@@ -241,12 +265,24 @@ func (f *fold) endMainTool(rec Record) {
 	f.phase = hook.StateThinking
 }
 
+// clearPermFor clears the dialog rec's call answered: by id when a candidate
+// named it, else by tool. A dialog with neither (an elicitation) clears on any
+// call of its agent ending, since nothing ties it to one call.
 func (f *fold) clearPermFor(rec Record) {
 	p := f.perm
 	if p == nil {
 		return
 	}
-	if (p.id != "" && p.id == rec.ID) || (p.id == "" && p.agent == rec.Agent && p.tool == rec.Tool) {
+	var answered bool
+	switch {
+	case p.id != "":
+		answered = p.id == rec.ID
+	case p.tool != "":
+		answered = p.agent == rec.Agent && p.tool == rec.Tool
+	default:
+		answered = p.agent == rec.Agent
+	}
+	if answered {
 		f.perm = nil
 	}
 }
@@ -265,8 +301,10 @@ func (f *fold) permission(rec Record) {
 			p.hint = f.flightHint(rec.Agent, p.id)
 		}
 	}
-	if f.perm != nil {
-		p.message = f.perm.message
+	// A notification's message belongs to its own dialog: it carries over only
+	// when this record re-raises that dialog.
+	if q := f.perm; q != nil && q.agent == p.agent && q.tool == p.tool && q.id == p.id {
+		p.message = q.message
 	}
 	f.perm = &p
 }

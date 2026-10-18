@@ -14,6 +14,12 @@ import (
 // MaxBody is the largest record body Decode accepts.
 const MaxBody = 16 << 10
 
+// Longest sid and boot Decode accepts: both key per-session state.
+const (
+	maxSID  = 128
+	maxBoot = 64
+)
+
 // ErrTooLarge is returned by Decode for a body over MaxBody.
 var ErrTooLarge = errors.New("record too large")
 
@@ -101,6 +107,7 @@ const (
 	evSessionStart = "session.start"
 	evSessionEnd   = "session.end"
 	evCompact      = "compact"
+	evCompactEnd   = "compact.end"
 	evTurnStart    = "turn.start"
 	evTurnComplete = "turn.complete"
 	evToolStart    = "tool.start"
@@ -110,17 +117,19 @@ const (
 	evPermission   = "permission"
 	evStop         = "stop"
 	evTaskEnd      = "task.end"
+	evHeartbeat    = "heartbeat"
 )
 
 var validEv = map[string]bool{
 	evSessionStart: true, evSessionEnd: true, evCompact: true, evTurnStart: true,
 	evTurnComplete: true, evToolStart: true, evToolEnd: true, evToolCheck: true,
 	evNotification: true, evPermission: true, evStop: true, evTaskEnd: true,
+	evCompactEnd: true, evHeartbeat: true,
 }
 
 // Decode reads exactly one record from r. It returns ErrTooLarge for a body
-// over MaxBody and rejects invalid JSON, trailing data, v != 1, an empty sid
-// or boot, seq < 1, ts < 1 and an unknown ev.
+// over MaxBody and rejects invalid JSON, trailing data, v != 1, an empty or
+// over-long sid or boot, seq < 1, ts < 1 and an unknown ev.
 func Decode(r io.Reader) (Record, error) {
 	body, err := io.ReadAll(io.LimitReader(r, MaxBody+1))
 	if err != nil {
@@ -142,8 +151,12 @@ func Decode(r io.Reader) (Record, error) {
 		return Record{}, fmt.Errorf("unsupported version %d", rec.V)
 	case rec.SID == "":
 		return Record{}, errors.New("empty sid")
+	case len(rec.SID) > maxSID:
+		return Record{}, errors.New("invalid sid")
 	case rec.Boot == "":
 		return Record{}, errors.New("empty boot")
+	case len(rec.Boot) > maxBoot:
+		return Record{}, errors.New("invalid boot")
 	case rec.Seq < 1:
 		return Record{}, fmt.Errorf("invalid seq %d", rec.Seq)
 	case rec.TS < 1:

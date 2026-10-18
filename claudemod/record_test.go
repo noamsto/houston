@@ -73,6 +73,8 @@ func TestDecodeMalformed(t *testing.T) {
 		"unknown ev":     `{"v":1,"sid":"s","boot":"b","seq":1,"ts":1,"ev":"nope"}`,
 		"trailing value": `{"v":1,"sid":"s","boot":"b","seq":1,"ts":1,"ev":"stop"}{}`,
 		"empty body":     ``,
+		"long sid":       `{"v":1,"sid":"` + strings.Repeat("s", 129) + `","boot":"b","seq":1,"ts":1,"ev":"stop"}`,
+		"long boot":      `{"v":1,"sid":"s","boot":"` + strings.Repeat("b", 65) + `","seq":1,"ts":1,"ev":"stop"}`,
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -84,6 +86,13 @@ func TestDecodeMalformed(t *testing.T) {
 				t.Fatalf("want a malformed error, got %v", err)
 			}
 		})
+	}
+}
+
+func TestDecodeLongestSIDAndBoot(t *testing.T) {
+	body := `{"v":1,"sid":"` + strings.Repeat("s", 128) + `","boot":"` + strings.Repeat("b", 64) + `","seq":1,"ts":1,"ev":"heartbeat"}`
+	if _, err := Decode(strings.NewReader(body)); err != nil {
+		t.Fatalf("Decode: %v", err)
 	}
 }
 

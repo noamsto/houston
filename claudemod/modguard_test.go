@@ -33,6 +33,14 @@ var (
 	resultBinding = regexp.MustCompile(`\b(?:const|let)\s+(\w+)\s*(?::[^=]*)?=\s*(?:await\s+)?next\s*\(\s*e\s*\)`)
 	returnObject  = regexp.MustCompile(`\breturn\s*\{`)
 	callsNextE    = regexp.MustCompile(`\bnext\s*\(\s*e\s*\)`)
+	mutateCall    = regexp.MustCompile(`\b(?:Object\s*\.\s*(?:assign|defineProperty|defineProperties)|Reflect\s*\.\s*(?:set|defineProperty))\s*\(\s*([\w$]+)\s*[,)]`)
+
+	funcDecl   = regexp.MustCompile(`\bfunction\s*\*?\s*([A-Za-z_$][\w$]*)\s*(?:<[^>]*>)?\s*\(`)
+	arrowDecl  = regexp.MustCompile(`\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]*)?=\s*(?:async\s*)?\(`)
+	arrowTail  = regexp.MustCompile(`^\s*(?::[^=;{]*)?=>`)
+	funcHead   = regexp.MustCompile(`\bfunction\s*\*?\s*[\w$]*\s*(?:<[^>]*>)?\s*$`)
+	engineDecl = regexp.MustCompile(`^\$\s*:\s*EngineInterface\b`)
+	callee     = regexp.MustCompile(`([A-Za-z_$][\w$]*)\s*$`)
 )
 
 // writes matches an assignment (plain or compound) to a property of name.
@@ -213,6 +221,154 @@ func matchParen(l lexed, text string, open int) int {
 	return -1
 }
 
+// enclosingOpen returns the index of the unmatched bracket opening the code
+// around i, or -1.
+func enclosingOpen(l lexed, text string, i int) int {
+	depth := 0
+	for j := i - 1; j >= 0; j-- {
+		if !l.code[j] {
+			continue
+		}
+		switch text[j] {
+		case ')', ']', '}':
+			depth++
+		case '(', '[', '{':
+			if depth == 0 {
+				return j
+			}
+			depth--
+		}
+	}
+	return -1
+}
+
+type span struct{ from, to int }
+
+// splitList splits the list between the brackets at open and end at its
+// top-level commas. angles counts <…> as brackets (type arguments in a
+// parameter list), never the > of =>.
+func splitList(l lexed, text string, open, end int, angles bool) []span {
+	var out []span
+	depth, start := 0, open+1
+	for i := open + 1; i < end; i++ {
+		if !l.code[i] {
+			continue
+		}
+		switch c := text[i]; {
+		case c == '(' || c == '[' || c == '{' || (angles && c == '<'):
+			depth++
+		case c == ')' || c == ']' || c == '}' || (angles && c == '>' && text[i-1] != '='):
+			depth--
+		case c == ',' && depth == 0:
+			out = append(out, span{start, i})
+			start = i + 1
+		}
+	}
+	return append(out, span{start, end})
+}
+
+// engineSigs maps each function this file declares by name to, per parameter,
+// whether it is declared `$: EngineInterface`. A name declared twice keeps
+// every declaration, so a call must suit all of them.
+func engineSigs(l lexed, text string) map[string][][]bool {
+	sigs := map[string][][]bool{}
+	add := func(m []int, arrow bool) {
+		open := m[1] - 1
+		end := matchParen(l, text, open)
+		if !l.code[m[0]] || end < 0 || (arrow && !arrowTail.MatchString(text[end+1:])) {
+			return
+		}
+		var sig []bool
+		for _, p := range splitList(l, text, open, end, true) {
+			sig = append(sig, engineDecl.MatchString(strings.TrimSpace(text[p.from:p.to])))
+		}
+		name := text[m[2]:m[3]]
+		sigs[name] = append(sigs[name], sig)
+	}
+	for _, m := range funcDecl.FindAllStringSubmatchIndex(text, -1) {
+		add(m, false)
+	}
+	for _, m := range arrowDecl.FindAllStringSubmatchIndex(text, -1) {
+		add(m, true)
+	}
+	return sigs
+}
+
+// engineParamAt reports whether the $ at i declares a `$: EngineInterface`
+// parameter of a function or arrow.
+func engineParamAt(l lexed, text string, i int) bool {
+	if !engineDecl.MatchString(text[i:]) {
+		return false
+	}
+	open := enclosingOpen(l, text, i)
+	if open < 0 || text[open] != '(' {
+		return false
+	}
+	end := matchParen(l, text, open)
+	return end >= 0 && (arrowTail.MatchString(text[end+1:]) || funcHead.MatchString(text[max(0, open-200):open]))
+}
+
+// engineArgAt reports whether the $ at i is a whole argument of a call to a
+// function this file declares with `$: EngineInterface` at that position.
+func engineArgAt(l lexed, text string, i int, sigs map[string][][]bool) bool {
+	open := enclosingOpen(l, text, i)
+	if open < 0 || text[open] != '(' {
+		return false
+	}
+	from := max(0, open-200)
+	m := callee.FindStringSubmatchIndex(text[from:open])
+	if m == nil || strings.HasSuffix(strings.TrimRight(text[:from+m[2]], " \t\r\n"), ".") {
+		return false
+	}
+	decls := sigs[text[from+m[2]:from+m[3]]]
+	end := matchParen(l, text, open)
+	if len(decls) == 0 || end < 0 {
+		return false
+	}
+	for k, a := range splitList(l, text, open, end, false) {
+		if i < a.from || i >= a.to {
+			continue
+		}
+		if strings.TrimSpace(text[a.from:a.to]) != "$" {
+			return false
+		}
+		for _, sig := range decls {
+			if k >= len(sig) || !sig[k] {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func isIdent(c byte) bool {
+	return c == '_' || c == '$' || ('0' <= c && c <= '9') || ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z')
+}
+
+// checkBareEngine rejects $ used other than as `$.…`: passed to a helper that
+// names it otherwise, the helper's calls would escape the `$.noun.method` scan.
+// A bare $ may only be a hook head's parameter (heads), a parameter declared
+// `$: EngineInterface`, or an argument for such a parameter.
+func checkBareEngine(l lexed, text string, heads []span) error {
+	sigs := engineSigs(l, text)
+	for i := 0; i < len(text); i++ {
+		if text[i] != '$' || !l.code[i] || (i > 0 && isIdent(text[i-1])) || (i+1 < len(text) && isIdent(text[i+1])) {
+			continue
+		}
+		if strings.HasPrefix(strings.TrimLeft(text[i+1:], " \t\r\n"), ".") {
+			continue
+		}
+		if slices.ContainsFunc(heads, func(h span) bool { return h.from <= i && i < h.to }) ||
+			engineParamAt(l, text, i) || engineArgAt(l, text, i, sigs) {
+			continue
+		}
+		line := strings.Count(text[:i], "\n") + 1
+		return fmt.Errorf("mod uses bare $ on line %d: only a hook head, a `$: EngineInterface` parameter or an argument for one may", line)
+	}
+	return nil
+}
+
 func paramList(s string) string {
 	parts := strings.Split(s, ",")
 	for i, p := range parts {
@@ -222,41 +378,55 @@ func paramList(s string) string {
 }
 
 // checkHooks holds every `on(` registration to the engine's names and to
-// handing `next` the event unchanged. Rules on the event and the result apply
-// to the hook's own span only: helpers may build and return objects.
-func checkHooks(l lexed, text string) error {
+// handing `next` the event unchanged, and returns the spans of the hook heads'
+// parameter lists. Rules on the event and the result apply to the hook's own
+// span only: helpers may build and return objects.
+func checkHooks(l lexed, text string) ([]span, error) {
+	var heads []span
 	for _, m := range onCall.FindAllStringIndex(text, -1) {
 		if !l.code[m[0]] || (m[0] > 0 && text[m[0]-1] == '.') {
 			continue
 		}
 		end := matchParen(l, text, m[1]-1)
 		if end < 0 {
-			return fmt.Errorf("unbalanced on( call at byte %d", m[0])
+			return nil, fmt.Errorf("unbalanced on( call at byte %d", m[0])
 		}
 		body := text[m[1]:end]
-		head := hookHead.FindStringSubmatch(body)
+		head := hookHead.FindStringSubmatchIndex(body)
 		if head == nil {
-			return fmt.Errorf("hook must be on('name'[, matcher], ($, e, next) => …): %.60q", body)
+			return nil, fmt.Errorf("hook must be on('name'[, matcher], ($, e, next) => …): %.60q", body)
 		}
-		if paramList(head[1]) != "$,e,next" {
-			return fmt.Errorf("hook has engine parameters (%s); they must be exactly $, e, next", strings.TrimSpace(head[1]))
+		params := body[head[2]:head[3]]
+		if paramList(params) != "$,e,next" {
+			return nil, fmt.Errorf("hook has engine parameters (%s); they must be exactly $, e, next", strings.TrimSpace(params))
 		}
+		heads = append(heads, span{m[1] + head[2], m[1] + head[3]})
 		if spreadEvent.MatchString(body) || writeEvent.MatchString(body) {
-			return fmt.Errorf("hook rewrites its event: %.60q", body)
+			return nil, fmt.Errorf("hook rewrites its event: %.60q", body)
 		}
+		var results []string
 		for _, b := range resultBinding.FindAllStringSubmatch(body, -1) {
 			if regexp.MustCompile(`\.\.\.\s*`+b[1]+`\b`).MatchString(body) || writes(b[1]).MatchString(body) {
-				return fmt.Errorf("hook rewrites next's result %s: %.60q", b[1], body)
+				return nil, fmt.Errorf("hook rewrites next's result %s: %.60q", b[1], body)
+			}
+			results = append(results, b[1])
+		}
+		for _, mc := range mutateCall.FindAllStringSubmatch(body, -1) {
+			switch {
+			case mc[1] == "e":
+				return nil, fmt.Errorf("hook rewrites its event: %.60q", body)
+			case slices.Contains(results, mc[1]):
+				return nil, fmt.Errorf("hook rewrites next's result %s: %.60q", mc[1], body)
 			}
 		}
 		if returnObject.MatchString(body) {
-			return fmt.Errorf("hook answers with its own object: %.60q", body)
+			return nil, fmt.Errorf("hook answers with its own object: %.60q", body)
 		}
 		if !callsNextE.MatchString(body) {
-			return fmt.Errorf("hook never calls next(e): %.60q", body)
+			return nil, fmt.Errorf("hook never calls next(e): %.60q", body)
 		}
 	}
-	return nil
+	return heads, nil
 }
 
 // scanMod returns why src is not a read-only mod, or nil. Comments are
@@ -298,11 +468,16 @@ func scanMod(src string) error {
 			return fmt.Errorf("next(%s) must pass e unchanged", strings.TrimSpace(m[1]))
 		}
 	}
-	return checkHooks(l, text)
+	heads, err := checkHooks(l, text)
+	if err != nil {
+		return err
+	}
+	return checkBareEngine(l, text, heads)
 }
 
-// The mod must never act on the session, and CI cannot run the plugin test kit
-// (`claude plugin test`), so this scans its source for anything beyond reads.
+// The mod must never act on the session. CI's mod job runs `claude plugin
+// validate` and `claude plugin test`; this scan is the tripwire inside
+// `go test`, flagging anything in the source beyond reads.
 func TestModIsReadOnly(t *testing.T) {
 	src, err := os.ReadFile("../contrib/claude-mod/hooks/register.ts")
 	if err != nil {
@@ -367,6 +542,23 @@ func TestScanMod(t *testing.T) {
 		{"paren in a template does not end the hook", reads + "on('x', ($, e, next) => { const s = `)`; e.text = 'x'; return next(e) })\n", "rewrites its event"},
 
 		{"hook reading the event and result", reads + "on('tool.check', async ($, e, next) => {\n  const r = await next(e)\n  post(e.tool === 'x', r.decision, r.isError !== true)\n  return r\n})\n", ""},
+		{"helper renames a passed $", reads + "function g(api) { api.prompt.submit({ text: 'x' }) }\non('turn.start', ($, e, next) => { g($); return next(e) })\n", "bare $"},
+		{"arrow renames a passed $", reads + "const f = (x: any) => x.prompt.submit(); f($)\n", "bare $"},
+		{"$ passed to a method", reads + "function h($: EngineInterface) {}\nconst o = { h }\no.h($)\n", "bare $"},
+		{"$ spread into a call", reads + "function h($: EngineInterface) {}\nh(...[$])\n", "bare $"},
+		{"$ in an array", reads + "const xs = [$]\n", "bare $"},
+		{"$ returned", reads + "function get($: EngineInterface) { return $ }\n", "bare $"},
+		{"untyped $ parameter", reads + "function h($) { return 1 }\nh($)\n", "bare $"},
+		{"$ for an untyped position", reads + "function h(x, $: EngineInterface) {}\nh($, $)\n", "bare $"},
+		{"$ to a helper declared twice", reads + "function h($: EngineInterface) {}\nfunction h(api) {}\nh($)\n", "bare $"},
+		{"helper typed $ called with $", reads + "function h($: EngineInterface) {}\nconst k = async ($: EngineInterface, n: Map<string, number>): Promise<void> => {}\non('turn.start', ($, e, next) => { h($); k($, new Map()); return next(e) })\n", ""},
+		{"$ in a string or template text", reads + "const s = '$'; const u = `$x ${1}`\n", ""},
+		{"Object.assign on the event", reads + "on('prompt.submit', ($, e, next) => { Object.assign(e, { text: 'x' }); return next(e) })\n", "rewrites its event"},
+		{"Reflect.set on the event", reads + "on('prompt.submit', ($, e, next) => { Reflect.set(e, 'text', 'x'); return next(e) })\n", "rewrites its event"},
+		{"Object.assign on the result", reads + "on('tool.check', async ($, e, next) => { const r = await next(e); Object.assign(r, { decision: 'allow' }); return r })\n", "rewrites next's result"},
+		{"Object.defineProperty on the result", reads + "on('tool.check', async ($, e, next) => { const r = await next(e); Object.defineProperty(r, 'decision', { value: 'allow' }); return r })\n", "rewrites next's result"},
+		{"copying the event is a read", reads + "on('x', ($, e, next) => { const c = Object.assign({}, e); return next(e) })\n", ""},
+
 		{"helpers outside hooks may build and write", reads + "function mk(v: Rec) { return { ...v, ok: true } }\nfunction w(e: Rec) { e.x = 1 }\non('x', ($, e, next) => { mk({}); return next(e) })\n", ""},
 	}
 	for _, tt := range tests {

@@ -128,6 +128,30 @@ func TestRetiredBootIsStale(t *testing.T) {
 	}
 }
 
+func TestRetiredBootsAreBounded(t *testing.T) {
+	f := newFeeder(t)
+	boot := func(i int) string { return fmt.Sprintf("b%02d", i) }
+	for i := 0; i <= 20; i++ {
+		f.boot = boot(i)
+		f.apply(1, evTurnStart, func(r *Record) { r.TS = int64(1000 * (i + 1)) })
+	}
+	f.store.mu.Lock()
+	ss := f.store.sessions["s1"]
+	f.store.mu.Unlock()
+	if ss == nil || len(ss.retired) > retiredCap {
+		t.Fatalf("session = %+v, want at most %d retired boots", ss, retiredCap)
+	}
+	for i := 20 - retiredCap; i < 20; i++ {
+		f.boot = boot(i)
+		if f.apply(2, evTurnComplete, func(r *Record) { r.TS = int64(1000*(i+1) + 1) }) {
+			t.Fatalf("late record of retired boot %s applied", f.boot)
+		}
+	}
+	if s := f.session(); s.Boot != boot(20) || s.State != hook.StateThinking || s.Stale != retiredCap {
+		t.Fatalf("session = %+v", s)
+	}
+}
+
 func TestSubagentRecordChangesNothing(t *testing.T) {
 	f := newFeeder(t)
 	f.apply(1, evTurnStart, nil)

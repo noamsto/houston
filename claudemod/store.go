@@ -29,6 +29,10 @@ const (
 // take milliseconds; later than this it is a reload whose clock stepped back.
 const bootDelaySlack = 5 * time.Second
 
+// retiredCap bounds the boots a session remembers as retired; a late record of
+// an older one falls to the bootDelaySlack rule.
+const retiredCap = 16
+
 // Session is the folded view of one Claude Code session.
 type Session struct {
 	SID         string     `json:"sid"`
@@ -39,7 +43,7 @@ type Session struct {
 	Since       int64      `json:"since"`        // unix s of the last state change
 	Updated     int64      `json:"updated"`      // ms, newest applied record's ts
 	MainUpdated int64      `json:"main_updated"` // ms, newest applied main-loop record's ts
-	Known       bool       `json:"known"`        // a state-defining main-loop record folded this boot
+	Known       bool       `json:"known"`        // a state-defining main-loop record folded since houston started (a reload keeps it)
 	Turns       int        `json:"turns"`
 	Last        string     `json:"last,omitempty"`
 	StopSeen    bool       `json:"stop_seen"` // a main-loop stop since the last turn.start
@@ -92,9 +96,9 @@ func NewStore() *Store {
 
 type session struct {
 	boot     string
-	bootTS   int64               // ts of the first record seen of the current boot
-	bootSeen time.Time           // houston clock when that record arrived
-	retired  map[string]struct{} // boots folded into base; their late records are stale
+	bootTS   int64     // ts of the first record seen of the current boot
+	bootSeen time.Time // houston clock when that record arrived
+	retired  []string  // boots folded into base, oldest first; their late records are stale
 	base     fold
 	window   []Record // current boot, ascending seq, at most windowCap
 	folded   int64    // highest seq folded into base
@@ -131,16 +135,16 @@ func (s *Store) apply(rec Record) (applied, changed bool) {
 	ss := s.sessions[rec.SID]
 	if ss == nil {
 		changed = s.makeRoom() || changed
-		ss = &session{boot: rec.Boot, bootTS: rec.TS, bootSeen: now, retired: map[string]struct{}{}}
+		ss = &session{boot: rec.Boot, bootTS: rec.TS, bootSeen: now}
 		s.sessions[rec.SID] = ss
 	}
-	if _, ok := ss.retired[rec.Boot]; ok {
+	if slices.Contains(ss.retired, rec.Boot) {
 		ss.stale++
 		return false, changed
 	}
 	if rec.Boot != ss.boot {
 		if rec.TS < ss.bootTS && now.Sub(ss.bootSeen) < bootDelaySlack {
-			ss.retired[rec.Boot] = struct{}{}
+			ss.retire(rec.Boot)
 			ss.stale++
 			return false, changed
 		}
@@ -178,7 +182,8 @@ func (s *Store) apply(rec Record) (applied, changed bool) {
 		ss.cur.apply(r)
 	}
 	if rec.Ev == evSessionEnd && ss.cur.phase == hook.StateEnded {
-		// Nothing after an end matters: later records fall under the stale rule.
+		// Folding the window makes a late record at or below the highest folded
+		// seq stale; a higher seq still applies.
 		ss.foldWindow()
 		ss.cur = ss.base.clone()
 	}
@@ -228,12 +233,22 @@ func (ss *session) foldWindow() {
 // newBoot keeps the folded state: a hot reload continues the session.
 func (ss *session) newBoot(boot string, ts int64, now time.Time) {
 	ss.foldWindow()
-	ss.retired[ss.boot] = struct{}{}
+	ss.retire(ss.boot)
 	ss.boot = boot
 	ss.bootTS = ts
 	ss.bootSeen = now
 	ss.folded = 0
 	ss.maxSeq = 0
+}
+
+func (ss *session) retire(boot string) {
+	if slices.Contains(ss.retired, boot) {
+		return
+	}
+	ss.retired = append(ss.retired, boot)
+	if len(ss.retired) > retiredCap {
+		ss.retired = slices.Delete(ss.retired, 0, len(ss.retired)-retiredCap)
+	}
 }
 
 // Sweep evicts expired sessions now, marking them dirty.

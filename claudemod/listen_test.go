@@ -175,6 +175,40 @@ func TestCloseRemovesSocket(t *testing.T) {
 	}
 }
 
+func TestCloseLeavesASuccessorsSocket(t *testing.T) {
+	srv, _, _ := startServer(t)
+	// A successor that took the path for dead: clearStale removed it and its
+	// link put a new socket there.
+	if err := os.Remove(srv.path); err != nil {
+		t.Fatal(err)
+	}
+	next, err := net.ListenUnix("unix", &net.UnixAddr{Name: srv.path, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = next.Close() }()
+	accepted := make(chan struct{})
+	go func() {
+		if conn, err := next.Accept(); err == nil {
+			_ = conn.Close()
+			close(accepted)
+		}
+	}()
+
+	if err := srv.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if _, err := os.Lstat(srv.path); err != nil {
+		t.Fatalf("successor's socket removed: %v", err)
+	}
+	conn, err := net.Dial("unix", srv.path)
+	if err != nil {
+		t.Fatalf("successor's socket unreachable: %v", err)
+	}
+	_ = conn.Close()
+	<-accepted
+}
+
 func TestListenLeavesOnlyTheSocket(t *testing.T) {
 	srv, _, _ := startServer(t)
 	entries, err := os.ReadDir(filepath.Dir(srv.path))
@@ -222,7 +256,7 @@ func TestLinkRefusesAnExistingPath(t *testing.T) {
 		}
 	}()
 
-	got, err := listenPrivate(path)
+	got, _, err := listenPrivate(path)
 	if err == nil {
 		_ = got.Close()
 		t.Fatal("listenPrivate over an existing socket succeeded")

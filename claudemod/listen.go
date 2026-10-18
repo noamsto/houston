@@ -19,6 +19,7 @@ type Server struct {
 	http *http.Server
 	done chan struct{}
 	path string
+	sock os.FileInfo // the socket file linked at path, to tell it from a successor's
 }
 
 // Listen prepares path, listens on it and serves store's records in a
@@ -34,7 +35,7 @@ func Listen(path string, store *Store) (*Server, error) {
 	if err := clearStale(path); err != nil {
 		return nil, err
 	}
-	ln, err := listenPrivate(path)
+	ln, sock, err := listenPrivate(path)
 	if err != nil {
 		return nil, err
 	}
@@ -43,6 +44,7 @@ func Listen(path string, store *Store) (*Server, error) {
 		http: &http.Server{Handler: Handler(store), ReadHeaderTimeout: 5 * time.Second},
 		done: make(chan struct{}),
 		path: path,
+		sock: sock,
 	}
 	go func() {
 		defer close(s.done)
@@ -53,32 +55,39 @@ func Listen(path string, store *Store) (*Server, error) {
 	return s, nil
 }
 
-func listenPrivate(path string) (*net.UnixListener, error) {
+// listenPrivate also returns the socket file's identity: the link at path
+// shares its inode.
+func listenPrivate(path string) (*net.UnixListener, os.FileInfo, error) {
 	tmp, err := os.MkdirTemp(filepath.Dir(path), ".claude-mod-")
 	if err != nil {
-		return nil, fmt.Errorf("create private socket dir: %w", err)
+		return nil, nil, fmt.Errorf("create private socket dir: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(tmp) }()
 	tmpSock := filepath.Join(tmp, "s")
 	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: tmpSock, Net: "unix"})
 	if err != nil {
-		return nil, fmt.Errorf("listen on %s: %w", path, err)
+		return nil, nil, fmt.Errorf("listen on %s: %w", path, err)
 	}
 	// The bound name is removed after the link; Close removes path instead.
 	ln.SetUnlinkOnClose(false)
 	if err := os.Chmod(tmpSock, 0o600); err != nil {
 		_ = ln.Close()
-		return nil, fmt.Errorf("chmod socket: %w", err)
+		return nil, nil, fmt.Errorf("chmod socket: %w", err)
+	}
+	sock, err := os.Lstat(tmpSock)
+	if err != nil {
+		_ = ln.Close()
+		return nil, nil, fmt.Errorf("stat socket: %w", err)
 	}
 	if err := os.Link(tmpSock, path); err != nil {
 		_ = ln.Close()
 		if errors.Is(err, fs.ErrExist) {
-			return nil, fmt.Errorf("%s: already exists", path)
+			return nil, nil, fmt.Errorf("%s: already exists", path)
 		}
-		return nil, fmt.Errorf("link socket into place: %w", err)
+		return nil, nil, fmt.Errorf("link socket into place: %w", err)
 	}
 	_ = os.Remove(tmpSock)
-	return ln, nil
+	return ln, sock, nil
 }
 
 func clearStale(path string) error {
@@ -103,19 +112,35 @@ func clearStale(path string) error {
 	return nil
 }
 
-// Close stops serving, waits for the serve goroutine and removes the socket.
+// Close removes the socket, stops serving and waits for the serve goroutine.
+// The socket goes first, and only while path is still ours: once the listener
+// closes, another houston may take path for dead and link its own there.
 func (s *Server) Close() error {
+	err := s.removeSocket()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	err := s.http.Shutdown(ctx)
-	if err != nil {
-		err = errors.Join(err, s.http.Close())
+	if shutErr := s.http.Shutdown(ctx); shutErr != nil {
+		err = errors.Join(err, shutErr, s.http.Close())
 	}
 	<-s.done
-	if rmErr := os.Remove(s.path); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
-		err = errors.Join(err, rmErr)
-	}
 	return err
+}
+
+func (s *Server) removeSocket() error {
+	fi, err := os.Lstat(s.path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("stat socket: %w", err)
+	}
+	if !os.SameFile(fi, s.sock) {
+		return nil
+	}
+	if err := os.Remove(s.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove socket: %w", err)
+	}
+	return nil
 }
 
 // Handler serves POST /v1/record: 204 for an accepted record (a stale one
