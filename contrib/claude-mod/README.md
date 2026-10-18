@@ -78,7 +78,7 @@ anywhere), one JSON object per event: `{v:1, sid, boot, seq, ts, ev, ...}`.
 | `tool.start` | `tool`, `id`, `agent`, `input`; Bash `bg`; AskUserQuestion `ask: [{question, multi, options: [{label, preview}]}]` |
 | `tool.end` | `tool`, `id`, `agent`, `err`; on success Bash `task`, `user_bg`; Monitor `task`, `timeout_ms` (absent when persistent); TaskStop/KillShell `stop_task` |
 | `tool.check` | `tool`, `id`, `agent`, `decision` |
-| `notification` | `type`, `message`, `transcript`, `cwd`, `pane`, `tmux_server` |
+| `notification` | `type`, `agent`, `message`, `transcript`, `cwd`, `pane`, `tmux_server` |
 | `permission` | `tool`, `agent`, `input`, `suggestions` (count), `transcript`, `cwd`, `pane`, `tmux_server` |
 | `stop` | `last`, `tasks: [{id, type, status, description}]`, `transcript`, `cwd`, `pane`, `tmux_server` |
 | `task.end` | `tasks: [{id} \| {tool_use}]` |
