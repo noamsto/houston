@@ -1,6 +1,8 @@
 package server
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -56,6 +58,17 @@ type peerRoute struct {
 	mapRunID bool          // the answer's run_id is a peer-local id to map to this houston's
 }
 
+// Forward waits outlast the peer's own worst case, so a slow peer still
+// answers rather than reading as unreachable.
+var (
+	// The tmux server PATH, models and engines lookups (10 s each), then
+	// dispatch's own timeout and its SIGTERM grace, plus 10 s: 30+120+5+10 = 165 s.
+	dispatchForwardWait = tmuxTimeout + 2*dispatchEnginesTimeout + dispatchTimeout + dispatchGrace + 10*time.Second
+	// The same lookups (30 s), the launch check plus restart slack (8 s) and
+	// five tmux calls at their 10 s bound (50 s): 88 s.
+	launchForwardWait = 90 * time.Second
+)
+
 var (
 	fwdTerminal       = peerRoute{suffix: "terminal", method: http.MethodGet, kind: forwardWS}
 	fwdInput          = peerRoute{suffix: "input", method: http.MethodPost, headers: []string{"Content-Type"}, limit: maxInputBody}
@@ -67,11 +80,11 @@ var (
 	fwdReply          = peerRoute{suffix: "reply", method: http.MethodPost, headers: []string{"Content-Type"}, limit: maxReplyBody}
 	fwdCrewFeed       = peerRoute{suffix: "crew/feed", method: http.MethodGet, query: []string{"before", "limit"}}
 	fwdCrewFeedStream = peerRoute{suffix: "crew/feed/stream", method: http.MethodGet, query: []string{"after", "from"}, headers: []string{"Last-Event-ID"}, kind: forwardSSE}
-	fwdRestart        = peerRoute{suffix: "restart", method: http.MethodPost, headers: []string{"Content-Type"}, limit: maxDispatchBody, wait: 60 * time.Second, mapRunID: true}
+	fwdRestart        = peerRoute{suffix: "restart", method: http.MethodPost, headers: []string{"Content-Type"}, limit: maxDispatchBody, wait: launchForwardWait, mapRunID: true}
 
 	fwdHostOptions     = peerRoute{suffix: "dispatch/options", method: http.MethodGet, wait: 30 * time.Second}
-	fwdHostDispatch    = peerRoute{suffix: "dispatch", method: http.MethodPost, headers: []string{"Content-Type"}, limit: maxDispatchBody, wait: dispatchTimeout + 15*time.Second}
-	fwdHostDispatcher  = peerRoute{suffix: "dispatch/dispatcher", method: http.MethodPost, headers: []string{"Content-Type"}, limit: maxDispatchBody, wait: 60 * time.Second, mapRunID: true}
+	fwdHostDispatch    = peerRoute{suffix: "dispatch", method: http.MethodPost, headers: []string{"Content-Type"}, limit: maxDispatchBody, wait: dispatchForwardWait}
+	fwdHostDispatcher  = peerRoute{suffix: "dispatch/dispatcher", method: http.MethodPost, headers: []string{"Content-Type"}, limit: maxDispatchBody, wait: launchForwardWait, mapRunID: true}
 	fwdHostRepos       = peerRoute{suffix: "repos", method: http.MethodGet}
 	fwdHostReposAdd    = peerRoute{suffix: "repos", method: http.MethodPost, headers: []string{"Content-Type"}, limit: maxRepoBody}
 	fwdHostReposRemove = peerRoute{suffix: "repos", method: http.MethodDelete, headers: []string{"Content-Type"}, limit: maxRepoBody}
@@ -258,11 +271,19 @@ func forwardLogLevel(rt peerRoute) slog.Level {
 	return slog.LevelDebug
 }
 
-// forwardFailed answers a forwarded request that got no response.
+// forwardFailed answers a forwarded request that got no response. A missed
+// wait is not unreachable: the peer detaches dispatch from the request, so
+// the work may still land.
 func forwardFailed(w http.ResponseWriter, r *http.Request, src *peer.Source, rt peerRoute, err error) {
 	slog.Debug("peer forward failed", "peer", src.Host(), "route", rt.suffix, "err", err)
-	http.Error(w, "peer unreachable", http.StatusBadGateway)
-	slog.Log(r.Context(), forwardLogLevel(rt), "peer forward", "peer", src.Host(), "route", rt.suffix, "status", http.StatusBadGateway)
+	code := http.StatusBadGateway
+	if errors.Is(err, context.DeadlineExceeded) {
+		code = http.StatusGatewayTimeout
+		http.Error(w, "peer did not answer in time — it may still be running; check Fleet before retrying", code)
+	} else {
+		http.Error(w, "peer unreachable", code)
+	}
+	slog.Log(r.Context(), forwardLogLevel(rt), "peer forward", "peer", src.Host(), "route", rt.suffix, "status", code)
 }
 
 // relayForward answers the browser with a forwarded request's response; the
@@ -290,12 +311,15 @@ func relayForward(w http.ResponseWriter, r *http.Request, src *peer.Source, rt p
 // rewriteRunID maps a peer-local run_id to the id this houston lists the run
 // under, and drops one it cannot map. It ignores Content-Type: the UI parses
 // the body as JSON whatever the header says, and a raw peer id would address
-// a local run here.
+// a local run here. A body Go cannot read as an object is replaced whole,
+// since JSON.parse accepts some that Go refuses (a BOM, which fetch's text()
+// strips, or nesting past Go's depth limit) and could still find a run_id.
 func rewriteRunID(host string) func([]byte) []byte {
 	return func(b []byte) []byte {
+		b = bytes.TrimPrefix(b, []byte("\xEF\xBB\xBF"))
 		var obj map[string]json.RawMessage
 		if json.Unmarshal(b, &obj) != nil || obj == nil {
-			return b
+			return unreadablePeerBody
 		}
 		raw, ok := obj["run_id"]
 		if !ok {
@@ -305,7 +329,7 @@ func rewriteRunID(host string) func([]byte) []byte {
 		if json.Unmarshal(raw, &id) == nil && peer.ValidID(id) {
 			mapped, err := json.Marshal(runs.PeerRunID(host, id))
 			if err != nil {
-				return b
+				return unreadablePeerBody
 			}
 			obj["run_id"] = mapped
 		} else {
@@ -313,11 +337,15 @@ func rewriteRunID(host string) func([]byte) []byte {
 		}
 		out, err := json.Marshal(obj)
 		if err != nil {
-			return b
+			return unreadablePeerBody
 		}
 		return out
 	}
 }
+
+// unreadablePeerBody is valid JSON under either relayed Content-Type, so the
+// UI shows it as the error.
+var unreadablePeerBody = []byte(`{"error":"unreadable peer response"}`)
 
 // relayPeerResponse writes the peer's status, Content-Type and body, and no
 // other peer header (no Set-Cookie, no Location). A redirect or auth refusal

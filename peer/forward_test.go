@@ -104,21 +104,40 @@ func TestDoGetHasNoQueryOrBody(t *testing.T) {
 }
 
 func TestDoReturnsRedirectWithoutFollowing(t *testing.T) {
-	target := newRecorder(t, nil)
-	rec := newRecorder(t, func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, target.URL+"/x", http.StatusFound)
-	})
-	src := newSource(rec.URL, tokenFile(t, testToken), fastOpts())
-	resp, err := src.Do(context.Background(), http.MethodGet, "pane-1", "prompt", nil, nil, nil, 0)
-	if err != nil {
-		t.Fatal(err)
+	// A wait switches to the slow client, which must keep the same refusals.
+	for _, wait := range []time.Duration{0, time.Second} {
+		t.Run(wait.String(), func(t *testing.T) {
+			target := newRecorder(t, nil)
+			rec := newRecorder(t, func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, target.URL+"/x", http.StatusFound)
+			})
+			src := newSource(rec.URL, tokenFile(t, testToken), fastOpts())
+			resp, err := src.Do(context.Background(), http.MethodGet, "pane-1", "prompt", nil, nil, nil, wait)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusFound {
+				t.Errorf("status = %d, want 302 returned as-is", resp.StatusCode)
+			}
+			if n := target.hits.Load(); n != 0 {
+				t.Errorf("redirect target received %d requests", n)
+			}
+		})
 	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusFound {
-		t.Errorf("status = %d, want 302 returned as-is", resp.StatusCode)
+}
+
+func TestSlowClientUsesNoProxyAndRefusesRedirects(t *testing.T) {
+	src := newSource("http://127.0.0.1:1", tokenFile(t, testToken), fastOpts())
+	tr, ok := src.slow.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("slow transport is %T, want *http.Transport", src.slow.Transport)
 	}
-	if n := target.hits.Load(); n != 0 {
-		t.Errorf("redirect target received %d requests", n)
+	if tr.Proxy != nil {
+		t.Error("slow transport has a proxy func")
+	}
+	if src.slow.CheckRedirect == nil {
+		t.Error("slow client follows redirects")
 	}
 }
 

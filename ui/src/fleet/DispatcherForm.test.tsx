@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { DispatcherForm } from './DispatcherForm'
 import type { DispatchOptions, DispatcherOutcome, DispatcherRequest } from '../api/dispatch'
 import type { Run } from '../api/runs'
@@ -247,6 +247,37 @@ describe('DispatcherForm result', () => {
     const link = screen.getByRole('link', { name: 'Open run' }) as HTMLAnchorElement
     expect(link.getAttribute('href')).toBe('#/fleet/pane-7')
     expect(screen.queryByText(/Waiting for it to appear/)).toBeNull()
+  })
+
+  it('on a peer does not link a local run named by the peer\'s run_id', async () => {
+    submitDispatcherMock.mockResolvedValue({ ...started, runId: 'pane-5' })
+    render(<DispatcherForm host="b" options={options} repo="/repo/a" runs={[run({ id: 'pane-5' })]} onStarted={() => {}} />)
+    fireEvent.click(startButton())
+
+    expect(await screen.findByText(/Waiting for it to appear in Fleet/)).toBeTruthy()
+    expect(screen.queryByRole('link', { name: 'Open run' })).toBeNull()
+  })
+
+  it('on a peer links that peer\'s run', async () => {
+    submitDispatcherMock.mockResolvedValue({ ...started, runId: 'peer-b.pane-5' })
+    const runs = [run({ id: 'peer-b.pane-5', host: 'b' })]
+    render(<DispatcherForm host="b" options={options} repo="/repo/a" runs={runs} onStarted={() => {}} />)
+    fireEvent.click(startButton())
+
+    const link = (await screen.findByRole('link', { name: 'Open run' })) as HTMLAnchorElement
+    expect(link.getAttribute('href')).toBe('#/fleet/peer-b.pane-5')
+  })
+
+  it('reports busy around a launch', async () => {
+    let resolve!: (o: DispatcherOutcome) => void
+    submitDispatcherMock.mockReturnValue(new Promise((r) => { resolve = r }))
+    const onBusyChange = vi.fn()
+    render(<DispatcherForm host="local" options={options} repo="/repo/a" runs={[]} onStarted={() => {}} onBusyChange={onBusyChange} />)
+    fireEvent.click(startButton())
+
+    expect(onBusyChange.mock.calls).toEqual([[true]])
+    await act(async () => { resolve(started) })
+    expect(onBusyChange.mock.calls).toEqual([[true], [false]])
   })
 
   it('shows the error and output on failure', async () => {

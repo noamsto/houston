@@ -177,10 +177,17 @@ func TestHostForwardMapsLaunchRunID(t *testing.T) {
 		})
 	}
 
+	t.Run("bom", func(t *testing.T) {
+		p := newPeerRecorder(t, serve("application/json", "\xEF\xBB\xBF"+`{"run_id":"pane-5"}`))
+		s := newForwardServer(t, p.srv.URL)
+		rec := doReply(t, s, browserRequest("POST", "/api/hosts/b/dispatch/dispatcher", `{}`))
+		if got := rec.Body.String(); got != `{"run_id":"peer-b.pane-5"}` {
+			t.Errorf("local body %q, want the mapped id and no BOM", got)
+		}
+	})
+
 	for _, tc := range []struct{ name, path, body string }{
 		{"no run_id", "dispatch/dispatcher", `{"error": "dispatcher exited immediately", "crew": "1-2"}`},
-		{"not json", "dispatch/dispatcher", `dispatcher exited`},
-		{"json array", "dispatch/dispatcher", `["pane-3"]`},
 		{"worker dispatch", "dispatch", `{"crew": "1-2", "run_id": "pane-3"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -192,7 +199,32 @@ func TestHostForwardMapsLaunchRunID(t *testing.T) {
 			}
 		})
 	}
+
+	for _, tc := range []struct{ name, contentType, body string }{
+		{"not json", "application/json", `dispatcher exited`},
+		{"json array", "application/json", `["pane-5"]`},
+		{"array of objects", "application/json", `[{"run_id":"pane-5"}]`},
+		{"null", "application/json", `null`},
+		{"too deep", "application/json", deepRunIDBody},
+		{"too deep as text", "text/plain", deepRunIDBody},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newPeerRecorder(t, serve(tc.contentType, tc.body))
+			s := newForwardServer(t, p.srv.URL)
+			rec := doReply(t, s, browserRequest("POST", "/api/hosts/b/dispatch/dispatcher", `{}`))
+			if got := rec.Body.String(); got != `{"error":"unreadable peer response"}` {
+				t.Errorf("local body %.80q, want it replaced", got)
+			}
+			if rec.Code != http.StatusOK {
+				t.Errorf("status %d, want the peer's 200", rec.Code)
+			}
+		})
+	}
 }
+
+// deepRunIDBody nests past Go's JSON depth limit, which JSON.parse accepts,
+// so the UI would find its run_id.
+var deepRunIDBody = `{"x":` + strings.Repeat("[", 10001) + strings.Repeat("]", 10001) + `,"run_id":"pane-5"}`
 
 func TestHostForwardRefusesUnknownHostsAndPaths(t *testing.T) {
 	p := newPeerRecorder(t, peerConflict)
@@ -312,12 +344,32 @@ func TestHostForwardDownPeerIsUnreachable(t *testing.T) {
 }
 
 func TestHostForwardRoutesWait(t *testing.T) {
-	if fwdHostDispatch.wait <= dispatchTimeout {
-		t.Errorf("dispatch wait %v, want more than dispatch's own %v", fwdHostDispatch.wait, dispatchTimeout)
+	if worst := dispatchTimeout + dispatchGrace + tmuxTimeout + 2*dispatchEnginesTimeout; fwdHostDispatch.wait <= worst {
+		t.Errorf("dispatch wait %v, want more than the peer's worst case %v", fwdHostDispatch.wait, worst)
 	}
 	for name, rt := range map[string]peerRoute{"options": fwdHostOptions, "dispatcher": fwdHostDispatcher, "restart": fwdRestart} {
 		if rt.wait <= 15*time.Second {
 			t.Errorf("%s wait %v, want more than the 15 s header timeout", name, rt.wait)
 		}
 	}
+}
+
+func TestHostForwardPastItsWaitIs504(t *testing.T) {
+	release := make(chan struct{})
+	p := newPeerRecorder(t, func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	})
+	defer close(release)
+	s := newForwardServer(t, p.srv.URL)
+
+	rt := fwdHostDispatch
+	rt.wait = 50 * time.Millisecond
+	req := browserRequest("POST", "/api/hosts/b/dispatch", `{}`)
+	req.SetPathValue("host", "b")
+	rec := httptest.NewRecorder()
+	s.forwardHost(rt)(rec, req)
+	wantRefusal(t, rec, http.StatusGatewayTimeout, "peer did not answer in time — it may still be running; check Fleet before retrying")
 }

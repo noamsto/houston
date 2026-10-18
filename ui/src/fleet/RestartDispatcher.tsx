@@ -8,6 +8,7 @@ import {
 } from '../api/dispatch'
 import type { Run } from '../api/runs'
 import { isBusy } from './crewsModel'
+import { runIdFor } from './dispatchForm'
 import { crewShortId } from './fleetList'
 import { switchRunTab } from './nav'
 import { clearPendingRun, clearRestartFailure, markPendingRun, recordRestartFailure, relaunchAdvice } from './pendingRuns'
@@ -106,8 +107,15 @@ export function RestartDispatcher({ run }: { run: Run }) {
     }
     clearPendingRun(run.id)
     if (result.kind === 'started') {
-      markPendingRun(result.runId, Date.now())
-      if (onRoute()) switchRunTab(result.runId, 'crew')
+      // An id that cannot address this host's run is not followed; the new
+      // dispatcher still shows up in Fleet.
+      const newId = runIdFor(run.host, result.runId)
+      if (!newId) {
+        close()
+        return
+      }
+      markPendingRun(newId, Date.now())
+      if (onRoute()) switchRunTab(newId, 'crew')
       return
     }
     if (result.busy) {

@@ -107,7 +107,7 @@ export interface DispatcherRequest {
 }
 
 export type DispatcherOutcome =
-  | { kind: 'started'; crew: string; session: string; window: string; pane: string; runId: string }
+  | { kind: 'started'; crew: string; session: string; window: string; pane: string; runId: string | undefined }
   | {
       kind: 'failed'
       status: number
@@ -126,7 +126,7 @@ interface DispatcherSuccessBody {
   session: string
   window: string
   pane: string
-  run_id: string
+  run_id?: unknown
 }
 
 interface DispatcherErrorBody extends DispatchErrorBody {
@@ -148,7 +148,7 @@ async function parseDispatcherResponse(res: Response): Promise<DispatcherOutcome
         session: body.session,
         window: body.window,
         pane: body.pane,
-        runId: body.run_id,
+        runId: typeof body.run_id === 'string' ? body.run_id : undefined,
       }
     } catch {
       return { kind: 'failed', status: res.status, error: 'malformed response: ' + text.trim() }

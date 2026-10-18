@@ -9,6 +9,8 @@ import {
   isValidIssue,
   loadPrefs,
   resolveInitial,
+  runIdFor,
+  safeIssueURL,
   savePrefs,
   taskMaxHeight,
   type DispatchPrefs,
@@ -110,6 +112,7 @@ describe('resolveInitial', () => {
       model: 'sonnet',
       effort: 'medium',
       linkRepoUnknown: false,
+      linkCrewUnknown: false,
     })
   })
 
@@ -140,6 +143,7 @@ describe('resolveInitial', () => {
       model: 'sonnet',
       effort: 'medium',
       linkRepoUnknown: false,
+      linkCrewUnknown: false,
     })
   })
 
@@ -211,6 +215,61 @@ describe('resolveInitial crew-only link', () => {
   it('keeps prefs when no repo has the crew, and for new', () => {
     expect(resolveInitial(withHome, { repo: '/repo/b' }, { crew: '999-9' }).repo).toBe('/repo/b')
     expect(resolveInitial(withHome, { repo: '/repo/b' }, { crew: 'new' }).repo).toBe('/repo/b')
+  })
+
+  it('flags a named crew that no repo lists', () => {
+    const r = resolveInitial(withHome, { repo: '/repo/b' }, { crew: '999-9' })
+    expect(r.linkCrewUnknown).toBe(true)
+    expect(r.repo).toBe('/repo/b')
+    expect(r.crew).toBe('300-3')
+    expect(resolveInitial(withHome, {}, { repo: '/repo/a', crew: '999-9' }).linkCrewUnknown).toBe(true)
+  })
+
+  it('does not flag a listed crew, new, or no crew', () => {
+    expect(resolveInitial(withHome, {}, { crew: '300-3' }).linkCrewUnknown).toBe(false)
+    expect(resolveInitial(withHome, {}, { repo: '/repo/a', crew: '200-1' }).linkCrewUnknown).toBe(false)
+    expect(resolveInitial(withHome, {}, { crew: 'new' }).linkCrewUnknown).toBe(false)
+    expect(resolveInitial(withHome, {}, { repo: '/repo/a' }).linkCrewUnknown).toBe(false)
+    expect(resolveInitial(withHome, {}, null).linkCrewUnknown).toBe(false)
+  })
+})
+
+describe('safeIssueURL', () => {
+  it('keeps a GitHub issue URL', () => {
+    expect(safeIssueURL('https://github.com/acme/houston.js/issues/53')).toBe('https://github.com/acme/houston.js/issues/53')
+  })
+
+  it('drops anything else', () => {
+    expect(safeIssueURL(undefined)).toBeUndefined()
+    expect(safeIssueURL('')).toBeUndefined()
+    expect(safeIssueURL('https://evil.example/x')).toBeUndefined()
+    expect(safeIssueURL('javascript:alert(1)')).toBeUndefined()
+    expect(safeIssueURL('http://github.com/acme/houston/issues/53')).toBeUndefined()
+    expect(safeIssueURL('https://github.com/acme/houston/pull/53')).toBeUndefined()
+    expect(safeIssueURL('https://github.com/acme/houston/issues/53?x=1')).toBeUndefined()
+    expect(safeIssueURL('https://github.com.evil.example/acme/houston/issues/53')).toBeUndefined()
+  })
+})
+
+describe('runIdFor', () => {
+  it('accepts a local id for local only', () => {
+    expect(runIdFor(undefined, 'pane-5')).toBe('pane-5')
+    expect(runIdFor('local', 'pane-5')).toBe('pane-5')
+    expect(runIdFor('local', 'peer-b.pane-5')).toBeUndefined()
+    expect(runIdFor(undefined, 'peer-b.pane-5')).toBeUndefined()
+  })
+
+  it('accepts only that peer\'s ids for a peer', () => {
+    expect(runIdFor('b', 'peer-b.pane-5')).toBe('peer-b.pane-5')
+    expect(runIdFor('b', 'pane-5')).toBeUndefined()
+    expect(runIdFor('b', 'peer-bb.pane-5')).toBeUndefined()
+    expect(runIdFor('b', 'peer-c.pane-5')).toBeUndefined()
+  })
+
+  it('drops a missing id', () => {
+    expect(runIdFor(undefined, undefined)).toBeUndefined()
+    expect(runIdFor('b', undefined)).toBeUndefined()
+    expect(runIdFor('b', '')).toBeUndefined()
   })
 })
 

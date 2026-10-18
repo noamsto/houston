@@ -66,6 +66,7 @@ interface ResolvedInitial {
   model: string
   effort: string
   linkRepoUnknown: boolean
+  linkCrewUnknown: boolean
 }
 
 /** Merges a `#/dispatch?repo=&crew=` link, remembered device prefs, and
@@ -121,7 +122,10 @@ export function resolveInitial(
       ? linkCrew
       : defaultCrew(chosenRepo)
 
-  return { repo, crew, engine, tier, model, effort, linkRepoUnknown: !!link?.repo && !repoKnown }
+  const namedCrew = link?.crew && link.crew !== NEW_CREW ? link.crew : undefined
+  const linkCrewUnknown = !!namedCrew && !o.repos.some((r) => r.crews.includes(namedCrew))
+
+  return { repo, crew, engine, tier, model, effort, linkRepoUnknown: !!link?.repo && !repoKnown, linkCrewUnknown }
 }
 
 /** `<id> · <age> ago`, or bare `id` if it doesn't start with a unix timestamp. */
@@ -137,6 +141,22 @@ const ISSUE_RE = /^([0-9]{1,9}|[A-Z]{2,10}-[0-9]{1,9})$/
 
 export function isValidIssue(issue: string): boolean {
   return issue.trim() === '' || ISSUE_RE.test(issue.trim())
+}
+
+// A peer's dispatch answer is not trusted to name a safe link.
+const ISSUE_URL = /^https:\/\/github\.com\/[A-Za-z0-9-]+\/[A-Za-z0-9._-]+\/issues\/[0-9]+$/
+
+export function safeIssueURL(url?: string): string | undefined {
+  return url && ISSUE_URL.test(url) ? url : undefined
+}
+
+/** A launch or restart answer's run id, only when it addresses a run of that
+ *  host: `peer-<host>.` for a peer, never a `peer-` id for local. */
+export function runIdFor(host: string | undefined, runId: string | undefined): string | undefined {
+  if (!runId) return undefined
+  const peer = host && host !== 'local' ? host : undefined
+  if (peer) return runId.startsWith(`peer-${peer}.`) ? runId : undefined
+  return runId.startsWith('peer-') ? undefined : runId
 }
 
 /** Same 40%-of-viewport cap as the terminal composer. */

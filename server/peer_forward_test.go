@@ -426,6 +426,18 @@ func TestPeerRestartIsForwarded(t *testing.T) {
 		}
 	}
 
+	t.Run("unreadable", func(t *testing.T) {
+		p := newPeerRecorder(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, deepRunIDBody)
+		})
+		s := newForwardServer(t, p.srv.URL)
+		rec := doReply(t, s, browserRequest("POST", "/api/runs/"+fwdPeerRunID+"/restart", `{}`))
+		if got := rec.Body.String(); got != `{"error":"unreadable peer response"}` {
+			t.Errorf("local body %.80q, want it replaced", got)
+		}
+	})
+
 	t.Run("unlisted", func(t *testing.T) {
 		p := newPeerRecorder(t, peerConflict)
 		s := newForwardServer(t, p.srv.URL)

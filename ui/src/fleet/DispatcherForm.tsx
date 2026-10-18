@@ -3,6 +3,7 @@ import type { FormEvent } from 'react'
 import { submitDispatcher, type DispatchOptions, type DispatcherOutcome } from '../api/dispatch'
 import type { Run } from '../api/runs'
 import { buildDispatcherRequest, MAX_TASKS, taskRowsProblem } from './dispatcherForm'
+import { runIdFor } from './dispatchForm'
 import { runHash } from './routes'
 import { onAppLink, openRun } from './nav'
 
@@ -17,12 +18,14 @@ export function DispatcherForm({
   repo,
   runs,
   onStarted,
+  onBusyChange,
 }: {
   host: string
   options: DispatchOptions
   repo: string
   runs: Run[]
   onStarted: () => void
+  onBusyChange?: (busy: boolean) => void
 }) {
   const engines = options.dispatcher_engines ?? []
   const nextRowId = useRef(1)
@@ -67,18 +70,21 @@ export function DispatcherForm({
     e.preventDefault()
     if (!canSubmit) return
     setSubmitting(true)
+    onBusyChange?.(true)
     const result = await submitDispatcher(
       buildDispatcherRequest({ repo, rows: rows.map((r) => r.text), engine, model, effort }),
       host === 'local' ? undefined : host,
     )
     setSubmitting(false)
+    onBusyChange?.(false)
     setOutcome(result)
     if (result.kind !== 'started') return
     setRows([newRow()])
     onStarted()
   }
 
-  const startedRun = outcome?.kind === 'started' ? runs.find((r) => r.id === outcome.runId) : undefined
+  const startedId = outcome?.kind === 'started' ? runIdFor(host, outcome.runId) : undefined
+  const startedRun = startedId ? runs.find((r) => r.id === startedId) : undefined
 
   return (
     <>

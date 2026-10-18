@@ -138,6 +138,46 @@ describe('RestartDispatcher', () => {
     expect(isPendingRun('pane-new', Date.now())).toBe(true)
   })
 
+  it('on a peer run a run_id that is not that peer\'s is not followed', async () => {
+    window.location.hash = '#/fleet/d%2F1/crew'
+    fetchMock.mockImplementationOnce(() => Promise.resolve(reply(200, { ...started, run_id: 'pane-5' })))
+    render(<RestartDispatcher run={dispatcher({ host: 'b' })} />)
+    open()
+
+    confirm()
+
+    await screen.findByRole('button', { name: 'Restart' })
+    expect(window.location.hash).toBe('#/fleet/d%2F1/crew')
+    expect(isPendingRun('pane-5', Date.now())).toBe(false)
+  })
+
+  it('on a peer run follows that peer\'s run_id', async () => {
+    window.location.hash = '#/fleet/d%2F1/crew'
+    fetchMock.mockImplementationOnce(() => Promise.resolve(reply(200, { ...started, run_id: 'peer-b.pane-5' })))
+    render(<RestartDispatcher run={dispatcher({ host: 'b' })} />)
+    open()
+
+    confirm()
+
+    await waitFor(() => expect(window.location.hash).toBe('#/fleet/peer-b.pane-5/crew'))
+    expect(isPendingRun('peer-b.pane-5', Date.now())).toBe(true)
+  })
+
+  it('a success without run_id does not navigate', async () => {
+    window.location.hash = '#/fleet/d%2F1/crew'
+    const noId: Partial<typeof started> = { ...started }
+    delete noId.run_id
+    fetchMock.mockImplementationOnce(() => Promise.resolve(reply(200, noId)))
+    render(<RestartDispatcher run={dispatcher()} />)
+    open()
+
+    confirm()
+
+    await screen.findByRole('button', { name: 'Restart' })
+    expect(window.location.hash).toBe('#/fleet/d%2F1/crew')
+    expect(isPendingRun('undefined', Date.now())).toBe(false)
+  })
+
   it('shows Restarting… and disables the action while sending', async () => {
     let resolve: (r: Response) => void = () => {}
     fetchMock.mockImplementationOnce(() => new Promise<Response>((r) => { resolve = r }))

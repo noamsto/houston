@@ -11,6 +11,7 @@ import {
   isValidIssue,
   loadPrefs,
   resolveInitial,
+  safeIssueURL,
   workerEngines,
   savePrefs,
   taskMaxHeight,
@@ -57,6 +58,7 @@ export function DispatchView({ runs }: { runs: Run[] }) {
   const [refreshError, setRefreshError] = useState<string | null>(null)
 
   const [submitting, setSubmitting] = useState(false)
+  const [dispatcherBusy, setDispatcherBusy] = useState(false)
   const [outcome, setOutcome] = useState<DispatchOutcome | null>(null)
   const [outcomeWasNewCrew, setOutcomeWasNewCrew] = useState(false)
   const [outcomeHost, setOutcomeHost] = useState('local')
@@ -71,6 +73,7 @@ export function DispatchView({ runs }: { runs: Run[] }) {
   const route = useDispatchRoute()
   const [appliedSeq, setAppliedSeq] = useState<number | null>(null)
   const peers = (hosts ?? []).filter((h) => !h.local)
+  const hostBusy = submitting || dispatcherBusy
 
   // State setters only: it runs from the render-phase link prefill as well as
   // from the picker; the [host] effect then fetches that host's options.
@@ -83,6 +86,7 @@ export function DispatchView({ runs }: { runs: Run[] }) {
     setOptionsError(null)
     setRefreshError(null)
     setLinkNotice(null)
+    setOutcome(null)
   }
 
   // Picking a host by hand abandons a link still waiting on its host's
@@ -107,6 +111,8 @@ export function DispatchView({ runs }: { runs: Run[] }) {
     } else if (peer?.health === 'unreachable') {
       setAppliedSeq(route.seq)
       setLinkNotice(`${wanted} is unreachable right now.`)
+    } else if (wanted !== host && hostBusy) {
+      // Held until the in-flight submit lands on the host it was sent to.
     } else if (wanted !== host) {
       switchHost(wanted)
     } else if (options && optionsHost === wanted) {
@@ -114,7 +120,13 @@ export function DispatchView({ runs }: { runs: Run[] }) {
       const link = resolveInitial(options, { repo }, route)
       setRepo(link.repo)
       setCrew(link.crew)
-      setLinkNotice(link.linkRepoUnknown ? UNKNOWN_REPO_NOTICE : null)
+      setLinkNotice(
+        link.linkRepoUnknown
+          ? UNKNOWN_REPO_NOTICE
+          : link.linkCrewUnknown
+            ? `Linked crew isn't listed on ${wanted} — pick one below.`
+            : null,
+      )
       setMode('worker')
     }
   }
@@ -157,8 +169,9 @@ export function DispatchView({ runs }: { runs: Run[] }) {
           if (active) setHosts(list)
         })
         .catch(() => {
-          // A failed poll keeps the last list, so a chosen peer stays pickable.
-          if (active) setHosts((prev) => prev ?? [])
+          // A failed poll keeps the last list, so a chosen peer stays pickable;
+          // a failed first poll stays null, so a pending host link waits for
+          // the next one.
         })
     }
     load()
@@ -321,7 +334,8 @@ export function DispatchView({ runs }: { runs: Run[] }) {
     outcome?.kind === 'started'
       ? findDispatchedRun(runs, outcome.branch, outcome.crew || undefined, outcomeHost === 'local' ? undefined : outcomeHost)
       : undefined
-  const issueUrl = outcome?.kind === 'started' ? (outcome.issueUrl ?? dispatchedRun?.issue?.url) : undefined
+  const issueUrl =
+    outcome?.kind === 'started' ? (safeIssueURL(outcome.issueUrl) ?? safeIssueURL(dispatchedRun?.issue?.url)) : undefined
 
   return (
     <div className="dispatch mocha">
@@ -332,7 +346,7 @@ export function DispatchView({ runs }: { runs: Run[] }) {
       {peers.length > 0 && (
         <div className="dispatch-field dispatch-host">
           <label htmlFor="dispatch-host">Host</label>
-          <select id="dispatch-host" value={host} onChange={(e) => chooseHost(e.target.value)}>
+          <select id="dispatch-host" value={host} disabled={hostBusy} onChange={(e) => chooseHost(e.target.value)}>
             <option value="local">local</option>
             {peers.map((p) => (
               <option key={p.name} value={p.name} disabled={p.health === 'unreachable'}>
@@ -388,7 +402,14 @@ export function DispatchView({ runs }: { runs: Run[] }) {
       {/* Kept mounted so the draft and an in-flight launch survive a mode toggle. */}
       {!loadingOptions && options && (
         <div hidden={mode !== 'dispatcher'}>
-          <DispatcherForm host={host} options={options} repo={repo} runs={runs} onStarted={() => refreshOptions()} />
+          <DispatcherForm
+            host={host}
+            options={options}
+            repo={repo}
+            runs={runs}
+            onStarted={() => refreshOptions()}
+            onBusyChange={setDispatcherBusy}
+          />
         </div>
       )}
 
