@@ -343,33 +343,113 @@ func TestHostForwardDownPeerIsUnreachable(t *testing.T) {
 	wantRefusal(t, doReply(t, s, browserRequest("GET", "/api/hosts/b/dispatch/options", "")), http.StatusBadGateway, "peer unreachable")
 }
 
-func TestHostForwardRoutesWait(t *testing.T) {
-	if worst := dispatchTimeout + dispatchGrace + tmuxTimeout + 2*dispatchEnginesTimeout; fwdHostDispatch.wait <= worst {
-		t.Errorf("dispatch wait %v, want more than the peer's worst case %v", fwdHostDispatch.wait, worst)
+const unknownOutcome = "peer did not answer in time — it may still be running; check Fleet before retrying"
+
+// TestForwardRouteModes: only the routes whose peer handler detaches its work
+// from the request may answer "may still be running".
+func TestForwardRouteModes(t *testing.T) {
+	routes := map[string]peerRoute{
+		"terminal": fwdTerminal, "input": fwdInput, "answer": fwdAnswer, "prompt": fwdPrompt,
+		"chat": fwdChat, "chat/stream": fwdChatStream, "chat/tool": fwdChatTool, "reply": fwdReply,
+		"crew/feed": fwdCrewFeed, "crew/feed/stream": fwdCrewFeedStream, "restart": fwdRestart,
+		"host options": fwdHostOptions, "host dispatch": fwdHostDispatch, "host dispatcher": fwdHostDispatcher,
+		"host repos": fwdHostRepos, "host repos add": fwdHostReposAdd, "host repos remove": fwdHostReposRemove,
+		"host candidates": fwdHostCandidates,
 	}
-	for name, rt := range map[string]peerRoute{"options": fwdHostOptions, "dispatcher": fwdHostDispatcher, "restart": fwdRestart} {
-		if rt.wait <= 15*time.Second {
-			t.Errorf("%s wait %v, want more than the 15 s header timeout", name, rt.wait)
+	detached := []string{"host dispatch", "host dispatcher", "restart"}
+	slice2 := []string{"terminal", "input", "answer", "prompt", "chat", "chat/stream", "chat/tool", "reply", "crew/feed", "crew/feed/stream"}
+	for name, rt := range routes {
+		if got, want := rt.mode == peer.Detached, slices.Contains(detached, name); got != want {
+			t.Errorf("%s detached = %v, want %v", name, got, want)
+		}
+		if slices.Contains(slice2, name) && rt.mode != peer.Fast {
+			t.Errorf("%s mode %d, want Fast", name, rt.mode)
 		}
 	}
 }
 
-func TestHostForwardPastItsWaitIs504(t *testing.T) {
-	release := make(chan struct{})
-	p := newPeerRecorder(t, func(w http.ResponseWriter, r *http.Request) {
-		select {
-		case <-release:
-		case <-r.Context().Done():
+func TestForwardDialTimeoutIsUnreachable(t *testing.T) {
+	p := newPeerRecorder(t, peerConflict)
+	s := newForwardServerWith(t, p.srv.URL, peer.Options{DialTimeout: time.Nanosecond})
+
+	for _, tc := range []struct{ method, path, body string }{
+		{"POST", "/api/runs/" + fwdPeerRunID + "/input", `{"type":"key","key":"Enter"}`},
+		{"GET", "/api/runs/" + fwdPeerRunID + "/prompt", ""},
+		{"POST", "/api/hosts/b/dispatch", `{}`},
+		{"POST", "/api/hosts/b/dispatch/dispatcher", `{}`},
+		{"POST", "/api/runs/" + fwdPeerRunID + "/restart", `{}`},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			wantRefusal(t, doReply(t, s, browserRequest(tc.method, tc.path, tc.body)), http.StatusBadGateway, "peer unreachable")
+		})
+	}
+	if n := len(p.requests()); n != 0 {
+		t.Fatalf("peer saw %d requests, want 0", n)
+	}
+}
+
+// stallPeer holds a request until the client goes away.
+func stallPeer(_ http.ResponseWriter, r *http.Request) { <-r.Context().Done() }
+
+func TestForwardHeaderTimeoutIsUnreachable(t *testing.T) {
+	p := newPeerRecorder(t, stallPeer)
+	s := newForwardServerWith(t, p.srv.URL, peer.Options{HeaderTimeout: 50 * time.Millisecond})
+
+	wantRefusal(t, doReply(t, s, browserRequest("GET", "/api/runs/"+fwdPeerRunID+"/prompt", "")), http.StatusBadGateway, "peer unreachable")
+}
+
+// detachedRoutes are the forwards that answer 504 once the peer had the
+// request.
+var detachedRoutes = []struct{ name, path string }{
+	{"dispatch", "/api/hosts/b/dispatch"},
+	{"dispatcher", "/api/hosts/b/dispatch/dispatcher"},
+	{"restart", "/api/runs/" + fwdPeerRunID + "/restart"},
+}
+
+func TestDetachedForwardPastTheCeilingIs504(t *testing.T) {
+	p := newPeerRecorder(t, stallPeer)
+	s := newForwardServerWith(t, p.srv.URL, peer.Options{LongCeiling: 50 * time.Millisecond})
+
+	for _, rt := range detachedRoutes {
+		t.Run(rt.name, func(t *testing.T) {
+			wantRefusal(t, doReply(t, s, browserRequest("POST", rt.path, `{"a":1}`)), http.StatusGatewayTimeout, unknownOutcome)
+		})
+	}
+	for _, r := range p.requests() {
+		if string(r.body) != `{"a":1}` {
+			t.Errorf("peer read body %q", r.body)
+		}
+	}
+}
+
+func TestDetachedForwardPeerHangsUpIs504(t *testing.T) {
+	p := newPeerRecorder(t, func(w http.ResponseWriter, _ *http.Request) {
+		if conn, _, err := w.(http.Hijacker).Hijack(); err == nil {
+			_ = conn.Close()
 		}
 	})
-	defer close(release)
 	s := newForwardServer(t, p.srv.URL)
 
-	rt := fwdHostDispatch
-	rt.wait = 50 * time.Millisecond
-	req := browserRequest("POST", "/api/hosts/b/dispatch", `{}`)
-	req.SetPathValue("host", "b")
-	rec := httptest.NewRecorder()
-	s.forwardHost(rt)(rec, req)
-	wantRefusal(t, rec, http.StatusGatewayTimeout, "peer did not answer in time — it may still be running; check Fleet before retrying")
+	for _, rt := range detachedRoutes {
+		t.Run(rt.name, func(t *testing.T) {
+			wantRefusal(t, doReply(t, s, browserRequest("POST", rt.path, `{}`)), http.StatusGatewayTimeout, unknownOutcome)
+		})
+	}
+
+	t.Run("truncated body", func(t *testing.T) {
+		p := newPeerRecorder(t, func(w http.ResponseWriter, _ *http.Request) {
+			conn, _, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				return
+			}
+			_, _ = io.WriteString(conn, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{\"crew\"")
+			_ = conn.Close()
+		})
+		s := newForwardServer(t, p.srv.URL)
+		wantRefusal(t, doReply(t, s, browserRequest("POST", "/api/hosts/b/dispatch", `{}`)), http.StatusGatewayTimeout, unknownOutcome)
+	})
+
+	t.Run("fast route", func(t *testing.T) {
+		wantRefusal(t, doReply(t, s, browserRequest("POST", "/api/runs/"+fwdPeerRunID+"/input", `{"type":"key","key":"Enter"}`)), http.StatusBadGateway, "peer unreachable")
+	})
 }

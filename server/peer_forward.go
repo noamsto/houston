@@ -2,7 +2,6 @@ package server
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -53,21 +52,10 @@ type peerRoute struct {
 	headers  []string
 	limit    int64 // body cap; 0 sends no body
 	kind     forwardKind
-	toolCall bool          // suffix is followed by the escaped {callId}
-	wait     time.Duration // bounds the whole request; 0 keeps the transport's header timeout
-	mapRunID bool          // the answer's run_id is a peer-local id to map to this houston's
+	toolCall bool      // suffix is followed by the escaped {callId}
+	mode     peer.Mode // Fast unless the peer's handler can outlast the header timeout
+	mapRunID bool      // the answer's run_id is a peer-local id to map to this houston's
 }
-
-// Forward waits outlast the peer's own worst case, so a slow peer still
-// answers rather than reading as unreachable.
-var (
-	// The tmux server PATH, models and engines lookups (10 s each), then
-	// dispatch's own timeout and its SIGTERM grace, plus 10 s: 30+120+5+10 = 165 s.
-	dispatchForwardWait = tmuxTimeout + 2*dispatchEnginesTimeout + dispatchTimeout + dispatchGrace + 10*time.Second
-	// The same lookups (30 s), the launch check plus restart slack (8 s) and
-	// five tmux calls at their 10 s bound (50 s): 88 s.
-	launchForwardWait = 90 * time.Second
-)
 
 var (
 	fwdTerminal       = peerRoute{suffix: "terminal", method: http.MethodGet, kind: forwardWS}
@@ -80,15 +68,15 @@ var (
 	fwdReply          = peerRoute{suffix: "reply", method: http.MethodPost, headers: []string{"Content-Type"}, limit: maxReplyBody}
 	fwdCrewFeed       = peerRoute{suffix: "crew/feed", method: http.MethodGet, query: []string{"before", "limit"}}
 	fwdCrewFeedStream = peerRoute{suffix: "crew/feed/stream", method: http.MethodGet, query: []string{"after", "from"}, headers: []string{"Last-Event-ID"}, kind: forwardSSE}
-	fwdRestart        = peerRoute{suffix: "restart", method: http.MethodPost, headers: []string{"Content-Type"}, limit: maxDispatchBody, wait: launchForwardWait, mapRunID: true}
+	fwdRestart        = peerRoute{suffix: "restart", method: http.MethodPost, headers: []string{"Content-Type"}, limit: maxDispatchBody, mode: peer.Detached, mapRunID: true}
 
-	fwdHostOptions     = peerRoute{suffix: "dispatch/options", method: http.MethodGet, wait: 30 * time.Second}
-	fwdHostDispatch    = peerRoute{suffix: "dispatch", method: http.MethodPost, headers: []string{"Content-Type"}, limit: maxDispatchBody, wait: dispatchForwardWait}
-	fwdHostDispatcher  = peerRoute{suffix: "dispatch/dispatcher", method: http.MethodPost, headers: []string{"Content-Type"}, limit: maxDispatchBody, wait: launchForwardWait, mapRunID: true}
-	fwdHostRepos       = peerRoute{suffix: "repos", method: http.MethodGet}
-	fwdHostReposAdd    = peerRoute{suffix: "repos", method: http.MethodPost, headers: []string{"Content-Type"}, limit: maxRepoBody}
-	fwdHostReposRemove = peerRoute{suffix: "repos", method: http.MethodDelete, headers: []string{"Content-Type"}, limit: maxRepoBody}
-	fwdHostCandidates  = peerRoute{suffix: "repos/candidates", method: http.MethodGet, query: []string{"q"}}
+	fwdHostOptions     = peerRoute{suffix: "dispatch/options", method: http.MethodGet, mode: peer.Long}
+	fwdHostDispatch    = peerRoute{suffix: "dispatch", method: http.MethodPost, headers: []string{"Content-Type"}, limit: maxDispatchBody, mode: peer.Detached}
+	fwdHostDispatcher  = peerRoute{suffix: "dispatch/dispatcher", method: http.MethodPost, headers: []string{"Content-Type"}, limit: maxDispatchBody, mode: peer.Detached, mapRunID: true}
+	fwdHostRepos       = peerRoute{suffix: "repos", method: http.MethodGet, mode: peer.Long}
+	fwdHostReposAdd    = peerRoute{suffix: "repos", method: http.MethodPost, headers: []string{"Content-Type"}, limit: maxRepoBody, mode: peer.Long}
+	fwdHostReposRemove = peerRoute{suffix: "repos", method: http.MethodDelete, headers: []string{"Content-Type"}, limit: maxRepoBody, mode: peer.Long}
+	fwdHostCandidates  = peerRoute{suffix: "repos/candidates", method: http.MethodGet, query: []string{"q"}, mode: peer.Long}
 )
 
 // forwardCaps is what this houston can forward to a peer in mode m: reply
@@ -191,7 +179,7 @@ func (s *Server) forwardPeer(w http.ResponseWriter, r *http.Request, rt peerRout
 	if !ok {
 		return
 	}
-	resp, err := src.Do(r.Context(), rt.method, peerID, suffix, query, header, body, rt.wait)
+	resp, err := src.Do(r.Context(), rt.method, peerID, suffix, query, header, body, rt.mode)
 	if err != nil {
 		forwardFailed(w, r, src, rt, err)
 		return
@@ -218,7 +206,7 @@ func (s *Server) forwardHost(rt peerRoute) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		resp, err := src.DoAPI(r.Context(), rt.method, rt.suffix, query, header, body, rt.wait)
+		resp, err := src.DoAPI(r.Context(), rt.method, rt.suffix, query, header, body, rt.mode)
 		if err != nil {
 			forwardFailed(w, r, src, rt, err)
 			return
@@ -271,19 +259,23 @@ func forwardLogLevel(rt peerRoute) slog.Level {
 	return slog.LevelDebug
 }
 
-// forwardFailed answers a forwarded request that got no response. A missed
-// wait is not unreachable: the peer detaches dispatch from the request, so
-// the work may still land.
+// forwardFailed answers a forwarded request that got no response.
 func forwardFailed(w http.ResponseWriter, r *http.Request, src *peer.Source, rt peerRoute, err error) {
 	slog.Debug("peer forward failed", "peer", src.Host(), "route", rt.suffix, "err", err)
-	code := http.StatusBadGateway
-	if errors.Is(err, context.DeadlineExceeded) {
-		code = http.StatusGatewayTimeout
-		http.Error(w, "peer did not answer in time — it may still be running; check Fleet before retrying", code)
-	} else {
-		http.Error(w, "peer unreachable", code)
-	}
+	code := peerFailure(w, err)
 	slog.Log(r.Context(), forwardLogLevel(rt), "peer forward", "peer", src.Host(), "route", rt.suffix, "status", code)
+}
+
+// peerFailure answers a forward that failed before a whole answer arrived. An
+// unknown outcome is not unreachable: the peer had the request and detaches
+// that work from it, so it may still land.
+func peerFailure(w http.ResponseWriter, err error) int {
+	if errors.Is(err, peer.ErrOutcomeUnknown) {
+		http.Error(w, "peer did not answer in time — it may still be running; check Fleet before retrying", http.StatusGatewayTimeout)
+		return http.StatusGatewayTimeout
+	}
+	http.Error(w, "peer unreachable", http.StatusBadGateway)
+	return http.StatusBadGateway
 }
 
 // relayForward answers the browser with a forwarded request's response; the
@@ -360,8 +352,7 @@ func relayPeerResponse(w http.ResponseWriter, resp *http.Response, rewrite func(
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, maxForwardBody+1))
 	if err != nil {
-		http.Error(w, "peer unreachable", http.StatusBadGateway)
-		return http.StatusBadGateway
+		return peerFailure(w, err)
 	}
 	if len(b) > maxForwardBody {
 		http.Error(w, "peer response too large", http.StatusBadGateway)

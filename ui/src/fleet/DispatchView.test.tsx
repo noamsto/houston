@@ -797,15 +797,20 @@ describe('DispatchView host picker', () => {
     await waitFor(() => expect(window.location.hash).toBe('#/dispatch'))
   })
 
-  it('an unknown linked host shows a notice', async () => {
+  it('an unknown linked host shows the options error and no form', async () => {
     window.location.hash = '#/dispatch?host=zzz'
     fetchHostsMock.mockResolvedValue(peerHosts)
-    servePerHost()
+    fetchDispatchOptionsMock.mockImplementation((h) =>
+      h === 'zzz'
+        ? Promise.reject(new Error("Linked host isn't one houston knows."))
+        : Promise.resolve(structuredClone(optionsFixture)),
+    )
     render(<DispatchView runs={[]} />)
 
     expect(await screen.findByText("Linked host isn't one houston knows.")).toBeTruthy()
-    expect(value('Host')).toBe('local')
-    await waitFor(() => expect(window.location.hash).toBe('#/dispatch'))
+    expect(value('Host')).toBe('zzz')
+    expect(screen.queryByLabelText('Repo')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Dispatch' })).toBeNull()
   })
 
   it('renders a peer\'s issue link only when it is a GitHub issue URL', async () => {
@@ -833,7 +838,110 @@ describe('DispatchView host picker', () => {
     expect(screen.queryByRole('link', { name: /view issue/i })).toBeNull()
   })
 
-  it('disables the host while a worker dispatch is in flight', async () => {
+  const dispatcherStarted = { kind: 'started', crew: '1-2', session: 'proj', window: '@1', pane: '%7', runId: 'peer-b.pane-7' }
+
+  async function launchPendingOnB(runs: Run[]) {
+    const utils = await renderOnB(runs)
+    fireEvent.click(screen.getByRole('button', { name: 'New dispatcher' }))
+    let resolve!: (o: unknown) => void
+    submitDispatcherMock.mockReturnValue(new Promise((r) => { resolve = r }))
+    fireEvent.click(screen.getByRole('button', { name: 'Start dispatcher' }))
+    await screen.findByRole('button', { name: 'Starting…' })
+    return { ...utils, resolve }
+  }
+
+  it('a host link mid-launch switches host at once and the launch lands tagged with its host', async () => {
+    const { resolve } = await launchPendingOnB([run({ id: 'peer-b.pane-7', host: 'b' })])
+
+    act(() => { window.location.hash = '#/dispatch?host=local' })
+    await waitFor(() => expect(value('Host')).toBe('local'))
+    await waitFor(() => expect(value('Repo')).toBe('/repo/a'))
+    await act(async () => { resolve(dispatcherStarted) })
+
+    expect(await screen.findByText('on b')).toBeTruthy()
+    expect(screen.getByText('proj')).toBeTruthy()
+    const link = screen.getByRole('link', { name: 'Open run' }) as HTMLAnchorElement
+    expect(link.getAttribute('href')).toBe('#/fleet/peer-b.pane-7')
+    expect(submitDispatcherMock).toHaveBeenCalledWith(expect.anything(), 'b')
+  })
+
+  it('choosing another host mid-launch keeps the launch result for its host', async () => {
+    const { resolve } = await launchPendingOnB([run({ id: 'peer-b.pane-7', host: 'b' })])
+
+    change('Host', 'local')
+    await waitFor(() => expect(value('Repo')).toBe('/repo/a'))
+    await act(async () => { resolve(dispatcherStarted) })
+
+    expect(await screen.findByText('on b')).toBeTruthy()
+    const link = screen.getByRole('link', { name: 'Open run' }) as HTMLAnchorElement
+    expect(link.getAttribute('href')).toBe('#/fleet/peer-b.pane-7')
+  })
+
+  it('a launch that lands after leaving its host refreshes only the host now chosen', async () => {
+    const { resolve } = await launchPendingOnB([])
+    change('Host', 'local')
+    await waitFor(() => expect(value('Repo')).toBe('/repo/a'))
+    const calls = fetchDispatchOptionsMock.mock.calls.length
+
+    await act(async () => { resolve(dispatcherStarted) })
+    await screen.findByText('on b')
+
+    expect(fetchDispatchOptionsMock.mock.calls.length).toBe(calls)
+  })
+
+  it('a worker dispatch landing after a host switch links the dispatched host\'s run', async () => {
+    await renderOnB([
+      run({ id: 'pane-1', branch: 'feat/9-x', since: 5 }),
+      run({ id: 'peer-b.pane-3', host: 'b', branch: 'feat/9-x', since: 1 }),
+    ])
+    let resolve!: (o: DispatchOutcome) => void
+    submitDispatchMock.mockReturnValue(new Promise((r) => { resolve = r }))
+    await submitTitle()
+
+    change('Host', 'local')
+    await waitFor(() => expect(value('Repo')).toBe('/repo/a'))
+    await act(async () => { resolve({ kind: 'started', workerId: 'w', branch: 'feat/9-x' }) })
+
+    expect(await screen.findByText('on b')).toBeTruthy()
+    const link = screen.getByRole('link', { name: 'Open run' }) as HTMLAnchorElement
+    expect(link.getAttribute('href')).toBe('#/fleet/peer-b.pane-3')
+  })
+
+  it('a minted crew landing after a host switch is not added to the new host\'s repos', async () => {
+    await renderOnB()
+    change('Crew', 'new')
+    let resolve!: (o: DispatchOutcome) => void
+    submitDispatchMock.mockReturnValue(new Promise((r) => { resolve = r }))
+    await submitTitle()
+
+    change('Host', 'local')
+    await waitFor(() => expect(value('Repo')).toBe('/repo/a'))
+    await act(async () => { resolve({ kind: 'started', workerId: 'w', branch: 'feat/9-x', crew: '900-9' }) })
+    await screen.findByText('on b')
+
+    expect(value('Crew')).toBe('200-1')
+    const values = within(field('Crew')).getAllByRole('option').map((o) => (o as HTMLOptionElement).value)
+    expect(values).not.toContain('900-9')
+  })
+
+  it('a result that landed on local stays visible after switching host', async () => {
+    fetchHostsMock.mockResolvedValue(peerHosts)
+    servePerHost()
+    render(<DispatchView runs={[]} />)
+    await screen.findByLabelText('Host')
+    submitDispatchMock.mockResolvedValue({ kind: 'started', workerId: 'worker:feat/1-x#s1', branch: 'feat/1-x' })
+    await submitTitle()
+    await screen.findByText('worker:feat/1-x#s1')
+    expect(screen.queryByText('on local')).toBeNull()
+
+    change('Host', 'b')
+    await waitFor(() => expect(value('Repo')).toBe('/b/one'))
+
+    expect(screen.getByText('worker:feat/1-x#s1')).toBeTruthy()
+    expect(screen.getByText('on local')).toBeTruthy()
+  })
+
+  it('a worker dispatch in flight disables both submits and leaves the host enabled', async () => {
     fetchHostsMock.mockResolvedValue(peerHosts)
     servePerHost()
     render(<DispatchView runs={[]} />)
@@ -842,12 +950,16 @@ describe('DispatchView host picker', () => {
     submitDispatchMock.mockReturnValue(new Promise((r) => { resolve = r }))
     await submitTitle()
 
-    expect((field('Host') as HTMLSelectElement).disabled).toBe(true)
-    await act(async () => { resolve({ kind: 'started', workerId: 'w', branch: 'feat/1-x' }) })
+    expect((screen.getByRole('button', { name: 'Dispatching…' }) as HTMLButtonElement).disabled).toBe(true)
     expect((field('Host') as HTMLSelectElement).disabled).toBe(false)
+    fireEvent.click(screen.getByRole('button', { name: 'New dispatcher' }))
+    expect((screen.getByRole('button', { name: 'Start dispatcher' }) as HTMLButtonElement).disabled).toBe(true)
+
+    await act(async () => { resolve({ kind: 'started', workerId: 'w', branch: 'feat/1-x' }) })
+    expect((screen.getByRole('button', { name: 'Start dispatcher' }) as HTMLButtonElement).disabled).toBe(false)
   })
 
-  it('disables the host while a dispatcher launch is in flight', async () => {
+  it('a dispatcher launch in flight disables both submits and leaves the host enabled', async () => {
     fetchHostsMock.mockResolvedValue(peerHosts)
     servePerHost()
     render(<DispatchView runs={[]} />)
@@ -858,26 +970,18 @@ describe('DispatchView host picker', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Start dispatcher' }))
     await screen.findByRole('button', { name: 'Starting…' })
 
-    expect((field('Host') as HTMLSelectElement).disabled).toBe(true)
+    expect((field('Host') as HTMLSelectElement).disabled).toBe(false)
+    fireEvent.click(screen.getByRole('button', { name: 'Add worker' }))
+    change('Title', 'go')
+    const dispatch = screen.getByRole('button', { name: 'Dispatch' }) as HTMLButtonElement
+    expect(dispatch.disabled).toBe(true)
+    fireEvent.click(dispatch)
+    expect(submitDispatchMock).not.toHaveBeenCalled()
+
     await act(async () => {
       resolve({ kind: 'started', crew: '1-2', session: 'proj', window: '@1', pane: '%7', runId: 'pane-7' })
     })
-    expect((field('Host') as HTMLSelectElement).disabled).toBe(false)
-  })
-
-  it('switching host drops the previous worker outcome', async () => {
-    fetchHostsMock.mockResolvedValue(peerHosts)
-    servePerHost()
-    render(<DispatchView runs={[]} />)
-    await screen.findByLabelText('Host')
-    submitDispatchMock.mockResolvedValue({ kind: 'started', workerId: 'worker:feat/1-x#s1', branch: 'feat/1-x' })
-    await submitTitle()
-    await screen.findByText('worker:feat/1-x#s1')
-
-    change('Host', 'b')
-    await waitFor(() => expect(value('Repo')).toBe('/b/one'))
-
-    expect(screen.queryByText('worker:feat/1-x#s1')).toBeNull()
+    expect(dispatch.disabled).toBe(false)
   })
 
   it('launches a dispatcher on the chosen peer', async () => {
@@ -919,40 +1023,36 @@ describe('DispatchView host picker', () => {
     expect(screen.queryByText(/Linked crew isn't listed/)).toBeNull()
   })
 
-  it('a failed first host list holds a host link until a later poll lists the host', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true })
-    try {
-      window.location.hash = '#/dispatch?host=b'
-      fetchHostsMock.mockRejectedValueOnce(new Error('fetchHosts: 500'))
-      fetchHostsMock.mockResolvedValue(peerHosts)
-      servePerHost()
-      render(<DispatchView runs={[]} />)
-      await screen.findByLabelText('Repo')
-      await act(async () => {})
-
-      expect(screen.queryByText("Linked host isn't one houston knows.")).toBeNull()
-      expect(screen.queryByLabelText('Host')).toBeNull()
-      expect(value('Repo')).toBe('/repo/a')
-
-      await act(async () => { await vi.advanceTimersByTimeAsync(30_000) })
-
-      await waitFor(() => expect(value('Host')).toBe('b'))
-      await waitFor(() => expect(value('Repo')).toBe('/b/one'))
-      expect(screen.queryByText("Linked host isn't one houston knows.")).toBeNull()
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
-  it('an unreachable linked host shows a notice and stays local', async () => {
-    window.location.hash = '#/dispatch?host=c'
-    fetchHostsMock.mockResolvedValue(peerHosts)
+  it('a host link targets that host even while the host list keeps failing', async () => {
+    window.location.hash = '#/dispatch?host=b'
+    fetchHostsMock.mockRejectedValue(new Error('fetchHosts: 500'))
     servePerHost()
     render(<DispatchView runs={[]} />)
 
-    expect(await screen.findByText('c is unreachable right now.')).toBeTruthy()
-    await screen.findByLabelText('Repo')
-    expect(value('Host')).toBe('local')
-    expect(value('Repo')).toBe('/repo/a')
+    await waitFor(() => expect(value('Repo')).toBe('/b/one'))
+    expect(value('Host')).toBe('b')
+    expect(fetchDispatchOptionsMock).toHaveBeenCalledWith('b')
+    submitDispatchMock.mockResolvedValue({ kind: 'started', workerId: 'w', branch: 'feat/9-x' })
+    await submitTitle()
+
+    expect(submitDispatchMock).toHaveBeenCalledWith(expect.objectContaining({ repo: '/b/one' }), 'b')
+  })
+
+  it('an unreachable linked host shows the options error with a Retry', async () => {
+    window.location.hash = '#/dispatch?host=c'
+    fetchHostsMock.mockResolvedValue(peerHosts)
+    fetchDispatchOptionsMock.mockImplementation((h) =>
+      h === 'c'
+        ? Promise.reject(new Error('fetchDispatchOptions: 502 peer unreachable'))
+        : Promise.resolve(structuredClone(optionsFixture)),
+    )
+    render(<DispatchView runs={[]} />)
+
+    expect(await screen.findByText('fetchDispatchOptions: 502 peer unreachable')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy()
+    const host = field('Host') as HTMLSelectElement
+    expect(host.value).toBe('c')
+    const c = within(host).getAllByRole('option').find((o) => (o as HTMLOptionElement).value === 'c') as HTMLOptionElement
+    expect(c.disabled).toBe(false)
   })
 })

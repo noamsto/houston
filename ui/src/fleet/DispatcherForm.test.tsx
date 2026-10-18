@@ -1,13 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
-import { DispatcherForm } from './DispatcherForm'
+import { useState } from 'react'
+import { DispatcherForm, DispatcherResult } from './DispatcherForm'
 import type { DispatchOptions, DispatcherOutcome, DispatcherRequest } from '../api/dispatch'
 import type { Run } from '../api/runs'
 
 const submitDispatcherMock = vi.fn<(req: DispatcherRequest) => Promise<DispatcherOutcome>>()
-vi.mock('../api/dispatch', () => ({
-  submitDispatcher: (req: DispatcherRequest) => submitDispatcherMock(req),
-}))
 
 const options: DispatchOptions = {
   repos: [{ path: '/repo/a', name: 'repo-a', crews: [] }],
@@ -30,8 +28,42 @@ function run(p: Partial<Run> = {}): Run {
   } as Run
 }
 
-function setup(o: DispatchOptions = options, runs: Run[] = [], repo = '/repo/a', onStarted: () => void = () => {}) {
-  return render(<DispatcherForm host="local" options={o} repo={repo} runs={runs} onStarted={onStarted} />)
+// Stands in for DispatchView, which owns the launch and its result.
+function Harness({
+  host = 'local',
+  o = options,
+  runs = [],
+  repo = '/repo/a',
+  onStarted = () => {},
+}: {
+  host?: string
+  o?: DispatchOptions
+  runs?: Run[]
+  repo?: string
+  onStarted?: (host: string) => void
+}) {
+  const [outcome, setOutcome] = useState<DispatcherOutcome | null>(null)
+  const [busy, setBusy] = useState(false)
+  async function onSubmit(req: DispatcherRequest): Promise<DispatcherOutcome> {
+    setBusy(true)
+    try {
+      const result = await submitDispatcherMock(req)
+      setOutcome(result)
+      return result
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <>
+      <DispatcherForm host={host} options={o} repo={repo} busy={busy} onSubmit={onSubmit} onStarted={onStarted} />
+      {outcome && <DispatcherResult host={host} currentHost={host} outcome={outcome} runs={runs} />}
+    </>
+  )
+}
+
+function setup(o: DispatchOptions = options, runs: Run[] = [], repo = '/repo/a', onStarted: (host: string) => void = () => {}) {
+  return render(<Harness o={o} runs={runs} repo={repo} onStarted={onStarted} />)
 }
 
 function change(label: string, v: string): void {
@@ -204,6 +236,21 @@ describe('DispatcherForm submit', () => {
 
     await screen.findByText(/Waiting for it to appear in Fleet/)
     expect(onStarted).toHaveBeenCalledTimes(1)
+    expect(onStarted).toHaveBeenCalledWith('local')
+  })
+
+  it('clears the task rows after a successful launch only', async () => {
+    setup()
+    change('Task 1', 'keep me')
+    submitDispatcherMock.mockResolvedValueOnce({ kind: 'failed', status: 422, error: 'nope' })
+    fireEvent.click(startButton())
+    await screen.findByText('nope')
+    expect((screen.getByLabelText('Task 1') as HTMLTextAreaElement).value).toBe('keep me')
+
+    submitDispatcherMock.mockResolvedValueOnce({ kind: 'started', crew: '1-2', session: 's', window: '@1', pane: '%7', runId: 'pane-7' })
+    fireEvent.click(startButton())
+    await screen.findByText(/Waiting for it to appear in Fleet/)
+    expect((screen.getByLabelText('Task 1') as HTMLTextAreaElement).value).toBe('')
   })
 
   it('sends one request from two rapid clicks', async () => {
@@ -242,7 +289,7 @@ describe('DispatcherForm result', () => {
     fireEvent.click(startButton())
     await screen.findByText(/Waiting for it to appear in Fleet/)
 
-    rerender(<DispatcherForm host="local" options={options} repo="/repo/a" runs={[run({ id: 'pane-7' })]} onStarted={() => {}} />)
+    rerender(<Harness runs={[run({ id: 'pane-7' })]} />)
 
     const link = screen.getByRole('link', { name: 'Open run' }) as HTMLAnchorElement
     expect(link.getAttribute('href')).toBe('#/fleet/pane-7')
@@ -251,7 +298,7 @@ describe('DispatcherForm result', () => {
 
   it('on a peer does not link a local run named by the peer\'s run_id', async () => {
     submitDispatcherMock.mockResolvedValue({ ...started, runId: 'pane-5' })
-    render(<DispatcherForm host="b" options={options} repo="/repo/a" runs={[run({ id: 'pane-5' })]} onStarted={() => {}} />)
+    render(<Harness host="b" runs={[run({ id: 'pane-5' })]} />)
     fireEvent.click(startButton())
 
     expect(await screen.findByText(/Waiting for it to appear in Fleet/)).toBeTruthy()
@@ -261,23 +308,35 @@ describe('DispatcherForm result', () => {
   it('on a peer links that peer\'s run', async () => {
     submitDispatcherMock.mockResolvedValue({ ...started, runId: 'peer-b.pane-5' })
     const runs = [run({ id: 'peer-b.pane-5', host: 'b' })]
-    render(<DispatcherForm host="b" options={options} repo="/repo/a" runs={runs} onStarted={() => {}} />)
+    render(<Harness host="b" runs={runs} />)
     fireEvent.click(startButton())
 
     const link = (await screen.findByRole('link', { name: 'Open run' })) as HTMLAnchorElement
     expect(link.getAttribute('href')).toBe('#/fleet/peer-b.pane-5')
   })
 
-  it('reports busy around a launch', async () => {
+  it('disables its inputs and submit while busy, without claiming the launch', () => {
+    const onSubmit = vi.fn<(req: DispatcherRequest) => Promise<DispatcherOutcome>>()
+    render(<DispatcherForm host="local" options={options} repo="/repo/a" busy onSubmit={onSubmit} onStarted={() => {}} />)
+
+    expect(startButton().disabled).toBe(true)
+    expect(startButton().textContent).toBe('Start dispatcher')
+    expect((screen.getByLabelText('Task 1') as HTMLTextAreaElement).disabled).toBe(true)
+    expect((screen.getByLabelText('Engine') as HTMLSelectElement).disabled).toBe(true)
+    fireEvent.click(startButton())
+    expect(onSubmit).not.toHaveBeenCalled()
+  })
+
+  it('unlocks once the launch settles', async () => {
     let resolve!: (o: DispatcherOutcome) => void
     submitDispatcherMock.mockReturnValue(new Promise((r) => { resolve = r }))
-    const onBusyChange = vi.fn()
-    render(<DispatcherForm host="local" options={options} repo="/repo/a" runs={[]} onStarted={() => {}} onBusyChange={onBusyChange} />)
+    setup()
     fireEvent.click(startButton())
+    expect(startButton().disabled).toBe(true)
 
-    expect(onBusyChange.mock.calls).toEqual([[true]])
-    await act(async () => { resolve(started) })
-    expect(onBusyChange.mock.calls).toEqual([[true], [false]])
+    await act(async () => { resolve({ kind: 'failed', status: 0, error: 'network error' }) })
+    expect(startButton().disabled).toBe(false)
+    expect(screen.getByText('network error')).toBeTruthy()
   })
 
   it('shows the error and output on failure', async () => {

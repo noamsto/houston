@@ -16,6 +16,10 @@ function optionsResponse(status: number, body: string): Response {
   return { ...jsonResponse(status, body), json: () => Promise.resolve(JSON.parse(body)) } as Response
 }
 
+function brokenBody(status: number): Response {
+  return { ok: status >= 200 && status < 300, status, text: () => Promise.reject(new TypeError('body stream reset')) } as Response
+}
+
 const req: DispatchRequest = {
   repo: '/repo',
   title: 'add widget',
@@ -60,6 +64,11 @@ describe('fetchDispatchOptions', () => {
     await expect(fetchDispatchOptions('b')).rejects.toThrow("Dispatch isn't available on b.")
   })
 
+  it('says the host is unknown when the forwarder knows no such peer', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(optionsResponse(404, 'no such host\n'))))
+    await expect(fetchDispatchOptions('zzz')).rejects.toThrow("Linked host isn't one houston knows.")
+  })
+
   it('keeps the old message for a local 404', async () => {
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(optionsResponse(404, 'nope'))))
     await expect(fetchDispatchOptions()).rejects.toThrow('fetchDispatchOptions: 404 nope')
@@ -72,6 +81,11 @@ describe('fetchDispatchOptions', () => {
 })
 
 describe('submitDispatch', () => {
+  it('a body that fails to read returns failed with status 0', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(brokenBody(200))))
+    expect(await submitDispatch(req)).toEqual({ kind: 'failed', status: 0, error: 'network error' })
+  })
+
   it('200 JSON body returns started', async () => {
     vi.stubGlobal(
       'fetch',
@@ -177,6 +191,11 @@ describe('submitDispatch', () => {
 describe('submitDispatcher', () => {
   const dreq: DispatcherRequest = { repo: '/repo', tasks: ['fix the bug'], engine: 'claude' }
 
+  it('a body that fails to read returns failed with status 0', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(brokenBody(502))))
+    expect(await submitDispatcher(dreq, 'b')).toEqual({ kind: 'failed', status: 0, error: 'network error' })
+  })
+
   it('posts JSON to /api/dispatch/dispatcher and maps 200 to started', async () => {
     const fetchMock = vi.fn<typeof fetch>(() =>
       Promise.resolve(
@@ -278,6 +297,11 @@ describe('submitDispatcher', () => {
 })
 
 describe('restartDispatcher', () => {
+  it('a body that fails to read returns failed with status 0', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(brokenBody(200))))
+    expect(await restartDispatcher('r1', {})).toEqual({ kind: 'failed', status: 0, error: 'network error' })
+  })
+
   it('posts JSON to the run restart route and maps 200 to started', async () => {
     const fetchMock = vi.fn<typeof fetch>(() =>
       Promise.resolve(

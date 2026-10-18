@@ -73,11 +73,19 @@ func peerRunDelta(host, id string) runs.Delta {
 // peerURL.
 func newForwardServer(t *testing.T, peerURL string, deltas ...runs.Delta) *Server {
 	t.Helper()
+	return newForwardServerWith(t, peerURL, peer.Options{}, deltas...)
+}
+
+// newForwardServerWith is newForwardServer with peer b built from opts, for
+// shortened timeouts.
+func newForwardServerWith(t *testing.T, peerURL string, opts peer.Options, deltas ...runs.Delta) *Server {
+	t.Helper()
 	s := newReplyServer(t, nil, append([]runs.Delta{peerRunDelta("b", "pane-2"), peerRunDelta("c", "pane-2")}, deltas...)...)
 	s.mode = mode.Dispatcher
+	opts.Caps = forwardCaps(mode.Dispatcher, true)
 	s.peers = []*peer.Source{peer.New(
 		peer.Config{Name: "b", URL: peerURL, TokenFile: writeTokenFile(t, fwdPeerToken)},
-		peer.Options{Caps: forwardCaps(mode.Dispatcher, true)},
+		opts,
 	)}
 	return s
 }

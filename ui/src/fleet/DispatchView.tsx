@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
-import { fetchDispatchOptions, submitDispatch, NEW_CREW, type DispatchOptions, type DispatchOutcome } from '../api/dispatch'
+import {
+  fetchDispatchOptions,
+  submitDispatch,
+  submitDispatcher,
+  NEW_CREW,
+  type DispatchOptions,
+  type DispatchOutcome,
+  type DispatcherOutcome,
+  type DispatcherRequest,
+} from '../api/dispatch'
 import { fetchHosts, type HostHealth } from '../api/hosts'
 import type { Run } from '../api/runs'
 import {
@@ -17,7 +26,7 @@ import {
   taskMaxHeight,
   type DispatchPrefs,
 } from './dispatchForm'
-import { DispatcherForm } from './DispatcherForm'
+import { DispatcherForm, DispatcherResult } from './DispatcherForm'
 import { RepoPicker } from './RepoPicker'
 import { runHash, useDispatchRoute } from './routes'
 import { onAppLink, openRun } from './nav'
@@ -25,8 +34,16 @@ import { useNow } from './useNow'
 import './fleet.css'
 
 const UNKNOWN_REPO_NOTICE = "Linked repo isn't one houston knows — pick one below."
-const UNKNOWN_HOST_NOTICE = "Linked host isn't one houston knows."
 const HOSTS_POLL_MS = 30_000
+
+interface Results {
+  worker?: { host: string; outcome: DispatchOutcome; wasNewCrew: boolean }
+  dispatcher?: { host: string; outcome: DispatcherOutcome }
+}
+
+function peerArg(host: string): string | undefined {
+  return host === 'local' ? undefined : host
+}
 
 function autoGrow(el: HTMLTextAreaElement): void {
   el.style.height = 'auto'
@@ -57,11 +74,9 @@ export function DispatchView({ runs }: { runs: Run[] }) {
   const [showPicker, setShowPicker] = useState(false)
   const [refreshError, setRefreshError] = useState<string | null>(null)
 
-  const [submitting, setSubmitting] = useState(false)
-  const [dispatcherBusy, setDispatcherBusy] = useState(false)
-  const [outcome, setOutcome] = useState<DispatchOutcome | null>(null)
-  const [outcomeWasNewCrew, setOutcomeWasNewCrew] = useState(false)
-  const [outcomeHost, setOutcomeHost] = useState('local')
+  // Results carry the host they were sent to and outlive a host switch.
+  const [results, setResults] = useState<Results>({})
+  const [inFlight, setInFlight] = useState<{ kind: keyof Results; host: string } | null>(null)
   const resultRef = useRef<HTMLDivElement>(null)
   const refreshSeq = useRef(0)
   const pendingAdded = useRef<string | null>(null)
@@ -73,7 +88,8 @@ export function DispatchView({ runs }: { runs: Run[] }) {
   const route = useDispatchRoute()
   const [appliedSeq, setAppliedSeq] = useState<number | null>(null)
   const peers = (hosts ?? []).filter((h) => !h.local)
-  const hostBusy = submitting || dispatcherBusy
+  const busy = inFlight !== null
+  const submitting = inFlight?.kind === 'worker'
 
   // State setters only: it runs from the render-phase link prefill as well as
   // from the picker; the [host] effect then fetches that host's options.
@@ -86,7 +102,32 @@ export function DispatchView({ runs }: { runs: Run[] }) {
     setOptionsError(null)
     setRefreshError(null)
     setLinkNotice(null)
-    setOutcome(null)
+  }
+
+  // One submission at a time, whichever form and host it targets.
+  async function submit<K extends keyof Results>(
+    kind: K,
+    h: string,
+    fn: () => Promise<NonNullable<Results[K]>>,
+  ): Promise<NonNullable<Results[K]>> {
+    setInFlight({ kind, host: h })
+    try {
+      const r = await fn()
+      setResults((rs) => ({ ...rs, [kind]: r }))
+      return r
+    } finally {
+      setInFlight(null)
+    }
+  }
+
+  async function launchDispatcher(req: DispatcherRequest): Promise<DispatcherOutcome> {
+    const h = host
+    const r = await submit('dispatcher', h, async () => ({ host: h, outcome: await submitDispatcher(req, peerArg(h)) }))
+    return r.outcome
+  }
+
+  function onDispatcherStarted(h: string): void {
+    if (h === hostRef.current) refreshOptions()
   }
 
   // Picking a host by hand abandons a link still waiting on its host's
@@ -97,23 +138,12 @@ export function DispatchView({ runs }: { runs: Run[] }) {
   }
 
   // Adjusted during render rather than in an effect: each hashchange (seq)
-  // applies its link exactly once, and a link that arrived before the hosts
-  // or its host's options is held until they load. Only host/repo/crew are
-  // touched, so a draft survives.
+  // applies its link exactly once. The host switches at once; repo/crew wait
+  // for that host's options, whose fetch is the authority on an unknown or
+  // unreachable host. Only host/repo/crew are touched, so a draft survives.
   if (route && route.seq !== appliedSeq && (route.host || route.repo || route.crew)) {
     const wanted = route.host || 'local'
-    const peer = peers.find((p) => p.name === wanted)
-    if (wanted !== 'local' && hosts === null) {
-      // The host list hasn't answered yet.
-    } else if (wanted !== 'local' && !peer) {
-      setAppliedSeq(route.seq)
-      setLinkNotice(UNKNOWN_HOST_NOTICE)
-    } else if (peer?.health === 'unreachable') {
-      setAppliedSeq(route.seq)
-      setLinkNotice(`${wanted} is unreachable right now.`)
-    } else if (wanted !== host && hostBusy) {
-      // Held until the in-flight submit lands on the host it was sent to.
-    } else if (wanted !== host) {
+    if (wanted !== host) {
       switchHost(wanted)
     } else if (options && optionsHost === wanted) {
       setAppliedSeq(route.seq)
@@ -143,8 +173,8 @@ export function DispatchView({ runs }: { runs: Run[] }) {
 
   // The result lands below the submit button — off-screen on a phone.
   useEffect(() => {
-    if (outcome) resultRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
-  }, [outcome])
+    if (results.worker || results.dispatcher) resultRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }, [results])
 
   useEffect(() => {
     if (taskRef.current) autoGrow(taskRef.current)
@@ -169,9 +199,7 @@ export function DispatchView({ runs }: { runs: Run[] }) {
           if (active) setHosts(list)
         })
         .catch(() => {
-          // A failed poll keeps the last list, so a chosen peer stays pickable;
-          // a failed first poll stays null, so a pending host link waits for
-          // the next one.
+          // A failed poll keeps the last list, so a chosen peer stays pickable.
         })
     }
     load()
@@ -189,7 +217,7 @@ export function DispatchView({ runs }: { runs: Run[] }) {
   // dropped.
   const runFetch = useCallback((h: string) => {
     let cancelled = false
-    fetchDispatchOptions(h === 'local' ? undefined : h)
+    fetchDispatchOptions(peerArg(h))
       .then((o) => {
         if (cancelled || h !== hostRef.current) return
         const init = resolveInitial(o, loadPrefs(h), null)
@@ -239,7 +267,7 @@ export function DispatchView({ runs }: { runs: Run[] }) {
     if (added) pendingAdded.current = added
     const seq = ++refreshSeq.current
     const h = hostRef.current
-    fetchDispatchOptions(h === 'local' ? undefined : h)
+    fetchDispatchOptions(peerArg(h))
       .then((o) => {
         if (seq !== refreshSeq.current || hostRef.current !== h) return
         setOptions(o)
@@ -285,8 +313,7 @@ export function DispatchView({ runs }: { runs: Run[] }) {
 
   async function handleSubmit(e: FormEvent): Promise<void> {
     e.preventDefault()
-    if (submitting || !title.trim() || !isValidIssue(issue)) return
-    setSubmitting(true)
+    if (busy || !title.trim() || !isValidIssue(issue)) return
     const req = {
       repo,
       title: title.trim(),
@@ -299,11 +326,11 @@ export function DispatchView({ runs }: { runs: Run[] }) {
       issue: issue.trim() || undefined,
     }
     const submitHost = host
-    const result = await submitDispatch(req, submitHost === 'local' ? undefined : submitHost)
-    setSubmitting(false)
-    setOutcome(result)
-    setOutcomeHost(submitHost)
-    setOutcomeWasNewCrew(req.crew === NEW_CREW)
+    const { outcome: result } = await submit('worker', submitHost, async () => ({
+      host: submitHost,
+      outcome: await submitDispatch(req, peerArg(submitHost)),
+      wasNewCrew: req.crew === NEW_CREW,
+    }))
     const minted = result.crew
     if (req.crew === NEW_CREW && minted && hostRef.current === submitHost) {
       // Join the minted crew on the next attempt — success or a retryable
@@ -330,12 +357,16 @@ export function DispatchView({ runs }: { runs: Run[] }) {
   const issueValid = isValidIssue(issue)
   const submitDisabledReason = !title.trim() ? 'Title is required.' : !issueValid ? 'Fix the issue id to dispatch.' : null
 
+  const worker = results.worker
+  const outcome = worker?.outcome
   const dispatchedRun =
-    outcome?.kind === 'started'
-      ? findDispatchedRun(runs, outcome.branch, outcome.crew || undefined, outcomeHost === 'local' ? undefined : outcomeHost)
+    worker && outcome?.kind === 'started'
+      ? findDispatchedRun(runs, outcome.branch, outcome.crew || undefined, peerArg(worker.host))
       : undefined
   const issueUrl =
     outcome?.kind === 'started' ? (safeIssueURL(outcome.issueUrl) ?? safeIssueURL(dispatchedRun?.issue?.url)) : undefined
+  const workerHostNote = worker && worker.host !== host && <p className="dispatch-hint">on {worker.host}</p>
+  const listedHost = host === 'local' || peers.some((p) => p.name === host)
 
   return (
     <div className="dispatch mocha">
@@ -343,16 +374,17 @@ export function DispatchView({ runs }: { runs: Run[] }) {
         <h1>Dispatch</h1>
       </header>
 
-      {peers.length > 0 && (
+      {(peers.length > 0 || host !== 'local') && (
         <div className="dispatch-field dispatch-host">
           <label htmlFor="dispatch-host">Host</label>
-          <select id="dispatch-host" value={host} disabled={hostBusy} onChange={(e) => chooseHost(e.target.value)}>
+          <select id="dispatch-host" value={host} onChange={(e) => chooseHost(e.target.value)}>
             <option value="local">local</option>
             {peers.map((p) => (
-              <option key={p.name} value={p.name} disabled={p.health === 'unreachable'}>
+              <option key={p.name} value={p.name} disabled={p.health === 'unreachable' && p.name !== host}>
                 {p.health === 'unreachable' ? `${p.name} (unreachable)` : p.name}
               </option>
             ))}
+            {!listedHost && <option value={host}>{host}</option>}
           </select>
         </div>
       )}
@@ -406,9 +438,9 @@ export function DispatchView({ runs }: { runs: Run[] }) {
             host={host}
             options={options}
             repo={repo}
-            runs={runs}
-            onStarted={() => refreshOptions()}
-            onBusyChange={setDispatcherBusy}
+            busy={busy}
+            onSubmit={launchDispatcher}
+            onStarted={onDispatcherStarted}
           />
         </div>
       )}
@@ -497,7 +529,7 @@ export function DispatchView({ runs }: { runs: Run[] }) {
             )}
           </div>
 
-          <button type="submit" className="dispatch-submit" disabled={submitting || !title.trim() || !issueValid}>
+          <button type="submit" className="dispatch-submit" disabled={busy || !title.trim() || !issueValid}>
             {submitting ? 'Dispatching…' : 'Dispatch'}
           </button>
           {!submitting && submitDisabledReason && (
@@ -506,12 +538,15 @@ export function DispatchView({ runs }: { runs: Run[] }) {
         </form>
       )}
 
+      {/* Not gated on the mode or the options: a link that switches either
+          must not hide a result that is still landing. */}
       <div ref={resultRef}>
-        {mode === 'worker' && outcome?.kind === 'started' && (
+        {outcome?.kind === 'started' && (
           <div className="dispatch-result success">
+            {workerHostNote}
             <p>Worker <strong>{outcome.workerId}</strong> started on <code>{outcome.branch}</code>.</p>
             {outcome.crew && (
-              <p>Crew <code>{outcome.crew}</code>{outcomeWasNewCrew && ' (new crew)'}</p>
+              <p>Crew <code>{outcome.crew}</code>{worker?.wasNewCrew && ' (new crew)'}</p>
             )}
             {dispatchedRun ? (
               <p><a href={runHash(dispatchedRun.id)} onClick={onAppLink(() => openRun(dispatchedRun.id))}>Open run</a></p>
@@ -524,8 +559,9 @@ export function DispatchView({ runs }: { runs: Run[] }) {
           </div>
         )}
 
-        {mode === 'worker' && outcome?.kind === 'failed' && (
+        {outcome?.kind === 'failed' && (
           <div className="dispatch-result failure">
+            {workerHostNote}
             <pre>{outcome.error}</pre>
             {outcome.output && (
               <details>
@@ -534,6 +570,15 @@ export function DispatchView({ runs }: { runs: Run[] }) {
               </details>
             )}
           </div>
+        )}
+
+        {results.dispatcher && (
+          <DispatcherResult
+            host={results.dispatcher.host}
+            currentHost={host}
+            outcome={results.dispatcher.outcome}
+            runs={runs}
+          />
         )}
       </div>
     </div>

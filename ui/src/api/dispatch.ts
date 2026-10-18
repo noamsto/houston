@@ -47,10 +47,12 @@ export type DispatchOutcome =
 export async function fetchDispatchOptions(host?: string): Promise<DispatchOptions> {
   const res = await fetch(hostAPI(host, 'dispatch/options'))
   if (!res.ok) {
+    const text = await res.text()
     if (host && host !== 'local' && res.status === 404) {
+      if (text.startsWith('no such host')) throw new Error("Linked host isn't one houston knows.")
       throw new Error(`Dispatch isn't available on ${host}.`)
     }
-    throw new Error(`fetchDispatchOptions: ${res.status} ${await res.text()}`)
+    throw new Error(`fetchDispatchOptions: ${res.status} ${text}`)
   }
   return (await res.json()) as DispatchOptions
 }
@@ -81,7 +83,12 @@ export async function submitDispatch(req: DispatchRequest, host?: string): Promi
   } catch {
     return { kind: 'failed', status: 0, error: 'network error' }
   }
-  const text = await res.text()
+  let text: string
+  try {
+    text = await res.text()
+  } catch {
+    return { kind: 'failed', status: 0, error: 'network error' }
+  }
   if (res.ok) {
     try {
       const body = JSON.parse(text) as DispatchSuccessBody
@@ -138,7 +145,12 @@ interface DispatcherErrorBody extends DispatchErrorBody {
 }
 
 async function parseDispatcherResponse(res: Response): Promise<DispatcherOutcome> {
-  const text = await res.text()
+  let text: string
+  try {
+    text = await res.text()
+  } catch {
+    return { kind: 'failed', status: 0, error: 'network error' }
+  }
   if (res.ok) {
     try {
       const body = JSON.parse(text) as DispatcherSuccessBody
