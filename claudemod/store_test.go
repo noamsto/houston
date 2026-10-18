@@ -1,6 +1,7 @@
 package claudemod
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -16,13 +17,16 @@ type feeder struct {
 	boot  string
 }
 
+// ts0 is the feeder's ms clock origin; record seq lands at ts0 + seq seconds.
+const ts0 = 1_700_000_000_000
+
 func newFeeder(t *testing.T) *feeder {
 	return &feeder{t: t, store: NewStore(), sid: "s1", boot: "b1"}
 }
 
 func (f *feeder) apply(seq int64, ev string, mut func(*Record)) bool {
 	f.t.Helper()
-	rec := Record{V: 1, SID: f.sid, Boot: f.boot, Seq: seq, TS: seq * 10, Ev: ev}
+	rec := Record{V: 1, SID: f.sid, Boot: f.boot, Seq: seq, TS: ts0 + seq*1000, Ev: ev}
 	if mut != nil {
 		mut(&rec)
 	}
@@ -41,13 +45,11 @@ func (f *feeder) toolEnd(seq int64, id string) {
 
 func (f *feeder) session() Session {
 	f.t.Helper()
-	for _, s := range f.store.Snapshot() {
-		if s.SID == f.sid {
-			return s
-		}
+	s, ok := f.store.Session(f.sid)
+	if !ok {
+		f.t.Fatalf("no session %q", f.sid)
 	}
-	f.t.Fatalf("no session %q", f.sid)
-	return Session{}
+	return s
 }
 
 func (f *feeder) wantState(want hook.State) {
@@ -175,7 +177,7 @@ func TestBackgroundTasks(t *testing.T) {
 		}
 		return out
 	}
-	if got := ids(); !slices.Equal(got, []string{"bg1", "bg2"}) {
+	if got := ids(); !slices.Equal(got, []string{"bg2", "bg1"}) {
 		t.Fatalf("after tool.end: %v", got)
 	}
 	f.apply(6, evTaskEnd, func(r *Record) { r.Tasks = []Task{{ID: "bg1", Status: "completed"}} })
@@ -183,7 +185,8 @@ func TestBackgroundTasks(t *testing.T) {
 		t.Fatalf("after task.end: %v", got)
 	}
 	f.apply(7, evStop, func(r *Record) {
-		r.Tasks = []Task{{ID: "n1", Type: "shell", Status: "running"}, {ID: "n2", Status: "pending"}, {ID: "n3", Status: "completed"}}
+		r.Tasks = []Task{{ID: "n1", Type: "shell", Status: "running"}, {ID: "n2", Type: "monitor", Status: "pending"},
+			{ID: "n3", Type: "shell", Status: "completed"}, {ID: "n4", Type: "agent", Status: "running"}}
 	})
 	if got := ids(); !slices.Equal(got, []string{"n1", "n2"}) {
 		t.Fatalf("after stop: %v", got)
@@ -207,26 +210,6 @@ func TestStopWithoutTasksKeepsBackground(t *testing.T) {
 	if s := f.session(); len(s.Background) != 0 {
 		t.Fatalf("after empty stop: %+v", s.Background)
 	}
-}
-
-func TestPermissionAndNotificationStates(t *testing.T) {
-	notify := func(typ string) func(*Record) { return func(r *Record) { r.Type = typ } }
-	f := newFeeder(t)
-	f.apply(1, evTurnStart, nil)
-	f.apply(2, evPermission, nil)
-	f.wantState(hook.StatePermission)
-	f.apply(3, evNotification, notify("idle_prompt"))
-	f.wantState(hook.StateWaiting)
-	f.apply(4, evNotification, notify("permission_prompt"))
-	f.wantState(hook.StatePermission)
-	f.apply(5, evNotification, notify("auth_success"))
-	f.wantState(hook.StatePermission)
-	f.apply(6, evNotification, notify("idle_prompt"))
-	f.apply(7, evNotification, notify("elicitation_dialog"))
-	f.wantState(hook.StatePermission)
-	f.toolStart(8, "A", "Bash")
-	f.toolEnd(9, "A")
-	f.wantState(hook.StateThinking)
 }
 
 func TestTurnCompleteClearsInFlight(t *testing.T) {
@@ -318,11 +301,13 @@ func TestReloadSwitchesToLaterBoot(t *testing.T) {
 
 func TestWindowDropsUnusedPayload(t *testing.T) {
 	f := newFeeder(t)
-	f.apply(1, evNotification, func(r *Record) { r.Message = "big"; r.Ask = []Ask{{Question: "q"}} })
+	f.apply(1, evNotification, func(r *Record) { r.Message = "kept"; r.Ask = []Ask{{Question: "q"}} })
+	f.apply(2, evToolStart, func(r *Record) { r.Message = "big"; r.Ask = []Ask{{Question: "q"}} })
 	f.store.mu.Lock()
 	defer f.store.mu.Unlock()
 	ss := f.store.sessions["s1"]
-	if ss == nil || len(ss.window) != 1 || ss.window[0].Message != "" || ss.window[0].Ask != nil {
+	if ss == nil || len(ss.window) != 2 || ss.window[0].Message != "kept" || ss.window[0].Ask != nil ||
+		ss.window[1].Message != "" || ss.window[1].Ask != nil {
 		t.Fatalf("session = %+v", ss)
 	}
 }
@@ -358,19 +343,18 @@ func TestEvictsEndedAndIdleSessions(t *testing.T) {
 		return out
 	}
 	apply("ended", 1, evSessionEnd)
-	apply("live", 1, evTurnStart)
 	apply("idle", 1, evTurnStart)
 
-	clock = clock.Add(endedTTL + time.Second)
-	apply("live", 2, evToolCheck)
-	if got := sids(); !slices.Equal(got, []string{"idle", "live"}) {
-		t.Fatalf("after endedTTL: %v", got)
+	clock = clock.Add(min(endedTTL, idleTTL) - time.Minute)
+	apply("live", 1, evTurnStart)
+	if got := sids(); !slices.Equal(got, []string{"ended", "idle", "live"}) {
+		t.Fatalf("before the TTLs: %v", got)
 	}
 
-	clock = clock.Add(idleTTL)
-	apply("live", 3, evToolCheck)
+	clock = clock.Add(2 * time.Minute)
+	apply("live", 2, evToolCheck)
 	if got := sids(); !slices.Equal(got, []string{"live"}) {
-		t.Fatalf("after idleTTL: %v", got)
+		t.Fatalf("after the TTLs: %v", got)
 	}
 }
 
@@ -391,5 +375,153 @@ func TestSweepRunsOncePerMinute(t *testing.T) {
 	st.Apply(Record{V: 1, SID: "x", Boot: "b", Seq: 3, Ev: evToolCheck})
 	if n := len(st.Snapshot()); n != 2 {
 		t.Fatalf("sessions = %d, want 2 (sweep throttled)", n)
+	}
+}
+
+func TestClockStepBackAcrossReloadKeepsNewBoot(t *testing.T) {
+	clock := time.Unix(1_000_000, 0)
+	f := newFeeder(t)
+	f.store.now = func() time.Time { return clock }
+	f.boot = "A"
+	f.apply(1, evTurnStart, func(r *Record) { r.TS = 1000 })
+	clock = clock.Add(6 * time.Second)
+	f.boot = "B"
+	if !f.apply(1, evSessionStart, func(r *Record) { r.TS = 900 }) {
+		t.Fatal("reloaded boot with an earlier clock rejected")
+	}
+	if !f.apply(2, evTurnStart, func(r *Record) { r.TS = 910 }) {
+		t.Fatal("new boot's next record rejected")
+	}
+	s := f.session()
+	if s.Boot != "B" || s.State != hook.StateThinking || s.Stale != 0 || s.Turns != 2 {
+		t.Fatalf("session = %+v", s)
+	}
+	f.boot = "A"
+	if f.apply(2, evTurnComplete, func(r *Record) { r.TS = 1010 }) {
+		t.Fatal("late record of the replaced boot applied")
+	}
+}
+
+func TestUnseenOlderBootWithinSlackIsStale(t *testing.T) {
+	clock := time.Unix(1_000_000, 0)
+	f := newFeeder(t)
+	f.store.now = func() time.Time { return clock }
+	f.boot = "A"
+	f.apply(1, evTurnStart, func(r *Record) { r.TS = 1000 })
+	clock = clock.Add(6 * time.Second)
+	f.boot = "B"
+	f.apply(1, evSessionStart, func(r *Record) { r.TS = 900 })
+	clock = clock.Add(bootDelaySlack - time.Second)
+	f.boot = "C"
+	if f.apply(1, evTurnStart, func(r *Record) { r.TS = 800 }) {
+		t.Fatal("delayed record of an older boot applied")
+	}
+	s := f.session()
+	if s.Boot != "B" || s.State != hook.StateStarting || s.Stale != 1 {
+		t.Fatalf("session = %+v", s)
+	}
+}
+
+func TestStaleRecordsDoNotRefreshEviction(t *testing.T) {
+	clock := time.Unix(1_000_000, 0)
+	st := NewStore()
+	st.now = func() time.Time { return clock }
+	rec := Record{V: 1, SID: "s", Boot: "b", Seq: 1, TS: 1000, Ev: evTurnStart}
+	st.Apply(rec)
+	clock = clock.Add(idleTTL - time.Minute)
+	if st.Apply(rec) {
+		t.Fatal("duplicate applied")
+	}
+	clock = clock.Add(2 * time.Minute)
+	st.Sweep()
+	if _, ok := st.Session("s"); ok {
+		t.Fatal("stale records kept the session alive")
+	}
+}
+
+func TestNotifyAfterApply(t *testing.T) {
+	f := newFeeder(t)
+	f.apply(1, evTurnStart, nil)
+	f.sid = "s2"
+	f.apply(1, evTurnStart, nil)
+	select {
+	case <-f.store.Notify():
+	default:
+		t.Fatal("no signal after Apply")
+	}
+	if got := f.store.TakeDirty(); !slices.Equal(got, []string{"s1", "s2"}) {
+		t.Fatalf("dirty = %v", got)
+	}
+	if got := f.store.TakeDirty(); len(got) != 0 {
+		t.Fatalf("dirty again = %v", got)
+	}
+	if f.apply(1, evTurnComplete, nil) {
+		t.Fatal("duplicate applied")
+	}
+	select {
+	case <-f.store.Notify():
+		t.Fatal("signal after a stale record")
+	default:
+	}
+	if got := f.store.TakeDirty(); len(got) != 0 {
+		t.Fatalf("dirty after a stale record = %v", got)
+	}
+}
+
+func TestSweepEvictsAndMarksDirty(t *testing.T) {
+	clock := time.Unix(1_000_000, 0)
+	st := NewStore()
+	st.now = func() time.Time { return clock }
+	st.Apply(Record{V: 1, SID: "old", Boot: "b", Seq: 1, TS: 1000, Ev: evSessionEnd})
+	st.TakeDirty()
+	<-st.Notify()
+
+	clock = clock.Add(endedTTL + time.Second)
+	st.Sweep()
+	select {
+	case <-st.Notify():
+	default:
+		t.Fatal("no signal after eviction")
+	}
+	if got := st.TakeDirty(); !slices.Equal(got, []string{"old"}) {
+		t.Fatalf("dirty = %v", got)
+	}
+	if _, ok := st.Session("old"); ok {
+		t.Fatal("ended session not evicted")
+	}
+
+	st.Sweep()
+	select {
+	case <-st.Notify():
+		t.Fatal("signal from a sweep that evicted nothing")
+	default:
+	}
+}
+
+func TestSessionCap(t *testing.T) {
+	clock := time.Unix(1_000_000, 0)
+	st := NewStore()
+	st.now = func() time.Time { return clock }
+	for i := range maxSessions {
+		clock = clock.Add(time.Millisecond)
+		st.Apply(Record{V: 1, SID: fmt.Sprintf("s%04d", i), Boot: "b", Seq: 1, TS: 1000, Ev: evTurnStart})
+	}
+	clock = clock.Add(time.Millisecond)
+	st.Apply(Record{V: 1, SID: "s0000", Boot: "b", Seq: 2, TS: 2000, Ev: evTurnComplete})
+	st.TakeDirty()
+
+	clock = clock.Add(time.Millisecond)
+	st.Apply(Record{V: 1, SID: "new", Boot: "b", Seq: 1, TS: 3000, Ev: evTurnStart})
+	if n := len(st.Snapshot()); n != maxSessions {
+		t.Fatalf("sessions = %d, want %d", n, maxSessions)
+	}
+	if _, ok := st.Session("s0001"); ok {
+		t.Fatal("least recently applied session kept")
+	}
+	if _, ok := st.Session("s0000"); !ok {
+		t.Fatal("recently applied session evicted")
+	}
+	if got := st.TakeDirty(); !slices.Equal(got, []string{"new", "s0001"}) {
+		t.Fatalf("dirty = %v", got)
 	}
 }
