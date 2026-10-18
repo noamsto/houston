@@ -96,6 +96,7 @@ export function DispatchView({ runs }: { runs: Run[] }) {
   function switchHost(h: string): void {
     if (h === host) return
     setHost(h)
+    hostRef.current = h
     setOptions(null)
     setOptionsHost(null)
     setLoadingOptions(true)
@@ -254,6 +255,9 @@ export function DispatchView({ runs }: { runs: Run[] }) {
     runFetch(host)
   }
 
+  // A late response from the previous host can store options before the new
+  // host's own land; they are shown only for the host they belong to.
+  const shown = options && optionsHost === host ? options : null
   const selectedRepo = options?.repos.find((r) => r.path === repo)
   const models = options?.engines[engine] ?? []
 
@@ -402,7 +406,7 @@ export function DispatchView({ runs }: { runs: Run[] }) {
 
       {refreshError && <p className="dispatch-notice" role="alert">{refreshError}</p>}
 
-      {!loadingOptions && options && (
+      {!loadingOptions && shown && (
         <div className="dispatch-shared">
           <div className="dispatch-modes" role="group" aria-label="Dispatch mode">
             <button type="button" aria-pressed={mode === 'worker'} onClick={() => chooseMode('worker')}>
@@ -417,7 +421,7 @@ export function DispatchView({ runs }: { runs: Run[] }) {
             <label htmlFor="dispatch-repo">Repo</label>
             <div className="dispatch-repo-row">
               <select id="dispatch-repo" value={repo} onChange={(e) => chooseRepo(e.target.value)}>
-                {options.repos.map((r) => (
+                {shown.repos.map((r) => (
                   <option key={r.path} value={r.path}>{r.name}</option>
                 ))}
               </select>
@@ -432,11 +436,11 @@ export function DispatchView({ runs }: { runs: Run[] }) {
       )}
 
       {/* Kept mounted so the draft and an in-flight launch survive a mode toggle. */}
-      {!loadingOptions && options && (
+      {!loadingOptions && shown && (
         <div hidden={mode !== 'dispatcher'}>
           <DispatcherForm
             host={host}
-            options={options}
+            options={shown}
             repo={repo}
             busy={busy}
             onSubmit={launchDispatcher}
@@ -445,7 +449,7 @@ export function DispatchView({ runs }: { runs: Run[] }) {
         </div>
       )}
 
-      {!loadingOptions && options && mode === 'worker' && (
+      {!loadingOptions && shown && mode === 'worker' && (
         <form className="dispatch-form" onSubmit={(e) => { void handleSubmit(e) }}>
           <div className="dispatch-field">
             <label htmlFor="dispatch-title">Title</label>
@@ -477,14 +481,14 @@ export function DispatchView({ runs }: { runs: Run[] }) {
             <div className="dispatch-field">
               <label htmlFor="dispatch-tier">Tier</label>
               <select id="dispatch-tier" value={tier} onChange={(e) => chooseTier(e.target.value)}>
-                {options.tiers.map((t) => <option key={t} value={t}>{t}</option>)}
+                {shown.tiers.map((t) => <option key={t} value={t}>{t}</option>)}
               </select>
             </div>
 
             <div className="dispatch-field">
               <label htmlFor="dispatch-engine">Engine</label>
               <select id="dispatch-engine" value={engine} onChange={(e) => chooseEngine(e.target.value)}>
-                {workerEngines(options).map((eng) => <option key={eng} value={eng}>{eng}</option>)}
+                {workerEngines(shown).map((eng) => <option key={eng} value={eng}>{eng}</option>)}
               </select>
             </div>
 
@@ -498,7 +502,7 @@ export function DispatchView({ runs }: { runs: Run[] }) {
             <div className="dispatch-field">
               <label htmlFor="dispatch-effort">Effort</label>
               <select id="dispatch-effort" value={effort} onChange={(e) => setEffort(e.target.value)}>
-                {options.efforts.map((ef) => <option key={ef} value={ef}>{ef}</option>)}
+                {shown.efforts.map((ef) => <option key={ef} value={ef}>{ef}</option>)}
               </select>
             </div>
           </div>
