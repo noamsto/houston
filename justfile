@@ -84,7 +84,27 @@ nilaway:
 race:
     exec go test -race ./...
 
-# Validate and test the Claude Code mod (as CI does)
+# The Claude Code release the read-only mod is written against
+claude_code := "@anthropic-ai/claude-code@2.1.302"
+
+# Validate and test the Claude Code mod as CI does; fails on a call on $ beyond the allowed four
 mod-check:
-    npx -y @anthropic-ai/claude-code@2.1.302 plugin validate contrib/claude-mod
-    npx -y @anthropic-ai/claude-code@2.1.302 plugin test contrib/claude-mod
+    #!/usr/bin/env bash
+    set -euo pipefail
+    allowed=$(printf '%s\n' '$.clock.every' '$.env.get' '$.http.fetch' '$.session.id')
+    status=0
+    out=$(npx -y {{claude_code}} plugin validate contrib/claude-mod 2>&1) || status=$?
+    printf '%s\n' "$out"
+    [ "$status" -eq 0 ] || exit "$status"
+    calls=$(printf '%s\n' "$out" | grep 'calls:' | grep -o '\$\.[a-z]*\.[a-z]*' | sort -u || true)
+    if [ -z "$calls" ]; then
+        echo "mod-check: validate printed no calls line" >&2
+        exit 1
+    fi
+    extra=$(comm -13 <(printf '%s\n' "$allowed" | sort) <(printf '%s\n' "$calls"))
+    if [ -n "$extra" ]; then
+        echo "mod-check: the mod calls on \$ beyond the allowed set:" >&2
+        printf '%s\n' "$extra" | sed 's/^/  /' >&2
+        exit 1
+    fi
+    npx -y {{claude_code}} plugin test contrib/claude-mod

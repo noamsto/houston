@@ -1,5 +1,7 @@
 # Plan: Claude Code mod as primary Claude source (#303)
 
+The shipped design follows the spec; where they differ (liveness, delivery), the spec and CLAUDE.md are authoritative.
+
 Spec: `docs/superpowers/specs/2026-10-18-claude-mod-primary-source.md` (D1–D10, D7a, D7b).
 Orchestration consult: not tripped. Four seams (mod ↔ claudemod ↔ hub ↔ server) with one
 owner each; the spec already fixes the interfaces below, so an opus plan suffices.
@@ -186,8 +188,8 @@ implement: opus
   1. hook state present → `mergeStateIntoView` (as today); else `hasMod` → `mergeModCoords`
      (SessionID, CWD, TmuxPane, TmuxServer, TranscriptPath, Agent `claude`, UpdatedAt =
      `mod.Updated/1000`, Turn = `mod.Turns`).
-  2. `modLive()` (D3: `hasMod && mod.Known && !(hook present && hookState.UpdatedAt >
-     mod.Updated/1000 + modLagGrace)`) → overlay State, Tool, ToolInputHint (= `mod.Hint`),
+  2. `modLive()` (liveness formula: spec D3; heartbeat recency, not the hook-ahead rule this step
+     was first written with) → overlay State, Tool, ToolInputHint (= `mod.Hint`),
      LastMessage (= `mod.Message`), Since, UpdatedAt = max(hook, mod/1000); then the hook
      permission override (D3: mod `tool-running` and `hookState.State == StatePermission` and
      `hookState.UpdatedAt >= mod.MainUpdated/1000` → hook's State/Tool/Hint/LastMessage);
