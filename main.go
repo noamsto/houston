@@ -193,6 +193,8 @@ func runServer() {
 	noAuth := flag.Bool("no-auth", false, "disable API authentication (NOT recommended)")
 	modeFlag := flag.String("mode", "auto", "auto|dispatcher|tmux: dispatcher mode needs dispatch and crew on PATH; auto picks")
 
+	claudeMod := flag.Bool("claude-mod", false, "listen on <status-dir>/claude-mod.sock for the read-only Claude Code mod's records (spike)")
+
 	var hostnames stringList
 	flag.Var(&hostnames, "hostname", "additional Host value to accept (repeatable; for reverse proxies or custom DNS)")
 
@@ -250,6 +252,11 @@ func runServer() {
 		slog.Warn("API authentication is DISABLED; any page that can reach this port can drive your tmux panes")
 	}
 
+	var claudeModSocket string
+	if *claudeMod {
+		claudeModSocket = filepath.Join(*statusDir, "claude-mod.sock")
+	}
+
 	srv, err := server.New(server.Config{
 		StatusDir:       *statusDir,
 		FontController:  fontCtrl,
@@ -262,6 +269,7 @@ func runServer() {
 		RepoRoots:       repoRoots,
 		Mode:            m,
 		Debug:           *debug,
+		ClaudeModSocket: claudeModSocket,
 	})
 	if err != nil {
 		log.Fatalf("failed to create server: %v", err)
