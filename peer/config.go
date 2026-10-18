@@ -144,8 +144,11 @@ func plainHTTPOK(host string) bool {
 
 // plainHopOK reports whether a plain-http connection stays on this machine or
 // goes over the tailnet, where WireGuard encrypts the hop: the remote end is
-// loopback, or both ends hold tailnet addresses. The local end proves the
-// route leaves through the Tailscale interface.
+// loopback, or both ends hold tailnet addresses. This checks addresses, not the
+// interface: 100.64.0.0/10 is RFC 6598 carrier-grade NAT space, so a host whose
+// own uplink holds a 100.x address with tailscaled down passes for an IPv4
+// peer and sends the token in cleartext over that network. fd7a:115c:a1e0::/48
+// is Tailscale-specific and sound; https avoids the residual.
 func plainHopOK(local, remote net.Addr) bool {
 	r, ok := tcpAddr(remote)
 	if !ok {
