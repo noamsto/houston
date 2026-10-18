@@ -259,7 +259,7 @@ func TestHeartbeatRefreshesUpdatedOnly(t *testing.T) {
 	f := newFeeder(t)
 	f.store.now = func() time.Time { return clock }
 	f.apply(1, evHeartbeat, nil)
-	if s := f.session(); s.Known || s.State != "" || s.Applied != 1 || s.Updated != ts0+1000 || s.MainUpdated != ts0+1000 {
+	if s := f.session(); s.Known || s.State != "" || s.Applied != 1 || s.Updated != ts0+1000 || s.MainUpdated != 0 {
 		t.Fatalf("after first heartbeat: %+v", s)
 	}
 	f.apply(2, evTurnComplete, nil)
@@ -273,7 +273,7 @@ func TestHeartbeatRefreshesUpdatedOnly(t *testing.T) {
 	}
 	s := f.session()
 	if s.State != hook.StateWaiting || s.Since != before.Since || !s.Known || s.Turns != before.Turns ||
-		s.Updated != ts0+3000 || s.MainUpdated != ts0+3000 || s.Applied != 3 {
+		s.Updated != ts0+3000 || s.MainUpdated != before.MainUpdated || s.Applied != 3 {
 		t.Fatalf("after heartbeat: %+v, before: %+v", s, before)
 	}
 	select {

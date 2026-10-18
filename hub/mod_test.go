@@ -247,6 +247,38 @@ func TestHookPermissionWinsWhileModToolRunning(t *testing.T) {
 	}
 }
 
+func TestHeartbeatKeepsHookPermissionOverride(t *testing.T) {
+	dir := t.TempDir()
+	store := claudemod.NewStore()
+	h := NewWithOptions(dir, Options{ClaudeProjectsDir: "-", Mod: store}, silentLog())
+	now := time.Now()
+	sec := now.Unix()
+
+	f := newModFeed(t, store, "s1")
+	f.at(sec-9, "turn.start", nil)
+	f.at(sec-8, "tool.start", func(r *claudemod.Record) { r.Tool, r.ID = "Bash", "tu1" })
+	writeState(t, dir, hook.SessionState{
+		SessionID: "s1", State: hook.StatePermission, Tool: "Bash",
+		LastMessage: "Claude needs your permission to use Bash", UpdatedAt: sec - 2,
+	})
+	h.loadStateFile(hook.Path(dir, "s1"))
+	h.applyModDirty()
+	h.tickMod(now)
+	if v := findSession(h, "s1"); v == nil || v.State != hook.StatePermission {
+		t.Fatalf("view = %+v, want the hook's permission", v)
+	}
+
+	// The heartbeat proves the mod alive; it is not main-loop activity.
+	f.at(sec, "heartbeat", nil)
+	h.applyModDirty()
+	h.tickMod(now)
+	v := findSession(h, "s1")
+	if v == nil || v.State != hook.StatePermission || v.Tool != "Bash" ||
+		v.LastMessage != "Claude needs your permission to use Bash" {
+		t.Fatalf("view = %+v, want the hook's permission after a heartbeat", v)
+	}
+}
+
 func TestHookPermissionIgnoredAfterModTurnComplete(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now().Unix()

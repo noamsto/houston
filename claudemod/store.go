@@ -42,7 +42,7 @@ type Session struct {
 	Message     string     `json:"message,omitempty"`
 	Since       int64      `json:"since"`        // unix s of the last state change
 	Updated     int64      `json:"updated"`      // ms, newest applied record's ts
-	MainUpdated int64      `json:"main_updated"` // ms, newest applied main-loop record's ts
+	MainUpdated int64      `json:"main_updated"` // ms, newest applied main-loop record's ts (a heartbeat is not one)
 	Known       bool       `json:"known"`        // a state-defining main-loop record folded since houston started (a reload keeps it)
 	Turns       int        `json:"turns"`
 	Last        string     `json:"last,omitempty"`
@@ -174,7 +174,7 @@ func (s *Store) apply(rec Record) (applied, changed bool) {
 	ss.applied++
 	ss.lastApply = now
 	ss.updated = max(ss.updated, rec.TS)
-	if rec.Agent == "" {
+	if rec.Agent == "" && rec.Ev != evHeartbeat {
 		ss.mainUpdated = max(ss.mainUpdated, rec.TS)
 	}
 	ss.cur = ss.base.clone()

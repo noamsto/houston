@@ -44,35 +44,38 @@ The mod is **live** for a session when both hold:
    that sets a definite main-loop state (`session.start`, `turn.start`, `tool.start`,
    `tool.end` of an in-flight id, `permission`, `turn.complete`, `compact`, `session.end`).
    A houston restart mid-session therefore uses the hook path until the next such record.
-2. **Hook not ahead:** the hook state has not led the newest mod record for the whole
-   `modLagGrace` (10 s): it is ahead when `hook.UpdatedAt > mod.Updated/1000 + 1` and
-   `now >= hook.UpdatedAt + 10`. Every hook event houston handles has a matching mod record,
-   but the mod sends from a 200 ms timer queue while the hook writes its file synchronously,
-   so a hook write (a `UserPromptSubmit` after an idle spell) routinely lands a moment before
-   its record; the grace gives the mod that long to answer. The `+ 1` absorbs the hook's
-   whole-second `UpdatedAt` against a record of the same event a few ms earlier across a
-   second boundary. A mod that has not answered a hook write within the grace stopped
-   posting (unloaded, broken by an engine update, a hot reload that failed), and houston
-   falls back by itself: the hub's 2 s tick recomputes every session with mod data, so the
-   fallback lands within about 2 s of the grace running out, with no record traffic.
+2. **Recent:** the store's newest record for the session (any kind, a `heartbeat` included;
+   `Session.Updated`) is under `modLiveWindow` (45 s) old, on houston's clock. The mod posts
+   a `heartbeat` from its timer after 15 s (75 ticks of 200 ms) with nothing queued, so an
+   idle session still answers; three missed heartbeats mean the mod stopped (unloaded, broken
+   by an engine update, a hot reload that failed). The hub's 2 s tick recomputes every session
+   with mod data, so a dead mod falls back to the hook path within about 47 s with no record
+   traffic.
 
-Why not "a record within N seconds": an idle session posts nothing for hours, and falling
-back would restore the hook state in exactly the cases the mod exists to fix (a stale
-`thinking` after the turn ended, a dismissed dialog). Why not "`session.start` seen" alone:
-`/clear` starts the next session with no `session.start` (first record `turn.start`), and a
-houston restart sees none.
+Liveness is the mod's own recency and never the hook file's: hook events are detached, so a
+`post_tool` can land after `Stop` and a `UserPromptSubmit` before the mod's queued record, and
+neither says anything about the mod. One hook-side exception: a hook state `ended` written at
+or after the newest mod record's second ends the mod's say for that session (the session's own
+`SessionEnd` fired, so a lost `session.end` must not keep a pane-owning card alive).
 
-There is no expiry without a hook write: liveness changes when a record lands, or when a
-hook write has gone unanswered for the grace.
+*Revised after review.* The first design counted the hook state as "ahead" once it led the
+newest mod record for a 10 s grace (`modLagGrace`, with a `+ 1` second slack). A late hook
+write then retired a healthy mod, and a steady stream of hook writes kept a dead one alive;
+the heartbeat replaces it.
+
+Why not "a record within N seconds" without a heartbeat: an idle session posts nothing for
+hours, and falling back would restore the hook state in exactly the cases the mod exists to
+fix (a stale `thinking` after the turn ended, a dismissed dialog). Why not "`session.start`
+seen" alone: `/clear` starts the next session with no `session.start` (first record
+`turn.start`), and a houston restart sees none.
 
 **Hook permission while live.** Where an organization manages Claude Code, a user-installed
 plugin's `classic.*` hooks do not run, so the mod gets no `permission`, `Notification` or
 `Stop` record while the hook path still gets the `permission_prompt` Notification (~6 s after
-the dialog opened). That write has no mod record to answer it, so a dialog left open past the
-grace retires the mod until its next record (`tool.end` on approval, `turn.complete` on a
-dismissal); the hook path shows the same permission meanwhile. So while the mod is live and its view is
+the dialog opened). The heartbeat keeps the mod live meanwhile, so the hook path has to name
+the dialog. So while the mod is live and its view is
 `tool-running` (a dialog can only be up while a call is in flight), a hook state of
-`waiting:permission` written at or after the newest **main-loop** (no `agent`) mod record's
+`waiting:permission` written at or after the newest **main-loop** (no `agent`, not a `heartbeat`) mod record's
 second wins (a parallel subagent's records must not hide the main loop's dialog) the state, tool,
 hint and message. Once the mod moves on (`tool.end`, `turn.complete`), it is newer and wins
 again. A hook permission while the mod reads `waiting`/`thinking` is ignored: the mod saw the
@@ -165,14 +168,25 @@ Fold entries `{id, kind, hint, since, expires}`:
 
 ### D7. Mod changes (`contrib/claude-mod/hooks/register.ts`)
 
-- **Queue + timer.** `post` only builds the record (`v`, `boot`, `seq`, `ts`, `gen`, `ev`,
-  fields) and pushes it on a module-level queue; it makes no `$` call. `session.start` starts
-  one `$.clock.every(200, drain)` (once per module load; a reload drops it and `session.start`
-  fires again, per the hooks reference). As a fallback, `post` starts the timer with its own
-  hook's `$` when none is running yet. `drain` resolves the socket path and session id and fires each record with an
-  unawaited `$.http.fetch` (errors swallowed), in queue order. A `tool.end` posted from an
-  abandoned `tool.call` dispatch is therefore sent by the timer's dispatch, not the dead one.
-  A post before any timer exists stays queued until one starts.
+- **Queue + timer.** `post` builds the record (`v`, `boot`, `seq`, `ts`, `gen`, `ev`,
+  fields) and pushes it on a module-level queue (cap 256, oldest dropped). It also starts
+  `$.clock.every(200, drain)` with its own hook's `$` when no timer runs, and restarts it the
+  same way when the timer has been silent for 2 s (a refused period ends an interval).
+  `session.start` is therefore not required to start delivery. `drain` resolves the socket path and
+  session id and fires each record with an unawaited `$.http.fetch` to
+  `http://houston.invalid/v1/record` over the socket (errors swallowed), in queue order. A
+  `tool.end` posted from an abandoned `tool.call` dispatch is sent by the timer's dispatch,
+  not the dead one.
+  - A record is peeked and shifted only once its sid is known, so a failed `$.session.id()`
+    lookup leaves it queued. A drain stuck for more than 5 s is replaced; a drain run counter
+    stops the replaced one sending, so nothing goes out twice.
+  - `session.end` posts its record and then flushes the queue itself, awaiting a drain within
+    the engine's exit bound: the timer may not outlive an exit.
+  - After 15 s with nothing queued the timer posts a `heartbeat` (D3). `session.compact`
+    posts `compact`, and `compact.end` once `next` resolves or throws.
+  - Size caps: a Notification `message` is cut to 500 characters and `stop` tasks to 32; a
+    body over 15000 bytes sheds `ask`, `tasks`, `last`, `input`, `message` in that order until
+    it fits (houston answers 413 above 16 KiB).
 - **Generation per record.** `gen` is stamped when the record is built. `session.end` stores
   its `e.sessionId` as the id of the ending generation before bumping it; any gen bump stores
   the current sid for the old gen. A record resolves its sid from its own gen's entry, else
@@ -267,7 +281,7 @@ deleted from the hub (as a removed state file is) so `HookSource`'s resync emits
   tool: one `turn.complete` → waiting), AC4 (permission → `waiting:permission`; `tool.end` /
   `turn.complete` clear it; subagent dialog), AC5 (bg start, completion, TaskStop target,
   Monitor expiry, UI kill cleared by the next stop), AC7 hardening.
-- hub tests: overlay wins when live, no heal while live, hook-ahead fallback, mod-only session
+- hub tests: overlay wins when live, no heal while live, stale-mod fallback (no record for `modLiveWindow`), mod-only session
   created and joined by pane, background switch without double count, restart (unknown bg)
   keeps transcript bg, eviction deletes a mod-only session.
 - runs test: the composed run reads `idle` (not `thinking`) for AC2 and `blocked` for AC4.
