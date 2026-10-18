@@ -748,6 +748,87 @@ describe('DispatchView host picker', () => {
     expect(repoNames()).toEqual(['b-one', 'b-two'])
   })
 
+  it('shows no previous host options after a link switch while a late refresh resolves', async () => {
+    fetchHostsMock.mockResolvedValue(peerHosts)
+    let resolveRefresh!: (o: DispatchOptions) => void
+    let resolveB!: (o: DispatchOptions) => void
+    fetchDispatchOptionsMock.mockImplementation((h) =>
+      h === 'b' ? new Promise((r) => { resolveB = r }) : Promise.resolve(structuredClone(optionsFixture)),
+    )
+    render(<DispatchView runs={[]} />)
+    await screen.findByLabelText('Repo')
+    fireEvent.click(screen.getByRole('button', { name: 'New dispatcher' }))
+    submitDispatcherMock.mockResolvedValue({ kind: 'started', crew: '1-1', session: 's', window: 'w', pane: '%1', runId: 'pane-1' })
+    fetchDispatchOptionsMock.mockImplementationOnce(() => new Promise((r) => { resolveRefresh = r }))
+    fireEvent.click(screen.getByRole('button', { name: 'Start dispatcher' }))
+    await waitFor(() => expect(resolveRefresh).toBeDefined())
+
+    // React renders outside act() in a later task, so the refresh lands in the
+    // gap between the switch and the [host] effect.
+    const flag = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
+    flag.IS_REACT_ACT_ENVIRONMENT = false
+    try {
+      // A mutation observer fires right after the switch commits, before its
+      // passive [host] effect runs.
+      const observer = new MutationObserver(() => {
+        observer.disconnect()
+        resolveRefresh(structuredClone(optionsFixture))
+      })
+      observer.observe(document.body, { childList: true, subtree: true })
+      window.location.hash = '#/dispatch?host=b'
+      window.dispatchEvent(new HashChangeEvent('hashchange'))
+      await new Promise((r) => setTimeout(r, 20))
+    } finally {
+      flag.IS_REACT_ACT_ENVIRONMENT = true
+    }
+
+    expect(screen.queryAllByLabelText('Repo')).toHaveLength(0)
+    expect(screen.queryByText('repo-a')).toBeNull()
+    expect(screen.getByText('Loading dispatch options…')).toBeTruthy()
+
+    await act(async () => { resolveB(structuredClone(bOptions)) })
+    await waitFor(() => expect(repoNames()).toEqual(['b-one', 'b-two']))
+  })
+
+  it('shows the new host\'s error alone, even when a late refresh of the old host lands first', async () => {
+    fetchHostsMock.mockResolvedValue(peerHosts)
+    let resolveRefresh!: (o: DispatchOptions) => void
+    fetchDispatchOptionsMock.mockImplementation((h) =>
+      h === 'b' ? Promise.reject(new Error('peer down')) : Promise.resolve(structuredClone(optionsFixture)),
+    )
+    render(<DispatchView runs={[]} />)
+    await screen.findByLabelText('Repo')
+    fireEvent.click(screen.getByRole('button', { name: 'New dispatcher' }))
+    submitDispatcherMock.mockResolvedValue({ kind: 'started', crew: '1-1', session: 's', window: 'w', pane: '%1', runId: 'pane-1' })
+    fetchDispatchOptionsMock.mockImplementationOnce(() => new Promise((r) => { resolveRefresh = r }))
+    fireEvent.click(screen.getByRole('button', { name: 'Start dispatcher' }))
+    await waitFor(() => expect(resolveRefresh).toBeDefined())
+
+    // React renders outside act() in a later task, so the refresh lands in the
+    // gap between the switch and the [host] effect.
+    const flag = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
+    flag.IS_REACT_ACT_ENVIRONMENT = false
+    try {
+      // A mutation observer fires right after the switch commits, before its
+      // passive [host] effect runs.
+      const observer = new MutationObserver(() => {
+        observer.disconnect()
+        resolveRefresh(structuredClone(optionsFixture))
+      })
+      observer.observe(document.body, { childList: true, subtree: true })
+      window.location.hash = '#/dispatch?host=b'
+      window.dispatchEvent(new HashChangeEvent('hashchange'))
+      await new Promise((r) => setTimeout(r, 20))
+    } finally {
+      flag.IS_REACT_ACT_ENVIRONMENT = true
+    }
+
+    await screen.findByText('peer down')
+    expect(screen.queryAllByLabelText('Repo')).toHaveLength(0)
+    expect(screen.queryByText('repo-a')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Add worker' })).toBeNull()
+  })
+
   it('submits to the peer and links its run, not a local one on the same branch', async () => {
     await renderOnB([
       run({ id: 'pane-1', branch: 'feat/9-x', since: 5 }),
