@@ -53,7 +53,7 @@ func (s *Server) handleWorkspace(w http.ResponseWriter, _ *http.Request) {
 		projectNames[win.GitRoot] = s.wsRepos.project(win.GitRoot)
 	}
 
-	ws := buildWorkspace(wins, panes, s.runs.Snapshot(), mainCheckouts, projectNames)
+	ws := buildWorkspace(wins, panes, localRuns(s.runs.Snapshot()), mainCheckouts, projectNames)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(ws)

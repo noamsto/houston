@@ -160,9 +160,12 @@ func (s *Server) handleRunReply(w http.ResponseWriter, r *http.Request) {
 
 // findRun resolves a run by its externally visible ID. No registry method
 // exists for this and none is needed — the snapshot is already the answer.
+// Run-addressed routes act on this host (reply runs `crew reply` in the run's
+// Worktree, which a peer's path may name locally), so a peer run is not found
+// here until a later slice proxies it.
 func (s *Server) findRun(id string) (runs.Run, bool) {
 	for _, run := range s.runs.Snapshot() {
-		if run.ID == id {
+		if run.ID == id && run.Host == "" {
 			return run, true
 		}
 	}

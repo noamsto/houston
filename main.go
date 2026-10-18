@@ -18,6 +18,7 @@ import (
 
 	"github.com/noamsto/houston/hook"
 	"github.com/noamsto/houston/mode"
+	"github.com/noamsto/houston/peer"
 	"github.com/noamsto/houston/server"
 	"github.com/noamsto/houston/terminal"
 )
@@ -198,6 +199,10 @@ func runServer() {
 	var hostnames stringList
 	flag.Var(&hostnames, "hostname", "additional Host value to accept (repeatable; for reverse proxies or custom DNS)")
 
+	var peers, peerTokenFiles stringList
+	flag.Var(&peers, "peer", "peer houston to mirror read-only, NAME=URL (repeatable)")
+	flag.Var(&peerTokenFiles, "peer-token-file", "token file for a peer, NAME=PATH (repeatable; default <status-dir>/peers/NAME.token)")
+
 	var repoRoots stringList
 	flag.Var(&repoRoots, "repo-root", "directory the repo registry and picker are confined to (repeatable; default $HOME/git)")
 
@@ -221,6 +226,14 @@ func runServer() {
 
 	if *statusDir == "" {
 		*statusDir = resolveStateDir()
+	}
+
+	peerConfigs, err := peer.ParseFlags(peers, peerTokenFiles, *statusDir)
+	if err != nil {
+		log.Fatalf("invalid -peer: %v", err)
+	}
+	for _, c := range peerConfigs {
+		slog.Info("peer", "name", c.Name, "url", c.URL)
 	}
 	if len(repoRoots) == 0 {
 		if home, err := os.UserHomeDir(); err != nil {
@@ -270,6 +283,7 @@ func runServer() {
 		Mode:            m,
 		Debug:           *debug,
 		ClaudeModSocket: claudeModSocket,
+		Peers:           peerConfigs,
 	})
 	if err != nil {
 		log.Fatalf("failed to create server: %v", err)
