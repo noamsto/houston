@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 )
 
@@ -165,10 +166,16 @@ func plainHopOK(local, remote net.Addr) bool {
 	return !l.Is4() || onTailscaleInterface(l)
 }
 
+// goos is runtime.GOOS; a var so tests can check both platforms' names.
+var goos = runtime.GOOS
+
 // onTailscaleInterface fails closed: a lookup error refuses the hop.
 func onTailscaleInterface(addr netip.Addr) bool {
 	name, err := interfaceOf(addr)
-	return err == nil && (strings.HasPrefix(name, "tailscale") || strings.HasPrefix(name, "utun"))
+	if err != nil {
+		return false
+	}
+	return strings.HasPrefix(name, "tailscale") || (goos == "darwin" && strings.HasPrefix(name, "utun"))
 }
 
 // interfaceOf names the interface holding addr on this host, "" when none
