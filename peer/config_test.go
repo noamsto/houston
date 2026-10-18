@@ -1,7 +1,9 @@
 package peer
 
 import (
+	"errors"
 	"net"
+	"net/netip"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -97,7 +99,24 @@ func TestParseFlagsNone(t *testing.T) {
 	}
 }
 
+// stubInterfaces stands in the host's interfaces: names maps an address to
+// the interface holding it; err fails every lookup.
+func stubInterfaces(t *testing.T, names map[netip.Addr]string, err error) {
+	t.Helper()
+	orig := interfaceOf
+	interfaceOf = func(a netip.Addr) (string, error) { return names[a], err }
+	t.Cleanup(func() { interfaceOf = orig })
+}
+
+func stubGOOS(t *testing.T, s string) {
+	t.Helper()
+	orig := goos
+	goos = s
+	t.Cleanup(func() { goos = orig })
+}
+
 func TestPlainHopOK(t *testing.T) {
+	stubInterfaces(t, map[netip.Addr]string{netip.MustParseAddr("100.101.1.1"): "tailscale0"}, nil)
 	tcp := func(s string) net.Addr { return &net.TCPAddr{IP: net.ParseIP(s), Port: 1} }
 	cases := []struct {
 		name          string
@@ -126,5 +145,47 @@ func TestPlainHopOK(t *testing.T) {
 		if got := plainHopOK(tc.local, tc.remote); got != tc.want {
 			t.Errorf("%s: plainHopOK = %v, want %v", tc.name, got, tc.want)
 		}
+	}
+}
+
+func TestPlainHopOKInterface(t *testing.T) {
+	tcp := func(s string) net.Addr { return &net.TCPAddr{IP: net.ParseIP(s), Port: 1} }
+	local := netip.MustParseAddr("100.101.1.1")
+	cases := []struct {
+		name  string
+		goos  string
+		names map[netip.Addr]string
+		err   error
+		want  bool
+	}{
+		{"tailscale interface", "linux", map[netip.Addr]string{local: "tailscale0"}, nil, true},
+		{"utun on darwin", "darwin", map[netip.Addr]string{local: "utun3"}, nil, true},
+		{"utun on linux", "linux", map[netip.Addr]string{local: "utun3"}, nil, false},
+		{"uplink interface", "linux", map[netip.Addr]string{local: "eth0"}, nil, false},
+		{"no interface", "linux", nil, nil, false},
+		{"lookup error", "linux", map[netip.Addr]string{local: "tailscale0"}, errors.New("boom"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stubGOOS(t, tc.goos)
+			stubInterfaces(t, tc.names, tc.err)
+			if got := plainHopOK(tcp("100.101.1.1"), tcp("100.64.0.7")); got != tc.want {
+				t.Errorf("plainHopOK = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPlainHopOKNoLookupForLoopbackAndV6(t *testing.T) {
+	stubInterfaces(t, nil, errors.New("boom"))
+	tcp := func(s string) net.Addr { return &net.TCPAddr{IP: net.ParseIP(s), Port: 1} }
+	if !plainHopOK(tcp("192.168.1.2"), tcp("127.0.0.1")) {
+		t.Error("loopback remote refused on lookup error")
+	}
+	if !plainHopOK(tcp("::1"), tcp("::1")) {
+		t.Error("loopback v6 refused on lookup error")
+	}
+	if !plainHopOK(tcp("fd7a:115c:a1e0::1"), tcp("fd7a:115c:a1e0::2")) {
+		t.Error("tailnet v6 refused on lookup error")
 	}
 }

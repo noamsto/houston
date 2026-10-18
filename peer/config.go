@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 )
 
@@ -144,11 +145,12 @@ func plainHTTPOK(host string) bool {
 
 // plainHopOK reports whether a plain-http connection stays on this machine or
 // goes over the tailnet, where WireGuard encrypts the hop: the remote end is
-// loopback, or both ends hold tailnet addresses. This checks addresses, not the
-// interface: 100.64.0.0/10 is RFC 6598 carrier-grade NAT space, so a host whose
-// own uplink holds a 100.x address with tailscaled down passes for an IPv4
-// peer and sends the token in cleartext over that network. fd7a:115c:a1e0::/48
-// is Tailscale-specific and sound; https avoids the residual.
+// loopback, or both ends hold tailnet addresses and, for IPv4, the local
+// address is held by a Tailscale interface (tailscale* on Linux, utun* on
+// macOS), because 100.64.0.0/10 is also RFC 6598 carrier-grade NAT space. A
+// lookup error refuses. fd7a:115c:a1e0::/48 is Tailscale-specific, so IPv6
+// needs no interface check. Residual: on macOS another VPN's utun interface
+// holding a 100.64/10 address still passes; https avoids it.
 func plainHopOK(local, remote net.Addr) bool {
 	r, ok := tcpAddr(remote)
 	if !ok {
@@ -158,7 +160,48 @@ func plainHopOK(local, remote net.Addr) bool {
 		return true
 	}
 	l, ok := tcpAddr(local)
-	return ok && inTailnet(r) && inTailnet(l)
+	if !ok || !inTailnet(r) || !inTailnet(l) {
+		return false
+	}
+	return !l.Is4() || onTailscaleInterface(l)
+}
+
+// goos is runtime.GOOS; a var so tests can check both platforms' names.
+var goos = runtime.GOOS
+
+func onTailscaleInterface(addr netip.Addr) bool {
+	name, err := interfaceOf(addr)
+	if err != nil {
+		return false
+	}
+	return strings.HasPrefix(name, "tailscale") || (goos == "darwin" && strings.HasPrefix(name, "utun"))
+}
+
+// interfaceOf names the interface holding addr on this host, "" when none
+// does; a var so tests can stand in a host's interfaces.
+var interfaceOf = hostInterfaceOf
+
+func hostInterfaceOf(addr netip.Addr) (string, error) {
+	ifs, err := net.Interfaces()
+	if err != nil {
+		return "", err
+	}
+	for _, ifc := range ifs {
+		addrs, err := ifc.Addrs()
+		if err != nil {
+			return "", err
+		}
+		for _, a := range addrs {
+			n, ok := a.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			if ip, ok := netip.AddrFromSlice(n.IP); ok && ip.Unmap() == addr {
+				return ifc.Name, nil
+			}
+		}
+	}
+	return "", nil
 }
 
 func tcpAddr(a net.Addr) (netip.Addr, bool) {

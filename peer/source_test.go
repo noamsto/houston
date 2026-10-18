@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -502,6 +503,7 @@ func TestJitterBounds(t *testing.T) {
 }
 
 func TestSourcePlainHTTPHopCheck(t *testing.T) {
+	stubInterfaces(t, map[netip.Addr]string{netip.MustParseAddr("100.101.1.1"): "tailscale0"}, nil)
 	cases := []struct {
 		name          string
 		local, remote string
