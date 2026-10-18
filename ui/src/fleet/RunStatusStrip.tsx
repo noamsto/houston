@@ -131,7 +131,7 @@ export function RunQuestion({ run, onTerminal = false, answeredHere = false }: {
   return (
     <>
       <div className="run-detail-question">{run.question.text}</div>
-      {blocked && via === 'crew' && <ReplyComposer runId={run.id} />}
+      {blocked && via === 'crew' && run.caps.reply && <ReplyComposer runId={run.id} />}
       {blocked && via === 'pane' && run.caps.terminal && !onTerminal && !answeredHere && (
         <button
           type="button"

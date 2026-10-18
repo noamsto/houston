@@ -1,7 +1,7 @@
 import type { Run } from '../api/runs'
 
 /** The slice of a run the freshness rules read; a Workspace pane carries it too. */
-export type Freshness = { state: string; updated_at: number }
+export type Freshness = { state: string; updated_at: number; stale?: boolean; host?: string }
 
 /**
  * How recently a run must have reported to count as fresh.
@@ -13,7 +13,13 @@ export type Freshness = { state: string; updated_at: number }
  */
 export const FRESH_MS = 60 * 60 * 1000
 
+/**
+ * A peer run marked stale is last-known in every field, so it is never fresh
+ * whatever its `updated_at`. A local transport-stale run (`stale` without
+ * `host`) keeps its live hooks layer, so it is judged by time alone.
+ */
 export function isFresh(run: Freshness, now: number): boolean {
+  if (run.stale && run.host) return false
   if (!run.updated_at) return false
   return now - run.updated_at * 1000 <= FRESH_MS
 }

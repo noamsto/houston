@@ -117,3 +117,21 @@ describe('staleness', () => {
     expect(needsYou(run({ state: 'idle', attention: 'done' }), now)).toBe(false)
   })
 })
+
+describe('staleness: peer runs', () => {
+  it('never counts a stale peer run, however recent its updated_at', () => {
+    const peer = run({ state: 'blocked', host: 'b', stale: true })
+    expect(isFresh(peer, now)).toBe(false)
+    expect(needsYou(peer, now)).toBe(false)
+    expect(isStuck(run({ attention: 'stuck', host: 'b', stale: true }), now)).toBe(false)
+    expect(isDone(run({ attention: 'done', host: 'b', stale: true }), now)).toBe(false)
+  })
+
+  it('counts a peer run that is not stale', () => {
+    expect(needsYou(run({ state: 'blocked', host: 'b', stale: false }), now)).toBe(true)
+  })
+
+  it('keeps counting a local transport-stale run', () => {
+    expect(needsYou(run({ state: 'blocked', stale: true }), now)).toBe(true)
+  })
+})

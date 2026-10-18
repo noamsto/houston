@@ -14,7 +14,7 @@ export function CrewGroupHeader({ entry }: { entry: CrewEntry }) {
         {crewShortId(entry.crew)}
       </span>
       <span className="fleet-group-counts">{countsLabel(entry.counts)}</span>
-      {repo && (
+      {repo && entry.host === 'local' && (
         <a className="fleet-group-dispatch" href={dispatchHref(repo.path, entry.crew)}>
           Dispatch here
         </a>

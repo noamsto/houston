@@ -112,3 +112,17 @@ describe('WorkerRow', () => {
     expect(agoLabel).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('WorkerRow peer freshness', () => {
+  const blocked = (p: Partial<Run>) => run({ state: 'blocked', updated_at: nowSec, ...p })
+
+  it('mutes a blocked row of a stale peer run even though it reported just now', () => {
+    const { container } = render(<WorkerRow run={blocked({ host: 'b', stale: true })} now={now} />)
+    expect(container.querySelector('.worker-row')?.classList.contains('muted')).toBe(true)
+  })
+
+  it('does not mute the same run while the peer is reachable', () => {
+    const { container } = render(<WorkerRow run={blocked({ host: 'b', stale: false })} now={now} />)
+    expect(container.querySelector('.worker-row')?.classList.contains('muted')).toBe(false)
+  })
+})

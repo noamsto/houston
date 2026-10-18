@@ -363,3 +363,26 @@ describe('narrowToCrew', () => {
     expect(keys(narrowToCrew(flat, '1-2')).sort()).toEqual(['d2', 'w2'])
   })
 })
+
+describe('fleetEntries: stale peer group', () => {
+  const peer = (stale: boolean) => [
+    dispatcher('b:d', '1700-1', { host: 'b', state: 'idle', stale }),
+    worker('b:w', '1700-1', { host: 'b', state: 'blocked', attention: 'needs-you', stale }),
+  ]
+
+  it('counts a blocked worker of a reachable peer as needing you', () => {
+    const d = fleetEntries(peer(false), 'active', now, 'dispatcher')[0]
+    if (d.kind !== 'dispatcher') throw new Error('expected a dispatcher entry')
+    expect(d.needsYou).toBe(1)
+    expect(d.counts.needsYou).toBe(1)
+  })
+
+  it('buckets it ended and counts no need-you while the peer is stale', () => {
+    const d = fleetEntries(peer(true), 'active', now, 'dispatcher')[0]
+    if (d.kind !== 'dispatcher') throw new Error('expected a dispatcher entry')
+    expect(ids(d.shown)).toEqual(['b:w'])
+    expect(d.needsYou).toBe(0)
+    expect(d.counts.needsYou).toBe(0)
+    expect(d.counts.ended).toBe(1)
+  })
+})

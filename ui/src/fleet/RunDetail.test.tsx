@@ -669,3 +669,32 @@ describe('RunDetail tabsInBar', () => {
     expect(screen.getByRole('button', { name: /back to fleet/i })).toBeTruthy()
   })
 })
+
+describe('RunDetail peer run', () => {
+  const peer = (p: Partial<Run> = {}) => run({
+    id: 'b:pane-1', host: 'b', role: 'dispatcher', crew: { name: '1700-1' },
+    caps: { terminal: false, reply: false, kill: false }, ...p,
+  })
+
+  it('renders no tab buttons, the host chip and the not-yet-available note', () => {
+    const r = peer()
+    const { container } = render(<RunDetail mode="dispatcher" runs={[r]} hasSnapshot streamConnected now={now} id={r.id} />)
+    expect(container.querySelectorAll('.run-detail-tabs button').length).toBe(0)
+    expect(container.querySelector('.crew-tab')).toBeNull()
+    expect(container.querySelector('.run-detail-heading .run-chip.host')?.textContent).toBe('b')
+    expect(container.querySelector('.run-detail-heading .run-chip.stale')).toBeNull()
+    expect(screen.getByText("Actions on runs from b aren't available yet.")).toBeTruthy()
+  })
+
+  it('shows the stale chip while the peer is unreachable', () => {
+    const r = peer({ stale: true })
+    const { container } = render(<RunDetail mode="dispatcher" runs={[r]} hasSnapshot streamConnected now={now} id={r.id} />)
+    expect(container.querySelector('.run-detail-heading .run-chip.stale')).toBeTruthy()
+  })
+
+  it('shows no note for a local run', () => {
+    const r = liveRun()
+    render(<RunDetail mode={null} runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="chat" />)
+    expect(screen.queryByText(/aren't available yet/)).toBeNull()
+  })
+})
