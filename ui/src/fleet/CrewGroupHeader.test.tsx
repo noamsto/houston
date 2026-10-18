@@ -45,4 +45,12 @@ describe('CrewGroupHeader', () => {
     render(<CrewGroupHeader entry={entry('dispatcher')} />)
     await waitFor(() => expect(screen.getByText('Dispatch here')).toBeTruthy())
   })
+
+  it('offers no Dispatch here for a crew on a peer host', async () => {
+    fetchOptions.mockResolvedValue({ repos: [{ name: 'dispatcher', path: '/r/dispatcher' }] } as never)
+    render(<CrewGroupHeader entry={{ ...entry('dispatcher'), host: 'b' }} />)
+    await waitFor(() => expect(fetchOptions).toHaveBeenCalled())
+    await Promise.resolve()
+    expect(screen.queryByText('Dispatch here')).toBeNull()
+  })
 })

@@ -286,3 +286,41 @@ describe('FleetView tmux mode', () => {
     expect(fetchDispatchOptions).not.toHaveBeenCalled()
   })
 })
+
+describe('FleetView peer runs', () => {
+  const peerCrew = { name: '1700000000-11' }
+  const peerRuns = (stale: boolean) => [
+    run({ id: 'l1', branch: 'local-one', project: 'houston' }),
+    run({ id: 'b:d', host: 'b', since: 2, project: 'houston', branch: 'main', role: 'dispatcher', state: 'idle', crew: peerCrew, caps: { terminal: false, reply: false, kill: false }, stale }),
+    run({ id: 'b:w', host: 'b', since: 1, project: 'houston', branch: 'peer-w', role: 'worker', state: 'blocked', crew: peerCrew, caps: { terminal: false, reply: false, kill: false }, stale }),
+    run({ id: 'b:p', host: 'b', project: 'other', branch: 'peer-solo', caps: { terminal: false, reply: false, kill: false }, stale }),
+  ]
+
+  it('renders a host group for the peer whose card carries the host chip', () => {
+    const { container } = render(<FleetView runs={peerRuns(false)} connected now={now} mode="dispatcher" />)
+    const heads = Array.from(container.querySelectorAll('.fleet-group')).map((e) => e.firstElementChild?.textContent)
+    expect([...heads].sort()).toEqual(['b', 'local'])
+    const card = Array.from(container.querySelectorAll('.run-card')).find((c) => c.textContent?.includes('peer-solo'))
+    expect(Array.from(card!.querySelectorAll('.run-chip')).map((c) => c.textContent)).toContain('b')
+    expect(container.querySelector('.run-card .run-chip.host')?.textContent).toBe('b')
+  })
+
+  it('counts a reachable peer blocked worker', () => {
+    const { container } = render(<FleetView runs={peerRuns(false)} connected now={now} mode="dispatcher" />)
+    expect(screen.getByRole('button', { name: '1 needs you' })).toBeTruthy()
+    expect(container.querySelector('.fleet-group-badge')?.textContent).toBe('1 need you')
+    expect(container.querySelector('.worker-row')?.classList.contains('muted')).toBe(false)
+  })
+
+  it('does not count the same worker while the peer is stale, and mutes its row', () => {
+    const { container } = render(<FleetView runs={peerRuns(true)} connected now={now} mode="dispatcher" />)
+    expect(screen.queryByRole('button', { name: /^\d+ needs you$/ })).toBeNull()
+    expect(container.querySelector('.fleet-group-badge')).toBeNull()
+    expect(container.querySelector('.worker-row')?.classList.contains('muted')).toBe(true)
+  })
+
+  it('keeps counting a local transport-stale blocked run', () => {
+    render(<FleetView runs={[run({ id: 'l', state: 'blocked', stale: true })]} connected now={now} mode="dispatcher" />)
+    expect(screen.getByRole('button', { name: '1 needs you' })).toBeTruthy()
+  })
+})

@@ -161,7 +161,8 @@ func (r *Registry) settleLocked(key string) (Run, bool) {
 		}
 	case was:
 		delete(r.lastSig, key)
-		return Run{ID: idFor(key), Removed: true}, true
+		host, _ := peerHost(key)
+		return Run{ID: idFor(key), Host: host, Removed: true}, true
 	}
 	return Run{}, false
 }
@@ -246,6 +247,9 @@ const tmuxFailedNote = "Its last turn failed — check its terminal."
 // the hooks layer has no StopFailure mapping and would otherwise hide it; the
 // crew layer's done/review likewise holds after hooks' idle wins State.
 func attentionOf(out Run, bySource map[string]Run) (Attention, string) {
+	if peer, ok := bySource[PeerLayer]; ok {
+		return peerAttention(out, peer)
+	}
 	if out.State == StateBlocked {
 		return AttentionNeedsYou, ""
 	}
@@ -306,6 +310,9 @@ func idFor(key string) string {
 	case strings.HasPrefix(key, "crew/"):
 		b := strings.TrimPrefix(key, "crew/")
 		return "crew-" + base64.RawURLEncoding.EncodeToString([]byte(b))
+	case strings.HasPrefix(key, peerKeyPrefix):
+		host, id, _ := strings.Cut(strings.TrimPrefix(key, peerKeyPrefix), "/")
+		return "peer-" + host + "." + id
 	default:
 		return "key-" + base64.RawURLEncoding.EncodeToString([]byte(key))
 	}

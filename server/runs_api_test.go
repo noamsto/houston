@@ -231,3 +231,205 @@ func TestRunsRoutesAreBehindTheAuthGate(t *testing.T) {
 		t.Fatalf("status %d, want 401 — /api/runs must require a token", rec.Code)
 	}
 }
+
+const (
+	scopeLocalID = "pane-1"
+	scopePeerID  = "peer-b.pane-1"
+)
+
+func localScopeDelta(branch string) runs.Delta {
+	return runs.Delta{Source: "tmux", Key: "%1", Run: runs.Run{
+		Agent: "claude", State: runs.StateIdle, Branch: branch,
+	}}
+}
+
+func peerScopeDelta(branch string) runs.Delta {
+	return runs.Delta{Source: runs.PeerLayer, Key: runs.PeerKey("b", "pane-1"), Run: runs.Run{
+		Agent: "claude", Host: "b", State: runs.StateIdle, Branch: branch,
+	}}
+}
+
+func scopeRegistry() *runs.Registry {
+	reg := runs.NewRegistry(runs.DefaultOrder)
+	reg.Apply(localScopeDelta("local-branch"))
+	reg.Apply(peerScopeDelta("peer-branch"))
+	return reg
+}
+
+func snapshotIDs(t *testing.T, s *Server, target string) []string {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	s.handleRunsSnapshot(rec, httptest.NewRequest("GET", target, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("%s: status %d", target, rec.Code)
+	}
+	var got []runs.Run
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	ids := make([]string, 0, len(got))
+	for _, r := range got {
+		ids = append(ids, r.ID)
+	}
+	return ids
+}
+
+func startRunsStream(t *testing.T, s *Server, target string) *syncRecorder {
+	t.Helper()
+	rec := newSyncRecorder()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.handleRunsStream(rec, httptest.NewRequest(http.MethodGet, target, nil).WithContext(ctx))
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	return rec
+}
+
+func waitBody(t *testing.T, rec *syncRecorder, substr string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !strings.Contains(rec.body(), substr) {
+		if time.Now().After(deadline) {
+			t.Fatalf("%q never arrived\n%s", substr, rec.body())
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestNewWithoutPeersStartsNoPeerSources(t *testing.T) {
+	s := newFullServer(t, Config{StatusDir: t.TempDir(), Mode: mode.Dispatcher})
+	if len(s.peers) != 0 {
+		t.Fatalf("%d peer sources, want 0", len(s.peers))
+	}
+	if len(s.instance) != 32 {
+		t.Fatalf("instance %q, want 32 hex characters", s.instance)
+	}
+}
+
+func TestRunsWithoutPeersAreByteIdenticalWithAndWithoutScope(t *testing.T) {
+	reg := runs.NewRegistry(runs.DefaultOrder)
+	reg.Apply(localScopeDelta("local-branch"))
+	s := &Server{runs: reg, instance: "inst"}
+
+	var want bytes.Buffer
+	if err := json.NewEncoder(&want).Encode(reg.Snapshot()); err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range []string{"/api/runs", "/api/runs?scope=local"} {
+		rec := httptest.NewRecorder()
+		s.handleRunsSnapshot(rec, httptest.NewRequest("GET", target, nil))
+		if rec.Body.String() != want.String() {
+			t.Fatalf("%s body %q, want %q", target, rec.Body.String(), want.String())
+		}
+	}
+
+	snap, err := json.Marshal(reg.Snapshot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame := "event: snapshot\ndata: " + string(snap) + "\n\n"
+	rec := startRunsStream(t, s, "/api/runs/stream")
+	waitBody(t, rec, "\n\n")
+	if got := rec.body(); got != frame {
+		t.Fatalf("first frame %q, want %q", got, frame)
+	}
+	if got := rec.Header().Get("X-Houston-Instance"); got != "inst" {
+		t.Fatalf("instance header %q, want inst", got)
+	}
+}
+
+func TestRunsSnapshotScope(t *testing.T) {
+	s := &Server{runs: scopeRegistry()}
+
+	if got := snapshotIDs(t, s, "/api/runs"); len(got) != 2 {
+		t.Fatalf("no scope: %v, want both runs", got)
+	}
+	got := snapshotIDs(t, s, "/api/runs?scope=local")
+	if len(got) != 1 || got[0] != scopeLocalID {
+		t.Fatalf("scope=local: %v, want only %s", got, scopeLocalID)
+	}
+	empty := &Server{runs: runs.NewRegistry(runs.DefaultOrder)}
+	rec := httptest.NewRecorder()
+	empty.handleRunsSnapshot(rec, httptest.NewRequest("GET", "/api/runs?scope=local", nil))
+	if strings.TrimSpace(rec.Body.String()) != "[]" {
+		t.Fatalf("empty local scope body %q, want []", rec.Body.String())
+	}
+}
+
+func TestRunsScopeUnknownIs400(t *testing.T) {
+	s := &Server{runs: scopeRegistry()}
+	for _, target := range []string{"/api/runs?scope=bogus", "/api/runs?scope=", "/api/runs?scope=local&scope=local"} {
+		rec := httptest.NewRecorder()
+		s.handleRunsSnapshot(rec, httptest.NewRequest("GET", target, nil))
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "unknown scope") {
+			t.Fatalf("snapshot %s: %d %q, want 400 unknown scope", target, rec.Code, rec.Body.String())
+		}
+		rec = httptest.NewRecorder()
+		s.handleRunsStream(rec, httptest.NewRequest("GET", strings.Replace(target, "/api/runs", "/api/runs/stream", 1), nil))
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "unknown scope") {
+			t.Fatalf("stream %s: %d %q, want 400 unknown scope", target, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestRunsStreamLocalScopeSkipsPeerRuns(t *testing.T) {
+	reg := scopeRegistry()
+	s := &Server{runs: reg}
+	rec := startRunsStream(t, s, "/api/runs/stream?scope=local")
+	waitBody(t, rec, "\n\n")
+	if body := rec.body(); !strings.Contains(body, "local-branch") || strings.Contains(body, scopePeerID) {
+		t.Fatalf("initial snapshot should hold only the local run\n%s", body)
+	}
+
+	reg.Apply(peerScopeDelta("peer-update"))
+	reg.Apply(runs.Delta{Source: runs.PeerLayer, Key: runs.PeerKey("b", "pane-1"), Gone: true})
+	reg.Apply(localScopeDelta("local-update"))
+	waitBody(t, rec, "local-update")
+	// The subscriber channel is ordered, so the peer events were already
+	// handled by the time the local one is written.
+	body := rec.body()
+	for _, leak := range []string{"peer-update", scopePeerID, `"removed":true`} {
+		if strings.Contains(body, leak) {
+			t.Fatalf("local scope leaked %q\n%s", leak, body)
+		}
+	}
+}
+
+func TestRunsStreamWithoutScopeDeliversPeerUpdates(t *testing.T) {
+	reg := scopeRegistry()
+	s := &Server{runs: reg}
+	rec := startRunsStream(t, s, "/api/runs/stream")
+	waitBody(t, rec, "\n\n")
+
+	reg.Apply(peerScopeDelta("peer-update"))
+	waitBody(t, rec, "peer-update")
+	reg.Apply(runs.Delta{Source: runs.PeerLayer, Key: runs.PeerKey("b", "pane-1"), Gone: true})
+	waitBody(t, rec, `"removed":true`)
+}
+
+func TestRunAddressedRoutesDoNotResolvePeerRuns(t *testing.T) {
+	s := newReplyServer(t, nil, localScopeDelta("local-branch"), peerScopeDelta("peer-branch"))
+
+	if _, ok := s.findRun(scopeLocalID); !ok {
+		t.Fatal("local run not found")
+	}
+	if _, ok := s.findRun(scopePeerID); ok {
+		t.Fatal("peer run resolved by findRun")
+	}
+
+	base := "/api/runs/" + scopePeerID
+	for _, rt := range []struct{ method, path, body string }{
+		{"POST", base + "/reply", replyBody(t, "hi")},
+		{"GET", base + "/chat", ""},
+		{"GET", base + "/terminal", ""},
+	} {
+		rec := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, replyRequest(rt.method, rt.path, rt.body))
+		wantRefusal(t, rec, http.StatusNotFound, "no such run")
+	}
+}

@@ -74,6 +74,7 @@ export function RunCard({ run, now, onOpen, selected, crewLine }: RunCardProps) 
         {run.role && <span className={`run-role ${run.role}`}>{run.role}</span>}
         {run.attention === 'stuck' && <span className="run-chip stuck">stuck</span>}
         {run.attention === 'done' && <span className="run-chip done">done</span>}
+        {run.host && <span className="run-chip host">{run.host}</span>}
         <span className="run-chip">{run.agent}</span>
         {run.issue && <span className="run-chip issue">{run.issue.id}</span>}
         {run.pr && <PRChip pr={run.pr} />}

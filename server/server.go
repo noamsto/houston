@@ -3,7 +3,9 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -29,6 +31,7 @@ import (
 	"github.com/noamsto/houston/mode"
 	"github.com/noamsto/houston/opencode"
 	"github.com/noamsto/houston/parser"
+	"github.com/noamsto/houston/peer"
 	"github.com/noamsto/houston/runs"
 	"github.com/noamsto/houston/tmux"
 )
@@ -192,6 +195,11 @@ type Server struct {
 
 	claudeModStore *claudemod.Store
 	claudeMod      *claudemod.Server
+
+	// instance identifies this process on its runs stream, so a peer list
+	// that names this houston is recognised as self.
+	instance string
+	peers    []*peer.Source
 }
 
 // closeTimeout bounds how long Close waits for background goroutines that
@@ -250,11 +258,19 @@ type Config struct {
 	// to. Empty disables the listener, the store and /api/debug/claude-mod. A
 	// listen failure is logged and houston runs on hooks alone.
 	ClaudeModSocket string
+
+	// Peers are the houstons whose local runs are mirrored read-only.
+	Peers []peer.Config
 }
 
 func New(cfg Config) (*Server, error) {
 	if cfg.Mode != mode.Dispatcher && cfg.Mode != mode.Tmux {
 		return nil, fmt.Errorf("server: mode must be resolved, got %q", cfg.Mode)
+	}
+
+	var instance [16]byte
+	if _, err := rand.Read(instance[:]); err != nil {
+		return nil, fmt.Errorf("instance id: %w", err)
 	}
 
 	registry := agents.NewRegistry(
@@ -286,6 +302,7 @@ func New(cfg Config) (*Server, error) {
 	}
 
 	s := &Server{
+		instance:       hex.EncodeToString(instance[:]),
 		mode:           cfg.Mode,
 		cancel:         cancel,
 		pumpDone:       make(chan struct{}),
@@ -362,6 +379,18 @@ func New(cfg Config) (*Server, error) {
 				slog.Warn("run source stopped", "source", src.Name(), "error", err)
 			}
 		}(src)
+	}
+
+	for _, pc := range cfg.Peers {
+		src := peer.New(pc, peer.Options{Self: s.instance})
+		s.peers = append(s.peers, src)
+		s.sourcesWG.Add(1)
+		go func() {
+			defer s.sourcesWG.Done()
+			if err := src.Run(ctx, deltas); err != nil && !errors.Is(err, context.Canceled) {
+				slog.Warn("run source stopped", "source", src.Name(), "error", err)
+			}
+		}()
 	}
 
 	// Initialize OpenCode integration if enabled
@@ -490,6 +519,7 @@ func (s *Server) Handler() http.Handler {
 	apiMux.HandleFunc("GET /api/runs/{id}/chat/tool/{callId}", s.handleRunChatTool)
 	apiMux.HandleFunc("GET /api/workspace", s.handleWorkspace)
 	apiMux.HandleFunc("GET /api/mode", s.handleMode)
+	apiMux.HandleFunc("GET /api/hosts", s.handleHosts)
 	// Tmux mode leaves the command-executing routes (crew reply, dispatch,
 	// launch, repo registry) unregistered, so they 404.
 	if s.mode != mode.Tmux {

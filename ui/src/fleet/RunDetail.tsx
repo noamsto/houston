@@ -72,7 +72,9 @@ export function RunDetail({ runs, hasSnapshot, streamConnected, now, id, tab, mo
             <span className="run-dot" style={{ background: `var(--state-${run.state}, var(--text-faint))` }} />
             <span className="run-detail-project">{projectOf(run)}</span>
             <span className="run-detail-name">{run.branch || nameLabel(run)}</span>
+            {run.host && <span className="run-chip host">{run.host}</span>}
             <span className="run-chip">{run.agent}</span>
+            {run.stale && <span className="run-chip stale">stale</span>}
             <span className="run-age">{agoLabel(run.updated_at, now)}</span>
           </div>
         )}
@@ -117,7 +119,7 @@ function RunDetailBody({ run, runs, tab, mode, streamConnected, now, onBack, tab
   const capable = run.caps.terminal && Boolean(run.tmux)
   const lifecycle = useTerminalLifecycle(run.id, capable, tab === 'terminal', streamConnected)
   const chatOffered = Boolean(run.caps.chat)
-  const crewOffered = mode === 'dispatcher' && run.role === 'dispatcher' && Boolean(run.crew?.name)
+  const crewOffered = offeredTabs(run, mode).includes('crew')
 
   // A deep link to `.../terminal` for a run that has never actually gone live
   // (never had, or already lost, terminal capability before the view ever
@@ -205,6 +207,7 @@ function RunStatusCard({ run, now, onTerminal = false }: { run: Run; now: number
     <div className="run-status-card">
       <RunStatusStrip run={run} now={now} />
       <RunQuestion run={run} onTerminal={onTerminal} />
+      {run.host && <div className="run-peer-note">Actions on runs from {run.host} aren't available yet.</div>}
       {message && message !== run.question?.text && (
         <button
           type="button"

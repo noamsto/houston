@@ -210,3 +210,18 @@ describe('RunStatusStrip context meter', () => {
     expect(container.querySelector('.run-status-ctx')).toBeNull()
   })
 })
+
+describe('RunQuestion reply gate', () => {
+  const crewQuestion = { text: 'which db?', via: 'crew' as const }
+
+  it('renders no reply composer when the run cannot be replied to', () => {
+    render(<RunQuestion run={run({ state: 'blocked', question: crewQuestion, caps: { terminal: false, reply: false, kill: false } })} />)
+    expect(screen.getByText('which db?')).toBeTruthy()
+    expect(screen.queryByLabelText(/reply to the crew/i)).toBeNull()
+  })
+
+  it('renders the reply composer when caps.reply is set', () => {
+    render(<RunQuestion run={run({ state: 'blocked', question: crewQuestion, caps: { terminal: false, reply: true, kill: false } })} />)
+    expect(screen.getByLabelText(/reply to the crew/i)).toBeTruthy()
+  })
+})
