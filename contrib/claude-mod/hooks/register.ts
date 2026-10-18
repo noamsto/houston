@@ -1,10 +1,12 @@
-import type { Register, EngineInterface } from 'claude-code'
+import type { Register, EngineInterface, BuiltinToolResults } from 'claude-code'
 
 type Rec = Record<string, unknown>
 
 const boot = crypto.randomUUID()
 let seq = 0
 let sid = ''
+// bumped wherever sid resets, so a lookup that straddles the reset is not cached
+let gen = 0
 let sock = ''
 let pending = 0
 let chain: Promise<unknown> = Promise.resolve()
@@ -30,8 +32,14 @@ function fire($: EngineInterface, rec: Rec) {
 
 async function settle($: EngineInterface, rec: Rec) {
   sock ||= await socketPath($)
-  sid ||= await $.session.id()
-  rec.sid ||= sid
+  if (!rec.sid) {
+    if (!sid) {
+      const g = gen
+      const id = await $.session.id()
+      if (g === gen) sid = id
+      rec.sid = id
+    } else rec.sid = sid
+  }
   fire($, rec)
 }
 
@@ -60,6 +68,7 @@ function parseTaskEnds(text: string) {
 export const register: Register = on => {
   on('session.start', ($, e, next) => {
     sid = ''
+    gen++
     post($, 'session.start')
     return next(e)
   })
@@ -67,6 +76,7 @@ export const register: Register = on => {
   on('session.end', ($, e, next) => {
     post($, 'session.end', { sid: e.sessionId, reason: e.reason })
     sid = ''
+    gen++
     return next(e)
   })
 
@@ -99,11 +109,11 @@ export const register: Register = on => {
     const r = await next(e)
     const end: Rec = { tool: e.tool, id: e.tool_use_id, agent: e.agentId, err: r.isError === true || undefined }
     if ('result' in r && r.isError !== true) {
-      const res = r.result as { backgroundTaskId?: string; backgroundedByUser?: boolean; taskId?: string } | undefined
       if (e.tool === 'Bash') {
+        const res = r.result as Partial<BuiltinToolResults['Bash']> | undefined
         end.task = res?.backgroundTaskId
         end.user_bg = res?.backgroundedByUser === true || undefined
-      } else if (e.tool === 'Monitor') end.task = res?.taskId
+      } else if (e.tool === 'Monitor') end.task = (r.result as Partial<BuiltinToolResults['Monitor']> | undefined)?.taskId
     }
     post($, 'tool.end', end)
     return r

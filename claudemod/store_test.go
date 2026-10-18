@@ -3,6 +3,7 @@ package claudemod
 import (
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/noamsto/houston/hook"
 )
@@ -282,5 +283,113 @@ func TestSnapshotIsACopy(t *testing.T) {
 	snap[0].InFlight[0] = "mutated"
 	if got := f.session().InFlight; !slices.Equal(got, []string{"A"}) {
 		t.Fatalf("in flight = %v", got)
+	}
+}
+
+func TestDelayedOlderBootDoesNotRetireLiveBoot(t *testing.T) {
+	f := newFeeder(t)
+	f.boot = "B"
+	f.apply(1, evTurnStart, func(r *Record) { r.TS = 2000 })
+	f.boot = "A"
+	if f.apply(5, evTurnComplete, func(r *Record) { r.TS = 1000 }) {
+		t.Fatal("record of an older boot applied")
+	}
+	f.boot = "B"
+	if !f.apply(2, evToolStart, func(r *Record) { r.TS = 2010; r.ID, r.Tool = "x", "Bash" }) {
+		t.Fatal("live boot's next record dropped")
+	}
+	s := f.session()
+	if s.Boot != "B" || s.State != hook.StateToolRunning || s.Stale != 1 {
+		t.Fatalf("session = %+v", s)
+	}
+}
+
+func TestReloadSwitchesToLaterBoot(t *testing.T) {
+	f := newFeeder(t)
+	f.apply(1, evTurnStart, func(r *Record) { r.TS = 1000 })
+	f.boot = "b2"
+	if !f.apply(1, evSessionStart, func(r *Record) { r.TS = 2000 }) {
+		t.Fatal("later boot rejected")
+	}
+	if s := f.session(); s.Boot != "b2" || s.State != hook.StateStarting {
+		t.Fatalf("session = %+v", s)
+	}
+}
+
+func TestWindowDropsUnusedPayload(t *testing.T) {
+	f := newFeeder(t)
+	f.apply(1, evNotification, func(r *Record) { r.Message = "big"; r.Ask = []Ask{{Question: "q"}} })
+	f.store.mu.Lock()
+	defer f.store.mu.Unlock()
+	ss := f.store.sessions["s1"]
+	if ss == nil || len(ss.window) != 1 || ss.window[0].Message != "" || ss.window[0].Ask != nil {
+		t.Fatalf("session = %+v", ss)
+	}
+}
+
+func TestSessionEndFoldsWindow(t *testing.T) {
+	f := newFeeder(t)
+	f.apply(1, evTurnStart, nil)
+	f.apply(2, evSessionEnd, nil)
+	f.store.mu.Lock()
+	ss := f.store.sessions["s1"]
+	if ss == nil || len(ss.window) != 0 || ss.folded != 2 {
+		t.Fatalf("session = %+v", ss)
+	}
+	f.store.mu.Unlock()
+	if f.apply(1, evToolCheck, nil) {
+		t.Fatal("record older than the end applied")
+	}
+	f.wantState(hook.StateEnded)
+}
+
+func TestEvictsEndedAndIdleSessions(t *testing.T) {
+	clock := time.Unix(1_000_000, 0)
+	st := NewStore()
+	st.now = func() time.Time { return clock }
+	apply := func(sid string, seq int64, ev string) {
+		st.Apply(Record{V: 1, SID: sid, Boot: "b", Seq: seq, Ev: ev})
+	}
+	sids := func() []string {
+		var out []string
+		for _, s := range st.Snapshot() {
+			out = append(out, s.SID)
+		}
+		return out
+	}
+	apply("ended", 1, evSessionEnd)
+	apply("live", 1, evTurnStart)
+	apply("idle", 1, evTurnStart)
+
+	clock = clock.Add(endedTTL + time.Second)
+	apply("live", 2, evToolCheck)
+	if got := sids(); !slices.Equal(got, []string{"idle", "live"}) {
+		t.Fatalf("after endedTTL: %v", got)
+	}
+
+	clock = clock.Add(idleTTL)
+	apply("live", 3, evToolCheck)
+	if got := sids(); !slices.Equal(got, []string{"live"}) {
+		t.Fatalf("after idleTTL: %v", got)
+	}
+}
+
+func TestSweepRunsOncePerMinute(t *testing.T) {
+	clock := time.Unix(1_000_000, 0)
+	st := NewStore()
+	st.now = func() time.Time { return clock }
+	st.Apply(Record{V: 1, SID: "e", Boot: "b", Seq: 1, Ev: evSessionEnd})
+	clock = clock.Add(endedTTL + time.Second)
+	st.Apply(Record{V: 1, SID: "x", Boot: "b", Seq: 1, Ev: evTurnStart}) // sweeps: e is old
+	if n := len(st.Snapshot()); n != 1 {
+		t.Fatalf("sessions = %d, want 1", n)
+	}
+	st.Apply(Record{V: 1, SID: "e", Boot: "b", Seq: 1, Ev: evSessionEnd})
+	clock = clock.Add(endedTTL + time.Second - sweepEvery/2)
+	st.Apply(Record{V: 1, SID: "x", Boot: "b", Seq: 2, Ev: evToolCheck})
+	clock = clock.Add(sweepEvery / 4) // under a minute since the last sweep
+	st.Apply(Record{V: 1, SID: "x", Boot: "b", Seq: 3, Ev: evToolCheck})
+	if n := len(st.Snapshot()); n != 2 {
+		t.Fatalf("sessions = %d, want 2 (sweep throttled)", n)
 	}
 }

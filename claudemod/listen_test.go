@@ -175,3 +175,18 @@ func TestCloseRemovesSocket(t *testing.T) {
 		t.Fatalf("socket still there: %v", err)
 	}
 }
+
+func TestListenLeavesOnlyTheSocket(t *testing.T) {
+	srv, _, _ := startServer(t)
+	entries, err := os.ReadDir(filepath.Dir(srv.path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != filepath.Base(srv.path) {
+		t.Fatalf("parent dir holds %v, want only the socket", entries)
+	}
+	fi, err := os.Lstat(srv.path)
+	if err != nil || fi.Mode()&os.ModeSocket == 0 || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("socket: %v, %v", fi, err)
+	}
+}

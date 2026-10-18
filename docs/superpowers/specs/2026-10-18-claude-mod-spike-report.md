@@ -9,8 +9,8 @@ at the end.
 | item | result |
 |---|---|
 | 1. Stale `thinking` after a late hook event | **Fixed.** Records carry a per-load sequence number, so a late record folds in its place. The mod also gets a turn end for interrupts and dismissed dialogs, where the hook path gets nothing. |
-| 2. Pane scraping for numbered choices | **Partial.** AskUserQuestion is fully covered. For a permission dialog the mod knows the tool, the input and that a dialog is up (6 s before the hook path does), but not the option labels Claude Code draws. Answering still needs the pane check. |
-| 3. Transcript fold for background tasks | **Mostly.** Start, natural completion and Monitor expiry arrive as events. A TaskStop or UI kill sends no event; it is only seen in the next turn end's `background_tasks` snapshot, which is no worse than the transcript today. |
+| 2. Pane scraping for numbered choices | **Partial.** AskUserQuestion is covered (the follow-up must also send whether an option has a `preview`, which changes the rows). For a permission dialog the mod knows the tool, the input and that a dialog is up (6 s before the hook path does), but not the option labels Claude Code draws. Answering still needs the pane check. |
+| 3. Transcript fold for background tasks | **Mostly.** Start, natural completion and Monitor expiry arrive as events. A UI kill sends no event and is only seen in the next turn end's `background_tasks` snapshot, no worse than the transcript today. A TaskStop clears at that turn's end, later than today's fold of its result, unless the mod also sends TaskStop's target id (follow-up). |
 
 Setup: Claude Code 2.1.302, the mod in `contrib/claude-mod/`, houston with `-claude-mod`
 (`claudemod/`). Every live run was a throwaway session in an isolated harness (appendix), driven
@@ -34,10 +34,16 @@ a `--settings` file registered `houston hook` for the classic events.
   `reordered` (arrived below the highest seq seen). This replaces the spec's original
   "drop a lower seq" rule: unawaited fetches are separate HTTP requests and could genuinely
   arrive out of order. In the runs below none did.
-- Delivery latency, record `ts` to listener arrival, over 52 raw records: min 1 ms, p50 6 ms,
+- Two captures cover one Claude process (one boot, seq 1–116) plus a second process (seq 1–2):
+  - houston (`-claude-mod`) for seq 1–63 (items 1 and 3 runs): 62 records arrived, `reordered 0`,
+    `stale 0`; seq 21 never arrived.
+  - a raw listener for seq 64–116 and the second process (item 2 payloads, interrupts, session
+    end): 52 records arrived, each in seq order; seq 77, 104 and 110 never arrived.
+  - The four missing records are the loss described under item 1. No record arrived out of
+    order in either capture.
+- Delivery latency, record `ts` to listener arrival, over the 52 raw records: min 1 ms, p50 6 ms,
   p95 15 ms, max 61 ms. The max was a `session.start`, which waits for the socket path and
-  session id to resolve. Arrival order equalled seq order in every live run (houston:
-  `reordered 0`, `stale 0` over the 62 records that arrived of seq 1–63; the missing one is the loss described under item 1).
+  session id to resolve.
 
 ## 1. Stale `thinking` after a late hook event
 
@@ -125,8 +131,11 @@ Split into the two jobs the pane read does today.
   ```
 
   Pane for the same kind of dialog: `1. Red` / `2. Blue` / `3. Type something.` /
-  `4. Chat about this`. Rows 3 and 4 are fixed engine rows, derivable from the input. So the mod
-  can replace `meta.choices` for AskUserQuestion.
+  `4. Chat about this`. Rows 3 and 4 are engine rows that depend on the layout: a single-select
+  question with any non-blank option `preview` draws no Other row and an unnumbered
+  `Chat about this` row (CLAUDE.md "Answering from Chat"). The spike sends labels only, so the
+  follow-up must add each option's `preview` presence. With that, the mod can replace
+  `meta.choices` for AskUserQuestion.
 - **Permission dialog: question yes, options no.**
   - The mod gets the tool and its input (`classic.PermissionRequest`'s `tool_name` and
     `tool_input`; the spike sent only the tool name), `tool.check` `decision: "ask"`, and
@@ -173,7 +182,7 @@ expiry     task.end   tasks:[{id:"bp06vj2zb"}]   (+3.0 s, no <status>)
 | shell completes | `task.end` with `status` | immediate | `<task-notification>` in transcript |
 | Monitor start | `tool.end.task` | immediate | tool_result text |
 | Monitor expiry (`timeout_ms`) | `task.end` **without** `status` | immediate | tracker expires it itself from `timeout_ms` |
-| TaskStop | none; next `stop` snapshot drops it | at that turn's end (same turn) | non-error TaskStop result |
+| TaskStop | `tool.start`/`tool.end` of TaskStop, but without its target id; the next `stop` snapshot drops the task | at that turn's end (later than today in a long turn) | non-error TaskStop result (≤ 2 s tick) |
 | UI kill (task view `x`) | none; next `stop` snapshot drops it | **next turn end** (a quiet session keeps it) | notification row appears with the next prompt ("was stopped by the user") |
 | any (snapshot) | `stop.tasks` = `background_tasks` | every turn end | — |
 
@@ -232,7 +241,8 @@ UI-kill latency and the Monitor event-vs-expiry ambiguity remain.
 - **Trust.**
   - Any process of the same uid can write to the 0600 socket and spoof records. That only skews
     houston's display; houston must never act on a record.
-  - The mod must stay read-only. Today a test plus a grep enforce it: no `$.prompt.*`,
+  - The mod must stay read-only. `claudemod/modguard_test.go`, a best-effort source scan (an alias of `$` passed into a helper is beyond it; `claude plugin validate`'s `calls:` line is the authoritative list), guards it in CI (CI cannot run
+    `claude plugin test`), and `register.test.ts` checks events pass through unchanged: no `$.prompt.*`,
     `$.command.*`, `$.tool.*`, `$.agent.*`, `$.session.append`, `$.env.set`, `$.ui.*`,
     `$.process.*` or `$.fs.*`, and no refusal or rewrite answers.
   - `prompt.submit` and `tool.call` are gating sites. An observer there that throws is skipped
@@ -248,7 +258,7 @@ UI-kill latency and the Monitor event-vs-expiry ambiguity remain.
 > The #239 spike (`docs/superpowers/specs/2026-10-18-claude-mod-spike-report.md`) showed that a
 > read-only Claude Code mod posting session, turn and tool events over a Unix socket fixes the
 > stale-`thinking` race and the dismissed-dialog and interrupt cases, detects permission dialogs
-> ~6 s earlier, and covers background tasks at least as well as the transcript fold. Promote it
+> ~6 s earlier, and covers background tasks about as well as the transcript fold (TaskStop needs its target id sent, see scope). Promote it
 > from spike to source for Claude runs. hookyard stays for pi, codex and cursor; the Claude hook
 > path stays as a fallback.
 >
@@ -259,10 +269,12 @@ UI-kill latency and the Monitor event-vs-expiry ambiguity remain.
 >     Esc interrupt is delivered.
 >   - Add the fields houston needs: `transcript_path` and `cwd` (from classic events),
 >     `last_assistant_message` (Stop), `usage` (`turn.complete`), the PermissionRequest
->     `tool_input` hint (through `hook.ToolHint` rules), and for task notifications enough to
+>     `tool_input` hint (through `hook.ToolHint` rules), TaskStop's target `task_id` on a
+>     non-error `tool.end` (so houston drops that task at once), each AskUserQuestion option's
+>     `preview` presence (it changes the dialog's rows), and for task notifications enough to
 >     tell a Monitor expiry from a per-event line.
 >   - Ship it next to hookyard's `--plugin-dir` in nix-config. Run `claude plugin validate` and
->     `claude plugin test` in CI.
+>     `claude plugin test` in CI; keep `claudemod/modguard_test.go` (the read-only guard).
 > - houston:
 >   - A `runs.Source` (or a hooks-layer merge) fed by `claudemod.Store`, keyed by session id and
 >     joined to the pane like the hooks layer (`TMUX_PANE` via a classic event's environment, or

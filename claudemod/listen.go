@@ -14,7 +14,7 @@ import (
 
 // Server serves the record route on a Unix socket.
 type Server struct {
-	ln   net.Listener
+	ln   *net.UnixListener
 	http *http.Server
 	done chan struct{}
 	path string
@@ -22,7 +22,9 @@ type Server struct {
 
 // Listen prepares path, listens on it and serves store's records in a
 // goroutine. The parent directory is created 0700 if missing; a socket nobody
-// answers is replaced; a live socket or a non-socket path is an error.
+// answers is replaced; a live socket or a non-socket path is an error. The
+// socket is bound in a private temp dir beside path, chmodded 0600 and renamed
+// into place, so it is never reachable at umask permissions.
 func Listen(path string, store *Store) (*Server, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("create socket dir: %w", err)
@@ -30,13 +32,9 @@ func Listen(path string, store *Store) (*Server, error) {
 	if err := clearStale(path); err != nil {
 		return nil, err
 	}
-	ln, err := net.Listen("unix", path)
+	ln, err := listenPrivate(path)
 	if err != nil {
-		return nil, fmt.Errorf("listen on %s: %w", path, err)
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		_ = ln.Close()
-		return nil, fmt.Errorf("chmod socket: %w", err)
+		return nil, err
 	}
 	s := &Server{
 		ln:   ln,
@@ -51,6 +49,30 @@ func Listen(path string, store *Store) (*Server, error) {
 		}
 	}()
 	return s, nil
+}
+
+func listenPrivate(path string) (*net.UnixListener, error) {
+	tmp, err := os.MkdirTemp(filepath.Dir(path), ".claude-mod-")
+	if err != nil {
+		return nil, fmt.Errorf("create private socket dir: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(tmp) }()
+	tmpSock := filepath.Join(tmp, "s")
+	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: tmpSock, Net: "unix"})
+	if err != nil {
+		return nil, fmt.Errorf("listen on %s: %w", path, err)
+	}
+	// The bound name is gone after the rename; Close removes path instead.
+	ln.SetUnlinkOnClose(false)
+	if err := os.Chmod(tmpSock, 0o600); err != nil {
+		_ = ln.Close()
+		return nil, fmt.Errorf("chmod socket: %w", err)
+	}
+	if err := os.Rename(tmpSock, path); err != nil {
+		_ = ln.Close()
+		return nil, fmt.Errorf("move socket into place: %w", err)
+	}
+	return ln, nil
 }
 
 func clearStale(path string) error {

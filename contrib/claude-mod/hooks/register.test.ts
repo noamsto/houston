@@ -3,15 +3,14 @@ import { test, expect, mock } from 'claude-code/testing'
 
 type Posted = { socketPath?: string; body: Record<string, unknown> }
 
-function rig(on: On, fetchFails = false) {
+function rig(on: On, sessionId: () => string | Promise<string> = () => 'sid-1') {
   const posted: Posted[] = []
   const waiters: { n: number; done: () => void }[] = []
   const arrived = (n: number) =>
     posted.length >= n ? Promise.resolve() : new Promise<void>(done => waiters.push({ n, done }))
   mock.env(on, { HOUSTON_STATE_DIR: '/tmp/hs' })
-  on('session.id', () => ({ value: 'sid-1' }))
+  on('session.id', async () => ({ value: await sessionId() }))
   on('http.fetch', (_$, e) => {
-    if (fetchFails) throw new Error('houston is down')
     posted.push({ socketPath: e.init?.socketPath, body: JSON.parse(e.init?.body ?? '{}') })
     for (const w of waiters) if (posted.length >= w.n) w.done()
     return { value: { status: 204, ok: true, headers: {}, text: '' } }
@@ -78,11 +77,93 @@ test('a task notification prompt posts task.end and reaches beneath unchanged', 
   expect(seen).toMatchObject({ text, origin: { kind: 'task-notification' } })
 })
 
-test('a failing fetch does not fail the tool call', async ($, on) => {
-  rig(on, true)
+test('a failing fetch does not fail the tool call and later posts still go out', async ($, on) => {
+  let attempts = 0
+  const waiters: { n: number; done: () => void }[] = []
+  const attempted = (n: number) =>
+    attempts >= n ? Promise.resolve() : new Promise<void>(done => waiters.push({ n, done }))
+  mock.env(on, { HOUSTON_STATE_DIR: '/tmp/hs' })
+  on('session.id', () => ({ value: 'sid-1' }))
+  on('http.fetch', () => {
+    attempts++
+    for (const w of waiters) if (attempts >= w.n) w.done()
+    throw new Error('houston is down')
+  })
   on('tool.call', () => RAN)
 
-  const got = await $.tool.call(BASH)
+  const first = await $.tool.call(BASH)
+  await attempted(2)
+  const second = await $.tool.call(BASH)
+  await attempted(4)
 
-  expect(got).toMatchObject(RAN)
+  expect(first).toMatchObject(RAN)
+  expect(second).toMatchObject(RAN)
+  expect(attempts).toBe(4)
+})
+
+test('records carry the id of the session they belong to across a session boundary', async ($, on) => {
+  let current = 'sid-1'
+  const { posted, arrived } = rig(on, () => current)
+  on('session.start', () => ({ cwd: '/work' }))
+  on('session.end', (_$, e) => ({ sessionId: e.sessionId }))
+  on('tool.call', () => RAN)
+
+  await $.session.start({ cwd: '/work', surface: null, isInteractive: false })
+  await $.tool.call(BASH)
+  await arrived(3)
+  await $.session.end({ reason: 'clear', sessionId: 'sid-1', resume: { id: 'sid-1' } })
+  current = 'sid-2'
+  await $.session.start({ cwd: '/work', surface: null, isInteractive: false })
+  await $.tool.call(BASH)
+  await arrived(7)
+
+  expect(posted.map(p => [p.body.ev, p.body.sid])).toEqual([
+    ['session.start', 'sid-1'],
+    ['tool.start', 'sid-1'],
+    ['tool.end', 'sid-1'],
+    ['session.end', 'sid-1'],
+    ['session.start', 'sid-2'],
+    ['tool.start', 'sid-2'],
+    ['tool.end', 'sid-2'],
+  ])
+})
+
+test('a session id lookup that straddles a session end is not cached for the next session', async ($, on) => {
+  let current = 'sid-1'
+  let calls = 0
+  let release = () => {}
+  const gate = new Promise<void>(done => (release = done))
+  const { posted, arrived } = rig(on, async () => {
+    const id = current
+    if (++calls === 1) await gate
+    return id
+  })
+  on('session.start', () => ({ cwd: '/work' }))
+  on('session.end', (_$, e) => ({ sessionId: e.sessionId }))
+  on('tool.call', () => RAN)
+
+  await $.session.start({ cwd: '/work', surface: null, isInteractive: false })
+  await $.session.end({ reason: 'clear', sessionId: 'sid-1', resume: { id: 'sid-1' } })
+  current = 'sid-2'
+  release()
+  await $.tool.call(BASH)
+  await arrived(4)
+
+  expect(posted.map(p => [p.body.ev, p.body.sid])).toEqual([
+    ['session.start', 'sid-1'],
+    ['session.end', 'sid-1'],
+    ['tool.start', 'sid-2'],
+    ['tool.end', 'sid-2'],
+  ])
+})
+
+test('a tool check returns the beneath decision unchanged and posts it', async ($, on) => {
+  const { posted, arrived } = rig(on)
+  on('tool.check', () => ({ decision: 'ask', reason: 'needs a human' }))
+
+  const got = await $.tool.check({ tool: 'Bash', input: { command: 'echo hi' } })
+  await arrived(1)
+
+  expect(got).toMatchObject({ decision: 'ask', reason: 'needs a human' })
+  expect(posted[0]!.body).toMatchObject({ ev: 'tool.check', tool: 'Bash', decision: 'ask' })
 })

@@ -453,12 +453,12 @@ router, not the agent — and isn't read anywhere in houston.
 
 ## Claude mod (spike)
 
-- Off by default. `-claude-mod` makes houston listen on `<status-dir>/claude-mod.sock` (socket 0600, parent dir 0700; a live socket or a non-socket path fails startup, a dead socket is replaced).
+- Off by default. `-claude-mod` makes houston listen on `<status-dir>/claude-mod.sock` (bound in a private 0700 temp dir, chmod 0600, then renamed into place, so it is never reachable at wider perms; the status dir keeps its own mode; a live socket or a non-socket path fails startup, a dead socket is replaced).
 - `POST /v1/record` takes one JSON record, at most 16 KiB; answers 204 (stale records included), 400, 413, 405 or 404, never with a body.
-- `claudemod.Store` keeps a seq-ordered window (64) per session, so a late record folds where its seq puts it; it counts `stale` and `reordered`, and only the main loop's records change the state.
+- `claudemod.Store` keeps a seq-ordered window (64) per session, so a late record folds where its seq puts it; it counts `stale` and `reordered`, and only the main loop's records change the state. A boot (mod load) older than the session's current one, by first `ts`, is stale. Ended sessions are evicted after 10 min, idle ones after 24 h.
 - `GET /api/debug/claude-mod` (registered only with the flag, behind the auth gate) shows the fold as `{"sessions": [...]}`.
 - Not wired into the runs registry: Fleet is unchanged.
-- The mod is `contrib/claude-mod/`; results are in `docs/superpowers/specs/2026-10-18-claude-mod-spike-report.md`.
+- The mod is `contrib/claude-mod/`; `claudemod/modguard_test.go` scans its `register.ts` and fails CI on any `$` call but `http.fetch`, `env.get` and `session.id` (best effort; the mod must stay read-only). Results are in `docs/superpowers/specs/2026-10-18-claude-mod-spike-report.md`.
 
 ## Background tasks
 

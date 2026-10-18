@@ -7,6 +7,7 @@ import (
 	"slices"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/noamsto/houston/hook"
 )
@@ -14,6 +15,15 @@ import (
 // windowCap bounds the per-session window of records kept unfolded so a late
 // record can still land where its seq puts it.
 const windowCap = 64
+
+// A session is evicted this long after its last record: an ended one soon, any
+// other once it has been silent for a day. The sweep runs at most once per
+// sweepEvery.
+const (
+	endedTTL   = 10 * time.Minute
+	idleTTL    = 24 * time.Hour
+	sweepEvery = time.Minute
+)
 
 // Session is the folded view of one Claude Code session.
 type Session struct {
@@ -32,12 +42,14 @@ type Session struct {
 
 // Store folds records into per-session state. It is safe for concurrent use.
 type Store struct {
-	mu       sync.Mutex
-	sessions map[string]*session
+	mu        sync.Mutex
+	sessions  map[string]*session
+	now       func() time.Time
+	lastSweep time.Time
 }
 
 func NewStore() *Store {
-	return &Store{sessions: map[string]*session{}}
+	return &Store{sessions: map[string]*session{}, now: time.Now}
 }
 
 type flight struct{ id, tool string }
@@ -126,6 +138,7 @@ func (f *fold) endTool(rec Record) {
 
 type session struct {
 	boot    string
+	bootTS  int64               // ts of the first record seen of the current boot
 	retired map[string]struct{} // boots folded into base; their late records are stale
 	base    fold
 	window  []Record // current boot, ascending seq, at most windowCap
@@ -135,28 +148,39 @@ type session struct {
 
 	applied, stale, reordered int
 	updated                   int64
+	lastApply                 time.Time
 }
 
 // Apply inserts rec into its session's seq-ordered window and refolds. It
 // reports false (and counts Stale) for a duplicate seq, one older than the
 // window, or a record of a boot the session already retired. A record
 // arriving below the highest seq seen is applied in place and counted in
-// Reordered.
+// Reordered. A record of an unseen boot whose ts predates the current boot's
+// first record is a delayed one from an older boot: it retires that boot
+// instead of replacing the live one.
 func (s *Store) Apply(rec Record) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	now := s.now()
+	s.sweep(now)
 	ss := s.sessions[rec.SID]
 	if ss == nil {
-		ss = &session{boot: rec.Boot, retired: map[string]struct{}{}}
+		ss = &session{boot: rec.Boot, bootTS: rec.TS, retired: map[string]struct{}{}}
 		s.sessions[rec.SID] = ss
 	}
+	ss.lastApply = now
 	if _, ok := ss.retired[rec.Boot]; ok {
 		ss.stale++
 		return false
 	}
 	if rec.Boot != ss.boot {
-		ss.newBoot(rec.Boot)
+		if rec.TS < ss.bootTS {
+			ss.retired[rec.Boot] = struct{}{}
+			ss.stale++
+			return false
+		}
+		ss.newBoot(rec.Boot, rec.TS)
 	}
 	i, dup := slices.BinarySearchFunc(ss.window, rec.Seq, func(r Record, seq int64) int {
 		return cmp.Compare(r.Seq, seq)
@@ -169,6 +193,7 @@ func (s *Store) Apply(rec Record) bool {
 		ss.reordered++
 	}
 	ss.maxSeq = max(ss.maxSeq, rec.Seq)
+	rec.Message, rec.Ask = "", nil // fold never reads them
 	ss.window = slices.Insert(ss.window, i, rec)
 	if len(ss.window) > windowCap {
 		ss.base.apply(ss.window[0])
@@ -181,20 +206,44 @@ func (s *Store) Apply(rec Record) bool {
 	for _, r := range ss.window {
 		ss.cur.apply(r)
 	}
+	if rec.Ev == evSessionEnd && ss.cur.state == hook.StateEnded {
+		// Nothing after an end matters: later records fall under the stale rule.
+		ss.foldWindow()
+		ss.cur = ss.base.clone()
+	}
 	slog.Debug("claude-mod record", "sid", rec.SID, "boot", rec.Boot, "seq", rec.Seq,
 		"ev", rec.Ev, "tool", rec.Tool, "id", rec.ID, "state", ss.cur.state)
 	return true
 }
 
-func (ss *session) newBoot(boot string) {
+func (ss *session) foldWindow() {
 	for _, r := range ss.window {
 		ss.base.apply(r)
+		ss.folded = r.Seq
 	}
+	ss.window = nil
+}
+
+func (ss *session) newBoot(boot string, ts int64) {
+	ss.foldWindow()
 	ss.retired[ss.boot] = struct{}{}
 	ss.boot = boot
-	ss.window = nil
+	ss.bootTS = ts
 	ss.folded = 0
 	ss.maxSeq = 0
+}
+
+func (s *Store) sweep(now time.Time) {
+	if now.Sub(s.lastSweep) < sweepEvery {
+		return
+	}
+	s.lastSweep = now
+	for sid, ss := range s.sessions {
+		idle := now.Sub(ss.lastApply)
+		if idle > idleTTL || (idle > endedTTL && ss.cur.state == hook.StateEnded) {
+			delete(s.sessions, sid)
+		}
+	}
 }
 
 // Snapshot returns a copy of every session, sorted by SID.
