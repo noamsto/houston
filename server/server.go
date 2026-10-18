@@ -200,6 +200,11 @@ type Server struct {
 	// that names this houston is recognised as self.
 	instance string
 	peers    []*peer.Source
+	// peerWSPing, peerWSPongWait and peerWSWriteWait override the forwarded
+	// terminal's browser-hop keep-alive and deadlines when non-zero.
+	peerWSPing      time.Duration
+	peerWSPongWait  time.Duration
+	peerWSWriteWait time.Duration
 }
 
 // closeTimeout bounds how long Close waits for background goroutines that
@@ -382,7 +387,7 @@ func New(cfg Config) (*Server, error) {
 	}
 
 	for _, pc := range cfg.Peers {
-		src := peer.New(pc, peer.Options{Self: s.instance})
+		src := peer.New(pc, peer.Options{Self: s.instance, Caps: forwardCaps(cfg.Mode, cfg.AuthEnabled)})
 		s.peers = append(s.peers, src)
 		s.sourcesWG.Add(1)
 		go func() {
@@ -510,23 +515,25 @@ func (s *Server) Handler() http.Handler {
 	apiMux.HandleFunc("/api/opencode/session/", s.handleAPIOpenCodeSession)
 	apiMux.HandleFunc("/api/runs", s.handleRunsSnapshot)
 	apiMux.HandleFunc("/api/runs/stream", s.handleRunsStream)
-	apiMux.HandleFunc("GET /api/runs/{id}/terminal", s.handleRunTerminal)
-	apiMux.HandleFunc("POST /api/runs/{id}/input", s.handleRunInput)
-	apiMux.HandleFunc("POST /api/runs/{id}/answer", s.handleRunAnswer)
-	apiMux.HandleFunc("GET /api/runs/{id}/prompt", s.handleRunPrompt)
-	apiMux.HandleFunc("GET /api/runs/{id}/chat", s.handleRunChat)
-	apiMux.HandleFunc("GET /api/runs/{id}/chat/stream", s.handleRunChatStream)
-	apiMux.HandleFunc("GET /api/runs/{id}/chat/tool/{callId}", s.handleRunChatTool)
+	// A peer run id on a run-addressed route is forwarded to its peer
+	// (peerOr); restart is not, so a peer id there stays "no such run".
+	apiMux.HandleFunc("GET /api/runs/{id}/terminal", s.peerOr(fwdTerminal, s.handleRunTerminal))
+	apiMux.HandleFunc("POST /api/runs/{id}/input", s.peerOr(fwdInput, s.handleRunInput))
+	apiMux.HandleFunc("POST /api/runs/{id}/answer", s.peerOr(fwdAnswer, s.handleRunAnswer))
+	apiMux.HandleFunc("GET /api/runs/{id}/prompt", s.peerOr(fwdPrompt, s.handleRunPrompt))
+	apiMux.HandleFunc("GET /api/runs/{id}/chat", s.peerOr(fwdChat, s.handleRunChat))
+	apiMux.HandleFunc("GET /api/runs/{id}/chat/stream", s.peerOr(fwdChatStream, s.handleRunChatStream))
+	apiMux.HandleFunc("GET /api/runs/{id}/chat/tool/{callId}", s.peerOr(fwdChatTool, s.handleRunChatTool))
 	apiMux.HandleFunc("GET /api/workspace", s.handleWorkspace)
 	apiMux.HandleFunc("GET /api/mode", s.handleMode)
 	apiMux.HandleFunc("GET /api/hosts", s.handleHosts)
 	// Tmux mode leaves the command-executing routes (crew reply, dispatch,
 	// launch, repo registry) unregistered, so they 404.
 	if s.mode != mode.Tmux {
-		apiMux.HandleFunc("POST /api/runs/{id}/reply", s.handleRunReply)
+		apiMux.HandleFunc("POST /api/runs/{id}/reply", s.peerOr(fwdReply, s.handleRunReply))
 		apiMux.HandleFunc("POST /api/runs/{id}/restart", s.handleRunRestart)
-		apiMux.HandleFunc("GET /api/runs/{id}/crew/feed", s.handleRunCrewFeed)
-		apiMux.HandleFunc("GET /api/runs/{id}/crew/feed/stream", s.handleRunCrewFeedStream)
+		apiMux.HandleFunc("GET /api/runs/{id}/crew/feed", s.peerOr(fwdCrewFeed, s.handleRunCrewFeed))
+		apiMux.HandleFunc("GET /api/runs/{id}/crew/feed/stream", s.peerOr(fwdCrewFeedStream, s.handleRunCrewFeedStream))
 		apiMux.HandleFunc("POST /api/dispatch", s.handleDispatch)
 		apiMux.HandleFunc("GET /api/dispatch/options", s.handleDispatchOptions)
 		apiMux.HandleFunc("POST /api/dispatch/dispatcher", s.handleDispatcherLaunch)

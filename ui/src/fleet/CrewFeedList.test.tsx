@@ -31,8 +31,8 @@ function setFeed(p: Partial<UseCrewFeedResult>) {
   feed = { status: 'ready', entries: [], more: false, loadOlder, retry, ...p }
 }
 
-function renderList(runs: Run[] = []) {
-  return render(<CrewFeedList runId="d1" crew="c1" runs={runs} />)
+function renderList(runs: Run[] = [], host = 'local') {
+  return render(<CrewFeedList runId="d1" crew="c1" host={host} runs={runs} />)
 }
 
 beforeEach(() => {
@@ -137,6 +137,19 @@ describe('CrewFeedList', () => {
       expect(a.getAttribute('href')).toBe('#/fleet/w1')
     })
 
+    it('links to the peer worker, not a same-branch local worker', () => {
+      setFeed({ entries: [entry({ branch: 'feat/a', codename: 'Nova' })] })
+      const runs = [worker({ id: 'local-w' }), worker({ id: 'peer-b.w', host: 'b' })]
+      renderList(runs, 'b')
+      expect(screen.getByRole('link', { name: 'Nova' }).getAttribute('href')).toBe('#/fleet/peer-b.w')
+    })
+
+    it('does not link a local dispatcher\'s entry to a same-branch peer worker', () => {
+      setFeed({ entries: [entry({ branch: 'feat/a', codename: 'Nova' })] })
+      renderList([worker({ id: 'peer-b.w', host: 'b' })])
+      expect(screen.queryByRole('link', { name: 'Nova' })).toBeNull()
+    })
+
     it('labels with the worker codename when the entry has none, then the branch', () => {
       setFeed({ entries: [entry({ id: 'e.2', branch: 'feat/b' }), entry({ id: 'e.1', branch: 'feat/a' })] })
       renderList([worker(), worker({ id: 'w2', branch: 'feat/b', crew: { name: 'c1' } })])
@@ -168,7 +181,7 @@ describe('CrewFeedList', () => {
     expect(screen.queryByRole('button', { name: 'Load older' })).toBeNull()
 
     setFeed({ entries: [entry()], more: true })
-    rerender(<CrewFeedList runId="d1" crew="c1" runs={[]} />)
+    rerender(<CrewFeedList runId="d1" crew="c1" host="local" runs={[]} />)
     fireEvent.click(screen.getByRole('button', { name: 'Load older' }))
     expect(loadOlder).toHaveBeenCalledTimes(1)
   })
@@ -179,15 +192,15 @@ describe('CrewFeedList', () => {
     expect(screen.getByText(/loading crew activity/i)).toBeTruthy()
 
     setFeed({ status: 'ready' })
-    rerender(<CrewFeedList runId="d1" crew="c1" runs={[]} />)
+    rerender(<CrewFeedList runId="d1" crew="c1" host="local" runs={[]} />)
     expect(screen.getByText('No crew activity yet.')).toBeTruthy()
 
     setFeed({ status: 'unavailable' })
-    rerender(<CrewFeedList runId="d1" crew="c1" runs={[]} />)
+    rerender(<CrewFeedList runId="d1" crew="c1" host="local" runs={[]} />)
     expect(screen.getByText(/unavailable/i)).toBeTruthy()
 
     setFeed({ status: 'error' })
-    rerender(<CrewFeedList runId="d1" crew="c1" runs={[]} />)
+    rerender(<CrewFeedList runId="d1" crew="c1" host="local" runs={[]} />)
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
     expect(retry).toHaveBeenCalledTimes(1)
   })
