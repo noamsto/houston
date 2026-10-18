@@ -42,4 +42,6 @@ claude --plugin-dir contrib/claude-mod
 ```
 
 `claude plugin test contrib/claude-mod` runs `hooks/register.test.ts`. The
-engine writes `.claude-plugin/types/` beside the mod; do not commit it.
+engine writes `.claude-plugin/types/` beside the mod (it ignores itself) each
+time it loads the mod; after that `tsc -p contrib/claude-mod` type-checks it
+through `tsconfig.json`.
