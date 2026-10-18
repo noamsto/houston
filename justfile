@@ -96,7 +96,7 @@ mod-check:
     out=$(npx -y {{claude_code}} plugin validate contrib/claude-mod 2>&1) || status=$?
     printf '%s\n' "$out"
     [ "$status" -eq 0 ] || exit "$status"
-    calls=$(printf '%s\n' "$out" | grep 'calls:' | grep -o '\$\.[a-z]*\.[a-z]*' | sort -u || true)
+    calls=$(printf '%s\n' "$out" | grep 'calls:' | grep -oE '\$\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+' | sort -u || true)
     if [ -z "$calls" ]; then
         echo "mod-check: validate printed no calls line" >&2
         exit 1

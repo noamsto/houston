@@ -137,10 +137,11 @@ function drain($: EngineInterface): Promise<void> {
   return p
 }
 
-// Sends what is queued now, from inside a hook: waits out a drain already
-// under way, which may have taken its records before the last one was queued.
+// Sends what is queued now, from inside a hook, in a run of its own: a drain
+// already under way may be stuck on a host call well inside drainStaleMs, and
+// the hook has less time than that. The superseded run sends nothing more.
 async function flush($: EngineInterface) {
-  await drain($).catch(() => {})
+  draining = undefined
   await drain($).catch(() => {})
 }
 
@@ -204,15 +205,14 @@ function inputHint(tool: string, x: unknown): Rec | undefined {
 }
 
 // Only a notification's header is ours: a monitor's event body embeds
-// arbitrary output, and a part with no terminal status ends nothing. A
-// notification opens a piece of the text split at its closing tags, so an
-// opening tag inside an event body is never read as one.
+// arbitrary output, opening and closing tags included, so nothing from the
+// first event body on is read. A part with no terminal status ends nothing.
 function parseTaskEnds(notification: string) {
   const tasks: Rec[] = []
-  for (const piece of notification.split('</task-notification>')) {
+  for (const piece of notification.split('<event>')[0]!.split('</task-notification>')) {
     const open = /^\s*<task-notification\b[^>]*>/.exec(piece)
     if (!open) continue
-    const head = piece.slice(open[0].length).split('<summary>')[0]!.split('<event>')[0]!
+    const head = piece.slice(open[0].length).split('<summary>')[0]!
     if (!/<status>(completed|failed|killed|stopped)<\/status>/.test(head)) continue
     for (const m of head.matchAll(/<task-id>([^<]*)<\/task-id>/g)) tasks.push({ id: m[1] })
     for (const m of head.matchAll(/<tool-use-id>([^<]*)<\/tool-use-id>/g)) tasks.push({ tool_use: m[1] })

@@ -46,7 +46,9 @@ at most 256 records; past that the oldest are evicted.
 - A refused period ends a `$.clock.every` interval, so a record queued when
   the timer has not ticked for 2 s starts a new one. A drain stuck on a host
   call for over 5 s is given up on: the next tick starts a fresh one, and the
-  stuck one sends nothing once it resumes.
+  stuck one sends nothing once it resumes. `session.end`'s flush never waits
+  on a running drain: it starts a fresh one at once, which needs no host call
+  for the ended session's records.
 - When nothing has been queued for 75 ticks (15 s of a running timer), the
   timer posts a `heartbeat`, so houston can judge liveness by recency. The
   first may go out 15 s after the timer starts.
@@ -92,8 +94,9 @@ anywhere), one JSON object per event: `{v:1, sid, boot, seq, ts, ev, ...}`.
   houston's question-at-turn-end rule.
 - `task.end` lists only task notifications whose header carries a terminal
   `<status>` (completed, failed, killed, stopped); a monitor's per-event
-  notification ends nothing, and tags inside its event body are ignored,
-  including an opening `<task-notification` tag.
+  notification ends nothing, and nothing from the first `<event>` body on is
+  read, so tags inside it (opening or closing `task-notification` tags
+  included) are ignored, and so is any notification after it in the batch.
 - Size: houston answers a body over 16 KiB with 413, so the `notification`
   `message` is cut to 500 characters and `stop` lists its first 32 `tasks`. A
   body still over 15000 bytes (UTF-8) loses, in order, `ask`, `tasks`, `last`,
