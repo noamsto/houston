@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -54,12 +55,25 @@ const (
 	ClassSilent   = "silent"
 	ClassClosed   = "closed"
 	ClassSelf     = "self"
+	ClassInsecure = "insecure"
 	ClassOther    = "other"
 )
 
 const maxToken = 4 << 10
 
-var idRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,256}$`)
+// maxPeerRuns bounds how many runs one peer can list here, so a broken peer
+// cannot grow this registry and every browser's stream without limit.
+const maxPeerRuns = 2000
+
+// maxID allows long ids: a windowless crew run's id encodes its bus path and
+// branch. The bound is not in idRe because RE2 caps a repeat count at 1000.
+const maxID = 1024
+
+var idRe = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+var dialer = &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
+
+var errInsecureHop = errors.New("plain http connection is neither loopback nor over the tailnet")
 
 type Options struct {
 	Self       string        // this houston's instance id; a peer answering with it is "self"
@@ -83,6 +97,7 @@ type Source struct {
 	cfg    Config
 	opts   Options
 	client *http.Client
+	hopOK  func(local, remote net.Addr) bool // plainHopOK; a field so tests can stand in a route
 
 	mu     sync.Mutex
 	health Health
@@ -92,6 +107,11 @@ type Source struct {
 	// goroutine.
 	known map[string]runs.Run
 	stale bool
+
+	// warned holds the warnings already logged on this connection, so a
+	// peer sending many bad runs logs each reason once. Owned by Run's
+	// goroutine.
+	warned map[string]bool
 }
 
 func New(cfg Config, opts Options) *Source {
@@ -105,27 +125,48 @@ func New(cfg Config, opts Options) *Source {
 	if opts.Silence <= 0 {
 		opts.Silence = 60 * time.Second
 	}
+	s := &Source{
+		cfg:    cfg,
+		opts:   opts,
+		hopOK:  plainHopOK,
+		health: Health{Name: cfg.Name, State: StateConnecting},
+		known:  map[string]runs.Run{},
+		warned: map[string]bool{},
+	}
 	transport := &http.Transport{
 		// Not ProxyFromEnvironment: an HTTP_PROXY would receive a plain-http
 		// tailnet request, bearer header included.
 		Proxy:                 nil,
-		DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		DialContext:           dialer.DialContext,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ResponseHeaderTimeout: 15 * time.Second,
 		ForceAttemptHTTP2:     true,
 		IdleConnTimeout:       90 * time.Second,
 	}
-	return &Source{
-		cfg:  cfg,
-		opts: opts,
-		client: &http.Client{
-			Transport: transport,
-			// The token must never follow a redirect to another URL.
-			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-		},
-		health: Health{Name: cfg.Name, State: StateConnecting},
-		known:  map[string]runs.Run{},
+	if strings.HasPrefix(cfg.URL, "http:") {
+		transport.DialContext = s.dialPlain
 	}
+	s.client = &http.Client{
+		Transport: transport,
+		// The token must never follow a redirect to another URL.
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	return s
+}
+
+// dialPlain refuses a plain-http connection that leaves both this machine and
+// the tailnet before anything is written on it, so the bearer token never
+// crosses a cleartext hop.
+func (s *Source) dialPlain(ctx context.Context, network, addr string) (net.Conn, error) {
+	conn, err := dialer.DialContext(ctx, network, addr)
+	if err != nil {
+		return nil, err
+	}
+	if !s.hopOK(conn.LocalAddr(), conn.RemoteAddr()) {
+		_ = conn.Close()
+		return nil, errInsecureHop
+	}
+	return conn, nil
 }
 
 func (s *Source) Name() string { return "peer:" + s.cfg.Name }
@@ -167,6 +208,7 @@ func (s *Source) Run(ctx context.Context, out chan<- runs.Delta) error {
 // connect runs one connection to its end and reports whether a snapshot
 // arrived, and the class of what ended it.
 func (s *Source) connect(ctx context.Context, out chan<- runs.Delta) (snapshot bool, class string, err error) {
+	clear(s.warned)
 	token, err := readToken(s.cfg.TokenFile)
 	if err != nil {
 		return false, ClassToken, err
@@ -258,6 +300,10 @@ func (s *Source) applySnapshot(ctx context.Context, out chan<- runs.Delta, data 
 			continue
 		}
 		if _, dup := next[id]; !dup {
+			if len(order) >= maxPeerRuns {
+				s.warnLimit()
+				continue
+			}
 			order = append(order, id)
 		}
 		next[id] = r
@@ -296,6 +342,10 @@ func (s *Source) applyUpdate(ctx context.Context, out chan<- runs.Delta, data []
 	if !ok {
 		return nil
 	}
+	if _, ok := s.known[id]; !ok && len(s.known) >= maxPeerRuns {
+		s.warnLimit()
+		return nil
+	}
 	s.known[id] = r
 	return s.emit(ctx, out, runs.Delta{Source: runs.PeerLayer, Key: runs.PeerKey(s.cfg.Name, id), Run: r})
 }
@@ -305,11 +355,11 @@ func (s *Source) applyUpdate(ctx context.Context, out chan<- runs.Delta, data []
 // peer that ignored scope=local): dropping it is the loop guard.
 func (s *Source) sanitise(r runs.Run) (string, runs.Run, bool) {
 	if r.Host != "" {
-		slog.Debug("peer run dropped", "peer", s.cfg.Name, "reason", "carries a host")
+		s.warnDropped("carries a host")
 		return "", runs.Run{}, false
 	}
-	if !idRe.MatchString(r.ID) {
-		slog.Debug("peer run dropped", "peer", s.cfg.Name, "reason", "invalid id")
+	if len(r.ID) > maxID || !idRe.MatchString(r.ID) {
+		s.warnDropped("invalid id")
 		return "", runs.Run{}, false
 	}
 	id := r.ID
@@ -323,6 +373,27 @@ func (s *Source) sanitise(r runs.Run) (string, runs.Run, bool) {
 	r.DraftKey = ""
 	r.Removed = false
 	return id, r, true
+}
+
+func (s *Source) warnDropped(reason string) {
+	if s.firstOnConn("dropped: " + reason) {
+		slog.Warn("peer run dropped", "peer", s.cfg.Name, "reason", reason)
+	}
+}
+
+func (s *Source) warnLimit() {
+	if s.firstOnConn("limit") {
+		slog.Warn("peer run limit reached", "peer", s.cfg.Name, "limit", maxPeerRuns)
+	}
+}
+
+// firstOnConn reports whether key is new on this connection, and records it.
+func (s *Source) firstOnConn(key string) bool {
+	if s.warned[key] {
+		return false
+	}
+	s.warned[key] = true
+	return true
 }
 
 // markStale re-emits every known run as stale, once per outage: they stay
@@ -422,6 +493,8 @@ func classify(err error) string {
 		netErr   net.Error
 	)
 	switch {
+	case errors.Is(err, errInsecureHop):
+		return ClassInsecure
 	case errors.As(err, &dnsErr):
 		return ClassDNS
 	case errors.Is(err, syscall.ECONNREFUSED):

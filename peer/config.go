@@ -5,6 +5,7 @@ package peer
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"net/url"
 	"path/filepath"
@@ -119,9 +120,12 @@ func parseURL(raw string) (normal, key string, err error) {
 	return u.Scheme + "://" + u.Host + path, u.Scheme + "://" + strings.ToLower(u.Host) + path, nil
 }
 
-// plainHTTPOK reports whether host is reachable only on this machine or the
-// tailnet, where WireGuard already encrypts the hop. A bare MagicDNS short
-// name is refused: telling it is a tailnet name would mean resolving it.
+// plainHTTPOK reports whether an http URL's host names this machine or the
+// tailnet. It only gates the URL text: a *.ts.net name can resolve through
+// public DNS and a 100.x address can route off the tailnet, so plainHopOK on
+// every dialled connection is what keeps the bearer token off a cleartext hop.
+// A bare MagicDNS short name is refused: telling it is a tailnet name would
+// mean resolving it.
 func plainHTTPOK(host string) bool {
 	h := strings.ToLower(host)
 	if h == "localhost" {
@@ -134,6 +138,35 @@ func plainHTTPOK(host string) bool {
 	if err != nil {
 		return false
 	}
-	addr = addr.Unmap()
-	return addr.IsLoopback() || tailnetV4.Contains(addr) || tailnetV6.Contains(addr.WithZone(""))
+	addr = addr.Unmap().WithZone("")
+	return addr.IsLoopback() || inTailnet(addr)
+}
+
+// plainHopOK reports whether a plain-http connection stays on this machine or
+// goes over the tailnet, where WireGuard encrypts the hop: the remote end is
+// loopback, or both ends hold tailnet addresses. The local end proves the
+// route leaves through the Tailscale interface.
+func plainHopOK(local, remote net.Addr) bool {
+	r, ok := tcpAddr(remote)
+	if !ok {
+		return false
+	}
+	if r.IsLoopback() {
+		return true
+	}
+	l, ok := tcpAddr(local)
+	return ok && inTailnet(r) && inTailnet(l)
+}
+
+func tcpAddr(a net.Addr) (netip.Addr, bool) {
+	tcp, ok := a.(*net.TCPAddr)
+	if !ok || tcp == nil {
+		return netip.Addr{}, false
+	}
+	addr, ok := netip.AddrFromSlice(tcp.IP)
+	return addr.Unmap(), ok
+}
+
+func inTailnet(addr netip.Addr) bool {
+	return tailnetV4.Contains(addr) || tailnetV6.Contains(addr)
 }

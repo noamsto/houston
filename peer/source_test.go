@@ -500,3 +500,96 @@ func TestJitterBounds(t *testing.T) {
 		}
 	}
 }
+
+func TestSourcePlainHTTPHopCheck(t *testing.T) {
+	cases := []struct {
+		name          string
+		local, remote string
+		ok            bool
+	}{
+		{"tailnet both ends", "100.101.1.1", "100.64.0.7", true},
+		{"tailnet remote, LAN local", "192.168.1.2", "100.64.0.7", false},
+		{"public remote", "100.101.1.1", "203.0.113.9", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newSSEServer(t, func(_ int, w http.ResponseWriter, r *http.Request, s *sseServer) {
+				s.open(w)
+				s.frame(w, "snapshot", `[{"id":"pane-1","agent":"claude"}]`)
+				s.hold(r)
+			})
+			src := newSource(srv.URL, tokenFile(t, testToken), fastOpts())
+			// The connection really goes to loopback; the check sees the
+			// addresses a route over this host's network would have.
+			src.hopOK = func(_, _ net.Addr) bool {
+				return plainHopOK(&net.TCPAddr{IP: net.ParseIP(tc.local)}, &net.TCPAddr{IP: net.ParseIP(tc.remote)})
+			}
+			out := start(t, src)
+			if tc.ok {
+				recv(t, out)
+				waitHealth(t, src, StateConnected, "")
+				return
+			}
+			waitHealth(t, src, StateUnreachable, ClassInsecure)
+			time.Sleep(30 * time.Millisecond) // several retries
+			if n := srv.hits.Load(); n != 0 {
+				t.Fatalf("server received %d requests over a refused hop", n)
+			}
+			noDelta(t, out)
+		})
+	}
+}
+
+func TestSourceCapsRunsPerPeer(t *testing.T) {
+	list := make([]runs.Run, maxPeerRuns+5)
+	for i := range list {
+		list[i] = runs.Run{ID: fmt.Sprintf("pane-%d", i), Agent: "claude"}
+	}
+	b, err := json.Marshal(list)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := newSSEServer(t, func(_ int, w http.ResponseWriter, r *http.Request, s *sseServer) {
+		s.open(w)
+		s.frame(w, "snapshot", string(b))
+		s.frame(w, "update", `{"id":"fresh-1","agent":"claude"}`)
+		s.frame(w, "update", `{"id":"fresh-2","agent":"claude"}`)
+		s.frame(w, "update", `{"id":"pane-0","agent":"pi"}`)
+		s.hold(r)
+	})
+	src := newSource(srv.URL, tokenFile(t, testToken), fastOpts())
+	out := start(t, src)
+
+	got := recvN(t, out, maxPeerRuns)
+	if len(got) != maxPeerRuns {
+		t.Fatalf("got %d distinct runs, want %d", len(got), maxPeerRuns)
+	}
+	for i := maxPeerRuns; i < len(list); i++ {
+		if _, ok := got[runs.PeerKey("b", fmt.Sprintf("pane-%d", i))]; ok {
+			t.Errorf("pane-%d past the cap was emitted", i)
+		}
+	}
+	if d := recv(t, out); d.Key != runs.PeerKey("b", "pane-0") || d.Run.Agent != "pi" {
+		t.Fatalf("delta after the cap = %+v, want pane-0's update (new ids dropped)", d)
+	}
+	time.Sleep(20 * time.Millisecond)
+	noDelta(t, out)
+}
+
+func TestSourceAcceptsLongIDs(t *testing.T) {
+	long := "crew-" + strings.Repeat("A", 595)
+	tooLong := strings.Repeat("B", 1025)
+	srv := newSSEServer(t, func(_ int, w http.ResponseWriter, r *http.Request, s *sseServer) {
+		s.open(w)
+		s.frame(w, "snapshot", `[{"id":"`+long+`","agent":"claude"},{"id":"`+tooLong+`","agent":"claude"},{"id":"pane-2","agent":"claude"}]`)
+		s.hold(r)
+	})
+	src := newSource(srv.URL, tokenFile(t, testToken), fastOpts())
+	out := start(t, src)
+	if d := recv(t, out); d.Key != runs.PeerKey("b", long) {
+		t.Fatalf("first delta = %q, want the 600-char id", d.Key)
+	}
+	if d := recv(t, out); d.Key != runs.PeerKey("b", "pane-2") {
+		t.Fatalf("second delta = %q, want pane-2 (1025-char id dropped)", d.Key)
+	}
+}

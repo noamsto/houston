@@ -1,6 +1,7 @@
 package peer
 
 import (
+	"net"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -93,5 +94,37 @@ func TestParseFlagsNone(t *testing.T) {
 	got, err := ParseFlags(nil, nil, "/st")
 	if err != nil || len(got) != 0 {
 		t.Fatalf("got %v, %v; want none", got, err)
+	}
+}
+
+func TestPlainHopOK(t *testing.T) {
+	tcp := func(s string) net.Addr { return &net.TCPAddr{IP: net.ParseIP(s), Port: 1} }
+	cases := []struct {
+		name          string
+		local, remote net.Addr
+		want          bool
+	}{
+		{"loopback v4", tcp("127.0.0.1"), tcp("127.0.0.1"), true},
+		{"loopback v6", tcp("::1"), tcp("::1"), true},
+		{"loopback, LAN local", tcp("192.168.1.2"), tcp("127.0.0.1"), true},
+		{"mapped loopback", tcp("::ffff:127.0.0.1"), tcp("::ffff:127.0.0.1"), true},
+		{"tailnet v4 both ends", tcp("100.101.1.1"), tcp("100.64.0.7"), true},
+		{"tailnet v6 both ends", tcp("fd7a:115c:a1e0::1"), tcp("fd7a:115c:a1e0::2"), true},
+		{"mapped tailnet both ends", tcp("::ffff:100.101.1.1"), tcp("::ffff:100.64.0.7"), true},
+		{"4-byte tailnet both ends", &net.TCPAddr{IP: net.IPv4(100, 101, 1, 1).To4()}, &net.TCPAddr{IP: net.IPv4(100, 64, 0, 7).To4()}, true},
+		{"tailnet remote, LAN local", tcp("192.168.1.2"), tcp("100.64.0.7"), false},
+		{"tailnet remote, public local", tcp("203.0.113.5"), tcp("100.64.0.7"), false},
+		{"tailnet v6 remote, LAN v6 local", tcp("fe80::1"), tcp("fd7a:115c:a1e0::2"), false},
+		{"public remote, tailnet local", tcp("100.101.1.1"), tcp("203.0.113.9"), false},
+		{"public remote, public local", tcp("203.0.113.5"), tcp("203.0.113.9"), false},
+		{"just outside 100.64/10", tcp("100.101.1.1"), tcp("100.128.0.1"), false},
+		{"non-TCP remote", tcp("127.0.0.1"), &net.UnixAddr{Name: "/x", Net: "unix"}, false},
+		{"nil addrs", nil, nil, false},
+		{"nil local, tailnet remote", nil, tcp("100.64.0.7"), false},
+	}
+	for _, tc := range cases {
+		if got := plainHopOK(tc.local, tc.remote); got != tc.want {
+			t.Errorf("%s: plainHopOK = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }
