@@ -13,12 +13,12 @@ import (
 	"github.com/noamsto/houston/mode"
 )
 
-func TestClaudeModOffByDefault(t *testing.T) {
+func TestClaudeModDisabledWithoutSocket(t *testing.T) {
 	dir := t.TempDir()
 	h := newFullServer(t, Config{StatusDir: dir, Mode: mode.Tmux}).Handler()
 
 	if _, err := os.Lstat(filepath.Join(dir, "claude-mod.sock")); !os.IsNotExist(err) {
-		t.Fatalf("claude-mod.sock exists without the flag: %v", err)
+		t.Fatalf("claude-mod.sock exists without a configured socket: %v", err)
 	}
 	if rec := modeRequest(t, h, "GET", "/api/debug/claude-mod", ""); rec.Code != http.StatusNotFound {
 		t.Fatalf("status %d, want 404 — body %s", rec.Code, rec.Body.String())
@@ -92,5 +92,30 @@ func TestClaudeModListensAndFolds(t *testing.T) {
 	}
 	if _, err := os.Lstat(sock); !os.IsNotExist(err) {
 		t.Fatalf("socket still present after Close: %v", err)
+	}
+}
+
+func TestClaudeModSocketTakenStillStarts(t *testing.T) {
+	// Short path: a unix socket path is limited to about 108 bytes.
+	dir, err := os.MkdirTemp("", "cms")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "claude-mod.sock")
+
+	taken, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = taken.Close() })
+
+	s := newFullServer(t, Config{StatusDir: dir, Mode: mode.Tmux, ClaudeModSocket: sock})
+
+	if rec := modeRequest(t, s.Handler(), "GET", "/api/debug/claude-mod", ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("status %d, want 404 — body %s", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Lstat(sock); err != nil {
+		t.Fatalf("the other listener's socket is gone: %v", err)
 	}
 }

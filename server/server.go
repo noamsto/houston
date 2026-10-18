@@ -247,7 +247,8 @@ type Config struct {
 	Debug bool
 
 	// ClaudeModSocket is the Unix socket the Claude Code mod posts its records
-	// to. Empty disables the listener and /api/debug/claude-mod.
+	// to. Empty disables the listener, the store and /api/debug/claude-mod. A
+	// listen failure is logged and houston runs on hooks alone.
 	ClaudeModSocket string
 }
 
@@ -271,6 +272,19 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		slog.Warn("dispatcher launch unavailable: cannot resolve houston's executable", "error", err)
 	}
+
+	var modStore *claudemod.Store
+	var modSrv *claudemod.Server
+	if cfg.ClaudeModSocket != "" {
+		store := claudemod.NewStore()
+		srv, err := claudemod.Listen(cfg.ClaudeModSocket, store)
+		if err != nil {
+			slog.Warn("claude mod socket unavailable, using hooks only", "error", err)
+		} else {
+			modStore, modSrv = store, srv
+		}
+	}
+
 	s := &Server{
 		mode:           cfg.Mode,
 		cancel:         cancel,
@@ -280,7 +294,7 @@ func New(cfg Config) (*Server, error) {
 		registry:       registry,
 		font:           cfg.FontController,
 		uiFS:           cfg.UIFS,
-		hub:            hub.New(cfg.StatusDir, slog.Default()),
+		hub:            hub.NewWithOptions(cfg.StatusDir, hub.Options{Mod: modStore}, slog.Default()),
 		replyRunner:    execCrewReply,
 		wsRepos:        newRepoClassifier(),
 		wsTmux:         tmuxClient,
@@ -309,6 +323,9 @@ func New(cfg Config) (*Server, error) {
 		pidAlive:        processAlive,
 		restartSlack:    5 * time.Second,
 		debug:           cfg.Debug,
+
+		claudeModStore: modStore,
+		claudeMod:      modSrv,
 	}
 	s.chat = s.hub
 	if cfg.Mode != mode.Tmux {
@@ -389,16 +406,6 @@ func New(cfg Config) (*Server, error) {
 	}
 	s.auth = gate
 	s.hosts = deriveHosts(cfg.AllowedHosts, cfg.AllowedOrigins)
-
-	if cfg.ClaudeModSocket != "" {
-		store := claudemod.NewStore()
-		ln, err := claudemod.Listen(cfg.ClaudeModSocket, store)
-		if err != nil {
-			_ = s.Close()
-			return nil, fmt.Errorf("claude mod socket: %w", err)
-		}
-		s.claudeModStore, s.claudeMod = store, ln
-	}
 
 	return s, nil
 }
