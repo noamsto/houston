@@ -135,11 +135,29 @@ func crewRunFinished(r Run, now time.Time) bool {
 	return now.Sub(time.Unix(r.UpdatedAt, 0)) > crewEvictionGrace
 }
 
+// identityOnly keeps who a finished worker is (crew, codename, project, branch,
+// PR) and drops what the bus last said it was doing, so the evicted layer
+// stops contributing state, attention and a question to the composed run.
+func identityOnly(r Run) Run {
+	crew := *r.Crew
+	crew.Detail = ""
+	r.Crew = &crew
+	r.State = ""
+	r.Attention = ""
+	r.AttentionNote = ""
+	r.Question = nil
+	r.UpdatedAt = 0
+	r.Since = 0
+	return r
+}
+
 // tickCrewDeltas computes this cycle's deltas from the runs scan() currently
 // sees, already keyed by their final registry keys, evicting anything whose
-// bus status has been terminal for longer than crewEvictionGrace. seen is the
-// previous tick's emitted key set; it returns the deltas to send and the new
-// seen set.
+// bus status has been terminal for longer than crewEvictionGrace. A pane-keyed
+// run is not dropped but reduced to its identity (identityOnly): its pane still
+// has tmux/hooks cards, which need crew.name and project to stay grouped under
+// their dispatcher. seen is the previous tick's emitted key set; it returns the
+// deltas to send and the new seen set.
 //
 // Every update is emitted before every Gone. A branch's key flips as its pane
 // opens and closes, and that order is what stops a subscriber briefly holding
@@ -149,7 +167,10 @@ func tickCrewDeltas(current map[string]Run, seen map[string]bool, now time.Time)
 	newSeen := map[string]bool{}
 	for key, r := range current {
 		if crewRunFinished(r, now) {
-			continue
+			if strings.HasPrefix(key, "crew/") {
+				continue
+			}
+			r = identityOnly(r)
 		}
 		deltas = append(deltas, Delta{Source: "crew", Key: key, Run: r})
 		newSeen[key] = true

@@ -105,7 +105,7 @@ func (s *HookSource) Run(ctx context.Context, out chan<- Delta) error {
 		gone := paneGone(v, panes.live, panes.at)
 		v, foreign := normalize(v)
 		gone = gone || foreign
-		key, r := runFromSessionView(v, s.projects.resolved(v.CWD))
+		key, r := runFromSessionView(v, s.projects.project(v.CWD))
 		switch {
 		case gone:
 			if at, ok := endedAt[v.SessionID]; ok && v.UpdatedAt > at {
