@@ -149,6 +149,7 @@ houston/
 ├── mode/                # Dispatcher vs tmux mode resolution (stdlib only)
 ├── runs/                # Run registry (tmux/hook/crew sources)
 ├── crewfeed/            # Crew-bus activity feed: events.jsonl fold + incremental store (stdlib only)
+├── claudemod/           # Claude Code mod spike: Unix-socket record ingest + fold (flag -claude-mod)
 ├── hook/                # Claude hook install/doctor/state
 ├── contrib/             # OpenCode plugin
 ├── scripts/             # claude-hook.sh
@@ -449,6 +450,15 @@ context and cost counts (see "Context meter and pi spend") but no trail.
 
 `SessionState.PID` is the hook's parent process — under hookyard that is the
 router, not the agent — and isn't read anywhere in houston.
+
+## Claude mod (spike)
+
+- Off by default. `-claude-mod` makes houston listen on `<status-dir>/claude-mod.sock` (socket 0600, parent dir 0700; a live socket or a non-socket path fails startup, a dead socket is replaced).
+- `POST /v1/record` takes one JSON record, at most 16 KiB; answers 204 (stale records included), 400, 413, 405 or 404, never with a body.
+- `claudemod.Store` keeps a seq-ordered window (64) per session, so a late record folds where its seq puts it; it counts `stale` and `reordered`, and only the main loop's records change the state.
+- `GET /api/debug/claude-mod` (registered only with the flag, behind the auth gate) shows the fold as `{"sessions": [...]}`.
+- Not wired into the runs registry: Fleet is unchanged.
+- The mod is `contrib/claude-mod/`; results are in `docs/superpowers/specs/2026-10-18-claude-mod-spike-report.md`.
 
 ## Background tasks
 

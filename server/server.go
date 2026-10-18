@@ -23,6 +23,7 @@ import (
 	"github.com/noamsto/houston/agents/amp"
 	"github.com/noamsto/houston/agents/claude"
 	"github.com/noamsto/houston/agents/generic"
+	"github.com/noamsto/houston/claudemod"
 	"github.com/noamsto/houston/crewfeed"
 	"github.com/noamsto/houston/hub"
 	"github.com/noamsto/houston/mode"
@@ -188,6 +189,9 @@ type Server struct {
 	deltas    chan runs.Delta
 	closeOnce sync.Once
 	closeErr  error
+
+	claudeModStore *claudemod.Store
+	claudeMod      *claudemod.Server
 }
 
 // closeTimeout bounds how long Close waits for background goroutines that
@@ -241,6 +245,10 @@ type Config struct {
 
 	// Debug registers /api/debug/pprof/ behind the auth and host gates.
 	Debug bool
+
+	// ClaudeModSocket is the Unix socket the Claude Code mod posts its records
+	// to. Empty disables the listener and /api/debug/claude-mod.
+	ClaudeModSocket string
 }
 
 func New(cfg Config) (*Server, error) {
@@ -382,6 +390,16 @@ func New(cfg Config) (*Server, error) {
 	s.auth = gate
 	s.hosts = deriveHosts(cfg.AllowedHosts, cfg.AllowedOrigins)
 
+	if cfg.ClaudeModSocket != "" {
+		store := claudemod.NewStore()
+		ln, err := claudemod.Listen(cfg.ClaudeModSocket, store)
+		if err != nil {
+			_ = s.Close()
+			return nil, fmt.Errorf("claude mod socket: %w", err)
+		}
+		s.claudeModStore, s.claudeMod = store, ln
+	}
+
 	return s, nil
 }
 
@@ -404,6 +422,11 @@ func runSources(m mode.Mode, h *hub.Hub, c *tmux.Client, cm *tmux.ControlManager
 func (s *Server) Close() error {
 	s.closeOnce.Do(func() {
 		s.cancel()
+
+		var modErr error
+		if s.claudeMod != nil {
+			modErr = s.claudeMod.Close()
+		}
 
 		stopped := make(chan struct{})
 		go func() {
@@ -433,6 +456,7 @@ func (s *Server) Close() error {
 		case <-time.After(closeTimeout):
 			s.closeErr = errors.New("server: background goroutines did not stop in time")
 		}
+		s.closeErr = errors.Join(s.closeErr, modErr)
 	})
 	return s.closeErr
 }
@@ -473,6 +497,9 @@ func (s *Server) Handler() http.Handler {
 		apiMux.HandleFunc("POST /api/repos", s.handleReposAdd)
 		apiMux.HandleFunc("DELETE /api/repos", s.handleReposRemove)
 		apiMux.HandleFunc("GET /api/repos/candidates", s.handleRepoCandidates)
+	}
+	if s.claudeModStore != nil {
+		apiMux.HandleFunc("GET /api/debug/claude-mod", s.handleClaudeMod)
 	}
 	if s.debug {
 		pm := http.NewServeMux()

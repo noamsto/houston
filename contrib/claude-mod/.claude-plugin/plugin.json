@@ -1,0 +1,6 @@
+{
+  "name": "houston",
+  "version": "0.1.0",
+  "description": "Read-only Claude Code mod: streams session, turn and tool state to houston over a local Unix socket (spike).",
+  "author": { "name": "Noam Stolero" }
+}

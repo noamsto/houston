@@ -1,0 +1,224 @@
+package claudemod
+
+import (
+	"cmp"
+	"log/slog"
+	"maps"
+	"slices"
+	"sort"
+	"sync"
+
+	"github.com/noamsto/houston/hook"
+)
+
+// windowCap bounds the per-session window of records kept unfolded so a late
+// record can still land where its seq puts it.
+const windowCap = 64
+
+// Session is the folded view of one Claude Code session.
+type Session struct {
+	SID        string     `json:"sid"`
+	State      hook.State `json:"state"`
+	Tool       string     `json:"tool,omitempty"`
+	InFlight   []string   `json:"in_flight,omitempty"`
+	Background []Task     `json:"background,omitempty"`
+	Boot       string     `json:"boot"`
+	LastSeq    int64      `json:"last_seq"` // highest seq seen this boot
+	Applied    int        `json:"applied"`
+	Stale      int        `json:"stale"`
+	Reordered  int        `json:"reordered"`
+	Updated    int64      `json:"updated"` // ms, newest applied record's ts
+}
+
+// Store folds records into per-session state. It is safe for concurrent use.
+type Store struct {
+	mu       sync.Mutex
+	sessions map[string]*session
+}
+
+func NewStore() *Store {
+	return &Store{sessions: map[string]*session{}}
+}
+
+type flight struct{ id, tool string }
+
+// fold is the state a record sequence produces. Its slices and map are owned,
+// so clone before mutating a copy.
+type fold struct {
+	state    hook.State
+	inflight []flight // start order; the last entry is the newest
+	bg       map[string]Task
+}
+
+func (f fold) clone() fold {
+	return fold{state: f.state, inflight: slices.Clone(f.inflight), bg: maps.Clone(f.bg)}
+}
+
+func (f *fold) apply(rec Record) {
+	if rec.Agent != "" {
+		return // a subagent's events say nothing about the main loop
+	}
+	switch rec.Ev {
+	case evSessionStart:
+		f.state = hook.StateStarting
+	case evTurnStart:
+		f.state = hook.StateThinking
+		f.inflight = nil
+	case evToolStart:
+		f.inflight = append(f.inflight, flight{rec.ID, rec.Tool})
+		f.state = hook.StateToolRunning
+	case evToolEnd:
+		f.endTool(rec)
+	case evPermission:
+		f.state = hook.StatePermission
+	case evNotification:
+		switch rec.Type {
+		case "permission_prompt", "elicitation_dialog":
+			f.state = hook.StatePermission
+		case "idle_prompt":
+			f.state = hook.StateWaiting
+		}
+	case evTurnComplete:
+		f.state = hook.StateWaiting
+		f.inflight = nil
+	case evCompact:
+		f.state = hook.StateCompacting
+	case evSessionEnd:
+		f.state = hook.StateEnded
+	case evTaskEnd:
+		for _, t := range rec.Tasks {
+			delete(f.bg, t.ID)
+		}
+	case evStop:
+		f.bg = map[string]Task{}
+		for _, t := range rec.Tasks {
+			if t.Status == "running" || t.Status == "pending" {
+				f.bg[t.ID] = t
+			}
+		}
+	}
+}
+
+// endTool leaves the state alone for an id that is not in flight: a turn end
+// already cleared it, and a late tool.end must not reopen the turn.
+func (f *fold) endTool(rec Record) {
+	if rec.Task != "" {
+		if f.bg == nil {
+			f.bg = map[string]Task{}
+		}
+		f.bg[rec.Task] = Task{ID: rec.Task, Type: rec.Tool, Status: "running"}
+	}
+	i := slices.IndexFunc(f.inflight, func(fl flight) bool { return fl.id == rec.ID })
+	if i < 0 {
+		return
+	}
+	f.inflight = slices.Delete(f.inflight, i, i+1)
+	if len(f.inflight) == 0 {
+		f.state = hook.StateThinking
+		return
+	}
+	f.state = hook.StateToolRunning
+}
+
+type session struct {
+	boot    string
+	retired map[string]struct{} // boots folded into base; their late records are stale
+	base    fold
+	window  []Record // current boot, ascending seq, at most windowCap
+	folded  int64    // highest seq folded into base
+	maxSeq  int64
+	cur     fold // base with the window applied
+
+	applied, stale, reordered int
+	updated                   int64
+}
+
+// Apply inserts rec into its session's seq-ordered window and refolds. It
+// reports false (and counts Stale) for a duplicate seq, one older than the
+// window, or a record of a boot the session already retired. A record
+// arriving below the highest seq seen is applied in place and counted in
+// Reordered.
+func (s *Store) Apply(rec Record) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ss := s.sessions[rec.SID]
+	if ss == nil {
+		ss = &session{boot: rec.Boot, retired: map[string]struct{}{}}
+		s.sessions[rec.SID] = ss
+	}
+	if _, ok := ss.retired[rec.Boot]; ok {
+		ss.stale++
+		return false
+	}
+	if rec.Boot != ss.boot {
+		ss.newBoot(rec.Boot)
+	}
+	i, dup := slices.BinarySearchFunc(ss.window, rec.Seq, func(r Record, seq int64) int {
+		return cmp.Compare(r.Seq, seq)
+	})
+	if dup || rec.Seq <= ss.folded {
+		ss.stale++
+		return false
+	}
+	if rec.Seq < ss.maxSeq {
+		ss.reordered++
+	}
+	ss.maxSeq = max(ss.maxSeq, rec.Seq)
+	ss.window = slices.Insert(ss.window, i, rec)
+	if len(ss.window) > windowCap {
+		ss.base.apply(ss.window[0])
+		ss.folded = ss.window[0].Seq
+		ss.window = ss.window[1:]
+	}
+	ss.applied++
+	ss.updated = max(ss.updated, rec.TS)
+	ss.cur = ss.base.clone()
+	for _, r := range ss.window {
+		ss.cur.apply(r)
+	}
+	slog.Debug("claude-mod record", "sid", rec.SID, "boot", rec.Boot, "seq", rec.Seq,
+		"ev", rec.Ev, "tool", rec.Tool, "id", rec.ID, "state", ss.cur.state)
+	return true
+}
+
+func (ss *session) newBoot(boot string) {
+	for _, r := range ss.window {
+		ss.base.apply(r)
+	}
+	ss.retired[ss.boot] = struct{}{}
+	ss.boot = boot
+	ss.window = nil
+	ss.folded = 0
+	ss.maxSeq = 0
+}
+
+// Snapshot returns a copy of every session, sorted by SID.
+func (s *Store) Snapshot() []Session {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	out := make([]Session, 0, len(s.sessions))
+	for sid, ss := range s.sessions {
+		out = append(out, ss.view(sid))
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].SID < out[j].SID })
+	return out
+}
+
+func (ss *session) view(sid string) Session {
+	v := Session{
+		SID: sid, State: ss.cur.state, Boot: ss.boot, LastSeq: ss.maxSeq,
+		Applied: ss.applied, Stale: ss.stale, Reordered: ss.reordered, Updated: ss.updated,
+	}
+	for _, fl := range ss.cur.inflight {
+		v.InFlight = append(v.InFlight, fl.id)
+		v.Tool = fl.tool // the last one is the newest
+	}
+	slices.Sort(v.InFlight)
+	for _, t := range ss.cur.bg {
+		v.Background = append(v.Background, t)
+	}
+	sort.Slice(v.Background, func(i, j int) bool { return v.Background[i].ID < v.Background[j].ID })
+	return v
+}
