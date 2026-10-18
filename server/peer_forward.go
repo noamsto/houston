@@ -127,7 +127,6 @@ func (s *Server) peerTarget(w http.ResponseWriter, r *http.Request) (*peer.Sourc
 	return nil, "", false
 }
 
-// hostSource is the peer source named host, or nil.
 func (s *Server) hostSource(host string) *peer.Source {
 	for _, src := range s.peers {
 		if src.Host() == host {
