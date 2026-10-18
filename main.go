@@ -193,7 +193,7 @@ func runServer() {
 	noAuth := flag.Bool("no-auth", false, "disable API authentication (NOT recommended)")
 	modeFlag := flag.String("mode", "auto", "auto|dispatcher|tmux: dispatcher mode needs dispatch and crew on PATH; auto picks")
 
-	claudeMod := flag.Bool("claude-mod", false, "listen on <status-dir>/claude-mod.sock for the read-only Claude Code mod's records (spike)")
+	claudeMod := flag.Bool("claude-mod", true, "listen on <status-dir>/claude-mod.sock for the read-only Claude Code mod's records (default on; -claude-mod=false disables)")
 
 	var hostnames stringList
 	flag.Var(&hostnames, "hostname", "additional Host value to accept (repeatable; for reverse proxies or custom DNS)")

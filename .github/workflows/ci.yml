@@ -68,3 +68,15 @@ jobs:
       - run: nix develop -c tmux new-session -d -s ci-keepalive
 
       - run: nix develop -c go test -race ./...
+
+  mod:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+
+      # The read-only Claude Code mod's manifest check and its own tests. Neither
+      # needs credentials; the recipe pins the version the mod was written against.
+      - run: nix develop -c just mod-check

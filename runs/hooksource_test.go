@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/noamsto/houston/claudemod"
 	"github.com/noamsto/houston/hook"
 	"github.com/noamsto/houston/hub"
 	"github.com/noamsto/houston/tmux"
@@ -1203,4 +1204,163 @@ func TestRunSignatureSeesContextAndSpend(t *testing.T) {
 			t.Errorf("%s change did not alter the signature", name)
 		}
 	}
+}
+
+func TestModViewLateToolEndReadsIdle(t *testing.T) {
+	// The overlay yields waiting after turn.start, tool.start, turn.complete and
+	// a late tool.end, whatever the hook file says.
+	key, r := runFromSessionView(hub.SessionView{
+		SessionID: "s1",
+		Agent:     "claude",
+		State:     hook.StateWaiting,
+	}, "")
+	if key != "claude/s1" {
+		t.Fatalf("key = %q, want claude/s1", key)
+	}
+	if r.State != StateIdle {
+		t.Fatalf("State = %q, want idle", r.State)
+	}
+	if r.Question != nil {
+		t.Errorf("Question = %+v, want none", r.Question)
+	}
+}
+
+func TestModPermissionViewReadsBlocked(t *testing.T) {
+	const msg = "Claude needs your permission to use Bash"
+	_, r := runFromSessionView(hub.SessionView{
+		SessionID:   "s1",
+		Agent:       "claude",
+		State:       hook.StatePermission,
+		Tool:        "Bash",
+		LastMessage: msg,
+	}, "")
+	if r.State != StateBlocked {
+		t.Fatalf("State = %q, want blocked", r.State)
+	}
+	if r.Question == nil || r.Question.Text != msg || r.Question.Kind != QuestionDialog {
+		t.Fatalf("Question = %+v, want the synthesized dialog message", r.Question)
+	}
+}
+
+// modRecords applies one session's mod records in the order the test chooses.
+type modRecords struct {
+	t     *testing.T
+	store *claudemod.Store
+	sid   string
+	dir   string
+}
+
+func (m modRecords) apply(seq int64, ev string, set func(*claudemod.Record)) {
+	m.t.Helper()
+	rec := claudemod.Record{V: 1, SID: m.sid, Boot: "boot-1", Seq: seq, TS: time.Now().UnixMilli(), Ev: ev}
+	if set != nil {
+		set(&rec)
+	}
+	if !m.store.Apply(rec) {
+		m.t.Fatalf("record %s seq %d not applied", ev, seq)
+	}
+}
+
+// startModHookSource runs a HookSource over a hub with a mod store attached,
+// seeded with a thinking hook state for session s1 as a late PostToolUse
+// leaves it.
+func startModHookSource(t *testing.T) (<-chan Delta, modRecords) {
+	t.Helper()
+	dir := t.TempDir()
+	st := hook.SessionState{SessionID: "s1", State: hook.StateThinking, Turn: 1, UpdatedAt: time.Now().Unix()}
+	if err := hook.Write(hook.Path(dir, st.SessionID), st); err != nil {
+		t.Fatal(err)
+	}
+
+	store := claudemod.NewStore()
+	h := hub.NewWithOptions(dir, hub.Options{ClaudeProjectsDir: "-", Mod: store}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	ctx := startHub(t, h, dir)
+	for deadline := time.Now().Add(2 * time.Second); len(h.Snapshot()) < 1; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("hub never loaded the state file")
+		}
+	}
+
+	src := NewHookSource(h, nil)
+	src.every = hookTestEvery
+	out := make(chan Delta, 64)
+	go func() { _ = src.Run(ctx, out) }()
+	return out, modRecords{t: t, store: store, sid: st.SessionID, dir: dir}
+}
+
+func TestHookSourceModLateToolEndReadsIdle(t *testing.T) {
+	out, m := startModHookSource(t)
+	const key = "claude/s1"
+	waitDelta(t, out, "initial run", func(d Delta) bool { return d.Key == key })
+
+	m.apply(1, "turn.start", nil)
+	m.apply(2, "tool.start", func(r *claudemod.Record) { r.Tool, r.ID = "Bash", "a" })
+	m.apply(4, "turn.complete", func(r *claudemod.Record) { r.Reason = "answer" })
+	m.apply(3, "tool.end", func(r *claudemod.Record) { r.Tool, r.ID = "Bash", "a" })
+
+	waitDelta(t, out, "idle run", func(d Delta) bool { return d.Key == key && d.Run.State == StateIdle })
+	expectNoDelta(t, out, "run left idle after the late tool.end", func(d Delta) bool {
+		return d.Key == key && d.Run.State != StateIdle
+	})
+}
+
+func TestHookSourceModLateHigherSeqToolEndReadsIdle(t *testing.T) {
+	out, m := startModHookSource(t)
+	const key = "claude/s1"
+	waitDelta(t, out, "initial run", func(d Delta) bool { return d.Key == key })
+
+	m.apply(1, "turn.start", nil)
+	m.apply(2, "tool.start", func(r *claudemod.Record) { r.Tool, r.ID = "Bash", "a" })
+	m.apply(3, "turn.complete", func(r *claudemod.Record) { r.Reason = "answer" })
+	// Sent after the turn ended, so it carries the higher seq.
+	m.apply(4, "tool.end", func(r *claudemod.Record) { r.Tool, r.ID = "Bash", "a" })
+
+	waitDelta(t, out, "idle run", func(d Delta) bool { return d.Key == key && d.Run.State == StateIdle })
+	expectNoDelta(t, out, "run left idle after the late tool.end", func(d Delta) bool {
+		return d.Key == key && d.Run.State != StateIdle
+	})
+}
+
+func TestHookSourceModHookEndedReadsDone(t *testing.T) {
+	out, m := startModHookSource(t)
+	const key = "claude/s1"
+	waitDelta(t, out, "initial run", func(d Delta) bool { return d.Key == key })
+
+	m.apply(1, "turn.start", nil)
+	m.apply(2, "turn.complete", func(r *claudemod.Record) { r.Reason = "answer" })
+	waitDelta(t, out, "idle run", func(d Delta) bool { return d.Key == key && d.Run.State == StateIdle })
+
+	// SessionEnd fired; the mod's session.end was lost at exit.
+	st := hook.SessionState{SessionID: m.sid, State: hook.StateEnded, Turn: 1, UpdatedAt: time.Now().Unix()}
+	if err := hook.Write(hook.Path(m.dir, st.SessionID), st); err != nil {
+		t.Fatal(err)
+	}
+	waitDelta(t, out, "done run", func(d Delta) bool { return d.Key == key && d.Run.State == StateDone })
+}
+
+func TestHookSourceModPermissionReadsBlocked(t *testing.T) {
+	out, m := startModHookSource(t)
+	const key = "claude/s1"
+	waitDelta(t, out, "initial run", func(d Delta) bool { return d.Key == key })
+
+	m.apply(1, "turn.start", nil)
+	m.apply(2, "tool.start", func(r *claudemod.Record) { r.Tool, r.ID = "Bash", "b" })
+	waitDelta(t, out, "running run", func(d Delta) bool { return d.Key == key && d.Run.State == StateRunning })
+
+	m.apply(3, "tool.check", func(r *claudemod.Record) { r.Tool, r.ID, r.Decision = "Bash", "b", "ask" })
+	start := time.Now()
+	m.apply(4, "permission", func(r *claudemod.Record) { r.Tool = "Bash" })
+	d := waitDelta(t, out, "blocked run", func(d Delta) bool { return d.Key == key && d.Run.State == StateBlocked })
+	if took := time.Since(start); took >= time.Second {
+		t.Errorf("blocked delta took %v, want under 1s", took)
+	}
+	if d.Run.Question == nil || d.Run.Question.Kind != QuestionDialog {
+		t.Errorf("Question = %+v, want a dialog", d.Run.Question)
+	}
+
+	m.apply(5, "tool.end", func(r *claudemod.Record) { r.Tool, r.ID = "Bash", "b" })
+	waitDelta(t, out, "thinking run", func(d Delta) bool { return d.Key == key && d.Run.State == StateThinking })
+	expectNoDelta(t, out, "run left thinking after the tool.end", func(d Delta) bool {
+		return d.Key == key && d.Run.State != StateThinking
+	})
 }
