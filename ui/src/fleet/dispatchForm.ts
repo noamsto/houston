@@ -14,9 +14,13 @@ export interface DispatchPrefs {
 
 const PREFS_KEY = 'houston-dispatch-prefs'
 
-export function loadPrefs(): DispatchPrefs {
+function prefsKey(host?: string): string {
+  return !host || host === 'local' ? PREFS_KEY : `${PREFS_KEY}@${host}`
+}
+
+export function loadPrefs(host?: string): DispatchPrefs {
   try {
-    const saved = localStorage.getItem(PREFS_KEY)
+    const saved = localStorage.getItem(prefsKey(host))
     if (!saved) return {}
     const parsed: unknown = JSON.parse(saved)
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
@@ -26,9 +30,9 @@ export function loadPrefs(): DispatchPrefs {
   }
 }
 
-export function savePrefs(p: DispatchPrefs): void {
+export function savePrefs(p: DispatchPrefs, host?: string): void {
   try {
-    localStorage.setItem(PREFS_KEY, JSON.stringify(p))
+    localStorage.setItem(prefsKey(host), JSON.stringify(p))
   } catch {
     // ignore
   }
@@ -62,6 +66,7 @@ interface ResolvedInitial {
   model: string
   effort: string
   linkRepoUnknown: boolean
+  linkCrewUnknown: boolean
 }
 
 /** Merges a `#/dispatch?repo=&crew=` link, remembered device prefs, and
@@ -72,12 +77,18 @@ export function resolveInitial(
   link: { repo?: string; crew?: string } | null,
 ): ResolvedInitial {
   const repoKnown = !!link?.repo && o.repos.some((r) => r.path === link.repo)
+  const linkedCrew = link?.crew && link.crew !== NEW_CREW && !link.repo ? link.crew : undefined
+  const crewRepo = linkedCrew
+    ? (o.repos.find((r) => r.home?.includes(linkedCrew)) ?? o.repos.find((r) => r.crews.includes(linkedCrew)))
+    : undefined
   const repo =
     link?.repo && repoKnown
       ? link.repo
-      : prefs.repo && o.repos.some((r) => r.path === prefs.repo)
-        ? prefs.repo
-        : (o.repos[0]?.path ?? '')
+      : crewRepo
+        ? crewRepo.path
+        : prefs.repo && o.repos.some((r) => r.path === prefs.repo)
+          ? prefs.repo
+          : (o.repos[0]?.path ?? '')
 
   const offered = workerEngines(o)
   const engine =
@@ -111,7 +122,10 @@ export function resolveInitial(
       ? linkCrew
       : defaultCrew(chosenRepo)
 
-  return { repo, crew, engine, tier, model, effort, linkRepoUnknown: !!link?.repo && !repoKnown }
+  const namedCrew = link?.crew && link.crew !== NEW_CREW ? link.crew : undefined
+  const linkCrewUnknown = !!namedCrew && !o.repos.some((r) => r.crews.includes(namedCrew))
+
+  return { repo, crew, engine, tier, model, effort, linkRepoUnknown: !!link?.repo && !repoKnown, linkCrewUnknown }
 }
 
 /** `<id> · <age> ago`, or bare `id` if it doesn't start with a unix timestamp. */
@@ -129,19 +143,37 @@ export function isValidIssue(issue: string): boolean {
   return issue.trim() === '' || ISSUE_RE.test(issue.trim())
 }
 
+// A peer's dispatch answer is not trusted to name a safe link.
+const ISSUE_URL = /^https:\/\/github\.com\/[A-Za-z0-9-]+\/[A-Za-z0-9._-]+\/issues\/[0-9]+$/
+
+export function safeIssueURL(url?: string): string | undefined {
+  return url && ISSUE_URL.test(url) ? url : undefined
+}
+
+/** A launch or restart answer's run id, only when it addresses a run of that
+ *  host: `peer-<host>.` for a peer, never a `peer-` id for local. */
+export function runIdFor(host: string | undefined, runId: string | undefined): string | undefined {
+  if (!runId) return undefined
+  const peer = host && host !== 'local' ? host : undefined
+  if (peer) return runId.startsWith(`peer-${peer}.`) ? runId : undefined
+  return runId.startsWith('peer-') ? undefined : runId
+}
+
 /** Same 40%-of-viewport cap as the terminal composer. */
 export function taskMaxHeight(vh: number): number {
   return Math.max(120, Math.round(vh * 0.4))
 }
 
-/** The newest non-removed local run (peer runs are skipped) for a
- *  just-dispatched branch, optionally narrowed to a crew — an empty/undefined
- *  run.crew.name is a wildcard (tmux-only runs belong to no crew group and
- *  still match). */
-export function findDispatchedRun(runs: Run[], branch: string, crew?: string): Run | undefined {
+/** The newest non-removed run on the dispatched host for a just-dispatched
+ *  branch (`host` a peer name; local otherwise, so peer runs are skipped),
+ *  optionally narrowed to a crew — an empty/undefined run.crew.name is a
+ *  wildcard (tmux-only runs belong to no crew group and still match). */
+export function findDispatchedRun(runs: Run[], branch: string, crew?: string, host?: string): Run | undefined {
+  const peer = host && host !== 'local' ? host : undefined
   let best: Run | undefined
   for (const r of runs) {
-    if (r.removed || r.host) continue
+    if (r.removed) continue
+    if (peer ? r.host !== peer : r.host) continue
     if (r.branch !== branch) continue
     if (crew !== undefined && r.crew?.name && r.crew.name !== crew) continue
     const t = r.since ?? r.updated_at

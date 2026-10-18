@@ -46,11 +46,11 @@ describe('CrewGroupHeader', () => {
     await waitFor(() => expect(screen.getByText('Dispatch here')).toBeTruthy())
   })
 
-  it('offers no Dispatch here for a crew on a peer host', async () => {
+  it('links Dispatch here to the peer host for a crew on a peer, without a local options fetch', async () => {
     fetchOptions.mockResolvedValue({ repos: [{ name: 'dispatcher', path: '/r/dispatcher' }] } as never)
     render(<CrewGroupHeader entry={{ ...entry('dispatcher'), host: 'b' }} />)
-    await waitFor(() => expect(fetchOptions).toHaveBeenCalled())
+    expect(screen.getByText('Dispatch here').getAttribute('href')).toBe('#/dispatch?host=b&crew=1-1')
     await Promise.resolve()
-    expect(screen.queryByText('Dispatch here')).toBeNull()
+    expect(fetchOptions).not.toHaveBeenCalled()
   })
 })

@@ -1,3 +1,5 @@
+import { hostAPI } from './hosts'
+
 export interface RepoEntry {
   path: string
   name: string
@@ -18,14 +20,15 @@ async function getJSON<T>(name: string, url: string): Promise<T> {
   return (await res.json()) as T
 }
 
-export function fetchRepos(): Promise<{ roots: string[]; repos: RepoEntry[] }> {
-  return getJSON('fetchRepos', '/api/repos')
+export function fetchRepos(host?: string): Promise<{ roots: string[]; repos: RepoEntry[] }> {
+  return getJSON('fetchRepos', hostAPI(host, 'repos'))
 }
 
 export function fetchRepoCandidates(
   q: string,
+  host?: string,
 ): Promise<{ roots: string[]; candidates: RepoCandidate[]; truncated: boolean }> {
-  return getJSON('fetchRepoCandidates', '/api/repos/candidates?q=' + encodeURIComponent(q))
+  return getJSON('fetchRepoCandidates', hostAPI(host, 'repos/candidates?q=' + encodeURIComponent(q)))
 }
 
 async function errorText(res: Response): Promise<string> {
@@ -39,9 +42,9 @@ async function errorText(res: Response): Promise<string> {
   return text.trim() || `HTTP ${res.status}`
 }
 
-async function send(method: 'POST' | 'DELETE', path: string): Promise<Response | null> {
+async function send(method: 'POST' | 'DELETE', path: string, host?: string): Promise<Response | null> {
   try {
-    return await fetch('/api/repos', {
+    return await fetch(hostAPI(host, 'repos'), {
       method,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path }),
@@ -51,8 +54,11 @@ async function send(method: 'POST' | 'DELETE', path: string): Promise<Response |
   }
 }
 
-export async function addRepo(path: string): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
-  const res = await send('POST', path)
+export async function addRepo(
+  path: string,
+  host?: string,
+): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
+  const res = await send('POST', path, host)
   if (!res) return { ok: false, error: 'network error' }
   if (!res.ok) return { ok: false, error: await errorText(res) }
   try {
@@ -63,8 +69,8 @@ export async function addRepo(path: string): Promise<{ ok: true; path: string } 
   }
 }
 
-export async function removeRepo(path: string): Promise<{ ok: true } | { ok: false; error: string }> {
-  const res = await send('DELETE', path)
+export async function removeRepo(path: string, host?: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  const res = await send('DELETE', path, host)
   if (!res) return { ok: false, error: 'network error' }
   if (!res.ok) return { ok: false, error: await errorText(res) }
   return { ok: true }

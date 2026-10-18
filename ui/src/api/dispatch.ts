@@ -1,3 +1,5 @@
+import { hostAPI } from './hosts'
+
 // Mirror of server/dispatch.go's dispatchOptions/dispatchRequest contract.
 export interface DispatchRepo {
   path: string
@@ -42,10 +44,15 @@ export type DispatchOutcome =
   | { kind: 'started'; workerId: string; branch: string; issueUrl?: string; crew?: string }
   | { kind: 'failed'; status: number; error: string; output?: string; workerId?: string; crew?: string }
 
-export async function fetchDispatchOptions(): Promise<DispatchOptions> {
-  const res = await fetch('/api/dispatch/options')
+export async function fetchDispatchOptions(host?: string): Promise<DispatchOptions> {
+  const res = await fetch(hostAPI(host, 'dispatch/options'))
   if (!res.ok) {
-    throw new Error(`fetchDispatchOptions: ${res.status} ${await res.text()}`)
+    const text = await res.text()
+    if (host && host !== 'local' && res.status === 404) {
+      if (text.startsWith('no such host')) throw new Error("Linked host isn't one houston knows.")
+      throw new Error(`Dispatch isn't available on ${host}.`)
+    }
+    throw new Error(`fetchDispatchOptions: ${res.status} ${text}`)
   }
   return (await res.json()) as DispatchOptions
 }
@@ -65,10 +72,10 @@ interface DispatchErrorBody {
   crew?: string
 }
 
-export async function submitDispatch(req: DispatchRequest): Promise<DispatchOutcome> {
+export async function submitDispatch(req: DispatchRequest, host?: string): Promise<DispatchOutcome> {
   let res: Response
   try {
-    res = await fetch('/api/dispatch', {
+    res = await fetch(hostAPI(host, 'dispatch'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req),
@@ -76,7 +83,12 @@ export async function submitDispatch(req: DispatchRequest): Promise<DispatchOutc
   } catch {
     return { kind: 'failed', status: 0, error: 'network error' }
   }
-  const text = await res.text()
+  let text: string
+  try {
+    text = await res.text()
+  } catch {
+    return { kind: 'failed', status: 0, error: 'network error' }
+  }
   if (res.ok) {
     try {
       const body = JSON.parse(text) as DispatchSuccessBody
@@ -102,7 +114,7 @@ export interface DispatcherRequest {
 }
 
 export type DispatcherOutcome =
-  | { kind: 'started'; crew: string; session: string; window: string; pane: string; runId: string }
+  | { kind: 'started'; crew: string; session: string; window: string; pane: string; runId: string | undefined }
   | {
       kind: 'failed'
       status: number
@@ -121,7 +133,7 @@ interface DispatcherSuccessBody {
   session: string
   window: string
   pane: string
-  run_id: string
+  run_id?: unknown
 }
 
 interface DispatcherErrorBody extends DispatchErrorBody {
@@ -133,7 +145,12 @@ interface DispatcherErrorBody extends DispatchErrorBody {
 }
 
 async function parseDispatcherResponse(res: Response): Promise<DispatcherOutcome> {
-  const text = await res.text()
+  let text: string
+  try {
+    text = await res.text()
+  } catch {
+    return { kind: 'failed', status: 0, error: 'network error' }
+  }
   if (res.ok) {
     try {
       const body = JSON.parse(text) as DispatcherSuccessBody
@@ -143,7 +160,7 @@ async function parseDispatcherResponse(res: Response): Promise<DispatcherOutcome
         session: body.session,
         window: body.window,
         pane: body.pane,
-        runId: body.run_id,
+        runId: typeof body.run_id === 'string' ? body.run_id : undefined,
       }
     } catch {
       return { kind: 'failed', status: res.status, error: 'malformed response: ' + text.trim() }
@@ -182,8 +199,8 @@ async function postDispatcher(url: string, req: object): Promise<DispatcherOutco
   return parseDispatcherResponse(res)
 }
 
-export function submitDispatcher(req: DispatcherRequest): Promise<DispatcherOutcome> {
-  return postDispatcher('/api/dispatch/dispatcher', req)
+export function submitDispatcher(req: DispatcherRequest, host?: string): Promise<DispatcherOutcome> {
+  return postDispatcher(hostAPI(host, 'dispatch/dispatcher'), req)
 }
 
 export interface RestartRequest {

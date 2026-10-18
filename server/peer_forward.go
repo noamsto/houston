@@ -1,6 +1,8 @@
 package server
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -40,17 +42,19 @@ const (
 	forwardWS
 )
 
-// peerRoute is how one run-addressed route crosses to a peer: everything the
-// upstream request carries is named here, nothing is copied from the browser
-// request wholesale.
+// peerRoute is how one run- or host-addressed route crosses to a peer:
+// everything the upstream request carries is named here, nothing is copied
+// from the browser request wholesale.
 type peerRoute struct {
-	suffix   string // upstream path after /api/runs/<peer id>/
+	suffix   string // upstream path after /api/runs/<peer id>/, or after /api/ for a host route
 	method   string
 	query    []string
 	headers  []string
-	limit    int64 // POST body cap; 0 sends no body
+	limit    int64 // body cap; 0 sends no body
 	kind     forwardKind
-	toolCall bool // suffix is followed by the escaped {callId}
+	toolCall bool      // suffix is followed by the escaped {callId}
+	mode     peer.Mode // Fast unless the peer's handler can outlast the header timeout
+	mapRunID bool      // the answer's run_id is a peer-local id to map to this houston's
 }
 
 var (
@@ -64,6 +68,15 @@ var (
 	fwdReply          = peerRoute{suffix: "reply", method: http.MethodPost, headers: []string{"Content-Type"}, limit: maxReplyBody}
 	fwdCrewFeed       = peerRoute{suffix: "crew/feed", method: http.MethodGet, query: []string{"before", "limit"}}
 	fwdCrewFeedStream = peerRoute{suffix: "crew/feed/stream", method: http.MethodGet, query: []string{"after", "from"}, headers: []string{"Last-Event-ID"}, kind: forwardSSE}
+	fwdRestart        = peerRoute{suffix: "restart", method: http.MethodPost, headers: []string{"Content-Type"}, limit: maxDispatchBody, mode: peer.Detached, mapRunID: true}
+
+	fwdHostOptions     = peerRoute{suffix: "dispatch/options", method: http.MethodGet, mode: peer.Long}
+	fwdHostDispatch    = peerRoute{suffix: "dispatch", method: http.MethodPost, headers: []string{"Content-Type"}, limit: maxDispatchBody, mode: peer.Detached}
+	fwdHostDispatcher  = peerRoute{suffix: "dispatch/dispatcher", method: http.MethodPost, headers: []string{"Content-Type"}, limit: maxDispatchBody, mode: peer.Detached, mapRunID: true}
+	fwdHostRepos       = peerRoute{suffix: "repos", method: http.MethodGet, mode: peer.Long}
+	fwdHostReposAdd    = peerRoute{suffix: "repos", method: http.MethodPost, headers: []string{"Content-Type"}, limit: maxRepoBody, mode: peer.Long}
+	fwdHostReposRemove = peerRoute{suffix: "repos", method: http.MethodDelete, headers: []string{"Content-Type"}, limit: maxRepoBody, mode: peer.Long}
+	fwdHostCandidates  = peerRoute{suffix: "repos/candidates", method: http.MethodGet, query: []string{"q"}, mode: peer.Long}
 )
 
 // forwardCaps is what this houston can forward to a peer in mode m: reply
@@ -114,6 +127,15 @@ func (s *Server) peerTarget(w http.ResponseWriter, r *http.Request) (*peer.Sourc
 	return nil, "", false
 }
 
+func (s *Server) hostSource(host string) *peer.Source {
+	for _, src := range s.peers {
+		if src.Host() == host {
+			return src
+		}
+	}
+	return nil
+}
+
 func (s *Server) peerRunListed(id, host string) bool {
 	for _, run := range s.runs.Snapshot() {
 		if run.ID == id && run.Host == host {
@@ -152,6 +174,50 @@ func (s *Server) forwardPeer(w http.ResponseWriter, r *http.Request, rt peerRout
 		suffix += "/" + url.PathEscape(callID)
 	}
 
+	query, header, body, ok := forwardParts(w, r, rt)
+	if !ok {
+		return
+	}
+	resp, err := src.Do(r.Context(), rt.method, peerID, suffix, query, header, body, rt.mode)
+	if err != nil {
+		forwardFailed(w, r, src, rt, err)
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+	relayForward(w, r, src, rt, resp)
+}
+
+// forwardHost forwards a host-addressed route to the peer named by {host}.
+// These routes are a fixed set of constants (the path value never reaches
+// the upstream URL), and the peer runs every check against its own state.
+func (s *Server) forwardHost(rt peerRoute) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.auth == nil || !s.auth.enabled {
+			http.Error(w, "peer actions need auth", http.StatusForbidden)
+			return
+		}
+		src := s.hostSource(r.PathValue("host"))
+		if src == nil {
+			http.Error(w, "no such host", http.StatusNotFound)
+			return
+		}
+		query, header, body, ok := forwardParts(w, r, rt)
+		if !ok {
+			return
+		}
+		resp, err := src.DoAPI(r.Context(), rt.method, rt.suffix, query, header, body, rt.mode)
+		if err != nil {
+			forwardFailed(w, r, src, rt, err)
+			return
+		}
+		defer func() { _ = resp.Body.Close() }()
+		relayForward(w, r, src, rt, resp)
+	}
+}
+
+// forwardParts takes from the browser request only what rt names: the body up
+// to its cap, the allowlisted query keys and headers.
+func forwardParts(w http.ResponseWriter, r *http.Request, rt peerRoute) (url.Values, http.Header, []byte, bool) {
 	var body []byte
 	if rt.limit > 0 {
 		b, err := io.ReadAll(http.MaxBytesReader(w, r.Body, rt.limit))
@@ -159,10 +225,10 @@ func (s *Server) forwardPeer(w http.ResponseWriter, r *http.Request, rt peerRout
 			var tooBig *http.MaxBytesError
 			if errors.As(err, &tooBig) {
 				http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
-				return
+				return nil, nil, nil, false
 			}
 			http.Error(w, "malformed request body", http.StatusBadRequest)
-			return
+			return nil, nil, nil, false
 		}
 		body = b
 	}
@@ -182,20 +248,38 @@ func (s *Server) forwardPeer(w http.ResponseWriter, r *http.Request, rt peerRout
 	if rt.kind == forwardSSE {
 		header.Set("Accept", "text/event-stream")
 	}
+	return query, header, body, true
+}
 
-	level := slog.LevelDebug
-	if rt.method == http.MethodPost {
-		level = slog.LevelInfo
+func forwardLogLevel(rt peerRoute) slog.Level {
+	if rt.method != http.MethodGet {
+		return slog.LevelInfo
 	}
-	resp, err := src.Do(r.Context(), rt.method, peerID, suffix, query, header, body)
-	if err != nil {
-		slog.Debug("peer forward failed", "peer", src.Host(), "route", rt.suffix, "err", err)
-		http.Error(w, "peer unreachable", http.StatusBadGateway)
-		slog.Log(r.Context(), level, "peer forward", "peer", src.Host(), "route", rt.suffix, "status", http.StatusBadGateway)
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
+	return slog.LevelDebug
+}
 
+// forwardFailed answers a forwarded request that got no response.
+func forwardFailed(w http.ResponseWriter, r *http.Request, src *peer.Source, rt peerRoute, err error) {
+	slog.Debug("peer forward failed", "peer", src.Host(), "route", rt.suffix, "err", err)
+	code := peerFailure(w, err)
+	slog.Log(r.Context(), forwardLogLevel(rt), "peer forward", "peer", src.Host(), "route", rt.suffix, "status", code)
+}
+
+// peerFailure answers a forward that failed before a whole answer arrived. An
+// unknown outcome is not unreachable: the peer had the request and detaches
+// that work from it, so it may still land.
+func peerFailure(w http.ResponseWriter, err error) int {
+	if errors.Is(err, peer.ErrOutcomeUnknown) {
+		http.Error(w, "peer did not answer in time — it may still be running; check Fleet before retrying", http.StatusGatewayTimeout)
+		return http.StatusGatewayTimeout
+	}
+	http.Error(w, "peer unreachable", http.StatusBadGateway)
+	return http.StatusBadGateway
+}
+
+// relayForward answers the browser with a forwarded request's response; the
+// caller closes resp.Body.
+func relayForward(w http.ResponseWriter, r *http.Request, src *peer.Source, rt peerRoute, resp *http.Response) {
 	if rt.kind == forwardSSE && resp.StatusCode == http.StatusOK {
 		if mt, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type")); mt == "text/event-stream" {
 			slog.Debug("peer stream open", "peer", src.Host(), "route", rt.suffix)
@@ -207,16 +291,59 @@ func (s *Server) forwardPeer(w http.ResponseWriter, r *http.Request, rt peerRout
 		slog.Debug("peer forward", "peer", src.Host(), "route", rt.suffix, "status", http.StatusBadGateway)
 		return
 	}
-	code := relayPeerResponse(w, resp)
-	slog.Log(r.Context(), level, "peer forward", "peer", src.Host(), "route", rt.suffix, "status", code)
+	var rewrite func([]byte) []byte
+	if rt.mapRunID {
+		rewrite = rewriteRunID(src.Host())
+	}
+	code := relayPeerResponse(w, resp, rewrite)
+	slog.Log(r.Context(), forwardLogLevel(rt), "peer forward", "peer", src.Host(), "route", rt.suffix, "status", code)
 }
+
+// rewriteRunID maps a peer-local run_id to the id this houston lists the run
+// under, and drops one it cannot map. It ignores Content-Type: the UI parses
+// the body as JSON whatever the header says, and a raw peer id would address
+// a local run here. A body Go cannot read as an object is replaced whole,
+// since JSON.parse accepts some that Go refuses (a BOM, which fetch's text()
+// strips, or nesting past Go's depth limit) and could still find a run_id.
+func rewriteRunID(host string) func([]byte) []byte {
+	return func(b []byte) []byte {
+		b = bytes.TrimPrefix(b, []byte("\xEF\xBB\xBF"))
+		var obj map[string]json.RawMessage
+		if json.Unmarshal(b, &obj) != nil || obj == nil {
+			return unreadablePeerBody
+		}
+		raw, ok := obj["run_id"]
+		if !ok {
+			return b
+		}
+		var id string
+		if json.Unmarshal(raw, &id) == nil && peer.ValidID(id) {
+			mapped, err := json.Marshal(runs.PeerRunID(host, id))
+			if err != nil {
+				return unreadablePeerBody
+			}
+			obj["run_id"] = mapped
+		} else {
+			delete(obj, "run_id")
+		}
+		out, err := json.Marshal(obj)
+		if err != nil {
+			return unreadablePeerBody
+		}
+		return out
+	}
+}
+
+// unreadablePeerBody is valid JSON under either relayed Content-Type, so the
+// UI shows it as the error.
+var unreadablePeerBody = []byte(`{"error":"unreadable peer response"}`)
 
 // relayPeerResponse writes the peer's status, Content-Type and body, and no
 // other peer header (no Set-Cookie, no Location). A redirect or auth refusal
 // becomes 502: relaying 401 would read as the browser's own token failing.
 // The body is served on this origin, so only a JSON or plain-text type is
 // relayed and the browser may neither sniff nor render it as a document.
-func relayPeerResponse(w http.ResponseWriter, resp *http.Response) int {
+func relayPeerResponse(w http.ResponseWriter, resp *http.Response, rewrite func([]byte) []byte) int {
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 ||
 		resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		http.Error(w, "peer refused the request", http.StatusBadGateway)
@@ -224,12 +351,14 @@ func relayPeerResponse(w http.ResponseWriter, resp *http.Response) int {
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, maxForwardBody+1))
 	if err != nil {
-		http.Error(w, "peer unreachable", http.StatusBadGateway)
-		return http.StatusBadGateway
+		return peerFailure(w, err)
 	}
 	if len(b) > maxForwardBody {
 		http.Error(w, "peer response too large", http.StatusBadGateway)
 		return http.StatusBadGateway
+	}
+	if rewrite != nil {
+		b = rewrite(b)
 	}
 	h := w.Header()
 	h.Set("Content-Type", relayContentType(resp.Header.Get("Content-Type")))
@@ -299,7 +428,7 @@ func (s *Server) forwardTerminal(w http.ResponseWriter, r *http.Request, src *pe
 			// Relayed, a 1xx/2xx without an upgrade would read as success.
 			http.Error(w, "peer refused the request", http.StatusBadGateway)
 		case errors.Is(err, websocket.ErrBadHandshake) && resp != nil:
-			code = relayPeerResponse(w, resp)
+			code = relayPeerResponse(w, resp, nil)
 		default:
 			slog.Debug("peer terminal dial failed", "peer", src.Host(), "err", err)
 			http.Error(w, "peer unreachable", http.StatusBadGateway)

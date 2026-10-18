@@ -8,6 +8,7 @@ import {
   isPendingRun,
   markPendingRun,
   recordRestartFailure,
+  relaunchAdvice,
   restartFailure,
 } from './pendingRuns'
 
@@ -56,5 +57,24 @@ describe('restart failures', () => {
     recordRestartFailure('b', failure, 0)
     clearPendingRuns()
     expect(restartFailure('b', 1)).toBeNull()
+  })
+})
+
+describe('relaunchAdvice', () => {
+  it('names the host of a peer dispatcher', () => {
+    const f = { error: 'dispatcher exited', crew: '1-2', host: 'b', status: 422 }
+    expect(relaunchAdvice(f, '1-2')).toBe('Relaunch it from a terminal in the repo on b with CREW_ID=1-2 dispatcher.')
+    recordRestartFailure('a', f, 0)
+    expect(restartFailure('a', 1)?.host).toBe('b')
+  })
+
+  it('keeps the local wording without a host', () => {
+    expect(relaunchAdvice({ error: 'x', status: 422 }, '1-2')).toBe('Relaunch it from a terminal in the repo with CREW_ID=1-2 dispatcher.')
+  })
+
+  it('does not advise a relaunch when the launcher may be running', () => {
+    expect(relaunchAdvice({ error: 'x', host: 'b', status: 502 }, '1-2')).toBe(
+      'Check Fleet for the new dispatcher before relaunching.',
+    )
   })
 })

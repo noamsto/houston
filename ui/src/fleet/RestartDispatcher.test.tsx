@@ -138,6 +138,46 @@ describe('RestartDispatcher', () => {
     expect(isPendingRun('pane-new', Date.now())).toBe(true)
   })
 
+  it('on a peer run a run_id that is not that peer\'s is not followed', async () => {
+    window.location.hash = '#/fleet/d%2F1/crew'
+    fetchMock.mockImplementationOnce(() => Promise.resolve(reply(200, { ...started, run_id: 'pane-5' })))
+    render(<RestartDispatcher run={dispatcher({ host: 'b' })} />)
+    open()
+
+    confirm()
+
+    await screen.findByRole('button', { name: 'Restart' })
+    expect(window.location.hash).toBe('#/fleet/d%2F1/crew')
+    expect(isPendingRun('pane-5', Date.now())).toBe(false)
+  })
+
+  it('on a peer run follows that peer\'s run_id', async () => {
+    window.location.hash = '#/fleet/d%2F1/crew'
+    fetchMock.mockImplementationOnce(() => Promise.resolve(reply(200, { ...started, run_id: 'peer-b.pane-5' })))
+    render(<RestartDispatcher run={dispatcher({ host: 'b' })} />)
+    open()
+
+    confirm()
+
+    await waitFor(() => expect(window.location.hash).toBe('#/fleet/peer-b.pane-5/crew'))
+    expect(isPendingRun('peer-b.pane-5', Date.now())).toBe(true)
+  })
+
+  it('a success without run_id does not navigate', async () => {
+    window.location.hash = '#/fleet/d%2F1/crew'
+    const noId: Partial<typeof started> = { ...started }
+    delete noId.run_id
+    fetchMock.mockImplementationOnce(() => Promise.resolve(reply(200, noId)))
+    render(<RestartDispatcher run={dispatcher()} />)
+    open()
+
+    confirm()
+
+    await screen.findByRole('button', { name: 'Restart' })
+    expect(window.location.hash).toBe('#/fleet/d%2F1/crew')
+    expect(isPendingRun('undefined', Date.now())).toBe(false)
+  })
+
   it('shows Restarting… and disables the action while sending', async () => {
     let resolve: (r: Response) => void = () => {}
     fetchMock.mockImplementationOnce(() => new Promise<Response>((r) => { resolve = r }))
@@ -299,6 +339,26 @@ describe('RestartDispatcher', () => {
     expect(screen.getByText(/CREW_ID=1700000000-42 dispatcher\./)).toBeTruthy()
   })
 
+  it('on a peer run Settings loads the peer host\'s options', async () => {
+    render(<RestartDispatcher run={dispatcher({ host: 'b' })} />)
+    open()
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+
+    await waitFor(() => expect(fetchMock.mock.calls.map((c) => c[0])).toContain('/api/hosts/b/dispatch/options'))
+  })
+
+  it('on a peer run an old_ended 422 names the host in the relaunch line', async () => {
+    fetchMock.mockImplementationOnce(() =>
+      Promise.resolve(reply(422, { error: 'dispatcher exited immediately', crew: '1700000000-42', old_ended: true })),
+    )
+    render(<RestartDispatcher run={dispatcher({ host: 'b' })} />)
+    open()
+    confirm()
+    await screen.findByText('dispatcher exited immediately')
+
+    expect(screen.getByText(/on b with CREW_ID=1700000000-42 dispatcher\./)).toBeTruthy()
+  })
+
   it('an old_ended unchecked 502 says to check Fleet, not to relaunch', async () => {
     fetchMock.mockImplementationOnce(() =>
       Promise.resolve(reply(502, { error: 'tmux unavailable', crew: '1700000000-42', old_ended: true })),
@@ -340,6 +400,30 @@ describe('RestartDispatcher', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close' }))
 
     expect(screen.getByRole('button', { name: 'Restart' })).toBeTruthy()
+  })
+
+  it('a forwarder 504 reads as a dropped connection and keeps the old id pending', async () => {
+    fetchMock.mockImplementationOnce(() => Promise.resolve(reply(504, { error: 'peer did not answer in time' })))
+    render(<RestartDispatcher run={dispatcher({ id: 'peer-b.d1', host: 'b' })} />)
+    open()
+    confirm()
+
+    await screen.findByText(/The connection dropped — the restart may still be running on the server\./)
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
+    expect(isPendingRun('peer-b.d1', Date.now())).toBe(true)
+    expect(restartFailure('peer-b.d1', Date.now())).toBeNull()
+  })
+
+  it('a body that fails to read reads as a dropped connection', async () => {
+    fetchMock.mockImplementationOnce(() =>
+      Promise.resolve({ ok: true, status: 200, text: () => Promise.reject(new Error('reset')) } as unknown as Response),
+    )
+    render(<RestartDispatcher run={dispatcher()} />)
+    open()
+    confirm()
+
+    await screen.findByText(/The connection dropped — the restart may still be running on the server\./)
+    expect(isPendingRun('d/1', Date.now())).toBe(true)
   })
 
   it('the old id is pending while the request is in flight', async () => {

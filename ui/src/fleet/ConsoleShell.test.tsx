@@ -28,6 +28,7 @@ vi.mock('../api/dispatch', () => ({
   })),
   submitDispatch: vi.fn(),
 }))
+vi.mock('../api/hosts', () => ({ hostAPI: (_h: string | undefined, p: string) => `/api/${p}`, fetchHosts: () => Promise.resolve([]) }))
 
 function run(p: Partial<Run> = {}): Run {
   return {

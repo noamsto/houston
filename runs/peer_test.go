@@ -62,6 +62,22 @@ func TestPeerLayerComposition(t *testing.T) {
 	}
 }
 
+func TestPeerRunIDMatchesTheListedID(t *testing.T) {
+	reg := NewRegistry(DefaultOrder)
+	reg.Apply(Delta{Source: PeerLayer, Key: PeerKey("b", "pane-7"), Run: Run{Agent: "claude", State: StateIdle, Host: "b"}})
+
+	snap := reg.Snapshot()
+	if len(snap) != 1 {
+		t.Fatalf("%d runs, want 1", len(snap))
+	}
+	if snap[0].ID != PeerRunID("b", "pane-7") {
+		t.Errorf("listed id %q, PeerRunID %q", snap[0].ID, PeerRunID("b", "pane-7"))
+	}
+	if got := PeerRunID("b", "pane-7"); got != "peer-b.pane-7" {
+		t.Errorf("PeerRunID = %q, want peer-b.pane-7", got)
+	}
+}
+
 func TestPeerLayerCapsComposition(t *testing.T) {
 	r := NewRegistry(DefaultOrder)
 	sub := r.Subscribe()

@@ -14,7 +14,16 @@ function messageOf(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
 
-export function RepoPicker({ onChanged, onClose }: { onChanged: (added?: string) => void; onClose: () => void }) {
+export function RepoPicker({
+  host,
+  onChanged,
+  onClose,
+}: {
+  host: string
+  onChanged: (added?: string) => void
+  onClose: () => void
+}) {
+  const peer = host === 'local' ? undefined : host
   const [repos, setRepos] = useState<RepoEntry[]>([])
   const [roots, setRoots] = useState<string[]>([])
   const [query, setQuery] = useState('')
@@ -28,7 +37,7 @@ export function RepoPicker({ onChanged, onClose }: { onChanged: (added?: string)
 
   useEffect(() => {
     let cancelled = false
-    fetchRepos()
+    fetchRepos(peer)
       .then((r) => {
         if (cancelled) return
         setRepos(r.repos)
@@ -39,13 +48,13 @@ export function RepoPicker({ onChanged, onClose }: { onChanged: (added?: string)
         if (!cancelled) setListError(messageOf(e))
       })
     return () => { cancelled = true }
-  }, [version])
+  }, [peer, version])
 
   useEffect(() => {
     let cancelled = false
     const timer = setTimeout(
       () => {
-        fetchRepoCandidates(query)
+        fetchRepoCandidates(query, peer)
           .then((r) => {
             if (cancelled) return
             setCandidates(r.candidates)
@@ -62,7 +71,7 @@ export function RepoPicker({ onChanged, onClose }: { onChanged: (added?: string)
       cancelled = true
       clearTimeout(timer)
     }
-  }, [query, version])
+  }, [peer, query, version])
 
   async function change(action: () => Promise<{ ok: true; path?: string } | { ok: false; error: string }>): Promise<void> {
     setBusy(true)
@@ -101,7 +110,7 @@ export function RepoPicker({ onChanged, onClose }: { onChanged: (added?: string)
               className="repo-picker-btn"
               disabled={busy}
               aria-label={`Remove ${r.name}`}
-              onClick={() => { void change(() => removeRepo(r.path)) }}
+              onClick={() => { void change(() => removeRepo(r.path, peer)) }}
             >
               Remove
             </button>
@@ -132,7 +141,7 @@ export function RepoPicker({ onChanged, onClose }: { onChanged: (added?: string)
               className="repo-picker-btn"
               disabled={busy || c.registered}
               aria-label={`Add ${c.name}`}
-              onClick={() => { void change(() => addRepo(c.path)) }}
+              onClick={() => { void change(() => addRepo(c.path, peer)) }}
             >
               Add
             </button>

@@ -84,7 +84,10 @@ function rank(run: Run, now: number): number {
 export function CrewTab({ run, runs, now }: CrewTabProps) {
   const crew = run.crew?.name ?? ''
   const host = run.host || 'local'
-  const repo = resolveCrewRepo(crew, run.project, useCrewRepos(true))
+  const repo = resolveCrewRepo(crew, run.project, useCrewRepos(!run.host))
+  const dispatchLink = run.host
+    ? crew && dispatchHref(undefined, crew, run.host)
+    : repo && dispatchHref(repo.path, crew)
 
   const members = useMemo(
     () =>
@@ -107,12 +110,12 @@ export function CrewTab({ run, runs, now }: CrewTabProps) {
           {crewShortId(crew)}
         </span>
         <span className="crews-counts">{countsLabel(counts)}</span>
-        {repo && !run.host && (
-          <a className="crews-dispatch" href={dispatchHref(repo.path, crew)}>
+        {dispatchLink && (
+          <a className="crews-dispatch" href={dispatchLink}>
             Dispatch here
           </a>
         )}
-        {run.crew?.name && !run.host && <RestartDispatcher run={run} />}
+        {run.crew?.name && <RestartDispatcher run={run} />}
       </div>
       {members.map((m) => (
         <Member key={m.id} run={m} now={now} />

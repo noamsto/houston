@@ -8,6 +8,7 @@ import {
 } from '../api/dispatch'
 import type { Run } from '../api/runs'
 import { isBusy } from './crewsModel'
+import { runIdFor } from './dispatchForm'
 import { crewShortId } from './fleetList'
 import { switchRunTab } from './nav'
 import { clearPendingRun, clearRestartFailure, markPendingRun, recordRestartFailure, relaunchAdvice } from './pendingRuns'
@@ -42,7 +43,7 @@ export function RestartDispatcher({ run }: { run: Run }) {
 
   function loadOptions(): void {
     setOptionsState({ status: 'loading' })
-    fetchDispatchOptions().then(
+    fetchDispatchOptions(run.host).then(
       (options) => setOptionsState({ status: 'ready', options }),
       (e: unknown) => setOptionsState({ status: 'error', error: e instanceof Error ? e.message : String(e) }),
     )
@@ -98,16 +99,25 @@ export function RestartDispatcher({ run }: { run: Run }) {
     markPendingRun(run.id, Date.now())
     const result = await restartDispatcher(run.id, req)
     sending.current = false
-    if (result.kind === 'failed' && result.status === 0) {
-      // The server may still be running the restart; the pending mark stays so
-      // the old id reads as starting instead of a false verdict.
+    if (result.kind === 'failed' && (result.status === 0 || result.status === 504)) {
+      // The server may still be running the restart (the local route never
+      // answers 504; the peer forwarder does once the peer had the request and
+      // the answer never arrived whole); the pending mark stays so the old id
+      // reads as starting instead of a false verdict.
       setPhase('dropped')
       return
     }
     clearPendingRun(run.id)
     if (result.kind === 'started') {
-      markPendingRun(result.runId, Date.now())
-      if (onRoute()) switchRunTab(result.runId, 'crew')
+      // An id that cannot address this host's run is not followed; the new
+      // dispatcher still shows up in Fleet.
+      const newId = runIdFor(run.host, result.runId)
+      if (!newId) {
+        close()
+        return
+      }
+      markPendingRun(newId, Date.now())
+      if (onRoute()) switchRunTab(newId, 'crew')
       return
     }
     if (result.busy) {
@@ -119,7 +129,7 @@ export function RestartDispatcher({ run }: { run: Run }) {
     if (result.oldEnded) {
       recordRestartFailure(
         run.id,
-        { error: result.error, output: result.output, crew: result.crew, status: result.status },
+        { error: result.error, output: result.output, crew: result.crew, status: result.status, host: run.host },
         Date.now(),
       )
     }
@@ -159,7 +169,7 @@ export function RestartDispatcher({ run }: { run: Run }) {
         {failure.crew && ended && (
           <p>
             Crew <code>{failure.crew}</code> is intact — workers keep running.{' '}
-            {relaunchAdvice(failure, failure.crew)}
+            {relaunchAdvice({ ...failure, host: run.host }, failure.crew)}
           </p>
         )}
         {failure.crew && !ended && <p>Crew <code>{failure.crew}</code> is unchanged.</p>}

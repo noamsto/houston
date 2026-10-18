@@ -12,6 +12,9 @@ const peerKeyPrefix = "peer/"
 // "/" or "."; ids match ^[A-Za-z0-9_-]+$ (both validated by the peer package).
 func PeerKey(host, id string) string { return peerKeyPrefix + host + "/" + id }
 
+// PeerRunID is the Run.ID the registry gives run id mirrored from peer host.
+func PeerRunID(host, id string) string { return idFor(PeerKey(host, id)) }
+
 // peerHost returns the host of a PeerKey.
 func peerHost(key string) (string, bool) {
 	rest, ok := strings.CutPrefix(key, peerKeyPrefix)

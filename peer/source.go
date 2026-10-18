@@ -71,8 +71,6 @@ const maxID = 1024
 
 var idRe = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
-var dialer = &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
-
 var errInsecureHop = errors.New("plain http connection is neither loopback nor over the tailnet")
 
 type Options struct {
@@ -81,6 +79,10 @@ type Options struct {
 	MinBackoff time.Duration // default 1s
 	MaxBackoff time.Duration // default 30s
 	Silence    time.Duration // default 60s
+
+	DialTimeout   time.Duration // default 10s
+	HeaderTimeout time.Duration // Fast requests' response-header timeout, default 15s
+	LongCeiling   time.Duration // bound on a Long or Detached request, default 5m
 }
 
 type Health struct {
@@ -98,8 +100,10 @@ type Source struct {
 	cfg    Config
 	opts   Options
 	client *http.Client
+	slow   *http.Client                                                      // client without a response-header timeout, for requests that answer late
 	dial   func(ctx context.Context, network, addr string) (net.Conn, error) // the transport's dial, reused by DialTerminal
 	hopOK  func(local, remote net.Addr) bool                                 // plainHopOK; a field so tests can stand in a route
+	dialer *net.Dialer
 
 	mu     sync.Mutex
 	health Health
@@ -127,10 +131,20 @@ func New(cfg Config, opts Options) *Source {
 	if opts.Silence <= 0 {
 		opts.Silence = 60 * time.Second
 	}
+	if opts.DialTimeout <= 0 {
+		opts.DialTimeout = 10 * time.Second
+	}
+	if opts.HeaderTimeout <= 0 {
+		opts.HeaderTimeout = 15 * time.Second
+	}
+	if opts.LongCeiling <= 0 {
+		opts.LongCeiling = 5 * time.Minute
+	}
 	s := &Source{
 		cfg:    cfg,
 		opts:   opts,
 		hopOK:  plainHopOK,
+		dialer: &net.Dialer{Timeout: opts.DialTimeout, KeepAlive: 30 * time.Second},
 		health: Health{Name: cfg.Name, State: StateConnecting},
 		known:  map[string]runs.Run{},
 		warned: map[string]bool{},
@@ -139,9 +153,9 @@ func New(cfg Config, opts Options) *Source {
 		// Not ProxyFromEnvironment: an HTTP_PROXY would receive a plain-http
 		// tailnet request, bearer header included.
 		Proxy:                 nil,
-		DialContext:           dialer.DialContext,
+		DialContext:           s.dialer.DialContext,
 		TLSHandshakeTimeout:   10 * time.Second,
-		ResponseHeaderTimeout: 15 * time.Second,
+		ResponseHeaderTimeout: opts.HeaderTimeout,
 		ForceAttemptHTTP2:     true,
 		IdleConnTimeout:       90 * time.Second,
 	}
@@ -149,11 +163,17 @@ func New(cfg Config, opts Options) *Source {
 		transport.DialContext = s.dialPlain
 	}
 	s.dial = transport.DialContext
-	s.client = &http.Client{
-		Transport: transport,
-		// The token must never follow a redirect to another URL.
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}
+	// The token must never follow a redirect to another URL.
+	noRedirect := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	s.client = &http.Client{Transport: transport, CheckRedirect: noRedirect}
+	// A dispatch answers only once it finished, so the ceiling bounds it
+	// instead of the header timeout. No idle reuse: a Detached request counts
+	// as written only on a fresh connection, so a stale pooled one that fails
+	// after the write cannot fake an unknown outcome.
+	slowTr := transport.Clone()
+	slowTr.ResponseHeaderTimeout = 0
+	slowTr.DisableKeepAlives = true
+	s.slow = &http.Client{Transport: slowTr, CheckRedirect: noRedirect}
 	return s
 }
 
@@ -161,7 +181,7 @@ func New(cfg Config, opts Options) *Source {
 // the tailnet before anything is written on it, so the bearer token never
 // crosses a cleartext hop.
 func (s *Source) dialPlain(ctx context.Context, network, addr string) (net.Conn, error) {
-	conn, err := dialer.DialContext(ctx, network, addr)
+	conn, err := s.dialer.DialContext(ctx, network, addr)
 	if err != nil {
 		return nil, err
 	}

@@ -515,8 +515,7 @@ func (s *Server) Handler() http.Handler {
 	apiMux.HandleFunc("/api/opencode/session/", s.handleAPIOpenCodeSession)
 	apiMux.HandleFunc("/api/runs", s.handleRunsSnapshot)
 	apiMux.HandleFunc("/api/runs/stream", s.handleRunsStream)
-	// A peer run id on a run-addressed route is forwarded to its peer
-	// (peerOr); restart is not, so a peer id there stays "no such run".
+	// A peer run id on a run-addressed route is forwarded to its peer (peerOr).
 	apiMux.HandleFunc("GET /api/runs/{id}/terminal", s.peerOr(fwdTerminal, s.handleRunTerminal))
 	apiMux.HandleFunc("POST /api/runs/{id}/input", s.peerOr(fwdInput, s.handleRunInput))
 	apiMux.HandleFunc("POST /api/runs/{id}/answer", s.peerOr(fwdAnswer, s.handleRunAnswer))
@@ -531,7 +530,7 @@ func (s *Server) Handler() http.Handler {
 	// launch, repo registry) unregistered, so they 404.
 	if s.mode != mode.Tmux {
 		apiMux.HandleFunc("POST /api/runs/{id}/reply", s.peerOr(fwdReply, s.handleRunReply))
-		apiMux.HandleFunc("POST /api/runs/{id}/restart", s.handleRunRestart)
+		apiMux.HandleFunc("POST /api/runs/{id}/restart", s.peerOr(fwdRestart, s.handleRunRestart))
 		apiMux.HandleFunc("GET /api/runs/{id}/crew/feed", s.peerOr(fwdCrewFeed, s.handleRunCrewFeed))
 		apiMux.HandleFunc("GET /api/runs/{id}/crew/feed/stream", s.peerOr(fwdCrewFeedStream, s.handleRunCrewFeedStream))
 		apiMux.HandleFunc("POST /api/dispatch", s.handleDispatch)
@@ -541,6 +540,15 @@ func (s *Server) Handler() http.Handler {
 		apiMux.HandleFunc("POST /api/repos", s.handleReposAdd)
 		apiMux.HandleFunc("DELETE /api/repos", s.handleReposRemove)
 		apiMux.HandleFunc("GET /api/repos/candidates", s.handleRepoCandidates)
+		// Forwarded to that peer; a path prefix rather than ?host= so a route
+		// left unwired 404s instead of acting on this machine.
+		apiMux.HandleFunc("GET /api/hosts/{host}/dispatch/options", s.forwardHost(fwdHostOptions))
+		apiMux.HandleFunc("POST /api/hosts/{host}/dispatch", s.forwardHost(fwdHostDispatch))
+		apiMux.HandleFunc("POST /api/hosts/{host}/dispatch/dispatcher", s.forwardHost(fwdHostDispatcher))
+		apiMux.HandleFunc("GET /api/hosts/{host}/repos", s.forwardHost(fwdHostRepos))
+		apiMux.HandleFunc("POST /api/hosts/{host}/repos", s.forwardHost(fwdHostReposAdd))
+		apiMux.HandleFunc("DELETE /api/hosts/{host}/repos", s.forwardHost(fwdHostReposRemove))
+		apiMux.HandleFunc("GET /api/hosts/{host}/repos/candidates", s.forwardHost(fwdHostCandidates))
 	}
 	if s.claudeModStore != nil {
 		apiMux.HandleFunc("GET /api/debug/claude-mod", s.handleClaudeMod)

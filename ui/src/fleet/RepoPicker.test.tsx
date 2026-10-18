@@ -7,11 +7,25 @@ const fetchReposMock = vi.fn<() => Promise<{ roots: string[]; repos: RepoEntry[]
 const fetchCandidatesMock = vi.fn<(q: string) => Promise<{ roots: string[]; candidates: RepoCandidate[]; truncated: boolean }>>()
 const addRepoMock = vi.fn<(path: string) => Promise<{ ok: true; path: string } | { ok: false; error: string }>>()
 const removeRepoMock = vi.fn<(path: string) => Promise<{ ok: true } | { ok: false; error: string }>>()
+// Every call's host, so the local-only assertions keep their plain arguments.
+const hostsSeen: { fn: string; host?: string }[] = []
 vi.mock('../api/repos', () => ({
-  fetchRepos: () => fetchReposMock(),
-  fetchRepoCandidates: (q: string) => fetchCandidatesMock(q),
-  addRepo: (path: string) => addRepoMock(path),
-  removeRepo: (path: string) => removeRepoMock(path),
+  fetchRepos: (host?: string) => {
+    hostsSeen.push({ fn: 'fetchRepos', host })
+    return fetchReposMock()
+  },
+  fetchRepoCandidates: (q: string, host?: string) => {
+    hostsSeen.push({ fn: 'fetchRepoCandidates', host })
+    return fetchCandidatesMock(q)
+  },
+  addRepo: (path: string, host?: string) => {
+    hostsSeen.push({ fn: 'addRepo', host })
+    return addRepoMock(path)
+  },
+  removeRepo: (path: string, host?: string) => {
+    hostsSeen.push({ fn: 'removeRepo', host })
+    return removeRepoMock(path)
+  },
 }))
 
 const registered: RepoEntry[] = [
@@ -19,12 +33,12 @@ const registered: RepoEntry[] = [
   { path: '/git/gone', name: 'gone', valid: false },
 ]
 
-function setup(candidates: RepoCandidate[] = [], truncated = false) {
+function setup(candidates: RepoCandidate[] = [], truncated = false, host = 'local') {
   fetchReposMock.mockResolvedValue({ roots: ['/git'], repos: registered })
   fetchCandidatesMock.mockResolvedValue({ roots: ['/git'], candidates, truncated })
   const onChanged = vi.fn()
   const onClose = vi.fn()
-  render(<RepoPicker onChanged={onChanged} onClose={onClose} />)
+  render(<RepoPicker host={host} onChanged={onChanged} onClose={onClose} />)
   return { onChanged, onClose }
 }
 
@@ -34,6 +48,7 @@ afterEach(() => {
   fetchCandidatesMock.mockReset()
   addRepoMock.mockReset()
   removeRepoMock.mockReset()
+  hostsSeen.length = 0
 })
 
 describe('RepoPicker', () => {
@@ -107,11 +122,36 @@ describe('RepoPicker', () => {
   it('keeps a failed repo-list error until the list loads again', async () => {
     fetchReposMock.mockRejectedValueOnce(new Error('list blew up'))
     fetchCandidatesMock.mockResolvedValue({ roots: [], candidates: [], truncated: false })
-    render(<RepoPicker onChanged={vi.fn()} onClose={vi.fn()} />)
+    render(<RepoPicker host="local" onChanged={vi.fn()} onClose={vi.fn()} />)
 
     expect(await screen.findByText('list blew up')).toBeTruthy()
     await waitFor(() => expect(fetchCandidatesMock).toHaveBeenCalled())
     expect(screen.getByRole('alert').textContent).toBe('list blew up')
+  })
+
+  it('sends every call to the local host as no host', async () => {
+    const { onChanged } = setup([{ path: '/git/beta', name: 'beta', registered: false }])
+    addRepoMock.mockResolvedValue({ ok: true, path: '/git/beta' })
+    fireEvent.click(await screen.findByRole('button', { name: 'Add beta' }))
+    await waitFor(() => expect(onChanged).toHaveBeenCalled())
+
+    expect(hostsSeen.length).toBeGreaterThan(0)
+    expect(hostsSeen.every((c) => c.host === undefined)).toBe(true)
+  })
+
+  it('sends every call to a peer host', async () => {
+    const { onChanged } = setup([{ path: '/git/beta', name: 'beta', registered: false }], false, 'b')
+    addRepoMock.mockResolvedValue({ ok: true, path: '/git/beta' })
+    removeRepoMock.mockResolvedValue({ ok: true })
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Add beta' }))
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove alpha' }))
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(2))
+
+    const fns = new Set(hostsSeen.map((c) => c.fn))
+    expect([...fns].sort()).toEqual(['addRepo', 'fetchRepoCandidates', 'fetchRepos', 'removeRepo'])
+    expect(hostsSeen.every((c) => c.host === 'b')).toBe(true)
   })
 
   it('closes', async () => {
