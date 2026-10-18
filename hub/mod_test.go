@@ -115,74 +115,111 @@ func TestModLiveSkipsTranscriptHeal(t *testing.T) {
 	waitView(t, h, "s1", "mod waiting", stateIs(hook.StateWaiting))
 }
 
-func TestHookAheadFallsBack(t *testing.T) {
+func TestStaleModFallsBack(t *testing.T) {
 	dir := t.TempDir()
-	now := time.Now().Unix()
-	writeState(t, dir, hook.SessionState{SessionID: "s1", State: hook.StateThinking, UpdatedAt: now - 26})
 	store := claudemod.NewStore()
-	h := startModHub(t, dir, store)
+	h := NewWithOptions(dir, Options{ClaudeProjectsDir: "-", Mod: store}, silentLog())
+	now := time.Now()
+	sec := now.Unix()
+	writeState(t, dir, hook.SessionState{SessionID: "s1", State: hook.StateThinking, UpdatedAt: sec - 1})
+	h.loadStateFile(hook.Path(dir, "s1"))
 
+	// The mod's records ended 50 s ago: past the window, so it stopped.
 	f := newModFeed(t, store, "s1")
-	f.at(now-26, "turn.start", nil)
-	f.at(now-25, "turn.complete", nil)
-	waitView(t, h, "s1", "mod live", stateIs(hook.StateWaiting))
+	f.at(sec-51, "turn.start", nil)
+	f.at(sec-50, "turn.complete", func(r *claudemod.Record) { r.Reason = "answer" })
+	h.applyModDirty()
+	h.tickMod(now)
+	v := findSession(h, "s1")
+	if v == nil || v.State != hook.StateThinking || v.UpdatedAt != sec-1 {
+		t.Fatalf("view = %+v, want the hook's thinking at %d", v, sec-1)
+	}
 
-	// 13 s past the newest record, and the mod has not answered it in 12 s:
-	// the mod stopped posting.
-	writeState(t, dir, hook.SessionState{SessionID: "s1", State: hook.StateThinking, UpdatedAt: now - 12})
-	v := waitView(t, h, "s1", "hook state", stateIs(hook.StateThinking))
-	if v.UpdatedAt != now-12 {
-		t.Errorf("UpdatedAt = %d, want the hook's %d", v.UpdatedAt, now-12)
+	// A record 30 s ago is inside the window: the mod is live again.
+	f.at(sec-30, "heartbeat", nil)
+	h.applyModDirty()
+	h.tickMod(now)
+	if v := findSession(h, "s1"); v == nil || v.State != hook.StateWaiting {
+		t.Fatalf("view = %+v, want the mod's waiting", v)
 	}
 }
 
-func TestFreshHookWriteDoesNotRetireLiveMod(t *testing.T) {
+func TestModLiveWindowBoundary(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	s := &Session{hasMod: true, mod: claudemod.Session{Known: true}}
+	s.mod.Updated = now.Add(-44 * time.Second).UnixMilli()
+	if !s.modLive(now) {
+		t.Error("mod retired 44 s after its newest record")
+	}
+	s.mod.Updated = now.Add(-modLiveWindow).UnixMilli()
+	if s.modLive(now) {
+		t.Error("mod still live once the window passed")
+	}
+}
+
+func TestStreamOfHookWritesDoesNotKeepDeadModLive(t *testing.T) {
+	const now = int64(1_000_000)
+	rec := now - 60
+	s := &Session{hasMod: true, mod: claudemod.Session{Known: true, Updated: rec * 1000}}
+	// Hook events keep landing 3 s apart after the mod's last record; once the
+	// window has passed, none of them brings the mod back.
+	for sec := rec + 3; sec <= now; sec += 3 {
+		s.hookState = hook.SessionState{SessionID: "s1", State: hook.StateThinking, UpdatedAt: sec}
+		for _, at := range []int64{sec, sec + 1, sec + 2} {
+			if at-rec < int64(modLiveWindow/time.Second) {
+				continue
+			}
+			if s.modLive(time.Unix(at, 0)) {
+				t.Fatalf("dead mod live at %d after a hook write at %d", at, sec)
+			}
+		}
+	}
+}
+
+func TestLateHookWriteDoesNotRetireIdleMod(t *testing.T) {
+	dir := t.TempDir()
+	store := claudemod.NewStore()
+	h := NewWithOptions(dir, Options{ClaudeProjectsDir: "-", Mod: store}, silentLog())
+	now := time.Now()
+	sec := now.Unix()
+
+	f := newModFeed(t, store, "s1")
+	f.at(sec-22, "turn.start", nil)
+	f.at(sec-20, "turn.complete", func(r *claudemod.Record) { r.Reason = "answer" })
+	// A detached post_tool lands after Stop and leaves the hook file thinking.
+	writeState(t, dir, hook.SessionState{SessionID: "s1", State: hook.StateThinking, UpdatedAt: sec - 18})
+	h.loadStateFile(hook.Path(dir, "s1"))
+	h.applyModDirty()
+
+	// 13 s after the late write, before the next heartbeat.
+	h.tickMod(time.Unix(sec-5, 0))
+	if v := findSession(h, "s1"); v == nil || v.State != hook.StateWaiting {
+		t.Fatalf("view = %+v, want the mod's waiting", v)
+	}
+
+	f.at(sec-5, "heartbeat", nil)
+	h.applyModDirty()
+	h.tickMod(now)
+	if v := findSession(h, "s1"); v == nil || v.State != hook.StateWaiting {
+		t.Fatalf("view = %+v, want the mod's waiting", v)
+	}
+}
+
+func TestHookEndedRetiresMod(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now().Unix()
-	writeState(t, dir, hook.SessionState{SessionID: "s1", State: hook.StateWaiting, UpdatedAt: now - 20})
+	writeState(t, dir, hook.SessionState{SessionID: "s1", State: hook.StateThinking, UpdatedAt: now - 6})
 	store := claudemod.NewStore()
 	h := startModHub(t, dir, store)
 
 	f := newModFeed(t, store, "s1")
-	f.at(now-21, "turn.start", nil)
-	f.at(now-20, "turn.complete", func(r *claudemod.Record) { r.Reason = "answer" })
+	f.at(now-5, "turn.start", nil)
+	f.at(now-2, "turn.complete", func(r *claudemod.Record) { r.Reason = "answer" })
 	waitView(t, h, "s1", "mod waiting", stateIs(hook.StateWaiting))
 
-	// A UserPromptSubmit after an idle spell lands before the mod's queued
-	// turn.start: the mod has not had the grace to answer it yet.
-	writeState(t, dir, hook.SessionState{SessionID: "s1", State: hook.StateThinking, Turn: 2, UpdatedAt: now})
-	v := waitView(t, h, "s1", "hook state loaded", func(v SessionView) bool { return v.Turn == 2 })
-	if v.State != hook.StateWaiting {
-		t.Fatalf("state = %q, want the mod's waiting", v.State)
-	}
-
-	f.at(now, "turn.start", nil)
-	v = waitView(t, h, "s1", "mod thinking", stateIs(hook.StateThinking))
-	if v.Since != now {
-		t.Errorf("Since = %d, want the mod's %d", v.Since, now)
-	}
-}
-
-func TestModLiveGraceBoundary(t *testing.T) {
-	const rec = int64(1_000_000)
-	s := &Session{
-		hasMod:    true,
-		mod:       claudemod.Session{Known: true, Updated: rec * 1000},
-		hookState: hook.SessionState{SessionID: "s1", UpdatedAt: rec + 5},
-	}
-	if !s.modLive(time.Unix(rec+5+modLagGrace-1, 0)) {
-		t.Error("mod retired before the grace passed")
-	}
-	if s.modLive(time.Unix(rec+5+modLagGrace, 0)) {
-		t.Error("mod still live once the grace passed")
-	}
-
-	// A hook write one second past the record is the same event across a
-	// second boundary, never ahead.
-	s.hookState.UpdatedAt = rec + 1
-	if !s.modLive(time.Unix(rec+1+modLagGrace*10, 0)) {
-		t.Error("hook write within the truncation second retired the mod")
-	}
+	// SessionEnd fired, the mod's session.end was lost at exit.
+	writeState(t, dir, hook.SessionState{SessionID: "s1", State: hook.StateEnded, UpdatedAt: now})
+	waitView(t, h, "s1", "hook ended", stateIs(hook.StateEnded))
 }
 
 func TestHookPermissionWinsWhileModToolRunning(t *testing.T) {
@@ -289,9 +326,7 @@ func TestModOnlySessionNotCreatedUntilKnown(t *testing.T) {
 func TestBackgroundSwitchesWithoutDoubleCount(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now().Unix()
-	// The mod's records sit far enough back for a hook write to lead them for
-	// the whole grace.
-	rec := now - modLagGrace - 15
+	rec := now - 5
 	transcript := writeJSONL(t,
 		bgStartLine("tu1", "Bash", shellInput, "2026-01-01T00:00:00Z")+
 			bgResultLine("tu1", fmt.Sprintf(shellResult, "bshA"), false))
@@ -322,13 +357,12 @@ func TestBackgroundSwitchesWithoutDoubleCount(t *testing.T) {
 		t.Errorf("mod task = %+v", v.Background[0])
 	}
 
-	// The hook runs ahead: the mod stopped, so the transcript's list returns.
-	writeState(t, dir, hook.SessionState{
-		SessionID: "s1", State: hook.StateThinking, TranscriptPath: transcript, UpdatedAt: now - modLagGrace - 2,
-	})
-	waitView(t, h, "s1", "transcript background again", func(v SessionView) bool {
-		return v.State == hook.StateThinking && backgroundIs("bshA")(v)
-	})
+	// No record for the whole window: the mod stopped, so the transcript's list
+	// returns.
+	h.tickMod(time.Unix(rec, 0).Add(modLiveWindow))
+	if v := findSession(h, "s1"); v == nil || v.State != hook.StateThinking || !backgroundIs("bshA")(*v) {
+		t.Errorf("view = %+v, want the hook's thinking and bshA", v)
+	}
 }
 
 func TestMonitorExpiresOnTick(t *testing.T) {
@@ -360,6 +394,8 @@ func TestMonitorExpiresOnTick(t *testing.T) {
 	if v := findSession(h, "m1"); v == nil || len(v.Background) != 1 {
 		t.Fatalf("monitor gone before its timeout: %+v", v)
 	}
+	f.at(sec+40, "heartbeat", nil)
+	h.applyModDirty()
 	h.tickMod(now.Add(61 * time.Second))
 	if v := findSession(h, "m1"); v == nil || v.Background != nil {
 		t.Fatalf("monitor kept past its timeout: %+v", v)

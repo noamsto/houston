@@ -7,29 +7,30 @@ import (
 	"github.com/noamsto/houston/hook"
 )
 
-// modLagGrace is how long, in seconds, the mod has to answer a hook write
-// with a record of its own before it counts as stopped (unloaded, broken, a
-// failed reload). Every hook event has a matching mod record, but the mod
-// sends from a timer queue while the hook writes synchronously, so a hook
-// write can land before its record; a mod that has not answered within the
-// grace is dead.
-const modLagGrace = 10
+// modLiveWindow is how long the mod counts as live after its newest record.
+// The mod posts a heartbeat from its timer whenever nothing else was queued
+// for 15 s, so an idle session still answers; three missed heartbeats mean it
+// stopped (unloaded, broken, a failed reload).
+const modLiveWindow = 45 * time.Second
 
 // modLive reports whether the mod's fold replaces the hook state. Known
 // requires a state-defining record since houston started, so a restart
-// mid-session keeps the hook path until the next one. There is no expiry
-// without a hook write: an idle session posts nothing for hours and must stay
-// on the mod. A hook write counts as ahead only once it has led the newest
-// mod record for the whole grace; the + 1 absorbs the hook's whole-second
-// UpdatedAt against a record of the same event a few ms earlier across a
-// second boundary.
+// mid-session keeps the hook path until the next one. Liveness is the mod's
+// own recency, never the hook file's: hook events are detached and can land
+// late (a post_tool after Stop) or early (a prompt before the mod's queued
+// record), so a hook write alone never decides it. The one exception is a
+// hook state of ended written at or after the mod's newest record second: the
+// session's own SessionEnd fired, so it is over even if the mod's session.end
+// was lost at exit.
 func (s *Session) modLive(now time.Time) bool {
 	if !s.hasMod || !s.mod.Known {
 		return false
 	}
 	st := s.hookState
-	ahead := st.SessionID != "" && st.UpdatedAt > s.mod.Updated/1000+1 && now.Unix() >= st.UpdatedAt+modLagGrace
-	return !ahead
+	if st.SessionID != "" && st.State == hook.StateEnded && st.UpdatedAt >= s.mod.Updated/1000 {
+		return false
+	}
+	return now.UnixMilli()-s.mod.Updated < modLiveWindow.Milliseconds()
 }
 
 // mergeModCoords fills the view of a session with no hook state from the
@@ -52,10 +53,11 @@ func (s *Session) mergeModCoords() {
 	v.Turn = m.Turns
 }
 
-// overlayMod puts the mod's state over the merged view. A hook permission
-// written at or after the newest main-loop record wins while the mod reads
-// tool-running: where Claude Code is managed, the mod's classic hooks do not
-// run and only the hook path learns of the dialog. A subagent's records must
+// overlayMod puts the mod's state over the merged view while the mod is live
+// (see modLive). A hook permission written at or after the newest main-loop
+// record wins while the mod reads tool-running: where Claude Code is managed,
+// the mod's classic hooks do not run and only the hook path learns of the
+// dialog, while its heartbeat keeps the mod live. A subagent's records must
 // not hide it, hence MainUpdated.
 func (s *Session) overlayMod() {
 	m, v := &s.mod, &s.view

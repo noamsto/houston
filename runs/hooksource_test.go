@@ -1247,6 +1247,7 @@ type modRecords struct {
 	t     *testing.T
 	store *claudemod.Store
 	sid   string
+	dir   string
 }
 
 func (m modRecords) apply(seq int64, ev string, set func(*claudemod.Record)) {
@@ -1284,7 +1285,7 @@ func startModHookSource(t *testing.T) (<-chan Delta, modRecords) {
 	src.every = hookTestEvery
 	out := make(chan Delta, 64)
 	go func() { _ = src.Run(ctx, out) }()
-	return out, modRecords{t: t, store: store, sid: st.SessionID}
+	return out, modRecords{t: t, store: store, sid: st.SessionID, dir: dir}
 }
 
 func TestHookSourceModLateToolEndReadsIdle(t *testing.T) {
@@ -1301,6 +1302,40 @@ func TestHookSourceModLateToolEndReadsIdle(t *testing.T) {
 	expectNoDelta(t, out, "run left idle after the late tool.end", func(d Delta) bool {
 		return d.Key == key && d.Run.State != StateIdle
 	})
+}
+
+func TestHookSourceModLateHigherSeqToolEndReadsIdle(t *testing.T) {
+	out, m := startModHookSource(t)
+	const key = "claude/s1"
+	waitDelta(t, out, "initial run", func(d Delta) bool { return d.Key == key })
+
+	m.apply(1, "turn.start", nil)
+	m.apply(2, "tool.start", func(r *claudemod.Record) { r.Tool, r.ID = "Bash", "a" })
+	m.apply(3, "turn.complete", func(r *claudemod.Record) { r.Reason = "answer" })
+	// Sent after the turn ended, so it carries the higher seq.
+	m.apply(4, "tool.end", func(r *claudemod.Record) { r.Tool, r.ID = "Bash", "a" })
+
+	waitDelta(t, out, "idle run", func(d Delta) bool { return d.Key == key && d.Run.State == StateIdle })
+	expectNoDelta(t, out, "run left idle after the late tool.end", func(d Delta) bool {
+		return d.Key == key && d.Run.State != StateIdle
+	})
+}
+
+func TestHookSourceModHookEndedReadsDone(t *testing.T) {
+	out, m := startModHookSource(t)
+	const key = "claude/s1"
+	waitDelta(t, out, "initial run", func(d Delta) bool { return d.Key == key })
+
+	m.apply(1, "turn.start", nil)
+	m.apply(2, "turn.complete", func(r *claudemod.Record) { r.Reason = "answer" })
+	waitDelta(t, out, "idle run", func(d Delta) bool { return d.Key == key && d.Run.State == StateIdle })
+
+	// SessionEnd fired; the mod's session.end was lost at exit.
+	st := hook.SessionState{SessionID: m.sid, State: hook.StateEnded, Turn: 1, UpdatedAt: time.Now().Unix()}
+	if err := hook.Write(hook.Path(m.dir, st.SessionID), st); err != nil {
+		t.Fatal(err)
+	}
+	waitDelta(t, out, "done run", func(d Delta) bool { return d.Key == key && d.Run.State == StateDone })
 }
 
 func TestHookSourceModPermissionReadsBlocked(t *testing.T) {
