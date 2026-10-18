@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -23,8 +24,9 @@ type Server struct {
 // Listen prepares path, listens on it and serves store's records in a
 // goroutine. The parent directory is created 0700 if missing; a socket nobody
 // answers is replaced; a live socket or a non-socket path is an error. The
-// socket is bound in a private temp dir beside path, chmodded 0600 and renamed
-// into place, so it is never reachable at umask permissions.
+// socket is bound in a private temp dir beside path, chmodded 0600 and linked
+// into place, so it is never reachable at umask permissions. The link fails
+// rather than replacing a socket another houston placed after clearStale.
 func Listen(path string, store *Store) (*Server, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("create socket dir: %w", err)
@@ -62,16 +64,20 @@ func listenPrivate(path string) (*net.UnixListener, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listen on %s: %w", path, err)
 	}
-	// The bound name is gone after the rename; Close removes path instead.
+	// The bound name is removed after the link; Close removes path instead.
 	ln.SetUnlinkOnClose(false)
 	if err := os.Chmod(tmpSock, 0o600); err != nil {
 		_ = ln.Close()
 		return nil, fmt.Errorf("chmod socket: %w", err)
 	}
-	if err := os.Rename(tmpSock, path); err != nil {
+	if err := os.Link(tmpSock, path); err != nil {
 		_ = ln.Close()
-		return nil, fmt.Errorf("move socket into place: %w", err)
+		if errors.Is(err, fs.ErrExist) {
+			return nil, fmt.Errorf("%s: already exists", path)
+		}
+		return nil, fmt.Errorf("link socket into place: %w", err)
 	}
+	_ = os.Remove(tmpSock)
 	return ln, nil
 }
 

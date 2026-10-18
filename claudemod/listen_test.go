@@ -71,7 +71,7 @@ func TestSocketMode(t *testing.T) {
 
 func TestPostRoundTrip(t *testing.T) {
 	_, store, c := startServer(t)
-	status := do(t, c, http.MethodPost, "/v1/record", `{"v":1,"sid":"s","boot":"b","seq":1,"ev":"turn.start"}`)
+	status := do(t, c, http.MethodPost, "/v1/record", `{"v":1,"sid":"s","boot":"b","seq":1,"ts":1,"ev":"turn.start"}`)
 	if status != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204", status)
 	}
@@ -80,7 +80,7 @@ func TestPostRoundTrip(t *testing.T) {
 		t.Fatalf("snapshot = %+v", snap)
 	}
 	// A duplicate is accepted too, and counted stale.
-	status = do(t, c, http.MethodPost, "/v1/record", `{"v":1,"sid":"s","boot":"b","seq":1,"ev":"turn.start"}`)
+	status = do(t, c, http.MethodPost, "/v1/record", `{"v":1,"sid":"s","boot":"b","seq":1,"ts":1,"ev":"turn.start"}`)
 	if status != http.StatusNoContent || store.Snapshot()[0].Stale != 1 {
 		t.Fatalf("duplicate: status = %d, snapshot = %+v", status, store.Snapshot())
 	}
@@ -88,7 +88,7 @@ func TestPostRoundTrip(t *testing.T) {
 
 func TestStatusCodes(t *testing.T) {
 	_, store, c := startServer(t)
-	oversize := `{"v":1,"sid":"s","boot":"b","seq":1,"ev":"stop","message":"` + strings.Repeat("x", MaxBody) + `"}`
+	oversize := `{"v":1,"sid":"s","boot":"b","seq":1,"ts":1,"ev":"stop","message":"` + strings.Repeat("x", MaxBody) + `"}`
 	cases := []struct {
 		name, method, path, body string
 		want                     int
@@ -187,5 +187,63 @@ func TestListenLeavesOnlyTheSocket(t *testing.T) {
 	fi, err := os.Lstat(srv.path)
 	if err != nil || fi.Mode()&os.ModeSocket == 0 || fi.Mode().Perm() != 0o600 {
 		t.Fatalf("socket: %v, %v", fi, err)
+	}
+}
+
+func TestSecondListenerRefusesAndFirstStaysReachable(t *testing.T) {
+	srv, store, c := startServer(t)
+	if _, err := Listen(srv.path, NewStore()); err == nil {
+		t.Fatal("second Listen on the same path succeeded")
+	}
+	status := do(t, c, http.MethodPost, "/v1/record", `{"v":1,"sid":"s","boot":"b","seq":1,"ts":1,"ev":"turn.start"}`)
+	if status != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", status)
+	}
+	if snap := store.Snapshot(); len(snap) != 1 || snap[0].SID != "s" {
+		t.Fatalf("first server's store = %+v", snap)
+	}
+	if _, err := os.Lstat(srv.path); err != nil {
+		t.Fatalf("socket removed: %v", err)
+	}
+}
+
+func TestLinkRefusesAnExistingPath(t *testing.T) {
+	path := socketPath(t)
+	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+	accepted := make(chan struct{})
+	go func() {
+		if conn, err := ln.Accept(); err == nil {
+			_ = conn.Close()
+			close(accepted)
+		}
+	}()
+
+	got, err := listenPrivate(path)
+	if err == nil {
+		_ = got.Close()
+		t.Fatal("listenPrivate over an existing socket succeeded")
+	}
+	if !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("err = %v, want already exists", err)
+	}
+	conn, err := net.Dial("unix", path)
+	if err != nil {
+		t.Fatalf("original socket unreachable: %v", err)
+	}
+	_ = conn.Close()
+	<-accepted
+
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".claude-mod-") {
+			t.Fatalf("temp dir %s left behind", e.Name())
+		}
 	}
 }

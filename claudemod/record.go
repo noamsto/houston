@@ -1,6 +1,6 @@
 // Package claudemod ingests the records a read-only Claude Code mod posts over
-// a Unix socket and folds them into per-session state. Nothing here is wired
-// into the runs registry; it exists to compare the mod's signals with hooks.
+// a Unix socket and folds them into per-session state, which the hub overlays
+// on hook state.
 package claudemod
 
 import (
@@ -19,16 +19,43 @@ var ErrTooLarge = errors.New("record too large")
 
 // Task is a background task as the mod reports it.
 type Task struct {
-	ID     string `json:"id"`
-	Type   string `json:"type,omitempty"`
-	Status string `json:"status,omitempty"`
+	ID          string `json:"id"`
+	Type        string `json:"type,omitempty"`
+	Status      string `json:"status,omitempty"`
+	Description string `json:"description,omitempty"`
+	ToolUse     string `json:"tool_use,omitempty"`
+}
+
+// AskOption is one AskUserQuestion option; Preview says it carries a preview.
+type AskOption struct {
+	Label   string `json:"label"`
+	Preview bool   `json:"preview,omitempty"`
+}
+
+// ToolInput is the subset of a tool's input the mod forwards. The tags are the
+// keys hook.ToolHint reads.
+type ToolInput struct {
+	Description string        `json:"description,omitempty"`
+	Command     string        `json:"command,omitempty"`
+	FilePath    string        `json:"file_path,omitempty"`
+	Path        string        `json:"path,omitempty"`
+	Pattern     string        `json:"pattern,omitempty"`
+	URL         string        `json:"url,omitempty"`
+	Prompt      string        `json:"prompt,omitempty"`
+	Questions   []AskQuestion `json:"questions,omitempty"`
+}
+
+// AskQuestion is the part of an AskUserQuestion question a hint needs.
+type AskQuestion struct {
+	Header   string `json:"header,omitempty"`
+	Question string `json:"question,omitempty"`
 }
 
 // Ask is one AskUserQuestion question.
 type Ask struct {
-	Question string   `json:"question"`
-	Multi    bool     `json:"multi,omitempty"`
-	Options  []string `json:"options"`
+	Question string      `json:"question"`
+	Multi    bool        `json:"multi,omitempty"`
+	Options  []AskOption `json:"options"`
 }
 
 // Record is one mod event as posted.
@@ -50,6 +77,15 @@ type Record struct {
 	Type     string `json:"type,omitempty"`
 	Message  string `json:"message,omitempty"`
 	Task     string `json:"task,omitempty"`
+
+	CWD        string     `json:"cwd,omitempty"`
+	Transcript string     `json:"transcript,omitempty"`
+	Pane       string     `json:"pane,omitempty"`
+	TmuxServer string     `json:"tmux_server,omitempty"`
+	Input      *ToolInput `json:"input,omitempty"`
+	Last       string     `json:"last,omitempty"`
+	StopTask   string     `json:"stop_task,omitempty"`
+	TimeoutMS  int64      `json:"timeout_ms,omitempty"`
 
 	BG     bool `json:"bg,omitempty"`
 	Err    bool `json:"err,omitempty"`
@@ -84,7 +120,7 @@ var validEv = map[string]bool{
 
 // Decode reads exactly one record from r. It returns ErrTooLarge for a body
 // over MaxBody and rejects invalid JSON, trailing data, v != 1, an empty sid
-// or boot, seq < 1 and an unknown ev.
+// or boot, seq < 1, ts < 1 and an unknown ev.
 func Decode(r io.Reader) (Record, error) {
 	body, err := io.ReadAll(io.LimitReader(r, MaxBody+1))
 	if err != nil {
@@ -110,6 +146,8 @@ func Decode(r io.Reader) (Record, error) {
 		return Record{}, errors.New("empty boot")
 	case rec.Seq < 1:
 		return Record{}, fmt.Errorf("invalid seq %d", rec.Seq)
+	case rec.TS < 1:
+		return Record{}, fmt.Errorf("invalid ts %d", rec.TS)
 	case !validEv[rec.Ev]:
 		return Record{}, fmt.Errorf("unknown ev %q", rec.Ev)
 	}
