@@ -12,11 +12,13 @@ interface TaskRow {
 }
 
 export function DispatcherForm({
+  host,
   options,
   repo,
   runs,
   onStarted,
 }: {
+  host: string
   options: DispatchOptions
   repo: string
   runs: Run[]
@@ -67,6 +69,7 @@ export function DispatcherForm({
     setSubmitting(true)
     const result = await submitDispatcher(
       buildDispatcherRequest({ repo, rows: rows.map((r) => r.text), engine, model, effort }),
+      host === 'local' ? undefined : host,
     )
     setSubmitting(false)
     setOutcome(result)

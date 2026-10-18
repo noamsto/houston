@@ -31,7 +31,7 @@ function run(p: Partial<Run> = {}): Run {
 }
 
 function setup(o: DispatchOptions = options, runs: Run[] = [], repo = '/repo/a', onStarted: () => void = () => {}) {
-  return render(<DispatcherForm options={o} repo={repo} runs={runs} onStarted={onStarted} />)
+  return render(<DispatcherForm host="local" options={o} repo={repo} runs={runs} onStarted={onStarted} />)
 }
 
 function change(label: string, v: string): void {
@@ -242,7 +242,7 @@ describe('DispatcherForm result', () => {
     fireEvent.click(startButton())
     await screen.findByText(/Waiting for it to appear in Fleet/)
 
-    rerender(<DispatcherForm options={options} repo="/repo/a" runs={[run({ id: 'pane-7' })]} onStarted={() => {}} />)
+    rerender(<DispatcherForm host="local" options={options} repo="/repo/a" runs={[run({ id: 'pane-7' })]} onStarted={() => {}} />)
 
     const link = screen.getByRole('link', { name: 'Open run' }) as HTMLAnchorElement
     expect(link.getAttribute('href')).toBe('#/fleet/pane-7')

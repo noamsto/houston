@@ -98,6 +98,7 @@ type Source struct {
 	cfg    Config
 	opts   Options
 	client *http.Client
+	slow   *http.Client                                                      // client without a response-header timeout, for requests that answer late
 	dial   func(ctx context.Context, network, addr string) (net.Conn, error) // the transport's dial, reused by DialTerminal
 	hopOK  func(local, remote net.Addr) bool                                 // plainHopOK; a field so tests can stand in a route
 
@@ -149,11 +150,14 @@ func New(cfg Config, opts Options) *Source {
 		transport.DialContext = s.dialPlain
 	}
 	s.dial = transport.DialContext
-	s.client = &http.Client{
-		Transport: transport,
-		// The token must never follow a redirect to another URL.
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}
+	// The token must never follow a redirect to another URL.
+	noRedirect := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	s.client = &http.Client{Transport: transport, CheckRedirect: noRedirect}
+	// A dispatch answers only once it finished (up to 120 s), so the caller's
+	// wait bounds it instead of the header timeout.
+	slowTr := transport.Clone()
+	slowTr.ResponseHeaderTimeout = 0
+	s.slow = &http.Client{Transport: slowTr, CheckRedirect: noRedirect}
 	return s
 }
 

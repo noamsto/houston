@@ -714,6 +714,7 @@ a.run-chip.crew-feed-link::after, a.run-chip.pr.crew-feed-pr::after { content: '
 .dispatch-submit:disabled { opacity: 0.5; cursor: default; }
 
 .dispatch-shared { display: flex; flex-direction: column; gap: 14px; padding: 14px 14px 0; }
+.dispatch-host { padding: 14px 14px 0; }
 
 .dispatch-modes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .dispatch-modes button,

@@ -51,6 +51,18 @@ describe('loadPrefs / savePrefs', () => {
     expect(loadPrefs()).toEqual(prefs)
   })
 
+  it('keeps the local key and gives each peer its own', () => {
+    savePrefs({ repo: '/repo/a' })
+    savePrefs({ repo: '/repo/b' }, 'b')
+    savePrefs({ repo: '/repo/b' }, 'local')
+    expect(localStorage.getItem(PREFS_KEY)).toBe(JSON.stringify({ repo: '/repo/b' }))
+    expect(localStorage.getItem(`${PREFS_KEY}@b`)).toBe(JSON.stringify({ repo: '/repo/b' }))
+    savePrefs({ repo: '/repo/a' }, 'c')
+    expect(loadPrefs('c')).toEqual({ repo: '/repo/a' })
+    expect(loadPrefs('b')).toEqual({ repo: '/repo/b' })
+    expect(loadPrefs('d')).toEqual({})
+  })
+
   it('ignores garbage JSON', () => {
     localStorage.setItem(PREFS_KEY, 'not json')
     expect(loadPrefs()).toEqual({})
@@ -178,6 +190,30 @@ describe('resolveInitial', () => {
   })
 })
 
+describe('resolveInitial crew-only link', () => {
+  const withHome: DispatchOptions = {
+    ...options,
+    repos: [
+      { path: '/repo/a', name: 'repo-a', crews: ['200-1', '300-3'] },
+      { path: '/repo/b', name: 'repo-b', crews: ['300-3'], home: ['300-3'] },
+    ],
+  }
+
+  it('picks the repo whose home holds the crew', () => {
+    expect(resolveInitial(withHome, {}, { crew: '300-3' }).repo).toBe('/repo/b')
+    expect(resolveInitial(withHome, {}, { crew: '300-3' }).crew).toBe('300-3')
+  })
+
+  it('falls back to the first repo listing the crew', () => {
+    expect(resolveInitial(withHome, { repo: '/repo/b' }, { crew: '200-1' }).repo).toBe('/repo/a')
+  })
+
+  it('keeps prefs when no repo has the crew, and for new', () => {
+    expect(resolveInitial(withHome, { repo: '/repo/b' }, { crew: '999-9' }).repo).toBe('/repo/b')
+    expect(resolveInitial(withHome, { repo: '/repo/b' }, { crew: 'new' }).repo).toBe('/repo/b')
+  })
+})
+
 describe('crewAgeLabel', () => {
   it('formats id + age', () => {
     const nowSec = 1_700_000_030
@@ -235,6 +271,16 @@ describe('findDispatchedRun', () => {
     const peer = run({ id: 'peer-b.x', branch: 'feat/x', since: 200, host: 'b' })
     expect(findDispatchedRun([local, peer], 'feat/x')).toBe(local)
     expect(findDispatchedRun([peer], 'feat/x')).toBeUndefined()
+  })
+
+  it('with a peer host returns only that host\'s run', () => {
+    const local = run({ id: 'local', branch: 'feat/x', since: 300 })
+    const peer = run({ id: 'peer-b.x', branch: 'feat/x', since: 200, host: 'b' })
+    const other = run({ id: 'peer-c.x', branch: 'feat/x', since: 400, host: 'c' })
+    expect(findDispatchedRun([local, peer, other], 'feat/x', undefined, 'b')).toBe(peer)
+    expect(findDispatchedRun([local, peer, other], 'feat/x')).toBe(local)
+    expect(findDispatchedRun([local, peer], 'feat/x', undefined, 'local')).toBe(local)
+    expect(findDispatchedRun([local], 'feat/x', undefined, 'b')).toBeUndefined()
   })
 
   it('narrows by crew.name when both are known and mismatched', () => {

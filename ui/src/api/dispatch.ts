@@ -1,3 +1,5 @@
+import { hostAPI } from './hosts'
+
 // Mirror of server/dispatch.go's dispatchOptions/dispatchRequest contract.
 export interface DispatchRepo {
   path: string
@@ -42,9 +44,12 @@ export type DispatchOutcome =
   | { kind: 'started'; workerId: string; branch: string; issueUrl?: string; crew?: string }
   | { kind: 'failed'; status: number; error: string; output?: string; workerId?: string; crew?: string }
 
-export async function fetchDispatchOptions(): Promise<DispatchOptions> {
-  const res = await fetch('/api/dispatch/options')
+export async function fetchDispatchOptions(host?: string): Promise<DispatchOptions> {
+  const res = await fetch(hostAPI(host, 'dispatch/options'))
   if (!res.ok) {
+    if (host && host !== 'local' && res.status === 404) {
+      throw new Error(`Dispatch isn't available on ${host}.`)
+    }
     throw new Error(`fetchDispatchOptions: ${res.status} ${await res.text()}`)
   }
   return (await res.json()) as DispatchOptions
@@ -65,10 +70,10 @@ interface DispatchErrorBody {
   crew?: string
 }
 
-export async function submitDispatch(req: DispatchRequest): Promise<DispatchOutcome> {
+export async function submitDispatch(req: DispatchRequest, host?: string): Promise<DispatchOutcome> {
   let res: Response
   try {
-    res = await fetch('/api/dispatch', {
+    res = await fetch(hostAPI(host, 'dispatch'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req),
@@ -182,8 +187,8 @@ async function postDispatcher(url: string, req: object): Promise<DispatcherOutco
   return parseDispatcherResponse(res)
 }
 
-export function submitDispatcher(req: DispatcherRequest): Promise<DispatcherOutcome> {
-  return postDispatcher('/api/dispatch/dispatcher', req)
+export function submitDispatcher(req: DispatcherRequest, host?: string): Promise<DispatcherOutcome> {
+  return postDispatcher(hostAPI(host, 'dispatch/dispatcher'), req)
 }
 
 export interface RestartRequest {

@@ -53,6 +53,15 @@ describe('parseDispatchRoute', () => {
   ])('%s -> %j', (hash, expected) => {
     expect(parseDispatchRoute(hash)).toEqual(expected)
   })
+
+  it('reads the host', () => {
+    expect(parseDispatchRoute('#/dispatch?host=b&repo=%2Frepo%2Fa&crew=c1')).toEqual({
+      host: 'b',
+      repo: '/repo/a',
+      crew: 'c1',
+    })
+    expect(parseDispatchRoute('#/dispatch?host=')?.host).toBeUndefined()
+  })
 })
 
 describe('dispatchHash', () => {
@@ -66,6 +75,16 @@ describe('dispatchHash', () => {
 
   it('omits an empty crew', () => {
     expect(dispatchHash({ repo: '/repo/a' })).toBe('#/dispatch?repo=%2Frepo%2Fa')
+  })
+
+  it('writes the host first, and nothing for local', () => {
+    expect(dispatchHash({ host: 'b', repo: '/repo/a', crew: 'c1' })).toBe('#/dispatch?host=b&repo=%2Frepo%2Fa&crew=c1')
+    expect(dispatchHash({ host: 'local', repo: '/repo/a' })).toBe('#/dispatch?repo=%2Frepo%2Fa')
+  })
+
+  it('round-trips a host link', () => {
+    const link = { host: 'b', repo: '/repo/a', crew: 'new' }
+    expect(parseDispatchRoute(dispatchHash(link))).toEqual(link)
   })
 })
 

@@ -299,6 +299,26 @@ describe('RestartDispatcher', () => {
     expect(screen.getByText(/CREW_ID=1700000000-42 dispatcher\./)).toBeTruthy()
   })
 
+  it('on a peer run Settings loads the peer host\'s options', async () => {
+    render(<RestartDispatcher run={dispatcher({ host: 'b' })} />)
+    open()
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+
+    await waitFor(() => expect(fetchMock.mock.calls.map((c) => c[0])).toContain('/api/hosts/b/dispatch/options'))
+  })
+
+  it('on a peer run an old_ended 422 names the host in the relaunch line', async () => {
+    fetchMock.mockImplementationOnce(() =>
+      Promise.resolve(reply(422, { error: 'dispatcher exited immediately', crew: '1700000000-42', old_ended: true })),
+    )
+    render(<RestartDispatcher run={dispatcher({ host: 'b' })} />)
+    open()
+    confirm()
+    await screen.findByText('dispatcher exited immediately')
+
+    expect(screen.getByText(/on b with CREW_ID=1700000000-42 dispatcher\./)).toBeTruthy()
+  })
+
   it('an old_ended unchecked 502 says to check Fleet, not to relaunch', async () => {
     fetchMock.mockImplementationOnce(() =>
       Promise.resolve(reply(502, { error: 'tmux unavailable', crew: '1700000000-42', old_ended: true })),

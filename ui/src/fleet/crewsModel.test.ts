@@ -52,6 +52,12 @@ describe('dispatchHref', () => {
   it('omits the repo when unknown', () => {
     expect(dispatchHref(undefined, 'a/b')).toBe('#/dispatch?crew=a%2Fb')
   })
+
+  it('names a peer host first and ignores local', () => {
+    expect(dispatchHref(undefined, 'c1', 'b')).toBe('#/dispatch?host=b&crew=c1')
+    expect(dispatchHref('/r', 'c1', 'b')).toBe('#/dispatch?host=b&repo=%2Fr&crew=c1')
+    expect(dispatchHref('/r', 'c1', 'local')).toBe('#/dispatch?repo=%2Fr&crew=c1')
+  })
 })
 
 describe('isBusy', () => {

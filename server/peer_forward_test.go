@@ -3,6 +3,7 @@ package server
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -379,17 +380,76 @@ func TestPeerForwardNeedsTheRegistry(t *testing.T) {
 	wantRefusal(t, doReply(t, s, browserRequest("GET", "/api/runs/"+fwdPeerRunID+"/chat", "")), http.StatusServiceUnavailable, "run registry not started")
 }
 
-func TestPeerRestartIsNotForwarded(t *testing.T) {
-	p := newPeerRecorder(t, peerConflict)
+func TestPeerRestartIsForwarded(t *testing.T) {
+	p := newPeerRecorder(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"crew":"1-2","run_id":"pane-9","old_ended":true}`)
+	})
 	s := newForwardServer(t, p.srv.URL)
 
-	rec := doReply(t, s, browserRequest("POST", "/api/runs/"+fwdPeerRunID+"/restart", `{}`))
-	if rec.Code != http.StatusNotFound || strings.TrimSpace(rec.Body.String()) != `{"error":"no such run"}` {
-		t.Fatalf("got %d %q, want 404 no such run", rec.Code, rec.Body.String())
+	rec := doReply(t, s, browserRequest("POST", "/api/runs/"+fwdPeerRunID+"/restart", `{"force":true}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("local answer %d %q, want 200", rec.Code, rec.Body.String())
 	}
-	if n := len(p.requests()); n != 0 {
-		t.Fatalf("peer saw %d requests, want 0", n)
+	var got struct {
+		Crew     string `json:"crew"`
+		RunID    string `json:"run_id"`
+		OldEnded bool   `json:"old_ended"`
 	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("local body %q: %v", rec.Body.String(), err)
+	}
+	if got.RunID != "peer-b.pane-9" || !got.OldEnded || got.Crew != "1-2" {
+		t.Errorf("local body %+v, want run_id peer-b.pane-9, old_ended, crew 1-2", got)
+	}
+
+	reqs := p.requests()
+	if len(reqs) != 1 {
+		t.Fatalf("peer saw %d requests, want 1", len(reqs))
+	}
+	up := reqs[0]
+	if up.method != "POST" || up.path != "/api/runs/pane-2/restart" {
+		t.Errorf("upstream %s %s, want POST /api/runs/pane-2/restart", up.method, up.path)
+	}
+	if a := up.header.Values("Authorization"); !slices.Equal(a, []string{"Bearer " + fwdPeerToken}) {
+		t.Errorf("upstream Authorization %q, want only the peer token", a)
+	}
+	if string(up.body) != `{"force":true}` {
+		t.Errorf("upstream body %q", up.body)
+	}
+	if ct := up.header.Get("Content-Type"); ct != "application/json" {
+		t.Errorf("upstream Content-Type %q", ct)
+	}
+	for _, h := range []string{"Cookie", "Origin"} {
+		if v := up.header.Get(h); v != "" {
+			t.Errorf("upstream carried %s: %q", h, v)
+		}
+	}
+
+	t.Run("unlisted", func(t *testing.T) {
+		p := newPeerRecorder(t, peerConflict)
+		s := newForwardServer(t, p.srv.URL)
+
+		wantRefusal(t, doReply(t, s, browserRequest("POST", "/api/runs/peer-b.pane-404/restart", `{}`)), http.StatusNotFound, "no such run")
+		if n := len(p.requests()); n != 0 {
+			t.Fatalf("peer saw %d requests, want 0", n)
+		}
+	})
+
+	t.Run("busy", func(t *testing.T) {
+		const busy = `{"error":"busy","busy":true}`
+		p := newPeerRecorder(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			_, _ = io.WriteString(w, busy)
+		})
+		s := newForwardServer(t, p.srv.URL)
+
+		rec := doReply(t, s, browserRequest("POST", "/api/runs/"+fwdPeerRunID+"/restart", `{}`))
+		if rec.Code != http.StatusConflict || rec.Body.String() != busy {
+			t.Fatalf("local answer %d %q, want the peer's 409 %s", rec.Code, rec.Body.String(), busy)
+		}
+	})
 }
 
 func TestPeerForwardLeavesLocalIDsLocal(t *testing.T) {

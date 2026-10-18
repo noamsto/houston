@@ -30,6 +30,16 @@ describe('fetchRepos', () => {
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(response(500, 'boom'))))
     await expect(fetchRepos()).rejects.toThrow('500 boom')
   })
+
+  it('GETs the host-addressed route for a peer and the plain one for local', async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(response(200, '{"roots":[],"repos":[]}')))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await fetchRepos('b')
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/hosts/b/repos')
+    await fetchRepos('local')
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/repos')
+  })
 })
 
 describe('fetchRepoCandidates', () => {
@@ -54,6 +64,16 @@ describe('fetchRepoCandidates', () => {
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(response(503, 'down'))))
     await expect(fetchRepoCandidates('x')).rejects.toThrow('503 down')
   })
+
+  it('GETs the host-addressed route for a peer and the plain one for local', async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(response(200, '{"roots":[],"candidates":[],"truncated":false}')))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await fetchRepoCandidates('a b', 'b')
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/hosts/b/repos/candidates?q=a%20b')
+    await fetchRepoCandidates('a b', 'local')
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/repos/candidates?q=a%20b')
+  })
 })
 
 describe('addRepo', () => {
@@ -69,6 +89,21 @@ describe('addRepo', () => {
     expect(url).toBe('/api/repos')
     expect(init?.method).toBe('POST')
     expect(JSON.parse(init?.body as string)).toEqual({ path: '/link/a' })
+  })
+
+  it('POSTs to the host-addressed route for a peer and the plain one for local', async () => {
+    const fetchMock = vi.fn<typeof fetch>(() => Promise.resolve(response(200, '{"path":"/real/a","name":"a"}')))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await addRepo('/link/a', 'b')
+    await addRepo('/link/a', 'local')
+    const calls = fetchMock.mock.calls
+    expect(calls.map(([url]) => url)).toEqual(['/api/hosts/b/repos', '/api/repos'])
+    for (const [, init] of calls) {
+      expect(init?.method).toBe('POST')
+      expect(init?.headers).toEqual({ 'Content-Type': 'application/json' })
+      expect(JSON.parse(init?.body as string)).toEqual({ path: '/link/a' })
+    }
   })
 
   it('maps a JSON error body to the error text', async () => {
@@ -97,6 +132,21 @@ describe('removeRepo', () => {
     expect(url).toBe('/api/repos')
     expect(init?.method).toBe('DELETE')
     expect(JSON.parse(init?.body as string)).toEqual({ path: '/real/a' })
+  })
+
+  it('DELETEs on the host-addressed route for a peer and the plain one for local', async () => {
+    const fetchMock = vi.fn<typeof fetch>(() => Promise.resolve(response(204, '')))
+    vi.stubGlobal('fetch', fetchMock)
+
+    expect(await removeRepo('/real/a', 'b')).toEqual({ ok: true })
+    await removeRepo('/real/a', 'local')
+    const calls = fetchMock.mock.calls
+    expect(calls.map(([url]) => url)).toEqual(['/api/hosts/b/repos', '/api/repos'])
+    for (const [, init] of calls) {
+      expect(init?.method).toBe('DELETE')
+      expect(init?.headers).toEqual({ 'Content-Type': 'application/json' })
+      expect(JSON.parse(init?.body as string)).toEqual({ path: '/real/a' })
+    }
   })
 
   it('maps a 404 JSON error', async () => {

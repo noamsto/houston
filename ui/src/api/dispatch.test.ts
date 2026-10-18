@@ -1,8 +1,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { restartDispatcher, submitDispatch, submitDispatcher, type DispatchRequest, type DispatcherRequest } from './dispatch'
+import {
+  fetchDispatchOptions,
+  restartDispatcher,
+  submitDispatch,
+  submitDispatcher,
+  type DispatchRequest,
+  type DispatcherRequest,
+} from './dispatch'
 
 function jsonResponse(status: number, body: string): Response {
   return { ok: status >= 200 && status < 300, status, text: () => Promise.resolve(body) } as Response
+}
+
+function optionsResponse(status: number, body: string): Response {
+  return { ...jsonResponse(status, body), json: () => Promise.resolve(JSON.parse(body)) } as Response
 }
 
 const req: DispatchRequest = {
@@ -17,6 +28,47 @@ const req: DispatchRequest = {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+})
+
+describe('fetchDispatchOptions', () => {
+  it('GETs /api/dispatch/options for the local host', async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(optionsResponse(200, '{"repos":[]}')))
+    vi.stubGlobal('fetch', fetchMock)
+
+    expect(await fetchDispatchOptions()).toEqual({ repos: [] })
+    expect(fetchMock).toHaveBeenCalledWith('/api/dispatch/options')
+  })
+
+  it("treats host 'local' as the plain route", async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(optionsResponse(200, '{"repos":[]}')))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await fetchDispatchOptions('local')
+    expect(fetchMock).toHaveBeenCalledWith('/api/dispatch/options')
+  })
+
+  it('GETs the host-addressed route for a peer', async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(optionsResponse(200, '{"repos":[]}')))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await fetchDispatchOptions('b')
+    expect(fetchMock).toHaveBeenCalledWith('/api/hosts/b/dispatch/options')
+  })
+
+  it('names the host when a peer answers 404', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(optionsResponse(404, '404 page not found'))))
+    await expect(fetchDispatchOptions('b')).rejects.toThrow("Dispatch isn't available on b.")
+  })
+
+  it('keeps the old message for a local 404', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(optionsResponse(404, 'nope'))))
+    await expect(fetchDispatchOptions()).rejects.toThrow('fetchDispatchOptions: 404 nope')
+  })
+
+  it('keeps the status message for a peer error other than 404', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(optionsResponse(502, 'peer unreachable'))))
+    await expect(fetchDispatchOptions('b')).rejects.toThrow('fetchDispatchOptions: 502 peer unreachable')
+  })
 })
 
 describe('submitDispatch', () => {
@@ -54,6 +106,24 @@ describe('submitDispatch', () => {
       issueUrl: undefined,
       crew: '1700000000-4242',
     })
+  })
+
+  it('posts to the plain route locally and the host-addressed route for a peer', async () => {
+    const fetchMock = vi.fn<typeof fetch>(() =>
+      Promise.resolve(jsonResponse(200, '{"worker_id":"w","branch":"b"}')),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await submitDispatch(req)
+    await submitDispatch(req, 'local')
+    await submitDispatch(req, 'b')
+    const calls = fetchMock.mock.calls
+    expect(calls.map(([url]) => url)).toEqual(['/api/dispatch', '/api/dispatch', '/api/hosts/b/dispatch'])
+    for (const [, init] of calls) {
+      expect(init?.method).toBe('POST')
+      expect(init?.headers).toEqual({ 'Content-Type': 'application/json' })
+      expect(JSON.parse(init?.body as string)).toEqual(req)
+    }
   })
 
   it('200 non-JSON body returns failed with malformed response', async () => {
@@ -128,6 +198,21 @@ describe('submitDispatcher', () => {
     expect(url).toBe('/api/dispatch/dispatcher')
     expect(init?.method).toBe('POST')
     expect(JSON.parse(init?.body as string)).toEqual(dreq)
+  })
+
+  it('posts to the plain route locally and the host-addressed route for a peer', async () => {
+    const fetchMock = vi.fn<typeof fetch>(() => Promise.resolve(jsonResponse(502, 'bad gateway')))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await submitDispatcher(dreq, 'local')
+    await submitDispatcher(dreq, 'b')
+    const calls = fetchMock.mock.calls
+    expect(calls.map(([url]) => url)).toEqual(['/api/dispatch/dispatcher', '/api/hosts/b/dispatch/dispatcher'])
+    for (const [, init] of calls) {
+      expect(init?.method).toBe('POST')
+      expect(init?.headers).toEqual({ 'Content-Type': 'application/json' })
+      expect(JSON.parse(init?.body as string)).toEqual(dreq)
+    }
   })
 
   it('200 non-JSON body returns failed with malformed response', async () => {

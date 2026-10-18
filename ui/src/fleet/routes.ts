@@ -41,6 +41,7 @@ export function useDetailRoute(): DetailRoute | null {
 }
 
 interface DispatchLink {
+  host?: string
   repo?: string
   crew?: string
 }
@@ -53,11 +54,16 @@ export function parseDispatchRoute(hash: string): DispatchLink | null {
   const m = hash.match(/^#\/dispatch(?:\?(.*))?$/)
   if (!m) return null
   const params = new URLSearchParams(m[1] ?? '')
-  return { repo: params.get('repo') || undefined, crew: params.get('crew') || undefined }
+  return {
+    host: params.get('host') || undefined,
+    repo: params.get('repo') || undefined,
+    crew: params.get('crew') || undefined,
+  }
 }
 
 export function dispatchHash(params: DispatchLink): string {
   const search = new URLSearchParams()
+  if (params.host && params.host !== 'local') search.set('host', params.host)
   if (params.repo) search.set('repo', params.repo)
   if (params.crew) search.set('crew', params.crew)
   const qs = search.toString()

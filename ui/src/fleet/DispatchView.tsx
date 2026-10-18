@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { fetchDispatchOptions, submitDispatch, NEW_CREW, type DispatchOptions, type DispatchOutcome } from '../api/dispatch'
+import { fetchHosts, type HostHealth } from '../api/hosts'
 import type { Run } from '../api/runs'
 import {
   crewAgeLabel,
@@ -23,6 +24,8 @@ import { useNow } from './useNow'
 import './fleet.css'
 
 const UNKNOWN_REPO_NOTICE = "Linked repo isn't one houston knows — pick one below."
+const UNKNOWN_HOST_NOTICE = "Linked host isn't one houston knows."
+const HOSTS_POLL_MS = 30_000
 
 function autoGrow(el: HTMLTextAreaElement): void {
   el.style.height = 'auto'
@@ -35,6 +38,9 @@ export function DispatchView({ runs }: { runs: Run[] }) {
   const [options, setOptions] = useState<DispatchOptions | null>(null)
   const [optionsError, setOptionsError] = useState<string | null>(null)
   const [loadingOptions, setLoadingOptions] = useState(true)
+  const [hosts, setHosts] = useState<HostHealth[] | null>(null)
+  const [host, setHost] = useState('local')
+  const [optionsHost, setOptionsHost] = useState<string | null>(null)
 
   const [repo, setRepo] = useState('')
   const [title, setTitle] = useState('')
@@ -53,22 +59,58 @@ export function DispatchView({ runs }: { runs: Run[] }) {
   const [submitting, setSubmitting] = useState(false)
   const [outcome, setOutcome] = useState<DispatchOutcome | null>(null)
   const [outcomeWasNewCrew, setOutcomeWasNewCrew] = useState(false)
+  const [outcomeHost, setOutcomeHost] = useState('local')
   const resultRef = useRef<HTMLDivElement>(null)
   const refreshSeq = useRef(0)
   const pendingAdded = useRef<string | null>(null)
   const repoRef = useRef(repo)
+  const hostRef = useRef(host)
   const taskRef = useRef<HTMLTextAreaElement>(null)
   const now = useNow()
 
   const route = useDispatchRoute()
   const [appliedSeq, setAppliedSeq] = useState<number | null>(null)
+  const peers = (hosts ?? []).filter((h) => !h.local)
+
+  // State setters only: it runs from the render-phase link prefill as well as
+  // from the picker; the [host] effect then fetches that host's options.
+  function switchHost(h: string): void {
+    if (h === host) return
+    setHost(h)
+    setOptions(null)
+    setOptionsHost(null)
+    setLoadingOptions(true)
+    setOptionsError(null)
+    setRefreshError(null)
+    setLinkNotice(null)
+  }
+
+  // Picking a host by hand abandons a link still waiting on its host's
+  // options, which would otherwise switch straight back.
+  function chooseHost(h: string): void {
+    if (route) setAppliedSeq(route.seq)
+    switchHost(h)
+  }
 
   // Adjusted during render rather than in an effect: each hashchange (seq)
-  // applies its link exactly once, and a link that arrived before the options
-  // is held until they load. Only repo/crew are touched, so a draft survives.
-  if (options && route && route.seq !== appliedSeq) {
-    setAppliedSeq(route.seq)
-    if (route.repo || route.crew) {
+  // applies its link exactly once, and a link that arrived before the hosts
+  // or its host's options is held until they load. Only host/repo/crew are
+  // touched, so a draft survives.
+  if (route && route.seq !== appliedSeq && (route.host || route.repo || route.crew)) {
+    const wanted = route.host || 'local'
+    const peer = peers.find((p) => p.name === wanted)
+    if (wanted !== 'local' && hosts === null) {
+      // The host list hasn't answered yet.
+    } else if (wanted !== 'local' && !peer) {
+      setAppliedSeq(route.seq)
+      setLinkNotice(UNKNOWN_HOST_NOTICE)
+    } else if (peer?.health === 'unreachable') {
+      setAppliedSeq(route.seq)
+      setLinkNotice(`${wanted} is unreachable right now.`)
+    } else if (wanted !== host) {
+      switchHost(wanted)
+    } else if (options && optionsHost === wanted) {
+      setAppliedSeq(route.seq)
       const link = resolveInitial(options, { repo }, route)
       setRepo(link.repo)
       setCrew(link.crew)
@@ -78,9 +120,9 @@ export function DispatchView({ runs }: { runs: Run[] }) {
   }
 
   // Once applied, drop the params so a reload doesn't re-apply a stale link
-  // over a hand-edited repo/crew; following the same link again changes the
-  // hash, which fires hashchange and bumps seq.
-  const hasLinkParams = !!(route?.repo || route?.crew)
+  // over a hand-edited host/repo/crew; following the same link again changes
+  // the hash, which fires hashchange and bumps seq.
+  const hasLinkParams = !!(route?.host || route?.repo || route?.crew)
   useEffect(() => {
     if (route && hasLinkParams && route.seq === appliedSeq) {
       history.replaceState(null, '', '#/dispatch')
@@ -107,16 +149,39 @@ export function DispatchView({ runs }: { runs: Run[] }) {
     return () => target.removeEventListener('resize', onResize)
   }, [])
 
+  useEffect(() => {
+    let active = true
+    const load = () => {
+      fetchHosts()
+        .then((list) => {
+          if (active) setHosts(list)
+        })
+        .catch(() => {
+          // A failed poll keeps the last list, so a chosen peer stays pickable.
+          if (active) setHosts((prev) => prev ?? [])
+        })
+    }
+    load()
+    const timer = setInterval(load, HOSTS_POLL_MS)
+    return () => {
+      active = false
+      clearInterval(timer)
+    }
+  }, [])
+
   // Pure fetch: every setState it makes happens inside a promise callback,
   // never synchronously in the caller's tick, so it's safe to invoke directly
-  // from the mount effect as well as from the Retry button's click handler.
-  const runFetch = useCallback(() => {
+  // from the host effect as well as from the Retry button's click handler.
+  // A result for a host no longer chosen (a Retry overtaken by a switch) is
+  // dropped.
+  const runFetch = useCallback((h: string) => {
     let cancelled = false
-    fetchDispatchOptions()
+    fetchDispatchOptions(h === 'local' ? undefined : h)
       .then((o) => {
-        if (cancelled) return
-        const init = resolveInitial(o, loadPrefs(), null)
+        if (cancelled || h !== hostRef.current) return
+        const init = resolveInitial(o, loadPrefs(h), null)
         setOptions(o)
+        setOptionsHost(h)
         setRepo(init.repo)
         setCrew(init.crew)
         setEngine(init.engine)
@@ -126,19 +191,26 @@ export function DispatchView({ runs }: { runs: Run[] }) {
         setLoadingOptions(false)
       })
       .catch((e: unknown) => {
-        if (cancelled) return
+        if (cancelled || h !== hostRef.current) return
         setOptionsError(e instanceof Error ? e.message : String(e))
         setLoadingOptions(false)
       })
     return () => { cancelled = true }
   }, [])
 
-  useEffect(() => runFetch(), [runFetch])
+  // A host switch also orphans the previous host's refreshes and any repo
+  // added through its picker.
+  useEffect(() => {
+    hostRef.current = host
+    refreshSeq.current++
+    pendingAdded.current = null
+    return runFetch(host)
+  }, [host, runFetch])
 
   function retryOptions(): void {
     setLoadingOptions(true)
     setOptionsError(null)
-    runFetch()
+    runFetch(host)
   }
 
   const selectedRepo = options?.repos.find((r) => r.path === repo)
@@ -153,9 +225,10 @@ export function DispatchView({ runs }: { runs: Run[] }) {
   function refreshOptions(added?: string): void {
     if (added) pendingAdded.current = added
     const seq = ++refreshSeq.current
-    fetchDispatchOptions()
+    const h = hostRef.current
+    fetchDispatchOptions(h === 'local' ? undefined : h)
       .then((o) => {
-        if (seq !== refreshSeq.current) return
+        if (seq !== refreshSeq.current || hostRef.current !== h) return
         setOptions(o)
         setRefreshError(null)
         const current = repoRef.current
@@ -166,7 +239,9 @@ export function DispatchView({ runs }: { runs: Run[] }) {
         if (next !== current) chooseRepoIn(o, next)
       })
       .catch((e: unknown) => {
-        if (seq === refreshSeq.current) setRefreshError(e instanceof Error ? e.message : String(e))
+        if (seq === refreshSeq.current && hostRef.current === h) {
+          setRefreshError(e instanceof Error ? e.message : String(e))
+        }
       })
   }
 
@@ -210,12 +285,14 @@ export function DispatchView({ runs }: { runs: Run[] }) {
       crew,
       issue: issue.trim() || undefined,
     }
-    const result = await submitDispatch(req)
+    const submitHost = host
+    const result = await submitDispatch(req, submitHost === 'local' ? undefined : submitHost)
     setSubmitting(false)
     setOutcome(result)
+    setOutcomeHost(submitHost)
     setOutcomeWasNewCrew(req.crew === NEW_CREW)
     const minted = result.crew
-    if (req.crew === NEW_CREW && minted) {
+    if (req.crew === NEW_CREW && minted && hostRef.current === submitHost) {
       // Join the minted crew on the next attempt — success or a retryable
       // failure alike — instead of minting another. `home` is deliberately
       // left untouched: the server wouldn't list this crew as home either,
@@ -229,7 +306,10 @@ export function DispatchView({ runs }: { runs: Run[] }) {
       setCrew(minted)
     }
     if (result.kind !== 'started') return
-    savePrefs({ ...loadPrefs(), repo: req.repo, engine: req.engine, model: req.model, tier: req.tier, effort: req.effort })
+    savePrefs(
+      { ...loadPrefs(submitHost), repo: req.repo, engine: req.engine, model: req.model, tier: req.tier, effort: req.effort },
+      submitHost,
+    )
     setTitle('')
     setSpec('')
   }
@@ -238,7 +318,9 @@ export function DispatchView({ runs }: { runs: Run[] }) {
   const submitDisabledReason = !title.trim() ? 'Title is required.' : !issueValid ? 'Fix the issue id to dispatch.' : null
 
   const dispatchedRun =
-    outcome?.kind === 'started' ? findDispatchedRun(runs, outcome.branch, outcome.crew || undefined) : undefined
+    outcome?.kind === 'started'
+      ? findDispatchedRun(runs, outcome.branch, outcome.crew || undefined, outcomeHost === 'local' ? undefined : outcomeHost)
+      : undefined
   const issueUrl = outcome?.kind === 'started' ? (outcome.issueUrl ?? dispatchedRun?.issue?.url) : undefined
 
   return (
@@ -246,6 +328,20 @@ export function DispatchView({ runs }: { runs: Run[] }) {
       <header className="fleet-nav">
         <h1>Dispatch</h1>
       </header>
+
+      {peers.length > 0 && (
+        <div className="dispatch-field dispatch-host">
+          <label htmlFor="dispatch-host">Host</label>
+          <select id="dispatch-host" value={host} onChange={(e) => chooseHost(e.target.value)}>
+            <option value="local">local</option>
+            {peers.map((p) => (
+              <option key={p.name} value={p.name} disabled={p.health === 'unreachable'}>
+                {p.health === 'unreachable' ? `${p.name} (unreachable)` : p.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
 
       {linkNotice && <p className="dispatch-notice" role="status">{linkNotice}</p>}
 
@@ -285,14 +381,14 @@ export function DispatchView({ runs }: { runs: Run[] }) {
             </div>
           </div>
 
-          {showPicker && <RepoPicker onChanged={refreshOptions} onClose={() => setShowPicker(false)} />}
+          {showPicker && <RepoPicker key={host} host={host} onChanged={refreshOptions} onClose={() => setShowPicker(false)} />}
         </div>
       )}
 
       {/* Kept mounted so the draft and an in-flight launch survive a mode toggle. */}
       {!loadingOptions && options && (
         <div hidden={mode !== 'dispatcher'}>
-          <DispatcherForm options={options} repo={repo} runs={runs} onStarted={() => refreshOptions()} />
+          <DispatcherForm host={host} options={options} repo={repo} runs={runs} onStarted={() => refreshOptions()} />
         </div>
       )}
 

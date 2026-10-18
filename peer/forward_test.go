@@ -2,6 +2,7 @@ package peer
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -56,7 +58,7 @@ func TestDoSendsBearerPathQueryAndOnlyGivenHeader(t *testing.T) {
 
 	q := url.Values{"limit": {"5"}, "before": {"e.9"}}
 	h := http.Header{"Content-Type": {"application/json"}}
-	resp, err := src.Do(context.Background(), http.MethodPost, "pane-1", "chat", q, h, []byte(`{"a":1}`))
+	resp, err := src.Do(context.Background(), http.MethodPost, "pane-1", "chat", q, h, []byte(`{"a":1}`), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +92,7 @@ func TestDoSendsBearerPathQueryAndOnlyGivenHeader(t *testing.T) {
 func TestDoGetHasNoQueryOrBody(t *testing.T) {
 	rec := newRecorder(t, nil)
 	src := newSource(rec.URL, tokenFile(t, testToken), fastOpts())
-	resp, err := src.Do(context.Background(), http.MethodGet, "pane-1", "prompt", nil, nil, nil)
+	resp, err := src.Do(context.Background(), http.MethodGet, "pane-1", "prompt", nil, nil, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +109,7 @@ func TestDoReturnsRedirectWithoutFollowing(t *testing.T) {
 		http.Redirect(w, r, target.URL+"/x", http.StatusFound)
 	})
 	src := newSource(rec.URL, tokenFile(t, testToken), fastOpts())
-	resp, err := src.Do(context.Background(), http.MethodGet, "pane-1", "prompt", nil, nil, nil)
+	resp, err := src.Do(context.Background(), http.MethodGet, "pane-1", "prompt", nil, nil, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +126,7 @@ func TestForwardRefusesInvalidIDsWithoutRequest(t *testing.T) {
 	rec := newRecorder(t, nil)
 	src := newSource(rec.URL, tokenFile(t, testToken), fastOpts())
 	for _, id := range []string{"", "../x", "a/b", "a b", "a?b", "a%2fb", strings.Repeat("a", maxID+1)} {
-		if resp, err := src.Do(context.Background(), http.MethodGet, id, "chat", nil, nil, nil); err == nil {
+		if resp, err := src.Do(context.Background(), http.MethodGet, id, "chat", nil, nil, nil, 0); err == nil {
 			resp.Body.Close()
 			t.Errorf("Do(%q) succeeded", id)
 		}
@@ -145,7 +147,7 @@ func TestForwardUnreadableTokenSendsNothing(t *testing.T) {
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	if resp, err := src.Do(context.Background(), http.MethodGet, "pane-1", "chat", nil, nil, nil); err == nil {
+	if resp, err := src.Do(context.Background(), http.MethodGet, "pane-1", "chat", nil, nil, nil, 0); err == nil {
 		resp.Body.Close()
 		t.Error("Do succeeded without a token")
 	} else if strings.Contains(err.Error(), testToken) {
@@ -202,6 +204,98 @@ func TestDialTerminalRefusesInsecureHop(t *testing.T) {
 	if conn, err := dialTerminal(src, "pane-1"); err == nil {
 		conn.Close()
 		t.Fatal("DialTerminal succeeded over a refused hop")
+	}
+	if n := rec.hits.Load(); n != 0 {
+		t.Fatalf("peer received %d requests over a refused hop", n)
+	}
+}
+
+func TestDoAPISendsBearerAndPath(t *testing.T) {
+	rec := newRecorder(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	src := newSource(rec.URL, tokenFile(t, testToken), fastOpts())
+	h := http.Header{"Content-Type": {"application/json"}}
+	resp, err := src.DoAPI(context.Background(), http.MethodPost, "dispatch/dispatcher", nil, h, []byte(`{"a":1}`), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	r := rec.req.Load()
+	if r.Method != http.MethodPost || r.URL.Path != "/api/dispatch/dispatcher" {
+		t.Errorf("request = %s %s", r.Method, r.URL.Path)
+	}
+	if got := r.Header.Get("Authorization"); got != "Bearer "+testToken {
+		t.Errorf("Authorization = %q", got)
+	}
+	if got := r.Header.Get("Content-Type"); got != "application/json" {
+		t.Errorf("Content-Type = %q", got)
+	}
+	if got := *rec.body.Load(); got != `{"a":1}` {
+		t.Errorf("body = %q", got)
+	}
+	for _, k := range []string{"Cookie", "Origin"} {
+		if got := r.Header.Get(k); got != "" {
+			t.Errorf("%s = %q reached the peer", k, got)
+		}
+	}
+}
+
+func TestDoAPIRefusesOtherPaths(t *testing.T) {
+	rec := newRecorder(t, nil)
+	src := newSource(rec.URL, tokenFile(t, testToken), fastOpts())
+	for _, p := range []string{"runs", "dispatch/x", "../runs", "repos/../runs", "", "dispatch/", "runs/pane-1/input"} {
+		resp, err := src.DoAPI(context.Background(), http.MethodGet, p, nil, nil, nil, 0)
+		if err == nil {
+			resp.Body.Close()
+		}
+		if !errors.Is(err, errBadPath) {
+			t.Errorf("DoAPI(%q) err = %v, want errBadPath", p, err)
+		}
+	}
+	if n := rec.hits.Load(); n != 0 {
+		t.Fatalf("peer received %d requests for refused paths", n)
+	}
+}
+
+func TestDoWaitBoundsTheRequest(t *testing.T) {
+	rec := newRecorder(t, func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(300 * time.Millisecond)
+		_, _ = w.Write([]byte("late"))
+	})
+	src := newSource(rec.URL, tokenFile(t, testToken), fastOpts())
+
+	resp, err := src.DoAPI(context.Background(), http.MethodGet, "repos", nil, nil, nil, 100*time.Millisecond)
+	if err == nil {
+		resp.Body.Close()
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("short wait err = %v, want deadline exceeded", err)
+	}
+
+	resp, err = src.DoAPI(context.Background(), http.MethodGet, "repos", nil, nil, nil, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if b, err := io.ReadAll(resp.Body); err != nil || string(b) != "late" {
+		t.Errorf("body = %q, %v", b, err)
+	}
+}
+
+func TestDoWaitKeepsTheHopCheck(t *testing.T) {
+	rec := newRecorder(t, nil)
+	src := newSource(rec.URL, tokenFile(t, testToken), fastOpts())
+	src.hopOK = func(_, _ net.Addr) bool { return false }
+	if resp, err := src.DoAPI(context.Background(), http.MethodGet, "repos", nil, nil, nil, time.Second); err == nil {
+		resp.Body.Close()
+		t.Error("DoAPI succeeded over a refused hop")
+	} else if !errors.Is(err, errInsecureHop) {
+		t.Errorf("DoAPI err = %v, want errInsecureHop", err)
+	}
+	if resp, err := src.Do(context.Background(), http.MethodGet, "pane-1", "chat", nil, nil, nil, time.Second); err == nil {
+		resp.Body.Close()
+		t.Error("Do succeeded over a refused hop")
+	} else if !errors.Is(err, errInsecureHop) {
+		t.Errorf("Do err = %v, want errInsecureHop", err)
 	}
 	if n := rec.hits.Load(); n != 0 {
 		t.Fatalf("peer received %d requests over a refused hop", n)

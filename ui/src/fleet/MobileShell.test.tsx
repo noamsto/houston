@@ -24,6 +24,7 @@ vi.mock('../api/dispatch', () => ({
   })),
   submitDispatch: vi.fn(),
 }))
+vi.mock('../api/hosts', () => ({ hostAPI: (_h: string | undefined, p: string) => `/api/${p}`, fetchHosts: () => Promise.resolve([]) }))
 
 function fakeVisualViewport(height: number) {
   const listeners = new Set<() => void>()

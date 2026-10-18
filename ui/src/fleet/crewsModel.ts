@@ -49,8 +49,9 @@ export function countsLabel(counts: CrewCounts): string {
     .join(' · ')
 }
 
-export function dispatchHref(repoPath: string | undefined, crew: string): string {
-  const params = repoPath === undefined ? [] : [`repo=${encodeURIComponent(repoPath)}`]
+export function dispatchHref(repoPath: string | undefined, crew: string, host?: string): string {
+  const params = host && host !== 'local' ? [`host=${encodeURIComponent(host)}`] : []
+  if (repoPath !== undefined) params.push(`repo=${encodeURIComponent(repoPath)}`)
   params.push(`crew=${encodeURIComponent(crew)}`)
   return `#/dispatch?${params.join('&')}`
 }

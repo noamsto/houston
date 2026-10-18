@@ -42,7 +42,7 @@ export function RestartDispatcher({ run }: { run: Run }) {
 
   function loadOptions(): void {
     setOptionsState({ status: 'loading' })
-    fetchDispatchOptions().then(
+    fetchDispatchOptions(run.host).then(
       (options) => setOptionsState({ status: 'ready', options }),
       (e: unknown) => setOptionsState({ status: 'error', error: e instanceof Error ? e.message : String(e) }),
     )
@@ -119,7 +119,7 @@ export function RestartDispatcher({ run }: { run: Run }) {
     if (result.oldEnded) {
       recordRestartFailure(
         run.id,
-        { error: result.error, output: result.output, crew: result.crew, status: result.status },
+        { error: result.error, output: result.output, crew: result.crew, status: result.status, host: run.host },
         Date.now(),
       )
     }
@@ -159,7 +159,7 @@ export function RestartDispatcher({ run }: { run: Run }) {
         {failure.crew && ended && (
           <p>
             Crew <code>{failure.crew}</code> is intact — workers keep running.{' '}
-            {relaunchAdvice(failure, failure.crew)}
+            {relaunchAdvice({ ...failure, host: run.host }, failure.crew)}
           </p>
         )}
         {failure.crew && !ended && <p>Crew <code>{failure.crew}</code> is unchanged.</p>}

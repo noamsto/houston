@@ -12,6 +12,7 @@ export interface RestartFailure {
   error: string
   output?: string
   crew?: string
+  host?: string
   status: number
 }
 
@@ -68,7 +69,8 @@ function launcherNotRunning(f: RestartFailure): boolean {
 }
 
 export function relaunchAdvice(f: RestartFailure, crew: string): string {
-  return launcherNotRunning(f)
-    ? `Relaunch it from a terminal in the repo with CREW_ID=${crew} dispatcher.`
-    : 'Check Fleet for the new dispatcher before relaunching.'
+  if (!launcherNotRunning(f)) return 'Check Fleet for the new dispatcher before relaunching.'
+  return f.host
+    ? `Relaunch it from a terminal in the repo on ${f.host} with CREW_ID=${crew} dispatcher.`
+    : `Relaunch it from a terminal in the repo with CREW_ID=${crew} dispatcher.`
 }

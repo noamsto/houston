@@ -24,7 +24,7 @@ function setup(candidates: RepoCandidate[] = [], truncated = false) {
   fetchCandidatesMock.mockResolvedValue({ roots: ['/git'], candidates, truncated })
   const onChanged = vi.fn()
   const onClose = vi.fn()
-  render(<RepoPicker onChanged={onChanged} onClose={onClose} />)
+  render(<RepoPicker host="local" onChanged={onChanged} onClose={onClose} />)
   return { onChanged, onClose }
 }
 
@@ -107,7 +107,7 @@ describe('RepoPicker', () => {
   it('keeps a failed repo-list error until the list loads again', async () => {
     fetchReposMock.mockRejectedValueOnce(new Error('list blew up'))
     fetchCandidatesMock.mockResolvedValue({ roots: [], candidates: [], truncated: false })
-    render(<RepoPicker onChanged={vi.fn()} onClose={vi.fn()} />)
+    render(<RepoPicker host="local" onChanged={vi.fn()} onClose={vi.fn()} />)
 
     expect(await screen.findByText('list blew up')).toBeTruthy()
     await waitFor(() => expect(fetchCandidatesMock).toHaveBeenCalled())
