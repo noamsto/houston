@@ -101,9 +101,9 @@ export function RestartDispatcher({ run }: { run: Run }) {
     sending.current = false
     if (result.kind === 'failed' && (result.status === 0 || result.status === 504)) {
       // The server may still be running the restart (the local route never
-      // answers 504; the peer forwarder does when its wait runs out); the
-      // pending mark stays so the old id reads as starting instead of a false
-      // verdict.
+      // answers 504; the peer forwarder does once the peer had the request and
+      // the answer never arrived whole); the pending mark stays so the old id
+      // reads as starting instead of a false verdict.
       setPhase('dropped')
       return
     }
