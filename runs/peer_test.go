@@ -42,7 +42,6 @@ func TestPeerLayerComposition(t *testing.T) {
 			key := PeerKey("b", "pane-3")
 			layer := c.layer
 			layer.Agent, layer.Host = "claude", "b"
-			layer.Caps = Caps{Terminal: true, Kill: true, Reply: true, Chat: true}
 			r.Apply(Delta{Source: PeerLayer, Key: key, Run: layer})
 
 			snap := r.Snapshot()
@@ -60,6 +59,44 @@ func TestPeerLayerComposition(t *testing.T) {
 				t.Errorf("attention = %q %q, want %q %q", got.Attention, got.AttentionNote, c.wantAtt, c.wantNote)
 			}
 		})
+	}
+}
+
+func TestPeerLayerCapsComposition(t *testing.T) {
+	r := NewRegistry(DefaultOrder)
+	sub := r.Subscribe()
+	defer r.Unsubscribe(sub)
+
+	key := PeerKey("b", "pane-2")
+	r.Apply(Delta{Source: PeerLayer, Key: key, Run: Run{Agent: "claude", Host: "b", Caps: Caps{Terminal: true, Chat: true}}})
+	select {
+	case <-sub:
+	default:
+		t.Fatal("no broadcast")
+	}
+	snap := r.Snapshot()
+	if len(snap) != 1 {
+		t.Fatalf("%d runs, want 1", len(snap))
+	}
+	if want := (Caps{Terminal: true, Chat: true}); snap[0].Caps != want {
+		t.Errorf("caps = %+v, want %+v", snap[0].Caps, want)
+	}
+
+	r.Apply(Delta{Source: PeerLayer, Key: key, Run: Run{Agent: "claude", Host: "b", Stale: true}})
+	select {
+	case got := <-sub:
+		if !got.Stale {
+			t.Errorf("re-emitted run stale = false, want true")
+		}
+	default:
+		t.Fatal("stale peer run was not re-emitted")
+	}
+	snap = r.Snapshot()
+	if len(snap) != 1 {
+		t.Fatalf("%d runs, want 1", len(snap))
+	}
+	if snap[0].Caps != (Caps{}) {
+		t.Errorf("stale caps = %+v, want zero", snap[0].Caps)
 	}
 }
 

@@ -277,8 +277,12 @@ func attentionOf(out Run, bySource map[string]Run) (Attention, string) {
 // derived from the hooks layer's own Session and Agent, not the composed
 // run's — a lower layer's Agent must never grant it. The one other grant is a
 // crew-named session (the bus's engine_session) whose engine, from that same
-// bus record, has a reader.
+// bus record, has a reader. A peer key's caps are its peer layer's own, already
+// intersected with what this host can forward.
 func deriveCaps(bySource map[string]Run) Caps {
+	if p, ok := bySource[PeerLayer]; ok {
+		return p.Caps
+	}
 	_, hasTmux := bySource["tmux"]
 	crew, hasCrew := bySource["crew"]
 	hooks, hasHooks := bySource["hooks"]
