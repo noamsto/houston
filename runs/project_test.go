@@ -72,17 +72,17 @@ func TestProjectResolverCachesSuccessForever(t *testing.T) {
 	}
 }
 
-func TestProjectResolverFailureFallsBackAndRetriesAfterWindow(t *testing.T) {
+func TestProjectResolverFailureIsEmptyAndRetriesAfterWindow(t *testing.T) {
 	f := &fakeCommonDir{err: errors.New("not a repo")}
 	clock := time.Unix(1000, 0)
 	p := newFakeResolver(f, &clock)
 
-	if got := p.project("/wt/feat"); got != "feat" {
-		t.Fatalf("project = %q, want Base(root) fallback", got)
+	if got := p.project("/wt/feat"); got != "" {
+		t.Fatalf("project = %q, want \"\" on a git failure", got)
 	}
 	clock = clock.Add(projectRetryAfter - time.Second)
-	if got := p.project("/wt/feat"); got != "feat" {
-		t.Fatalf("project = %q, want fallback within the window", got)
+	if got := p.project("/wt/feat"); got != "" {
+		t.Fatalf("project = %q, want \"\" within the window", got)
 	}
 	if f.calls != 1 {
 		t.Fatalf("commonDir called %d times within the window, want 1", f.calls)
@@ -100,6 +100,21 @@ func TestProjectResolverFailureFallsBackAndRetriesAfterWindow(t *testing.T) {
 	p.project("/wt/feat")
 	if f.calls != 2 {
 		t.Errorf("commonDir called %d times, want the success cached", f.calls)
+	}
+}
+
+func TestProjectResolverVanishedRootKeepsEarlierSuccess(t *testing.T) {
+	f := &fakeCommonDir{dir: "/x/houston/.git"}
+	clock := time.Unix(1000, 0)
+	p := newFakeResolver(f, &clock)
+
+	if got := p.project("/wt/feat"); got != "houston" {
+		t.Fatalf("project = %q, want houston", got)
+	}
+	f.err = errors.New("no such directory")
+	clock = clock.Add(24 * time.Hour)
+	if got := p.project("/wt/feat"); got != "houston" {
+		t.Errorf("project = %q after the root vanished, want the cached houston", got)
 	}
 }
 
@@ -140,31 +155,5 @@ func TestGitCommonDirResolvesWorktreeToMainRepo(t *testing.T) {
 		if got := p.project(root); got != "myrepo" {
 			t.Errorf("project(%q) = %q, want myrepo", root, got)
 		}
-	}
-}
-
-func TestProjectResolverResolvedNeverReturnsTheFallback(t *testing.T) {
-	f := &fakeCommonDir{err: errors.New("not a repo")}
-	clock := time.Unix(1000, 0)
-	p := newFakeResolver(f, &clock)
-
-	if got := p.resolved("/wt/feat"); got != "" {
-		t.Fatalf("resolved = %q on a git failure, want \"\"", got)
-	}
-	// The second call is a cache hit on the failed entry.
-	if got := p.resolved("/wt/feat"); got != "" {
-		t.Fatalf("resolved = %q on a cached failure, want \"\"", got)
-	}
-	if f.calls != 1 {
-		t.Fatalf("commonDir called %d times within the window, want 1", f.calls)
-	}
-
-	f.err, f.dir = nil, "/x/houston/.git"
-	clock = clock.Add(projectRetryAfter + time.Second)
-	if got := p.resolved("/wt/feat"); got != "houston" {
-		t.Errorf("resolved = %q after the window, want houston", got)
-	}
-	if got := p.resolved(""); got != "" {
-		t.Errorf("resolved(\"\") = %q, want \"\"", got)
 	}
 }

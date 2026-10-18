@@ -2206,3 +2206,87 @@ func TestScanKeepsAStaleWindowlessWorkerWhoseDispatcherIsJoinedOnAnotherBus(t *t
 		t.Errorf("worker dropped although its crew's dispatcher is joined on another bus; keys %v", keysOf(got))
 	}
 }
+
+func finishedJoinedWorker(now time.Time) Run {
+	return Run{
+		Agent: "claude", State: StateDone, Attention: AttentionDone, AttentionNote: "n",
+		Role: RoleWorker, Project: "houston", Branch: "fix/412", Worktree: "/wt/a",
+		CrewBus: testBus, CrewSession: "sess",
+		PR:       &PRRef{Number: "9", URL: "https://github.com/x/y/pull/9"},
+		Question: &Question{Text: "q", Via: "crew"},
+		Crew: &CrewRef{
+			Name: "c1", Codename: "mauve", Color: "#d75f87", Title: "fix it", Tier: "standard",
+			Model: "sonnet", Detail: "all done", Sessions: 2, Home: "houston",
+		},
+		Since: now.Add(-time.Hour).Unix(), UpdatedAt: now.Add(-30 * time.Minute).Unix(),
+	}
+}
+
+func TestTickCrewDeltasKeepsIdentityOfAnEvictedPaneKeyedRun(t *testing.T) {
+	now := time.Now()
+	in := finishedJoinedWorker(now)
+	deltas, newSeen := tickCrewDeltas(map[string]Run{"%307": in}, map[string]bool{"%307": true}, now)
+
+	if len(deltas) != 1 || deltas[0].Gone || deltas[0].Key != "%307" || deltas[0].Source != "crew" {
+		t.Fatalf("deltas = %+v, want one crew update for %%307", deltas)
+	}
+	if !newSeen["%307"] {
+		t.Error("%307 missing from the new seen set")
+	}
+	got := deltas[0].Run
+	if got.State != "" || got.Attention != "" || got.AttentionNote != "" || got.Question != nil ||
+		got.UpdatedAt != 0 || got.Since != 0 || got.Crew.Detail != "" {
+		t.Errorf("identity layer kept status fields: %+v", got)
+	}
+	if got.Agent != "claude" || got.Role != RoleWorker || got.Project != "houston" || got.Branch != "fix/412" ||
+		got.Worktree != "/wt/a" || got.CrewBus != testBus || got.CrewSession != "sess" ||
+		got.PR == nil || got.PR.Number != "9" {
+		t.Errorf("identity layer lost identity fields: %+v", got)
+	}
+	want := *in.Crew
+	want.Detail = ""
+	if *got.Crew != want {
+		t.Errorf("Crew = %+v, want %+v", *got.Crew, want)
+	}
+	if in.Crew.Detail != "all done" {
+		t.Error("identityOnly mutated the input's shared CrewRef")
+	}
+}
+
+func TestTickCrewDeltasStillEvictsAWindowlessFinishedRun(t *testing.T) {
+	now := time.Now()
+	key := "crew/" + testBus + "/fix/412"
+	deltas, _ := tickCrewDeltas(map[string]Run{key: finishedJoinedWorker(now)}, map[string]bool{key: true}, now)
+	if len(deltas) != 1 || !deltas[0].Gone || deltas[0].Key != key {
+		t.Errorf("deltas = %+v, want Gone for %q", deltas, key)
+	}
+}
+
+func TestEvictedJoinedWorkerKeepsCrewIdentityWithoutCrewAttention(t *testing.T) {
+	now := time.Now()
+	reg := NewRegistry(DefaultOrder)
+	reg.Apply(Delta{Source: "tmux", Key: "%307", Run: Run{
+		Agent: "claude", State: StateIdle, Branch: "fix/412", UpdatedAt: now.Unix(),
+		Tmux: &TmuxRef{PaneID: "%307"},
+	}})
+	deltas, _ := tickCrewDeltas(map[string]Run{"%307": finishedJoinedWorker(now)}, nil, now)
+	for _, d := range deltas {
+		reg.Apply(d)
+	}
+
+	var got *Run
+	for _, r := range reg.Snapshot() {
+		if r.Tmux != nil && r.Tmux.PaneID == "%307" {
+			got = &r
+		}
+	}
+	if got == nil {
+		t.Fatal("pane run missing from the snapshot")
+	}
+	if got.Crew == nil || got.Crew.Name != "c1" || got.Project != "houston" || got.Role != RoleWorker {
+		t.Errorf("composed run lost crew identity: crew=%+v project=%q role=%q", got.Crew, got.Project, got.Role)
+	}
+	if got.Attention == AttentionDone || got.Attention == AttentionStuck || got.State != StateIdle {
+		t.Errorf("composed run state=%q attention=%q, want the live idle state and no crew attention", got.State, got.Attention)
+	}
+}

@@ -114,7 +114,7 @@ func deltasFromTmux(wins []tmux.WindowOptions, panes []tmux.PaneOptions, project
 			Branch:    w.Branch,
 			Worktree:  w.GitRoot,
 			Tmux:      &TmuxRef{Session: w.Session, Window: w.Window, PaneID: p.PaneID, Server: p.ServerPID},
-			Activity:  Activity{Task: firstNonEmpty(p.ClaudeTask, w.Task)},
+			Activity:  Activity{Task: previewTask(p.ClaudeTask, w.Task)},
 		}
 		// A pane is an agent run only once lazytmux reports a claude_status for
 		// it — an empty status means a shell, build or htop, and the enrichment
@@ -170,13 +170,4 @@ func unsentinel(v string) string {
 		return ""
 	}
 	return v
-}
-
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
 }

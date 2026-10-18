@@ -13,8 +13,8 @@ import (
 // caller forever.
 const commonDirTimeout = 5 * time.Second
 
-// projectRetryAfter is how long a failed resolution keeps its fallback name
-// before git is asked again.
+// projectRetryAfter is how long a failed resolution stays empty before git is
+// asked again.
 const projectRetryAfter = 30 * time.Second
 
 // GitCommonDir resolves root's absolute git-common-dir: the main repo's .git
@@ -47,9 +47,10 @@ type projectEntry struct {
 }
 
 // projectResolver maps a checkout root to its main repo's name. Successes are
-// cached for the process lifetime; a failure answers with the root's base name
-// and is retried only after projectRetryAfter, so a vanished root does not
-// cost a git exec on every poll.
+// cached for the process lifetime; a failure answers "" and is retried only
+// after projectRetryAfter, so a vanished root does not cost a git exec on every
+// poll. The root's base name is never a fallback: for a linked worktree it is
+// the worktree's leaf, not the project.
 type projectResolver struct {
 	mu    sync.Mutex
 	cache map[string]projectEntry
@@ -66,24 +67,12 @@ func newProjectResolver() *projectResolver {
 	}
 }
 
+// project is "" unless git actually named the main repo.
 func (p *projectResolver) project(root string) string {
 	if root == "" {
 		return ""
 	}
 	return p.lookup(root).name
-}
-
-// resolved is project without the fallback: "" unless git actually named the
-// main repo. For layers that outrank tmux, where a guessed name would overwrite
-// a correct one.
-func (p *projectResolver) resolved(root string) string {
-	if root == "" {
-		return ""
-	}
-	if e := p.lookup(root); e.ok {
-		return e.name
-	}
-	return ""
 }
 
 func (p *projectResolver) lookup(root string) projectEntry {
@@ -97,8 +86,6 @@ func (p *projectResolver) lookup(root string) projectEntry {
 	e := projectEntry{at: p.now()}
 	if dir, err := p.commonDir(root); err == nil {
 		e.name, e.ok = ProjectFromCommonDir(dir), true
-	} else {
-		e.name = filepath.Base(root)
 	}
 	p.cache[root] = e
 	return e

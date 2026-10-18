@@ -15,6 +15,11 @@ interface GroupProps<K extends FleetEntry['kind']> {
 // The head card is a <button>, so the member rows are its siblings inside the
 // container, never its children.
 export function DispatcherGroup({ entry, now, onOpen, selectedId }: GroupProps<'dispatcher'>) {
+  const crewLine = dispatcherCrewLine(entry, now)
+  // A container around a lone head would only add a border and a badge slot.
+  if (entry.shown.length === 0 && entry.needsYou === 0) {
+    return <RunCard run={entry.head} now={now} onOpen={onOpen} selected={selectedId === entry.head.id} crewLine={crewLine} />
+  }
   return (
     <div className={`fleet-group-card${entry.needsYou > 0 ? ' needs-you' : ''}`}>
       <RunCard
@@ -22,7 +27,7 @@ export function DispatcherGroup({ entry, now, onOpen, selectedId }: GroupProps<'
         now={now}
         onOpen={onOpen}
         selected={selectedId === entry.head.id}
-        crewLine={dispatcherCrewLine(entry, now)}
+        crewLine={crewLine}
       />
       {entry.needsYou > 0 && <span className="fleet-group-badge">{entry.needsYou} need you</span>}
       <MemberRows shown={entry.shown} now={now} onOpen={onOpen} selectedId={selectedId} />
