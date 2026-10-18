@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/noamsto/houston/claudemod"
 	"github.com/noamsto/houston/hook"
 )
 
@@ -75,6 +76,8 @@ type Hub struct {
 
 	preRemoveStat func(string) (os.FileInfo, error) // test seam for pruneEnded's race guard
 
+	mod *claudemod.Store // nil when the Claude Code mod is not listened for
+
 	mu       sync.RWMutex
 	sessions map[string]*Session
 	subs     map[chan SessionView]struct{}
@@ -95,6 +98,9 @@ type Options struct {
 	// <=0. A state file whose last-written State is not StateEnded is never
 	// pruned, regardless of age.
 	PruneTTL time.Duration
+	// Mod is the Claude Code mod's record store, overlaid on hook state while
+	// the mod is live for a session. Nil leaves the hook path alone.
+	Mod *claudemod.Store
 }
 
 // Session is the hub's per-session bookkeeping. One goroutine owns it via the
@@ -120,6 +126,11 @@ type Session struct {
 	tools     map[string]toolOutcome // latest call per tool name since the last reset
 
 	chat *chatState // nil until first use, and for agents without a chat.Reader
+
+	mod         claudemod.Session // the mod's fold; meaningful only while hasMod
+	hasMod      bool
+	modOnly     bool // created from mod records, not a state file or discovery
+	lastModTurn int  // last mod turn count whose trail was cleared, for a session with no hook state
 }
 
 // toolOutcome is how a tool's latest call ended, and when the transcript said so.
@@ -192,6 +203,7 @@ func NewWithOptions(stateDir string, opts Options, log *slog.Logger) *Hub {
 		pruneTTL:          ttl,
 		log:               log,
 		preRemoveStat:     os.Stat,
+		mod:               opts.Mod,
 		sessions:          map[string]*Session{},
 		subs:              map[chan SessionView]struct{}{},
 	}
@@ -231,6 +243,11 @@ func (h *Hub) Run(ctx context.Context) error {
 	pruneTick := time.NewTicker(pruneInterval)
 	defer pruneTick.Stop()
 
+	var modCh <-chan struct{} // nil without a store: never fires
+	if h.mod != nil {
+		modCh = h.mod.Notify()
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -245,8 +262,15 @@ func (h *Hub) Run(ctx context.Context) error {
 				return nil
 			}
 			h.log.Warn("watcher error", "err", err)
+		case <-modCh:
+			h.applyModDirty()
 		case <-tick.C:
 			h.refreshAllTranscripts()
+			if h.mod != nil {
+				// Eviction and monitor expiry need no record traffic.
+				h.mod.Sweep()
+				h.tickMod(time.Now())
+			}
 		case <-discover.C:
 			h.runDiscovery(ctx)
 		case <-pruneTick.C:
@@ -467,18 +491,8 @@ func (h *Hub) loadStateFile(path string) {
 		// transcript user text: meta and injected user records appear mid-turn.
 		sess.resetTools()
 	}
-	if sess.transcriptPath != s.TranscriptPath {
-		// The tail's offset and running totals belong to the old file.
-		sess.transcriptOffset = 0
-		sess.spend, sess.maxCtx = nil, 0
-		sess.view.ContextUsed, sess.view.ContextLimit, sess.view.SpendUSD = 0, 0, nil
-		sess.resetTools()
-	}
-	sess.applyHook()
-	sess.transcriptPath = s.TranscriptPath
-	if sess.chat != nil {
-		sess.chat.setPath(s.TranscriptPath)
-	}
+	sess.setTranscriptPath(sess.effectiveTranscript())
+	sess.refreshView(time.Now())
 	view := sess.view
 	h.mu.Unlock()
 
@@ -487,6 +501,32 @@ func (h *Hub) loadStateFile(path string) {
 	}
 
 	h.broadcastIfChanged(sess, view)
+}
+
+// setTranscriptPath points the tail at p and reports whether it moved.
+func (s *Session) setTranscriptPath(p string) bool {
+	if s.transcriptPath == p {
+		return false
+	}
+	// The tail's offset and running totals belong to the old file.
+	s.transcriptOffset = 0
+	s.spend, s.maxCtx = nil, 0
+	s.view.ContextUsed, s.view.ContextLimit, s.view.SpendUSD = 0, 0, nil
+	s.resetTools()
+	s.transcriptPath = p
+	if s.chat != nil {
+		s.chat.setPath(p)
+	}
+	return true
+}
+
+// effectiveTranscript is the transcript the session tails: the hook state's,
+// else the one the mod learnt.
+func (s *Session) effectiveTranscript() string {
+	if s.hookState.TranscriptPath != "" || !s.hasMod {
+		return s.hookState.TranscriptPath
+	}
+	return s.mod.Transcript
 }
 
 func (h *Hub) refreshAllTranscripts() {
@@ -571,9 +611,16 @@ func (h *Hub) refreshTranscript(sessionID string) {
 // syncTranscriptView copies the transcript-derived state into the view.
 func (s *Session) syncTranscriptView(now time.Time) {
 	s.view.Trail = append([]TrailChip(nil), s.trail...)
-	s.view.Asks = s.asks
-	s.view.Background = s.bg.list(now)
+	s.refreshView(now)
+}
+
+// refreshView recomputes the view's state, background and asks. Every view
+// recomputation goes through it, so the mod and transcript sources switch in
+// one place and are never both counted.
+func (s *Session) refreshView(now time.Time) {
 	s.applyHook()
+	s.view.Background = s.background(now)
+	s.view.Asks = s.asksNow()
 }
 
 // applyHook merges the hook state into the view and heals a dialog the
@@ -590,11 +637,25 @@ func (s *Session) syncTranscriptView(now time.Time) {
 // tool-running, since no PostToolUseFailure hook is handled. Without the
 // timestamp check a call that just started would read as the finished earlier
 // call of the same tool.
+//
+// While the mod is live it replaces the state and the heal is off: the mod's
+// turn.complete already covers dismissals and interrupts.
 func (s *Session) applyHook() {
+	switch {
+	case s.hookState.SessionID != "":
+		mergeStateIntoView(&s.view, s.hookState)
+	case s.hasMod:
+		s.mergeModCoords()
+	default:
+		return
+	}
+	if s.modLive() {
+		s.overlayMod()
+		return
+	}
 	if s.hookState.SessionID == "" {
 		return
 	}
-	mergeStateIntoView(&s.view, s.hookState)
 	st := s.hookState
 	if st.Tool == "" {
 		return
@@ -625,12 +686,12 @@ func (s *Session) applyHook() {
 // to the transcript when one does, so no new event will ever say so.
 func (h *Hub) expireBackground(sess *Session) {
 	h.mu.Lock()
-	cur := sess.bg.list(time.Now())
-	if backgroundSignature(cur) == backgroundSignature(sess.view.Background) {
+	now := time.Now()
+	if backgroundSignature(sess.background(now)) == backgroundSignature(sess.view.Background) {
 		h.mu.Unlock()
 		return
 	}
-	sess.view.Background = cur
+	sess.refreshView(now)
 	view := sess.view
 	h.mu.Unlock()
 	h.broadcastIfChanged(sess, view)
