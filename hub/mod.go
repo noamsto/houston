@@ -49,7 +49,7 @@ func (s *Session) mergeModCoords() {
 	}
 	v.TranscriptPath = s.transcriptPath
 	v.Agent = hook.AgentClaude
-	v.UpdatedAt = m.Updated / 1000
+	v.UpdatedAt = m.Active / 1000
 	v.Turn = m.Turns
 }
 
@@ -66,7 +66,7 @@ func (s *Session) overlayMod() {
 	v.ToolInputHint = m.Hint
 	v.LastMessage = m.Message
 	v.Since = m.Since
-	v.UpdatedAt = max(v.UpdatedAt, m.Updated/1000)
+	v.UpdatedAt = max(v.UpdatedAt, m.Active/1000)
 
 	st := s.hookState
 	if m.State == hook.StateToolRunning && st.State == hook.StatePermission && st.UpdatedAt >= m.MainUpdated/1000 {

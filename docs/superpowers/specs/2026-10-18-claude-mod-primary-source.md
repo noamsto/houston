@@ -33,7 +33,7 @@ tmux session/window too). Otherwise from the mod itself: the mod reads `TMUX_PAN
 pid field of `$TMUX`, indexed from the right as `hook.tmuxEnv` does) on `session.start`,
 `turn.start` and every classic record,
 and with `cwd` and `transcript` (from classic events: `transcript_path`, `cwd`) whenever it
-learns them. A mod-only session's `UpdatedAt` is the newest record's `ts` (seconds), so
+learns them. A mod-only session's `UpdatedAt` is the newest non-heartbeat record's `ts` (seconds), so
 `paneForeign`'s start-time rule and `paneGone` work on it as on a hook session. The hub
 creates a session for a mod-only sid (agent `claude`) and tails its transcript like any other.
 
@@ -51,6 +51,9 @@ The mod is **live** for a session when both hold:
    by an engine update, a hot reload that failed). The hub's 2 s tick recomputes every session
    with mod data, so a dead mod falls back to the hook path within about 47 s with no record
    traffic.
+
+`Updated` is liveness only. The view's age comes from `Session.Active` (ms, the newest
+non-heartbeat record, any agent), so heartbeats never make an idle card look fresh (D4).
 
 Liveness is the mod's own recency and never the hook file's: hook events are detached, so a
 `post_tool` can land after `Stop` and a `UserPromptSubmit` before the mod's queued record, and
@@ -93,7 +96,7 @@ next main-loop record corrects it.
 | `State` | mod fold | hook state + transcript heal |
 | `Tool`, `ToolInputHint` | mod (`hook.ToolHint` over the input subset the mod sends) | hook |
 | `LastMessage` | permission: the notification message, else `Claude needs your permission to use <tool>`; nothing otherwise | hook |
-| `Since`, `UpdatedAt` | mod state change / max(hook, mod) | hook |
+| `Since`, `UpdatedAt` | mod state change / max(hook, mod `Active`; a heartbeat never advances it) | hook |
 | `Asks` | `questionTail` of the Stop record's `last` once a main-loop `stop` was seen this turn; else transcript | transcript |
 | `Background` | mod, once its background list is **known** (D6) | transcript `bgTracker` |
 | transcript heal | **off** (the mod's `turn.complete` covers dismissals and interrupts) | on |
@@ -118,12 +121,13 @@ The fold separates the main loop's **phase** from a pending **permission**:
   candidate.
 - `permission` (any agent, now carrying `agent`) → permission pending with the tool, its hint
   and the candidate id when tool and agent match.
-- Permission clears on: `tool.end` of its id (or, with no id, of the same agent and tool),
+- Permission clears on: `tool.end` of its id (or, with no id, of the same agent and tool;
+  with neither, a `tool.end` that leaves its agent no call in flight),
   `turn.start`, `turn.complete`, `session.start`, `session.end`, `compact`.
   `notification idle_prompt` changes nothing: the mod sees dismissals as `turn.complete`, so
   an idle_prompt while a dialog is still up must not hide it (the hook path's residual).
 - `notification permission_prompt|elicitation_dialog` → permission pending if none (keeps the
-  message for `LastMessage`).
+  message for `LastMessage`); the message lands on a pending dialog only of the same agent.
 - `turn.complete` (main) → `waiting`, clears inflight and permission. Any `reason`
   (`answer`, `aborted`, `refusal`, `error`): Esc on a dialog and Esc on a running tool both
   arrive as `turn.complete` (AC3).

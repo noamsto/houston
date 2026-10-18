@@ -252,9 +252,10 @@ func (f *fold) endFlight(rec Record) bool {
 // endMainTool leaves the phase alone for an id that is not in flight: a turn
 // end already cleared it, and a late tool.end must not reopen the turn.
 func (f *fold) endMainTool(rec Record) {
+	ended := f.endFlight(rec)
 	f.clearPermFor(rec)
 	f.endBackground(rec)
-	if !f.endFlight(rec) {
+	if !ended {
 		return
 	}
 	f.known = true
@@ -266,8 +267,9 @@ func (f *fold) endMainTool(rec Record) {
 }
 
 // clearPermFor clears the dialog rec's call answered: by id when a candidate
-// named it, else by tool. A dialog with neither (an elicitation) clears on any
-// call of its agent ending, since nothing ties it to one call.
+// named it, else by tool. A dialog with neither (an elicitation) is tied to no
+// one call, so it clears once its agent has no call left in flight; a parallel
+// call ending first leaves it open. Run it after endFlight.
 func (f *fold) clearPermFor(rec Record) {
 	p := f.perm
 	if p == nil {
@@ -280,7 +282,8 @@ func (f *fold) clearPermFor(rec Record) {
 	case p.tool != "":
 		answered = p.agent == rec.Agent && p.tool == rec.Tool
 	default:
-		answered = p.agent == rec.Agent
+		answered = p.agent == rec.Agent &&
+			!slices.ContainsFunc(f.inflight, func(fl flight) bool { return fl.agent == rec.Agent })
 	}
 	if answered {
 		f.perm = nil
@@ -314,7 +317,7 @@ func (f *fold) notification(rec Record) {
 		return
 	}
 	if f.perm != nil {
-		if f.perm.message == "" {
+		if f.perm.agent == rec.Agent && f.perm.message == "" {
 			f.perm.message = rec.Message
 		}
 		return

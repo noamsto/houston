@@ -180,6 +180,50 @@ func TestElicitationWithoutCandidateClearsOnToolEnd(t *testing.T) {
 	f.wantState(hook.StateThinking)
 }
 
+func TestElicitationWithoutCandidateWaitsForAllItsCalls(t *testing.T) {
+	f := newFeeder(t)
+	f.apply(1, evTurnStart, nil)
+	f.toolStart(2, "m", "mcp__docs__search")
+	f.toolStart(3, "r", "Read")
+	f.apply(4, evNotification, func(r *Record) { r.Type, r.Message = "elicitation_dialog", "Pick a source" })
+	f.wantState(hook.StatePermission)
+	// A parallel call ending first does not answer the dialog still open.
+	f.apply(5, evToolEnd, func(r *Record) { r.ID, r.Tool = "r", "Read" })
+	if s := f.session(); s.State != hook.StatePermission || s.Message != "Pick a source" {
+		t.Fatalf("after the parallel call ended: %+v", s)
+	}
+	f.apply(6, evToolEnd, func(r *Record) { r.ID, r.Tool = "m", "mcp__docs__search" })
+	f.wantState(hook.StateThinking)
+}
+
+func TestSubagentElicitationWaitsForAllItsCalls(t *testing.T) {
+	f := newFeeder(t)
+	f.apply(1, evTurnStart, nil)
+	f.toolStart(2, "task", "Agent")
+	f.apply(3, evToolStart, func(r *Record) { r.ID, r.Tool, r.Agent = "m", "mcp__docs__search", "sub1" })
+	f.apply(4, evToolStart, func(r *Record) { r.ID, r.Tool, r.Agent = "r", "Read", "sub1" })
+	f.apply(5, evNotification, func(r *Record) { r.Type, r.Agent = "elicitation_dialog", "sub1" })
+	f.apply(6, evToolEnd, func(r *Record) { r.ID, r.Tool, r.Agent = "r", "Read", "sub1" })
+	f.wantState(hook.StatePermission)
+	f.apply(7, evToolEnd, func(r *Record) { r.ID, r.Tool, r.Agent = "m", "mcp__docs__search", "sub1" })
+	f.wantState(hook.StateToolRunning)
+}
+
+func TestNotificationMessageStaysWithItsAgent(t *testing.T) {
+	f := newFeeder(t)
+	f.apply(1, evTurnStart, nil)
+	f.toolStart(2, "task", "Agent")
+	f.toolStart(3, "a", "Bash")
+	f.check(4, "a", "Bash", "")
+	f.permission(5, "Bash", "", nil)
+	f.apply(6, evNotification, func(r *Record) {
+		r.Type, r.Agent, r.Message = "permission_prompt", "sub1", "Claude needs your permission to use Edit"
+	})
+	if s := f.session(); s.Tool != "Bash" || s.Message != "Claude needs your permission to use Bash" {
+		t.Fatalf("main dialog after a subagent's notification: %+v", s)
+	}
+}
+
 func TestNewDialogDoesNotInheritMessage(t *testing.T) {
 	f := newFeeder(t)
 	f.apply(1, evTurnStart, nil)
@@ -199,7 +243,7 @@ func TestNewDialogDoesNotInheritMessage(t *testing.T) {
 	if s := f.session(); s.Tool != "Edit" || s.Message != "Claude needs your permission to use Edit" {
 		t.Fatalf("dialog B: %+v", s)
 	}
-	f.apply(9, evNotification, func(r *Record) { r.Type, r.Message = "permission_prompt", "B text" })
+	f.apply(9, evNotification, func(r *Record) { r.Type, r.Agent, r.Message = "permission_prompt", "sub1", "B text" })
 	if s := f.session(); s.Message != "B text" {
 		t.Fatalf("dialog B's notification: %+v", s)
 	}
@@ -259,11 +303,14 @@ func TestHeartbeatRefreshesUpdatedOnly(t *testing.T) {
 	f := newFeeder(t)
 	f.store.now = func() time.Time { return clock }
 	f.apply(1, evHeartbeat, nil)
-	if s := f.session(); s.Known || s.State != "" || s.Applied != 1 || s.Updated != ts0+1000 || s.MainUpdated != 0 {
+	if s := f.session(); s.Known || s.State != "" || s.Applied != 1 || s.Updated != ts0+1000 || s.Active != 0 || s.MainUpdated != 0 {
 		t.Fatalf("after first heartbeat: %+v", s)
 	}
 	f.apply(2, evTurnComplete, nil)
 	before := f.session()
+	if before.Active != ts0+2000 {
+		t.Fatalf("Active = %d after turn.complete, want %d", before.Active, ts0+2000)
+	}
 	f.store.TakeDirty()
 	<-f.store.Notify()
 
@@ -273,7 +320,7 @@ func TestHeartbeatRefreshesUpdatedOnly(t *testing.T) {
 	}
 	s := f.session()
 	if s.State != hook.StateWaiting || s.Since != before.Since || !s.Known || s.Turns != before.Turns ||
-		s.Updated != ts0+3000 || s.MainUpdated != before.MainUpdated || s.Applied != 3 {
+		s.Updated != ts0+3000 || s.Active != before.Active || s.MainUpdated != before.MainUpdated || s.Applied != 3 {
 		t.Fatalf("after heartbeat: %+v, before: %+v", s, before)
 	}
 	select {

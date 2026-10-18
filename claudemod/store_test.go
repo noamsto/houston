@@ -158,7 +158,7 @@ func TestSubagentRecordChangesNothing(t *testing.T) {
 	f.apply(2, evToolStart, func(r *Record) { r.ID, r.Tool, r.Agent = "x", "Bash", "sub1" })
 	f.apply(3, evTurnComplete, func(r *Record) { r.Agent = "sub1" })
 	s := f.session()
-	if s.State != hook.StateThinking || len(s.InFlight) != 0 || s.Applied != 3 {
+	if s.State != hook.StateThinking || len(s.InFlight) != 0 || s.Applied != 3 || s.Active != ts0+3000 {
 		t.Fatalf("session = %+v", s)
 	}
 }

@@ -205,6 +205,35 @@ func TestLateHookWriteDoesNotRetireIdleMod(t *testing.T) {
 	}
 }
 
+func TestHeartbeatsDoNotRefreshIdleAge(t *testing.T) {
+	dir := t.TempDir()
+	store := claudemod.NewStore()
+	h := NewWithOptions(dir, Options{ClaudeProjectsDir: "-", Mod: store}, silentLog())
+	now := time.Now()
+	idle := now.Unix() - 40
+
+	f := newModFeed(t, store, "s1")
+	f.at(idle-2, "session.start", nil)
+	f.at(idle-1, "turn.start", nil)
+	f.at(idle, "turn.complete", func(r *claudemod.Record) { r.Reason = "answer" })
+	f.at(idle+15, "heartbeat", nil)
+	f.at(idle+30, "heartbeat", nil)
+	h.applyModDirty()
+	h.tickMod(now)
+	v := findSession(h, "s1")
+	if v == nil || v.State != hook.StateWaiting || v.UpdatedAt != idle {
+		t.Fatalf("view = %+v, want waiting updated at %d", v, idle)
+	}
+
+	// With a hook file too, the overlay keeps the last activity.
+	writeState(t, dir, hook.SessionState{SessionID: "s1", State: hook.StateWaiting, UpdatedAt: idle - 5})
+	h.loadStateFile(hook.Path(dir, "s1"))
+	h.tickMod(now)
+	if v := findSession(h, "s1"); v == nil || v.State != hook.StateWaiting || v.UpdatedAt != idle {
+		t.Fatalf("view = %+v, want waiting updated at %d", v, idle)
+	}
+}
+
 func TestHookEndedRetiresMod(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now().Unix()

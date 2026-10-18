@@ -41,7 +41,8 @@ type Session struct {
 	Hint        string     `json:"hint,omitempty"`
 	Message     string     `json:"message,omitempty"`
 	Since       int64      `json:"since"`        // unix s of the last state change
-	Updated     int64      `json:"updated"`      // ms, newest applied record's ts
+	Updated     int64      `json:"updated"`      // ms, newest applied record's ts: liveness
+	Active      int64      `json:"active"`       // ms, newest applied non-heartbeat record's ts: activity
 	MainUpdated int64      `json:"main_updated"` // ms, newest applied main-loop record's ts (a heartbeat is not one)
 	Known       bool       `json:"known"`        // a state-defining main-loop record folded since houston started (a reload keeps it)
 	Turns       int        `json:"turns"`
@@ -105,9 +106,9 @@ type session struct {
 	maxSeq   int64
 	cur      fold // base with the window applied
 
-	applied, stale, reordered int
-	updated, mainUpdated      int64
-	lastApply                 time.Time
+	applied, stale, reordered    int
+	updated, active, mainUpdated int64
+	lastApply                    time.Time
 }
 
 // Apply inserts rec into its session's seq-ordered window and refolds. It
@@ -174,8 +175,11 @@ func (s *Store) apply(rec Record) (applied, changed bool) {
 	ss.applied++
 	ss.lastApply = now
 	ss.updated = max(ss.updated, rec.TS)
-	if rec.Agent == "" && rec.Ev != evHeartbeat {
-		ss.mainUpdated = max(ss.mainUpdated, rec.TS)
+	if rec.Ev != evHeartbeat {
+		ss.active = max(ss.active, rec.TS)
+		if rec.Agent == "" {
+			ss.mainUpdated = max(ss.mainUpdated, rec.TS)
+		}
 	}
 	ss.cur = ss.base.clone()
 	for _, r := range ss.window {
@@ -328,7 +332,7 @@ func (ss *session) view(sid string) Session {
 	f := &ss.cur
 	v := Session{
 		SID: sid, State: f.viewState(), Since: f.since,
-		Updated: ss.updated, MainUpdated: ss.mainUpdated,
+		Updated: ss.updated, Active: ss.active, MainUpdated: ss.mainUpdated,
 		Known: f.known, Turns: f.turns, Last: f.last, StopSeen: f.stopSeen, BGKnown: f.bgKnown,
 		CWD: f.cwd, Transcript: f.transcript, Pane: f.pane, TmuxServer: f.tmuxServer,
 		Boot: ss.boot, LastSeq: ss.maxSeq, Applied: ss.applied, Stale: ss.stale, Reordered: ss.reordered,
