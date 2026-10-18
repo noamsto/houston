@@ -241,7 +241,7 @@ UI-kill latency and the Monitor event-vs-expiry ambiguity remain.
 - **Trust.**
   - Any process of the same uid can write to the 0600 socket and spoof records. That only skews
     houston's display; houston must never act on a record.
-  - The mod must stay read-only. `claudemod/modguard_test.go`, a best-effort source scan (an alias of `$` passed into a helper is beyond it; `claude plugin validate`'s `calls:` line is the authoritative list), guards it in CI (CI cannot run
+  - The mod must stay read-only. `claudemod/modguard_test.go` is a CI tripwire for literal forbidden `$` calls (CI cannot run `claude plugin test`); it does not catch a hook that rewrites its event or result, `$` under another name, or `?.` access, and `claude plugin validate`'s `calls:` line is the authoritative list (CI cannot run
     `claude plugin test`), and `register.test.ts` checks events pass through unchanged: no `$.prompt.*`,
     `$.command.*`, `$.tool.*`, `$.agent.*`, `$.session.append`, `$.env.set`, `$.ui.*`,
     `$.process.*` or `$.fs.*`, and no refusal or rewrite answers.
@@ -286,6 +286,18 @@ UI-kill latency and the Monitor event-vs-expiry ambiguity remain.
 >     `hub/background.go` for Claude when the mod is live.
 >   - Make `-claude-mod` default on, or always on behind an env opt-out. Bound the store
 >     (evict ended sessions after the prune TTL).
+> - Hardening left open by the spike's review (spike code is off by default, so deferred):
+>   - `claudemod.Listen` moves the bound socket into place with `os.Rename`, which silently
+>     replaces a socket another houston bound after `clearStale` (two instances on one status
+>     dir both start; the first is unreachable and its `Close` deletes the second's socket). Use
+>     `os.Link` (fails with EEXIST) and drop the temp name.
+>   - The store's boot rule trusts `ts`: `Decode` accepts a missing `ts` (0), and a wall-clock step
+>     back across a reload retires the live boot for good, since `lastApply` also moves on stale
+>     records. Reject `ts < 1`, and stamp `lastApply` only on applied records.
+>   - The mod's `settle` can give a record queued before a session reset the next session's id.
+>     Stamp the generation on each record and keep the ended session's id per generation.
+>   - Widen `modguard_test.go`: strip comments, allow `?.`/`!.`, and flag result or event rewrites
+>     and an engine parameter not named `$`.
 > - Out of scope: permission-dialog option labels and answering (the engine draws the dialog; the
 >   pane read and the `answer/` checks stay), and non-Claude engines.
 >
