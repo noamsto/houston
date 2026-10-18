@@ -285,7 +285,7 @@
   font: inherit; font-size: 11px; cursor: pointer;
 }
 .shell-tabs button.on { color: var(--accent); font-weight: 700; }
-.shell-tabs .glyph { font-size: 15px; line-height: 1; }
+.shell-tabs .tab-icon { display: block; flex: none; width: 18px; height: 18px; }
 .run-tabs-list { flex: 1; min-width: 0; display: flex; }
 .shell-tabs .run-tabs-back {
   flex: 0 1 auto; min-width: 64px; max-width: 34%; padding: 0 12px;
