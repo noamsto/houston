@@ -595,3 +595,36 @@ func TestSourceAcceptsLongIDs(t *testing.T) {
 		t.Fatalf("second delta = %q, want pane-2 (1025-char id dropped)", d.Key)
 	}
 }
+
+func TestSourceCapsIntersectStaleClearsSnapshotRestores(t *testing.T) {
+	const snap = `[{"id":"pane-1","agent":"claude","caps":{"terminal":true,"reply":true,"kill":true,"chat":true}}]`
+	end1 := make(chan struct{})
+	srv := newSSEServer(t, func(n int, w http.ResponseWriter, r *http.Request, s *sseServer) {
+		s.open(w)
+		s.frame(w, "snapshot", snap)
+		if n == 1 {
+			<-end1
+			return
+		}
+		s.hold(r)
+	})
+	opts := fastOpts()
+	opts.Caps = runs.Caps{Terminal: true, Chat: true}
+	src := newSource(srv.URL, tokenFile(t, testToken), opts)
+	out := start(t, src)
+	key := runs.PeerKey("b", "pane-1")
+	want := runs.Caps{Terminal: true, Chat: true}
+
+	if d := recv(t, out); d.Key != key || d.Run.Caps != want {
+		t.Fatalf("snapshot caps = %+v, want %+v", d.Run.Caps, want)
+	}
+	waitHealth(t, src, StateConnected, "")
+
+	close(end1)
+	if d := recv(t, out); !d.Run.Stale || d.Run.Caps != (runs.Caps{}) {
+		t.Fatalf("stale emission = %+v, want stale with zero caps", d.Run)
+	}
+	if d := recv(t, out); d.Gone || d.Run.Stale || d.Run.Caps != want {
+		t.Fatalf("next snapshot = %+v, want fresh with caps %+v", d.Run, want)
+	}
+}

@@ -77,6 +77,7 @@ var errInsecureHop = errors.New("plain http connection is neither loopback nor o
 
 type Options struct {
 	Self       string        // this houston's instance id; a peer answering with it is "self"
+	Caps       runs.Caps     // caps this houston can forward; a peer run keeps only those it also reports
 	MinBackoff time.Duration // default 1s
 	MaxBackoff time.Duration // default 30s
 	Silence    time.Duration // default 60s
@@ -97,7 +98,8 @@ type Source struct {
 	cfg    Config
 	opts   Options
 	client *http.Client
-	hopOK  func(local, remote net.Addr) bool // plainHopOK; a field so tests can stand in a route
+	dial   func(ctx context.Context, network, addr string) (net.Conn, error) // the transport's dial, reused by DialTerminal
+	hopOK  func(local, remote net.Addr) bool                                 // plainHopOK; a field so tests can stand in a route
 
 	mu     sync.Mutex
 	health Health
@@ -146,6 +148,7 @@ func New(cfg Config, opts Options) *Source {
 	if strings.HasPrefix(cfg.URL, "http:") {
 		transport.DialContext = s.dialPlain
 	}
+	s.dial = transport.DialContext
 	s.client = &http.Client{
 		Transport: transport,
 		// The token must never follow a redirect to another URL.
@@ -170,6 +173,12 @@ func (s *Source) dialPlain(ctx context.Context, network, addr string) (net.Conn,
 }
 
 func (s *Source) Name() string { return "peer:" + s.cfg.Name }
+
+// Host is the name peer runs carry in Run.Host.
+func (s *Source) Host() string { return s.cfg.Name }
+
+// ValidID reports whether id is safe to splice into a peer URL path.
+func ValidID(id string) bool { return len(id) <= maxID && idRe.MatchString(id) }
 
 func (s *Source) Health() Health {
 	s.mu.Lock()
@@ -358,7 +367,7 @@ func (s *Source) sanitise(r runs.Run) (string, runs.Run, bool) {
 		s.warnDropped("carries a host")
 		return "", runs.Run{}, false
 	}
-	if len(r.ID) > maxID || !idRe.MatchString(r.ID) {
+	if !ValidID(r.ID) {
 		s.warnDropped("invalid id")
 		return "", runs.Run{}, false
 	}
@@ -368,7 +377,12 @@ func (s *Source) sanitise(r runs.Run) (string, runs.Run, bool) {
 	// A peer pane id addresses nothing here and would collide with a local
 	// pane; the peer's own Stale describes its tmux connection, not ours.
 	r.Tmux = nil
-	r.Caps = runs.Caps{}
+	r.Caps = runs.Caps{
+		Terminal: r.Caps.Terminal && s.opts.Caps.Terminal,
+		Reply:    r.Caps.Reply && s.opts.Caps.Reply,
+		Kill:     r.Caps.Kill && s.opts.Caps.Kill,
+		Chat:     r.Caps.Chat && s.opts.Caps.Chat,
+	}
 	r.Stale = false
 	r.DraftKey = ""
 	r.Removed = false
@@ -405,6 +419,7 @@ func (s *Source) markStale(ctx context.Context, out chan<- runs.Delta) error {
 	s.stale = true
 	for id, r := range s.known {
 		r.Stale = true
+		r.Caps = runs.Caps{} // a stale run cannot be acted on
 		s.known[id] = r
 		if err := s.emit(ctx, out, runs.Delta{Source: runs.PeerLayer, Key: runs.PeerKey(s.cfg.Name, id), Run: r}); err != nil {
 			return err
