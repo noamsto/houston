@@ -83,3 +83,8 @@ nilaway:
 # Run tests with the race detector
 race:
     exec go test -race ./...
+
+# Validate and test the Claude Code mod (as CI does)
+mod-check:
+    npx -y @anthropic-ai/claude-code@2.1.302 plugin validate contrib/claude-mod
+    npx -y @anthropic-ai/claude-code@2.1.302 plugin test contrib/claude-mod
