@@ -1,10 +1,23 @@
-import type { Register, EngineInterface, BuiltinToolResults } from 'claude-code'
+import type { Register, EngineInterface, BuiltinToolResults, Timer } from 'claude-code'
 
 type Rec = Record<string, unknown>
 type Queued = { gen: number; body: Rec }
 
 const boot = crypto.randomUUID()
 const queueCap = 256
+const tickMs = 200
+// Ticks with nothing queued before a heartbeat: counted in ticks, not wall
+// time, so houston sees one every 15 s of a running timer.
+const heartbeatTicks = 15000 / tickMs
+// A timer silent this long is dead (a refused period ends an interval), and a
+// drain running this long is stuck on a host call.
+const timerStaleMs = 2000
+const drainStaleMs = 5000
+// houston answers a body over 16 KiB with 413.
+const maxBodyBytes = 15000
+// Cut in this order until a record fits; ids, sequence and state stay.
+const bulky = ['ask', 'tasks', 'last', 'input', 'message']
+const encoder = new TextEncoder()
 const queue: Queued[] = []
 let seq = 0
 // A generation is one session's span of records: bumped at session.start and
@@ -12,8 +25,14 @@ let seq = 0
 let gen = 0
 let sid = ''
 const leftIds = new Map<number, string>()
-let ticking = false
-let draining = false
+let timer: Timer | undefined
+let lastTick = 0
+let quietTicks = 0
+// Each drain gets a run number; one whose number is no longer current was
+// given up on and sends nothing more.
+let drainRun = 0
+let draining: Promise<void> | undefined
+let drainStarted = 0
 let sock = ''
 let coordsRead = false
 let pane = ''
@@ -59,9 +78,13 @@ async function sessionOf($: EngineInterface, q: Queued): Promise<string | undefi
   return id
 }
 
+function bodyBytes(body: Rec): number {
+  return encoder.encode(JSON.stringify(body)).length
+}
+
 function fire($: EngineInterface, body: Rec) {
   $.http
-    .fetch('http://houston/v1/record', {
+    .fetch('http://houston.invalid/v1/record', {
       method: 'POST',
       socketPath: sock,
       headers: { 'content-type': 'application/json' },
@@ -70,36 +93,66 @@ function fire($: EngineInterface, body: Rec) {
     .catch(() => {})
 }
 
-// Runs on the timer, never inside the hook that queued the record, so a record
-// posted from a dispatch the engine abandoned is still sent.
-async function drain($: EngineInterface) {
-  if (draining) return
-  draining = true
+// A record leaves the queue only once its session id is known, so a failed
+// lookup leaves it for the next tick.
+async function send($: EngineInterface, run: number) {
   try {
     sock ||= await socketPath($)
     if (!coordsRead) await readCoords($)
-    while (queue.length) {
-      const q = queue.shift()!
+    while (queue.length && run === drainRun) {
+      const q = queue[0]!
       const id = await sessionOf($, q)
+      if (run !== drainRun) return
+      // Evicted while the lookup ran.
+      if (queue[0] !== q) continue
+      queue.shift()
       if (!id) continue
       const body: Rec = { ...q.body, sid: id }
       if (withCoords.has(body.ev as string)) {
         if (pane) body.pane = pane
         if (tmuxServer) body.tmux_server = tmuxServer
       }
+      for (const key of bulky) {
+        if (bodyBytes(body) <= maxBodyBytes) break
+        delete body[key]
+      }
       fire($, body)
     }
+  } finally {
     const oldest = queue[0]?.gen ?? gen
     for (const g of leftIds.keys()) if (g < oldest) leftIds.delete(g)
-  } finally {
-    draining = false
   }
 }
 
-function tick($: EngineInterface) {
-  if (ticking) return
-  ticking = true
-  $.clock.every(200, () => {
+// Joins the drain under way, or starts one when none runs or the one running
+// is stuck.
+function drain($: EngineInterface): Promise<void> {
+  if (draining && Date.now() - drainStarted <= drainStaleMs) return draining
+  const run = ++drainRun
+  drainStarted = Date.now()
+  const p = send($, run).finally(() => {
+    if (run === drainRun) draining = undefined
+  })
+  draining = p
+  return p
+}
+
+// Sends what is queued now, from inside a hook: waits out a drain already
+// under way, which may have taken its records before the last one was queued.
+async function flush($: EngineInterface) {
+  await drain($).catch(() => {})
+  await drain($).catch(() => {})
+}
+
+// Runs the sends on the timer, never inside the hook that queued the record,
+// so a record posted from a dispatch the engine abandoned is still sent.
+function startTimer($: EngineInterface) {
+  timer?.cancel()
+  lastTick = Date.now()
+  quietTicks = 0
+  timer = $.clock.every(tickMs, () => {
+    lastTick = Date.now()
+    if (++quietTicks >= heartbeatTicks) post($, 'heartbeat')
     drain($).catch(() => {})
   })
 }
@@ -113,7 +166,8 @@ function evictOldest() {
 function post($: EngineInterface, ev: string, fields: Rec = {}) {
   if (queue.length >= queueCap) evictOldest()
   queue.push({ gen, body: { v: 1, boot, seq: ++seq, ts: Date.now(), ev, ...fields } })
-  tick($)
+  quietTicks = 0
+  if (!timer || Date.now() - lastTick > timerStaleMs) startTimer($)
 }
 
 function cut(s: string, n: number): string {
@@ -150,11 +204,15 @@ function inputHint(tool: string, x: unknown): Rec | undefined {
 }
 
 // Only a notification's header is ours: a monitor's event body embeds
-// arbitrary output, and a part with no terminal status ends nothing.
+// arbitrary output, and a part with no terminal status ends nothing. A
+// notification opens a piece of the text split at its closing tags, so an
+// opening tag inside an event body is never read as one.
 function parseTaskEnds(notification: string) {
   const tasks: Rec[] = []
-  for (const part of notification.split('<task-notification')) {
-    const head = part.split('<summary>')[0]!.split('<event>')[0]!
+  for (const piece of notification.split('</task-notification>')) {
+    const open = /^\s*<task-notification\b[^>]*>/.exec(piece)
+    if (!open) continue
+    const head = piece.slice(open[0].length).split('<summary>')[0]!.split('<event>')[0]!
     if (!/<status>(completed|failed|killed|stopped)<\/status>/.test(head)) continue
     for (const m of head.matchAll(/<task-id>([^<]*)<\/task-id>/g)) tasks.push({ id: m[1] })
     for (const m of head.matchAll(/<tool-use-id>([^<]*)<\/tool-use-id>/g)) tasks.push({ tool_use: m[1] })
@@ -165,20 +223,26 @@ function parseTaskEnds(notification: string) {
 export const register: Register = on => {
   on('session.start', ($, e, next) => {
     bump(sid)
-    tick($)
     post($, 'session.start', { cwd: e.cwd })
     return next(e)
   })
 
-  on('session.end', ($, e, next) => {
+  // The timer may not outlive an exit, so the end and whatever is still
+  // queued go out before the engine's end step.
+  on('session.end', async ($, e, next) => {
     post($, 'session.end', { sid: e.sessionId, reason: e.reason })
     bump(e.sessionId)
+    await flush($)
     return next(e)
   })
 
-  on('session.compact', ($, e, next) => {
+  on('session.compact', async ($, e, next) => {
     post($, 'compact', { trigger: e.trigger, agent: e.agentId })
-    return next(e)
+    try {
+      return await next(e)
+    } finally {
+      post($, 'compact.end', { agent: e.agentId })
+    }
   })
 
   on('turn.start', ($, e, next) => {
@@ -239,7 +303,7 @@ export const register: Register = on => {
   on('classic.Notification', ($, e, next) => {
     post($, 'notification', {
       type: e.notification_type,
-      message: e.message,
+      message: cut(e.message, 500),
       transcript: e.transcript_path,
       cwd: e.cwd,
     })
@@ -261,7 +325,7 @@ export const register: Register = on => {
   on('classic.Stop', ($, e, next) => {
     post($, 'stop', {
       last: e.last_assistant_message ? tail(e.last_assistant_message, 300) : undefined,
-      tasks: e.background_tasks?.map(t => ({
+      tasks: e.background_tasks?.slice(0, 32).map(t => ({
         id: t.id,
         type: t.type,
         status: t.status,

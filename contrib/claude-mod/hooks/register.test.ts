@@ -1,9 +1,16 @@
 import type { On } from 'claude-code'
 import { test, expect, mock } from 'claude-code/testing'
 
-type Posted = { socketPath?: string; body: Record<string, unknown> }
+type Posted = { url: string; socketPath?: string; body: Record<string, unknown>; bytes: number }
 
 const TICK = 200
+
+// The mod judges a stalled timer or drain by wall time, which the mocked clock
+// does not move, and the kit has no real timer.
+function spin(ms: number) {
+  const until = Date.now() + ms
+  while (Date.now() < until) {}
+}
 
 function rig(
   on: On,
@@ -15,7 +22,8 @@ function rig(
   mock.env(on, { HOUSTON_STATE_DIR: '/tmp/hs', ...env })
   on('session.id', async () => ({ value: await sessionId() }))
   on('http.fetch', (_$, e) => {
-    posted.push({ socketPath: e.init?.socketPath, body: JSON.parse(e.init?.body ?? '{}') })
+    const raw = e.init?.body ?? '{}'
+    posted.push({ url: e.url, socketPath: e.init?.socketPath, body: JSON.parse(raw), bytes: new TextEncoder().encode(raw).length })
     return { value: { status: 204, ok: true, headers: {}, text: '' } }
   })
   const bodies = (ev?: string) => posted.map(p => p.body).filter(b => !ev || b.ev === ev)
@@ -41,6 +49,7 @@ test('a tool call posts start and end in order and passes the call through untou
   expect(seen).toMatchObject(BASH)
   expect(posted.map(p => p.body.ev)).toEqual(['tool.start', 'tool.end'])
   expect(posted.every(p => p.socketPath === '/tmp/hs/claude-mod.sock')).toBe(true)
+  expect(posted.every(p => p.url === 'http://houston.invalid/v1/record')).toBe(true)
   const [start, end] = posted.map(p => p.body)
   expect(start).toMatchObject({ v: 1, sid: 'sid-1', seq: 1, tool: 'Bash', input: { command: 'echo hi' } })
   expect(start!.gen).toBeUndefined()
@@ -198,7 +207,9 @@ test('a failing fetch does not fail the tool call and later posts still go out',
   expect(attempts).toBe(4)
 })
 
-test('records carry the id of the session they belong to across a session boundary', async ($, on) => {
+// A /clear ends the session and the process goes on under a new id with no
+// session.start: later records find the new id through $.session.id().
+test('records carry the id of the session they belong to across a /clear', async ($, on) => {
   let current = 'sid-1'
   const { posted, flush } = rig(on, () => current)
   on('session.start', () => ({ cwd: '/work' }))
@@ -210,7 +221,6 @@ test('records carry the id of the session they belong to across a session bounda
   await flush()
   await $.session.end({ reason: 'clear', sessionId: 'sid-1', resume: { id: 'sid-1' } })
   current = 'sid-2'
-  await $.session.start(START)
   await $.tool.call(BASH)
   await flush()
 
@@ -219,13 +229,12 @@ test('records carry the id of the session they belong to across a session bounda
     ['tool.start', 'sid-1'],
     ['tool.end', 'sid-1'],
     ['session.end', 'sid-1'],
-    ['session.start', 'sid-2'],
     ['tool.start', 'sid-2'],
     ['tool.end', 'sid-2'],
   ])
 })
 
-test('records queued before a reset keep their session when drained after the next one started', async ($, on) => {
+test('records queued before a /clear keep their session without asking for one', async ($, on) => {
   let current = 'sid-1'
   const { posted, flush } = rig(on, () => current)
   on('session.start', () => ({ cwd: '/work' }))
@@ -234,9 +243,10 @@ test('records queued before a reset keep their session when drained after the ne
 
   await $.session.start(START)
   await $.tool.call(BASH)
-  await $.session.end({ reason: 'clear', sessionId: 'sid-1', resume: { id: 'sid-1' } })
+  // A lookup from here on answers the next session's id; the queued records
+  // must take the id session.end names instead.
   current = 'sid-2'
-  await $.session.start(START)
+  await $.session.end({ reason: 'clear', sessionId: 'sid-1', resume: { id: 'sid-1' } })
   await $.tool.call(BASH)
   await flush()
 
@@ -245,7 +255,6 @@ test('records queued before a reset keep their session when drained after the ne
     ['tool.start', 'sid-1'],
     ['tool.end', 'sid-1'],
     ['session.end', 'sid-1'],
-    ['session.start', 'sid-2'],
     ['tool.start', 'sid-2'],
     ['tool.end', 'sid-2'],
   ])
@@ -256,26 +265,32 @@ test('a session id lookup that straddles a session end is not cached for the nex
   let calls = 0
   let release = () => {}
   const gate = new Promise<void>(done => (release = done))
-  const { posted, clock, flush } = rig(on, async () => {
-    const id = current
+  const { posted, flush } = rig(on, async () => {
     if (++calls === 1) await gate
-    return id
+    return current
   })
   on('session.start', () => ({ cwd: '/work' }))
   on('session.end', (_$, e) => ({ sessionId: e.sessionId }))
   on('tool.call', () => RAN)
 
   await $.session.start(START)
+  await $.tool.call(BASH)
   await flush()
-  await $.session.end({ reason: 'clear', sessionId: 'sid-1', resume: { id: 'sid-1' } })
+  expect(posted).toHaveLength(0)
+  // session.end waits for the drain held on the lookup, which answers the id
+  // current at release: the next session's.
+  const end = $.session.end({ reason: 'clear', sessionId: 'sid-1', resume: { id: 'sid-1' } })
   current = 'sid-2'
   release()
-  await clock.settle()
+  await end
+  expect(posted.map(p => p.body.ev)).toEqual(['session.start', 'tool.start', 'tool.end', 'session.end'])
   await $.tool.call(BASH)
   await flush()
 
   expect(posted.map(p => [p.body.ev, p.body.sid])).toEqual([
     ['session.start', 'sid-1'],
+    ['tool.start', 'sid-1'],
+    ['tool.end', 'sid-1'],
     ['session.end', 'sid-1'],
     ['tool.start', 'sid-2'],
     ['tool.end', 'sid-2'],
@@ -418,4 +433,171 @@ test('a tool check returns the beneath decision unchanged and posts it', async (
 
   expect(got).toMatchObject({ decision: 'ask', reason: 'needs a human' })
   expect(bodies()[0]).toMatchObject({ ev: 'tool.check', tool: 'Bash', decision: 'ask' })
+})
+
+test('session.end sends what is queued and its own record before it resolves', async ($, on) => {
+  const { posted, clock } = rig(on)
+  let ended = false
+  on('session.start', () => ({ cwd: '/work' }))
+  on('classic.Stop', () => ({}))
+  on('session.end', (_$, e) => {
+    ended = true
+    return { sessionId: e.sessionId }
+  })
+
+  await $.session.start(START)
+  await $.classic.Stop({ stop_hook_active: false, last_assistant_message: 'Done.' })
+  await $.session.end({ reason: 'other', sessionId: 'sid-1', resume: { id: 'sid-1' } })
+
+  expect(clock.now()).toBe(0)
+  expect(ended).toBe(true)
+  expect(posted.map(p => [p.body.ev, p.body.sid])).toEqual([
+    ['session.start', 'sid-1'],
+    ['stop', 'sid-1'],
+    ['session.end', 'sid-1'],
+  ])
+})
+
+// The kit's clock cannot lose a period, so a test hook above it refuses one,
+// which ends the interval as a session's host does.
+test('a timer whose period was refused is started again by a later record', { timeoutMs: 10000 }, async ($, on) => {
+  let periods = 0
+  on('clock.every', { ms: TICK }, (_$, e, next) => (++periods === 2 ? { deny: 'host busy' } : next(e)))
+  const { bodies, flush } = rig(on)
+  on('tool.call', () => RAN)
+
+  await $.tool.call(BASH)
+  await flush()
+  expect(bodies().map(b => b.seq)).toEqual([1, 2])
+  await $.tool.call(BASH)
+  await flush()
+  await flush()
+  expect(bodies().map(b => b.seq)).toEqual([1, 2])
+
+  spin(2100)
+  await $.tool.call(BASH)
+  await flush()
+  expect(bodies().map(b => b.seq)).toEqual([1, 2, 3, 4, 5, 6])
+})
+
+test('a drain stuck on a host call is given up on and its records go out once', { timeoutMs: 15000 }, async ($, on) => {
+  let calls = 0
+  let release = () => {}
+  const gate = new Promise<void>(done => (release = done))
+  const { bodies, flush } = rig(on, async () => {
+    if (++calls === 1) await gate
+    return 'sid-1'
+  })
+  on('tool.call', () => RAN)
+
+  await $.tool.call(BASH)
+  await flush()
+  await flush()
+  expect(bodies()).toHaveLength(0)
+
+  spin(5100)
+  await flush()
+  expect(bodies().map(b => [b.ev, b.sid])).toEqual([
+    ['tool.start', 'sid-1'],
+    ['tool.end', 'sid-1'],
+  ])
+  release()
+  await flush()
+  expect(bodies()).toHaveLength(2)
+})
+
+test('a tag inside a monitor event is not read as a notification', async ($, on) => {
+  const { bodies, flush } = rig(on)
+  on('prompt.submit', (_$, e) => e)
+  const text =
+    '<task-notification><task-id>m1</task-id><event>tail: <task-notification><task-id>b7</task-id>' +
+    '<status>completed</status></event></task-notification>'
+
+  await $.prompt.submit({ text, wait: false, origin: { kind: 'task-notification' } })
+  await flush()
+
+  expect(bodies()).toHaveLength(0)
+})
+
+test('a notification message is cut to 500 characters', async ($, on) => {
+  const { bodies, flush } = rig(on)
+  on('classic.Notification', () => ({}))
+
+  await $.classic.Notification({ message: 'm'.repeat(20000), notification_type: 'idle_prompt' })
+  await flush()
+
+  expect(bodies('notification')[0]!.message).toBe('m'.repeat(500))
+})
+
+test('a record past the size limit loses its bulky fields first', async ($, on) => {
+  const { posted, flush } = rig(on)
+  on('tool.call', () => ({ ref: 1, text: 'answered', result: {} }))
+  const long = (n: number) => '漢'.repeat(n)
+  const question = (i: number) => ({
+    question: `${i} ${long(600)}`,
+    header: `Q${i}`,
+    multiSelect: false,
+    options: [1, 2, 3, 4].map(j => ({ label: `${j} ${long(300)}`, description: 'd' })),
+  })
+
+  await $.tool.call({ tool: 'AskUserQuestion', questions: [1, 2, 3, 4].map(question) })
+  await flush()
+
+  const start = posted.find(p => p.body.ev === 'tool.start')!
+  expect(start.bytes <= 15000).toBe(true)
+  expect(start.body.ask).toBeUndefined()
+  expect(start.body).toMatchObject({ v: 1, sid: 'sid-1', seq: 1, tool: 'AskUserQuestion', input: { questions: [{ header: 'Q1' }] } })
+})
+
+test('a failed session id lookup leaves the record queued for the next tick', async ($, on) => {
+  let calls = 0
+  const { bodies, flush } = rig(on, () => {
+    if (++calls === 1) throw new Error('not yet')
+    return 'sid-1'
+  })
+  on('tool.call', () => RAN)
+
+  await $.tool.call(BASH)
+  await flush()
+  expect(bodies()).toHaveLength(0)
+  await flush()
+
+  expect(bodies().map(b => [b.ev, b.seq, b.sid])).toEqual([
+    ['tool.start', 1, 'sid-1'],
+    ['tool.end', 2, 'sid-1'],
+  ])
+})
+
+test('a heartbeat goes out after 15 s with nothing queued', async ($, on) => {
+  const { bodies, clock, flush } = rig(on)
+  on('tool.call', () => RAN)
+
+  await $.tool.call(BASH)
+  await flush()
+  await clock.advance(15000 - 2 * TICK)
+  expect(bodies('heartbeat')).toHaveLength(0)
+  await flush()
+  const [beat] = bodies('heartbeat')
+  expect(Object.keys(beat!).sort()).toEqual(['boot', 'ev', 'seq', 'sid', 'ts', 'v'])
+  expect(beat).toMatchObject({ sid: 'sid-1', seq: 3 })
+  await clock.advance(15000)
+  expect(bodies('heartbeat')).toHaveLength(2)
+})
+
+test('a compaction posts its end once the compaction resolves, which reaches the caller unchanged', async ($, on) => {
+  const { bodies, clock, flush } = rig(on)
+  const summary = { role: 'user' as const, text: 'summary', toolUses: [] }
+  const compacted = { messages: [summary], tokensBefore: 9000, tokensAfter: 900 }
+  on('session.compact', async () => {
+    await clock.sleep(1000)
+    return compacted
+  })
+
+  const call = $.session.compact({ trigger: 'manual', messages: [summary, { role: 'assistant', text: 'ok', toolUses: [] }] })
+  await flush()
+  expect(bodies().map(b => b.ev)).toEqual(['compact'])
+  await clock.advance(1000)
+  expect(await call).toMatchObject(compacted)
+  expect(bodies().map(b => b.ev)).toEqual(['compact', 'compact.end'])
+  expect(bodies('compact')[0]).toMatchObject({ trigger: 'manual' })
 })
