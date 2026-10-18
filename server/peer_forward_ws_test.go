@@ -5,10 +5,13 @@ import (
 	"errors"
 	"io"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -170,6 +173,72 @@ func TestPeerTerminalPreUpgradeRefusalIsRelayed(t *testing.T) {
 	}
 }
 
+func TestPeerTerminalPreUpgradeRefusalCannotRender(t *testing.T) {
+	p := newPeerRecorder(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = io.WriteString(w, "<script>alert(1)</script>")
+	})
+	_, res, err := dialForwardedTerminal(t, newForwardServer(t, p.srv.URL), fwdPeerRunID)
+	if !errors.Is(err, websocket.ErrBadHandshake) || res == nil {
+		t.Fatalf("dial %v, want a refused handshake", err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	if res.StatusCode != http.StatusConflict {
+		t.Fatalf("status %d, want the peer's 409", res.StatusCode)
+	}
+	wantInertHeaders(t, res.Header, "text/plain; charset=utf-8")
+}
+
+func TestPeerTerminalUnupgradedAnswerIs502(t *testing.T) {
+	for _, code := range []int{http.StatusOK, http.StatusNoContent} {
+		t.Run(strconv.Itoa(code), func(t *testing.T) {
+			p := newPeerRecorder(t, func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(code)
+			})
+			_, res, err := dialForwardedTerminal(t, newForwardServer(t, p.srv.URL), fwdPeerRunID)
+			if !errors.Is(err, websocket.ErrBadHandshake) || res == nil {
+				t.Fatalf("dial %v, want a refused handshake", err)
+			}
+			defer func() { _ = res.Body.Close() }()
+			body, _ := io.ReadAll(res.Body)
+			if res.StatusCode != http.StatusBadGateway || string(body) != "peer refused the request\n" {
+				t.Fatalf("refusal %d %q, want 502 peer refused the request", res.StatusCode, body)
+			}
+		})
+	}
+}
+
+func TestPeerTerminalPlainRequestIsNotDialled(t *testing.T) {
+	p := stubPeerTerminal(t, func(*websocket.Conn) {})
+	s := newForwardServer(t, p.srv.URL)
+
+	wantRefusal(t, doReply(t, s, browserRequest("GET", "/api/runs/"+fwdPeerRunID+"/terminal", "")), http.StatusBadRequest, "not a websocket request")
+	if n := len(p.requests()); n != 0 {
+		t.Fatalf("peer saw %d requests, want 0", n)
+	}
+}
+
+func TestPeerTerminalCraftedTargetsAreNotDialled(t *testing.T) {
+	p := stubPeerTerminal(t, func(*websocket.Conn) {})
+	s := newForwardServer(t, p.srv.URL)
+
+	for _, id := range append(slices.Clone(craftedPeerIDs), "peer-b.pane-2/terminal/extra", "peer-b.pane-2/../pane-2") {
+		t.Run(id, func(t *testing.T) {
+			_, res, err := dialForwardedTerminal(t, s, id)
+			if res != nil {
+				_ = res.Body.Close()
+			}
+			if err == nil {
+				t.Fatal("dial succeeded")
+			}
+		})
+	}
+	for _, got := range p.requests() {
+		t.Errorf("peer saw %s %s", got.method, got.path)
+	}
+}
+
 func TestPeerTerminalDownPeerIs502(t *testing.T) {
 	down := httptest.NewServer(http.NotFoundHandler())
 	downURL := down.URL
@@ -198,19 +267,43 @@ func TestPeerTerminalUnlistedRunIsNotDialled(t *testing.T) {
 	}
 }
 
-// TestPeerTerminalLivenessTearsDownBothHops: a browser that stops answering
-// pings (it never reads, so gorilla never sends a pong) loses both hops once
-// the read deadline passes.
-func TestPeerTerminalLivenessTearsDownBothHops(t *testing.T) {
-	peerGone := make(chan struct{})
-	p := stubPeerTerminal(t, func(c *websocket.Conn) {
+// pingingPeer is a peer terminal that pings the relay every interval, as
+// servePane does, counts the pongs it gets back and closes gone when its
+// socket ends.
+func pingingPeer(t *testing.T, interval time.Duration, pongs *atomic.Int32, gone chan struct{}) *peerRecorder {
+	t.Helper()
+	return stubPeerTerminal(t, func(c *websocket.Conn) {
+		c.SetPongHandler(func(string) error { pongs.Add(1); return nil })
+		stop := make(chan struct{})
+		defer close(stop)
+		go func() {
+			tick := time.NewTicker(interval)
+			defer tick.Stop()
+			for {
+				select {
+				case <-stop:
+					return
+				case <-tick.C:
+					_ = c.WriteControl(websocket.PingMessage, nil, time.Now().Add(time.Second))
+				}
+			}
+		}()
 		for {
 			if _, _, err := c.ReadMessage(); err != nil {
-				close(peerGone)
+				close(gone)
 				return
 			}
 		}
 	})
+}
+
+// TestPeerTerminalLivenessTearsDownBothHops: a browser that stops answering
+// pings (it never reads, so gorilla never sends a pong) loses both hops once
+// the read deadline passes, though the peer stays live.
+func TestPeerTerminalLivenessTearsDownBothHops(t *testing.T) {
+	peerGone := make(chan struct{})
+	var pongs atomic.Int32
+	p := pingingPeer(t, 20*time.Millisecond, &pongs, peerGone)
 	s := newForwardServer(t, p.srv.URL)
 	s.peerWSPing = 20 * time.Millisecond
 	s.peerWSPongWait = 60 * time.Millisecond
@@ -224,16 +317,13 @@ func TestPeerTerminalLivenessTearsDownBothHops(t *testing.T) {
 	}
 }
 
+// TestPeerTerminalAnsweredPingsKeepTheRelay: a browser that answers the
+// relay's pings and a peer that pings the relay keep both hops open through
+// several idle read deadlines, and the relay answers the peer's pings.
 func TestPeerTerminalAnsweredPingsKeepTheRelay(t *testing.T) {
-	p := stubPeerTerminal(t, func(c *websocket.Conn) {
-		for {
-			mt, data, err := c.ReadMessage()
-			if err != nil {
-				return
-			}
-			_ = c.WriteMessage(mt, data)
-		}
-	})
+	peerGone := make(chan struct{})
+	var pongs atomic.Int32
+	p := pingingPeer(t, 20*time.Millisecond, &pongs, peerGone)
 	s := newForwardServer(t, p.srv.URL)
 	s.peerWSPing = 20 * time.Millisecond
 	s.peerWSPongWait = 60 * time.Millisecond
@@ -248,6 +338,47 @@ func TestPeerTerminalAnsweredPingsKeepTheRelay(t *testing.T) {
 	}()
 	if err := <-idle; err == nil || !strings.Contains(err.Error(), "timeout") {
 		t.Fatalf("idle read ended with %v, want only our own deadline", err)
+	}
+	select {
+	case <-peerGone:
+		t.Fatal("the peer hop closed while the peer was pinging")
+	default:
+	}
+	if n := pongs.Load(); n < 3 {
+		t.Errorf("peer got %d pongs, want the relay to answer its pings", n)
+	}
+}
+
+// TestPeerTerminalSilentPeerTearsDownBothHops: a peer that upgrades and then
+// sends nothing, not even pings, loses both hops once the peer hop's read
+// deadline passes, though the browser keeps answering pings.
+func TestPeerTerminalSilentPeerTearsDownBothHops(t *testing.T) {
+	peerGone := make(chan struct{})
+	p := stubPeerTerminal(t, func(c *websocket.Conn) {
+		for {
+			if _, _, err := c.ReadMessage(); err != nil {
+				close(peerGone)
+				return
+			}
+		}
+	})
+	s := newForwardServer(t, p.srv.URL)
+	s.peerWSPing = 20 * time.Millisecond
+	s.peerWSPongWait = 60 * time.Millisecond
+	browser := mustDialForwarded(t, s)
+
+	// Reading answers the relay's pings, so only the peer hop is silent.
+	_ = browser.SetReadDeadline(time.Now().Add(2 * time.Second))
+	// The drop reads as 1006 or a reset, never as our own deadline.
+	_, _, err := browser.ReadMessage()
+	var ne net.Error
+	if err == nil || errors.As(err, &ne) && ne.Timeout() {
+		t.Fatalf("browser read %v, want the relay to drop the browser hop", err)
+	}
+	select {
+	case <-peerGone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the peer hop outlived its own silence")
 	}
 }
 

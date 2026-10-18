@@ -67,8 +67,13 @@ var (
 )
 
 // forwardCaps is what this houston can forward to a peer in mode m: reply
-// only where the reply route is registered, and no kill route exists.
-func forwardCaps(m mode.Mode) runs.Caps {
+// only where the reply route is registered, and no kill route exists. Without
+// auth nothing is forwarded: anyone reaching this houston would act on the
+// peer with the peer's token.
+func forwardCaps(m mode.Mode, authEnabled bool) runs.Caps {
+	if !authEnabled {
+		return runs.Caps{}
+	}
 	return runs.Caps{Terminal: true, Chat: true, Reply: m == mode.Dispatcher}
 }
 
@@ -77,6 +82,10 @@ func forwardCaps(m mode.Mode) runs.Caps {
 func (s *Server) peerOr(rt peerRoute, local http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.PathValue("id"), "peer-") {
+			if s.auth == nil || !s.auth.enabled {
+				http.Error(w, "peer actions need auth", http.StatusForbidden)
+				return
+			}
 			s.forwardPeer(w, r, rt)
 			return
 		}
@@ -205,6 +214,8 @@ func (s *Server) forwardPeer(w http.ResponseWriter, r *http.Request, rt peerRout
 // relayPeerResponse writes the peer's status, Content-Type and body, and no
 // other peer header (no Set-Cookie, no Location). A redirect or auth refusal
 // becomes 502: relaying 401 would read as the browser's own token failing.
+// The body is served on this origin, so only a JSON or plain-text type is
+// relayed and the browser may neither sniff nor render it as a document.
 func relayPeerResponse(w http.ResponseWriter, resp *http.Response) int {
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 ||
 		resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
@@ -220,14 +231,20 @@ func relayPeerResponse(w http.ResponseWriter, resp *http.Response) int {
 		http.Error(w, "peer response too large", http.StatusBadGateway)
 		return http.StatusBadGateway
 	}
-	if ct := resp.Header.Get("Content-Type"); ct != "" {
-		w.Header().Set("Content-Type", ct)
-	} else {
-		w.Header()["Content-Type"] = nil // no sniffed type the peer never claimed
-	}
+	h := w.Header()
+	h.Set("Content-Type", relayContentType(resp.Header.Get("Content-Type")))
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Content-Security-Policy", "default-src 'none'; sandbox")
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(b)
 	return resp.StatusCode
+}
+
+func relayContentType(ct string) string {
+	if mt, _, err := mime.ParseMediaType(ct); err == nil && (mt == "application/json" || mt == "text/plain") {
+		return ct
+	}
+	return "text/plain; charset=utf-8"
 }
 
 // relayPeerStream copies an event stream as it arrives. The peer's ids,
@@ -244,6 +261,7 @@ func relayPeerStream(w http.ResponseWriter, body io.Reader) {
 	h.Set("Content-Type", "text/event-stream")
 	h.Set("Cache-Control", "no-cache")
 	h.Set("X-Accel-Buffering", "no")
+	h.Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
@@ -266,15 +284,23 @@ func relayPeerStream(w http.ResponseWriter, body io.Reader) {
 // dialled before the browser is upgraded, so its pre-upgrade refusals (409,
 // 503) reach the browser as the same plain HTTP errors the local route gives.
 func (s *Server) forwardTerminal(w http.ResponseWriter, r *http.Request, src *peer.Source, peerID string) {
+	if !websocket.IsWebSocketUpgrade(r) {
+		http.Error(w, "not a websocket request", http.StatusBadRequest)
+		return
+	}
 	up, resp, err := src.DialTerminal(r.Context(), peerID)
 	if resp != nil {
 		defer func() { _ = resp.Body.Close() }()
 	}
 	if err != nil {
 		code := http.StatusBadGateway
-		if errors.Is(err, websocket.ErrBadHandshake) && resp != nil {
+		switch {
+		case errors.Is(err, websocket.ErrBadHandshake) && resp != nil && resp.StatusCode < 300:
+			// Relayed, a 1xx/2xx without an upgrade would read as success.
+			http.Error(w, "peer refused the request", http.StatusBadGateway)
+		case errors.Is(err, websocket.ErrBadHandshake) && resp != nil:
 			code = relayPeerResponse(w, resp)
-		} else {
+		default:
 			slog.Debug("peer terminal dial failed", "peer", src.Host(), "err", err)
 			http.Error(w, "peer unreachable", http.StatusBadGateway)
 		}
@@ -327,7 +353,9 @@ func (h *wsHop) control(mt int, data []byte) error {
 // relayWS pumps frames both ways until either side ends, then closes both and
 // returns the close code it relayed first (0 for a drop). The browser hop is
 // pinged and read under a deadline, as servePane does, so a phone socket left
-// half-open never keeps a peer pane socket alive.
+// half-open never keeps a peer pane socket alive. The peer hop is read under
+// the same deadline, kept fresh by the pings the peer's servePane sends, so a
+// peer that went half-open never keeps the browser's socket alive either.
 func relayWS(browserConn, upConn *websocket.Conn, ping, pongWait, writeWait time.Duration) int {
 	browser := &wsHop{conn: browserConn, wait: writeWait}
 	up := &wsHop{conn: upConn, wait: writeWait}
@@ -335,6 +363,18 @@ func relayWS(browserConn, upConn *websocket.Conn, ping, pongWait, writeWait time
 	refresh := func() { _ = browserConn.SetReadDeadline(time.Now().Add(pongWait)) }
 	refresh()
 	browserConn.SetPongHandler(func(string) error { refresh(); return nil })
+
+	upRefresh := func() { _ = upConn.SetReadDeadline(time.Now().Add(pongWait)) }
+	upRefresh()
+	// Replacing gorilla's default handler means answering the pong here, through
+	// the hop's lock like every other write to the peer.
+	upConn.SetPingHandler(func(appData string) error {
+		upRefresh()
+		if err := up.control(websocket.PongMessage, []byte(appData)); err != nil && !errors.Is(err, websocket.ErrCloseSent) {
+			return err
+		}
+		return nil
+	})
 
 	done := make(chan struct{})
 	var once sync.Once
@@ -351,7 +391,7 @@ func relayWS(browserConn, upConn *websocket.Conn, ping, pongWait, writeWait time
 	wg.Add(3)
 	go func() {
 		defer wg.Done()
-		codes <- pumpWS(up, browser, func() {})
+		codes <- pumpWS(up, browser, upRefresh)
 		closeBoth()
 	}()
 	go func() {

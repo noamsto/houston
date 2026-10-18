@@ -76,7 +76,7 @@ func newForwardServer(t *testing.T, peerURL string, deltas ...runs.Delta) *Serve
 	s.mode = mode.Dispatcher
 	s.peers = []*peer.Source{peer.New(
 		peer.Config{Name: "b", URL: peerURL, TokenFile: writeTokenFile(t, fwdPeerToken)},
-		peer.Options{Caps: forwardCaps(mode.Dispatcher)},
+		peer.Options{Caps: forwardCaps(mode.Dispatcher, true)},
 	)}
 	return s
 }
@@ -196,10 +196,92 @@ func TestPeerForwardEscapesToolCallID(t *testing.T) {
 	p := newPeerRecorder(t, peerConflict)
 	s := newForwardServer(t, p.srv.URL)
 
-	doReply(t, s, browserRequest("GET", "/api/runs/"+fwdPeerRunID+"/chat/tool/a%20b", ""))
+	doReply(t, s, browserRequest("GET", "/api/runs/"+fwdPeerRunID+"/chat/tool/a%3Fb%23c", ""))
 	got := p.requests()
-	if len(got) != 1 || got[0].path != "/api/runs/pane-2/chat/tool/a b" {
-		t.Fatalf("peer saw %+v, want one request for the escaped call id", got)
+	if len(got) != 1 || got[0].path != "/api/runs/pane-2/chat/tool/a?b#c" || got[0].rawQuery != "" {
+		t.Fatalf("peer saw %+v, want one request for call id a?b#c with no query", got)
+	}
+}
+
+// TestPeerForwardResponseCannotRenderOnThisOrigin: a peer's body is served on
+// this origin, so only a JSON or plain-text type survives, never sniffed.
+func TestPeerForwardResponseCannotRenderOnThisOrigin(t *testing.T) {
+	for _, tc := range []struct{ peerCT, want string }{
+		{"text/html", "text/plain; charset=utf-8"},
+		{"image/svg+xml", "text/plain; charset=utf-8"},
+		{"application/json-seq", "text/plain; charset=utf-8"},
+		{"not a type", "text/plain; charset=utf-8"},
+		{"", "text/plain; charset=utf-8"},
+		{"application/json", "application/json"},
+		{"text/plain; charset=iso-8859-1", "text/plain; charset=iso-8859-1"},
+	} {
+		t.Run(tc.peerCT, func(t *testing.T) {
+			p := newPeerRecorder(t, func(w http.ResponseWriter, _ *http.Request) {
+				if tc.peerCT == "" {
+					w.Header()["Content-Type"] = nil // no sniffed type either
+				} else {
+					w.Header().Set("Content-Type", tc.peerCT)
+				}
+				_, _ = io.WriteString(w, "<script>alert(1)</script>")
+			})
+			s := newForwardServer(t, p.srv.URL)
+
+			rec := doReply(t, s, browserRequest("GET", "/api/runs/"+fwdPeerRunID+"/prompt", ""))
+			if rec.Code != http.StatusOK || rec.Body.String() != "<script>alert(1)</script>" {
+				t.Fatalf("local answer %d %q, want the peer's 200 body", rec.Code, rec.Body.String())
+			}
+			wantInertHeaders(t, rec.Header(), tc.want)
+		})
+	}
+}
+
+func wantInertHeaders(t *testing.T, h http.Header, contentType string) {
+	t.Helper()
+	if ct := h.Get("Content-Type"); ct != contentType {
+		t.Errorf("Content-Type %q, want %q", ct, contentType)
+	}
+	if v := h.Get("X-Content-Type-Options"); v != "nosniff" {
+		t.Errorf("X-Content-Type-Options %q, want nosniff", v)
+	}
+	if v := h.Get("Content-Security-Policy"); v != "default-src 'none'; sandbox" {
+		t.Errorf("Content-Security-Policy %q", v)
+	}
+}
+
+// forwardedRoutes is every HTTP route a peer run id is forwarded on, with a
+// body that would pass for POST.
+var forwardedRoutes = []struct{ method, suffix, body string }{
+	{"POST", "input", `{"type":"key","key":"Enter"}`},
+	{"POST", "answer", `{"kind":"choice","ordinal":1}`},
+	{"GET", "prompt", ""},
+	{"GET", "chat", ""},
+	{"GET", "chat/stream", ""},
+	{"GET", "chat/tool/call-1", ""},
+	{"POST", "reply", `{"text":"yes"}`},
+	{"GET", "crew/feed", ""},
+	{"GET", "crew/feed/stream", ""},
+}
+
+func TestPeerForwardWithoutAuthIsRefused(t *testing.T) {
+	p := newPeerRecorder(t, peerConflict)
+	s := newForwardServer(t, p.srv.URL, runs.Delta{Source: "tmux", Key: "%1", Run: runs.Run{Agent: "claude", State: runs.StateIdle}})
+	s.auth.enabled = false
+
+	for _, rt := range append(forwardedRoutes, struct{ method, suffix, body string }{"GET", "terminal", ""}) {
+		rec := doReply(t, s, browserRequest(rt.method, "/api/runs/"+fwdPeerRunID+"/"+rt.suffix, rt.body))
+		if rec.Code != http.StatusForbidden || strings.TrimSpace(rec.Body.String()) != "peer actions need auth" {
+			t.Errorf("%s %s: got %d %q, want 403 peer actions need auth", rt.method, rt.suffix, rec.Code, rec.Body.String())
+		}
+	}
+	if n := len(p.requests()); n != 0 {
+		t.Fatalf("peer saw %d requests, want 0", n)
+	}
+	wantRefusal(t, doReply(t, s, browserRequest("GET", "/api/runs/pane-1/chat", "")), http.StatusNotFound, "no chat")
+
+	for _, m := range []mode.Mode{mode.Dispatcher, mode.Tmux} {
+		if c := forwardCaps(m, false); c != (runs.Caps{}) {
+			t.Errorf("%s-mode caps without auth %+v, want none", m, c)
+		}
 	}
 }
 
@@ -215,23 +297,37 @@ func TestPeerForwardOversizedBodyIsRefusedLocally(t *testing.T) {
 	}
 }
 
+// craftedPeerIDs are run ids that must never reach a peer: malformed, for a
+// host with no source (c), for an unknown peer name (z), or not listed.
+var craftedPeerIDs = []string{
+	"peer-b.pane-2%2F..%2Fx",
+	"peer-b.%2e%2e",
+	"peer-b",
+	"peer-.pane-2",
+	"peer-b.",
+	"peer-c.pane-2",
+	"peer-z.pane-2",
+	"peer-b.pane$2",
+	"peer-b.pane-9",
+}
+
 // TestPeerForwardRefusesCraftedTargets: every crafted id or path is refused
-// here, and nothing but a fixed route path ever reaches the peer.
+// here on every forwarded route, and nothing but a fixed route path ever
+// reaches the peer.
 func TestPeerForwardRefusesCraftedTargets(t *testing.T) {
 	p := newPeerRecorder(t, peerConflict)
 	s := newForwardServer(t, p.srv.URL)
 
+	var paths []string
+	for _, rt := range forwardedRoutes {
+		for _, id := range craftedPeerIDs {
+			paths = append(paths, rt.method+" /api/runs/"+id+"/"+rt.suffix)
+		}
+		paths = append(paths,
+			rt.method+" /api/runs/peer-b.pane-2/"+rt.suffix+"/extra",
+			rt.method+" /api/runs/peer-b.pane-2/../pane-2/"+rt.suffix)
+	}
 	for _, path := range []string{
-		"/api/runs/peer-b.pane-2%2F..%2Fx/chat",
-		"/api/runs/peer-b.%2e%2e/chat",
-		"/api/runs/peer-b.pane-2/chat/extra",
-		"/api/runs/peer-b/chat",
-		"/api/runs/peer-.pane-2/chat",
-		"/api/runs/peer-b./chat",
-		"/api/runs/peer-c.pane-2/chat",
-		"/api/runs/peer-b.pane$2/chat",
-		"/api/runs/peer-b.pane-9/chat",
-		"/api/runs/peer-b.pane-2/../pane-2/chat",
 		"/api/runs/peer-b.pane-2/chat/tool/..",
 		"/api/runs/peer-b.pane-2/chat/tool/%2e%2e",
 		"/api/runs/peer-b.pane-2/chat/tool/a%2Fb",
@@ -240,8 +336,12 @@ func TestPeerForwardRefusesCraftedTargets(t *testing.T) {
 		"/api/runs/peer-b.pane-2/chat/tool/a%0Ab",
 		"/api/runs/peer-b.pane-2/chat/tool/" + strings.Repeat("a", 1025),
 	} {
-		t.Run(path, func(t *testing.T) {
-			rec := doReply(t, s, browserRequest("GET", path, ""))
+		paths = append(paths, "GET "+path)
+	}
+	for _, mp := range paths {
+		t.Run(mp, func(t *testing.T) {
+			method, path, _ := strings.Cut(mp, " ")
+			rec := doReply(t, s, browserRequest(method, path, `{}`))
 			// 301 is ServeMux cleaning a dot segment; the browser would
 			// follow it to a path that is itself checked.
 			if rec.Code != http.StatusNotFound && rec.Code != http.StatusMovedPermanently {
@@ -320,10 +420,10 @@ func TestPeerForwardTmuxModeRegistersNoReplyOrFeed(t *testing.T) {
 		t.Fatalf("peer saw %d requests, want 0", n)
 	}
 
-	if c := forwardCaps(mode.Tmux); c != (runs.Caps{Terminal: true, Chat: true}) {
+	if c := forwardCaps(mode.Tmux, true); c != (runs.Caps{Terminal: true, Chat: true}) {
 		t.Errorf("tmux-mode forwardable caps %+v, want terminal and chat only", c)
 	}
-	if c := forwardCaps(mode.Dispatcher); c != (runs.Caps{Terminal: true, Chat: true, Reply: true}) {
+	if c := forwardCaps(mode.Dispatcher, true); c != (runs.Caps{Terminal: true, Chat: true, Reply: true}) {
 		t.Errorf("dispatcher-mode forwardable caps %+v, want terminal, chat and reply", c)
 	}
 }
@@ -354,7 +454,7 @@ func TestPeerForwardUnreadableTokenIsUnreachable(t *testing.T) {
 	s := newForwardServer(t, p.srv.URL)
 	s.peers = []*peer.Source{peer.New(
 		peer.Config{Name: "b", URL: p.srv.URL, TokenFile: t.TempDir() + "/missing.token"},
-		peer.Options{Caps: forwardCaps(mode.Dispatcher)},
+		peer.Options{Caps: forwardCaps(mode.Dispatcher, true)},
 	)}
 
 	rec := doReply(t, s, browserRequest("GET", "/api/runs/"+fwdPeerRunID+"/prompt", ""))
@@ -536,5 +636,61 @@ func TestPeerStreamRefusalIsRelayed(t *testing.T) {
 	rec := doReply(t, s, browserRequest("GET", "/api/runs/"+fwdPeerRunID+"/crew/feed/stream", ""))
 	if rec.Code != http.StatusConflict || rec.Body.String() != `{"reset":true}` {
 		t.Fatalf("local answer %d %q, want the peer's 409", rec.Code, rec.Body.String())
+	}
+}
+
+// TestPeerStreamsSendOnlyAllowlistedRequestParts: the stream routes carry the
+// peer token, Last-Event-ID and their own query keys, and nothing else the
+// browser sent.
+func TestPeerStreamsSendOnlyAllowlistedRequestParts(t *testing.T) {
+	for _, tc := range []struct {
+		suffix string
+		query  url.Values
+	}{
+		{"chat/stream", url.Values{"after": {"e.2"}}},
+		{"crew/feed/stream", url.Values{"after": {"e.2"}, "from": {"e"}}},
+	} {
+		t.Run(tc.suffix, func(t *testing.T) {
+			p := newPeerRecorder(t, func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = io.WriteString(w, "event: reset\ndata: \n\n")
+			})
+			s := newForwardServer(t, p.srv.URL)
+
+			rec := doReply(t, s, browserRequest("GET", "/api/runs/"+fwdPeerRunID+"/"+tc.suffix+"?after=e.2&from=e&before=e.1&limit=3&token=x&junk=1", ""))
+			if rec.Code != http.StatusOK || rec.Body.String() != "event: reset\ndata: \n\n" {
+				t.Fatalf("local answer %d %q, want the peer's stream", rec.Code, rec.Body.String())
+			}
+			if v := rec.Header().Get("X-Content-Type-Options"); v != "nosniff" {
+				t.Errorf("X-Content-Type-Options %q, want nosniff", v)
+			}
+
+			got := p.requests()
+			if len(got) != 1 {
+				t.Fatalf("peer saw %d requests, want 1", len(got))
+			}
+			up := got[0]
+			if up.path != "/api/runs/pane-2/"+tc.suffix {
+				t.Errorf("upstream path %q", up.path)
+			}
+			if a := up.header.Values("Authorization"); !slices.Equal(a, []string{"Bearer " + fwdPeerToken}) {
+				t.Errorf("upstream Authorization %q, want only the peer token", a)
+			}
+			for _, h := range []string{"Cookie", "Origin", "X-Extra"} {
+				if v := up.header.Get(h); v != "" {
+					t.Errorf("upstream carried %s: %q", h, v)
+				}
+			}
+			if v := up.header.Get("Last-Event-ID"); v != "e.1" {
+				t.Errorf("upstream Last-Event-ID %q, want e.1", v)
+			}
+			q, err := url.ParseQuery(up.rawQuery)
+			if err != nil {
+				t.Fatalf("upstream query %q: %v", up.rawQuery, err)
+			}
+			if len(q) != len(tc.query) || !queryEqual(q, tc.query) {
+				t.Errorf("upstream query %v, want %v", q, tc.query)
+			}
+		})
 	}
 }

@@ -628,3 +628,22 @@ func TestSourceCapsIntersectStaleClearsSnapshotRestores(t *testing.T) {
 		t.Fatalf("next snapshot = %+v, want fresh with caps %+v", d.Run, want)
 	}
 }
+
+func TestSourceCapsKeepOnlyBothSidesHave(t *testing.T) {
+	srv := newSSEServer(t, func(_ int, w http.ResponseWriter, r *http.Request, s *sseServer) {
+		s.open(w)
+		s.frame(w, "snapshot", `[{"id":"pane-1","agent":"claude","caps":{"reply":true}},{"id":"pane-2","agent":"claude","caps":{"terminal":false,"chat":true}}]`)
+		s.hold(r)
+	})
+	opts := fastOpts()
+	opts.Caps = runs.Caps{Terminal: true, Chat: true}
+	out := start(t, newSource(srv.URL, tokenFile(t, testToken), opts))
+
+	got := recvN(t, out, 2)
+	if c := got[runs.PeerKey("b", "pane-1")].Run.Caps; c != (runs.Caps{}) {
+		t.Errorf("reply-only run caps = %+v, want none (reply is not forwardable)", c)
+	}
+	if c := got[runs.PeerKey("b", "pane-2")].Run.Caps; c != (runs.Caps{Chat: true}) {
+		t.Errorf("chat-only run caps = %+v, want chat only", c)
+	}
+}

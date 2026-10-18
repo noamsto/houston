@@ -387,7 +387,7 @@ func New(cfg Config) (*Server, error) {
 	}
 
 	for _, pc := range cfg.Peers {
-		src := peer.New(pc, peer.Options{Self: s.instance, Caps: forwardCaps(cfg.Mode)})
+		src := peer.New(pc, peer.Options{Self: s.instance, Caps: forwardCaps(cfg.Mode, cfg.AuthEnabled)})
 		s.peers = append(s.peers, src)
 		s.sourcesWG.Add(1)
 		go func() {
