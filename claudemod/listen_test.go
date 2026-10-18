@@ -44,7 +44,6 @@ func startServer(t *testing.T) (*Server, *Store, *http.Client) {
 	return srv, store, unixClient(path)
 }
 
-// do returns the response status code.
 func do(t *testing.T, c *http.Client, method, path, body string) int {
 	t.Helper()
 	req, err := http.NewRequest(method, "http://houston"+path, strings.NewReader(body))
