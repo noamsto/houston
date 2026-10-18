@@ -22,6 +22,23 @@ func TestDecodeValid(t *testing.T) {
 	}
 }
 
+func TestDecodeStopTasks(t *testing.T) {
+	empty, err := Decode(strings.NewReader(`{"v":1,"sid":"s","boot":"b","seq":1,"ev":"stop","tasks":[]}`))
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if empty.Tasks == nil || len(empty.Tasks) != 0 {
+		t.Fatalf("tasks:[] decoded to %#v, want non-nil empty", empty.Tasks)
+	}
+	absent, err := Decode(strings.NewReader(`{"v":1,"sid":"s","boot":"b","seq":1,"ev":"stop"}`))
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if absent.Tasks != nil {
+		t.Fatalf("absent tasks decoded to %#v, want nil", absent.Tasks)
+	}
+}
+
 func TestDecodeMalformed(t *testing.T) {
 	cases := map[string]string{
 		"invalid json":   `{"v":1,`,

@@ -187,9 +187,24 @@ func TestBackgroundTasks(t *testing.T) {
 	if got := ids(); !slices.Equal(got, []string{"n1", "n2"}) {
 		t.Fatalf("after stop: %v", got)
 	}
-	f.apply(8, evStop, nil)
+	f.apply(8, evStop, func(r *Record) { r.Tasks = []Task{} })
 	if got := ids(); len(got) != 0 {
 		t.Fatalf("after empty stop: %v", got)
+	}
+}
+
+func TestStopWithoutTasksKeepsBackground(t *testing.T) {
+	f := newFeeder(t)
+	f.apply(1, evTurnStart, nil)
+	f.toolStart(2, "A", "Bash")
+	f.apply(3, evToolEnd, func(r *Record) { r.ID, r.Tool, r.Task = "A", "Bash", "t1" })
+	f.apply(4, evStop, nil)
+	if s := f.session(); len(s.Background) != 1 || s.Background[0].ID != "t1" {
+		t.Fatalf("after stop without tasks: %+v", s.Background)
+	}
+	f.apply(5, evStop, func(r *Record) { r.Tasks = []Task{} })
+	if s := f.session(); len(s.Background) != 0 {
+		t.Fatalf("after empty stop: %+v", s.Background)
 	}
 }
 

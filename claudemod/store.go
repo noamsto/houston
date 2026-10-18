@@ -90,10 +90,14 @@ func (f *fold) apply(rec Record) {
 			delete(f.bg, t.ID)
 		}
 	case evStop:
-		f.bg = map[string]Task{}
-		for _, t := range rec.Tasks {
-			if t.Status == "running" || t.Status == "pending" {
-				f.bg[t.ID] = t
+		// A nil Tasks means the engine sent no background_tasks, so the list
+		// stands; an empty list means nothing is in flight.
+		if rec.Tasks != nil {
+			f.bg = map[string]Task{}
+			for _, t := range rec.Tasks {
+				if t.Status == "running" || t.Status == "pending" {
+					f.bg[t.ID] = t
+				}
 			}
 		}
 	}
