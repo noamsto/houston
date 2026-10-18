@@ -107,17 +107,17 @@ export function CrewTab({ run, runs, now }: CrewTabProps) {
           {crewShortId(crew)}
         </span>
         <span className="crews-counts">{countsLabel(counts)}</span>
-        {repo && (
+        {repo && !run.host && (
           <a className="crews-dispatch" href={dispatchHref(repo.path, crew)}>
             Dispatch here
           </a>
         )}
-        {run.crew?.name && <RestartDispatcher run={run} />}
+        {run.crew?.name && !run.host && <RestartDispatcher run={run} />}
       </div>
       {members.map((m) => (
         <Member key={m.id} run={m} now={now} />
       ))}
-      <CrewFeedList runId={run.id} crew={crew} runs={runs} />
+      <CrewFeedList runId={run.id} crew={crew} host={host} runs={runs} />
     </div>
   )
 }

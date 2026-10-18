@@ -62,19 +62,20 @@ const FeedRow = memo(function FeedRow({ entry, workerId, workerCodename }: FeedR
 interface CrewFeedListProps {
   runId: string
   crew: string
+  host: string
   runs: Run[]
 }
 
-export function CrewFeedList({ runId, crew, runs }: CrewFeedListProps) {
+export function CrewFeedList({ runId, crew, host, runs }: CrewFeedListProps) {
   const { status, entries, more, loadOlder, retry } = useCrewFeed(runId, true)
 
   const workers = useMemo(() => {
     const byBranch = new Map<string, Run>()
     for (const r of runs) {
-      if (r.role === 'worker' && r.crew?.name === crew && r.branch) byBranch.set(r.branch, r)
+      if (r.role === 'worker' && r.crew?.name === crew && (r.host || 'local') === host && r.branch) byBranch.set(r.branch, r)
     }
     return byBranch
-  }, [runs, crew])
+  }, [runs, crew, host])
 
   const newestFirst = useMemo(() => [...entries].reverse(), [entries])
 

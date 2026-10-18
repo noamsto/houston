@@ -97,6 +97,20 @@ describe('CrewTab roster', () => {
       .toBe('#/dispatch?repo=%2Fhome%2Fme%2Fqa-repo&crew=crew-9')
   })
 
+  it('offers a peer dispatcher neither Dispatch here nor Restart, even when its repo resolves locally', async () => {
+    fetchOptions.mockResolvedValue(options([{ path: '/home/me/qa-repo', name: 'qa-repo', crews: [] }]))
+    const { container } = renderTab([], dispatcher({ project: 'qa-repo', crew: { name: 'crew-9' }, host: 'b' }))
+
+    await waitFor(() => expect(container.querySelector('.crews-repo')?.textContent).toBe('qa-repo'))
+    expect(container.querySelector('.crews-dispatch')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Restart' })).toBeNull()
+  })
+
+  it('offers a local dispatcher Restart', () => {
+    renderTab([])
+    expect(screen.getByRole('button', { name: 'Restart' })).toBeTruthy()
+  })
+
   it('prefers the repo that lists the crew and omits the link when nothing resolves', async () => {
     fetchOptions.mockResolvedValue(
       options([

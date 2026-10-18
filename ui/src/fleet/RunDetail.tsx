@@ -13,7 +13,7 @@ import { CrewTab } from './CrewTab'
 import { RunQuestion, RunStatusStrip } from './RunStatusStrip'
 import { tabHash, type DetailTab } from './routes'
 import { back, switchRunTab } from './nav'
-import { DETAIL_TAB_LABEL, offeredTabs } from './runTabs'
+import { DETAIL_TAB_LABEL, offeredTabs, terminalTarget } from './runTabs'
 import { isPendingRun, relaunchAdvice, restartFailure } from './pendingRuns'
 import './fleet.css'
 
@@ -116,7 +116,7 @@ export function RunDetail({ runs, hasSnapshot, streamConnected, now, id, tab, mo
 }
 
 function RunDetailBody({ run, runs, tab, mode, streamConnected, now, onBack, tabsInBar }: { run: Run; runs: Run[]; tab?: DetailTab; mode: Mode | null; streamConnected: boolean; now: number; onBack: () => void; tabsInBar: boolean }) {
-  const capable = run.caps.terminal && Boolean(run.tmux)
+  const capable = run.caps.terminal && terminalTarget(run)
   const lifecycle = useTerminalLifecycle(run.id, capable, tab === 'terminal', streamConnected)
   const chatOffered = Boolean(run.caps.chat)
   const crewOffered = offeredTabs(run, mode).includes('crew')
@@ -166,7 +166,7 @@ function RunDetailBody({ run, runs, tab, mode, streamConnected, now, onBack, tab
         ) : (
           <>
             {!chatOffered && <RunStatusCard run={run} now={now} onTerminal />}
-            {!run.tmux ? (
+            {!terminalTarget(run) ? (
               <div className="run-detail-empty">Terminal — coming soon.</div>
             ) : lifecycle.state === 'ended' ? (
               <div className="run-detail-empty">
@@ -207,7 +207,6 @@ function RunStatusCard({ run, now, onTerminal = false }: { run: Run; now: number
     <div className="run-status-card">
       <RunStatusStrip run={run} now={now} />
       <RunQuestion run={run} onTerminal={onTerminal} />
-      {run.host && <div className="run-peer-note">Actions on runs from {run.host} aren't available yet.</div>}
       {message && message !== run.question?.text && (
         <button
           type="button"

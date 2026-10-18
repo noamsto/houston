@@ -34,7 +34,7 @@ interface TerminalLifecycleResult {
  * a pane socket that never comes back, and a stale SSE stream. See
  * RunDetail.tsx's terminal-tab render branch for how these states map to UI.
  *
- * `capable` (run.caps.terminal && has tmux data) drives the "ended"/recovery
+ * `capable` (`run.caps.terminal && terminalTarget(run)`: a local pane or a peer) drives the "ended"/recovery
  * transitions on its own, independent of `onTerminalTab` — switching to the
  * Chat tab and back must not, by itself, read as the pane dying.
  * `onTerminalTab` only feeds the "has this ever actually been shown" latch.

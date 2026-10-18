@@ -672,23 +672,31 @@ describe('RunDetail tabsInBar', () => {
 
 describe('RunDetail peer run', () => {
   const peer = (p: Partial<Run> = {}) => run({
-    id: 'b:pane-1', host: 'b', role: 'dispatcher', crew: { name: '1700-1' },
-    caps: { terminal: false, reply: false, kill: false }, ...p,
+    id: 'peer-b.pane-1', host: 'b', role: 'dispatcher', crew: { name: '1700-1' },
+    caps: { terminal: true, chat: true, reply: false, kill: false }, ...p,
   })
 
-  it('renders no tab buttons, the host chip and the not-yet-available note', () => {
+  it('renders the host chip and the Crew, Chat and Terminal tabs, with no unavailable note', () => {
     const r = peer()
     const { container } = render(<RunDetail mode="dispatcher" runs={[r]} hasSnapshot streamConnected now={now} id={r.id} />)
-    expect(container.querySelectorAll('.run-detail-tabs button').length).toBe(0)
-    expect(container.querySelector('.crew-tab')).toBeNull()
+    expect(Array.from(container.querySelectorAll('.run-detail-tabs button')).map((b) => b.textContent)).toEqual(['Crew', 'Chat', 'Terminal'])
+    expect(container.querySelector('.crew-tab')).toBeTruthy()
     expect(container.querySelector('.run-detail-heading .run-chip.host')?.textContent).toBe('b')
     expect(container.querySelector('.run-detail-heading .run-chip.stale')).toBeNull()
-    expect(screen.getByText("Actions on runs from b aren't available yet.")).toBeTruthy()
+    expect(screen.queryByText(/aren't available yet/)).toBeNull()
   })
 
-  it('shows the stale chip while the peer is unreachable', () => {
-    const r = peer({ stale: true })
-    const { container } = render(<RunDetail mode="dispatcher" runs={[r]} hasSnapshot streamConnected now={now} id={r.id} />)
+  it('renders the terminal of a peer run that has no tmux data, addressed at the run', () => {
+    const r = peer({ role: undefined, crew: undefined })
+    render(<RunDetail mode="dispatcher" runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
+    expect(screen.queryByText(/coming soon/i)).toBeNull()
+    expect(lastSocketPath).toBe(`/api/runs/${r.id}/terminal`)
+  })
+
+  it('offers a stale peer run no tabs', () => {
+    const r = peer({ stale: true, caps: { terminal: false, chat: false, reply: false, kill: false } })
+    const { container } = render(<RunDetail mode="tmux" runs={[r]} hasSnapshot streamConnected now={now} id={r.id} />)
+    expect(container.querySelectorAll('.run-detail-tabs button').length).toBe(0)
     expect(container.querySelector('.run-detail-heading .run-chip.stale')).toBeTruthy()
   })
 
