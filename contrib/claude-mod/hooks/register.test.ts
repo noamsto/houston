@@ -277,12 +277,14 @@ test('a session id lookup that straddles a session end is not cached for the nex
   await $.tool.call(BASH)
   await flush()
   expect(posted).toHaveLength(0)
-  // The drain held on the lookup gets its answer only after session.end: the
-  // next session's id.
-  const end = $.session.end({ reason: 'clear', sessionId: 'sid-1', resume: { id: 'sid-1' } })
-  current = 'sid-2'
+  // session.end flushes with a fresh drain, so the held lookup is still
+  // pending when the generation bumps. It then answers the stale id 'sid-1';
+  // sessionOf must drop that answer instead of caching it as the new
+  // generation's id, or the next session's records would go out as 'sid-1'.
+  await $.session.end({ reason: 'clear', sessionId: 'sid-1', resume: { id: 'sid-1' } })
   release()
-  await end
+  await flush()
+  current = 'sid-2'
   expect(posted.map(p => p.body.ev)).toEqual(['session.start', 'tool.start', 'tool.end', 'session.end'])
   await $.tool.call(BASH)
   await flush()
