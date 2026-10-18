@@ -134,13 +134,14 @@ export function taskMaxHeight(vh: number): number {
   return Math.max(120, Math.round(vh * 0.4))
 }
 
-/** The newest non-removed run for a just-dispatched branch, optionally
- *  narrowed to a crew — an empty/undefined run.crew.name is a wildcard
- *  (tmux-only runs belong to no crew group and still match). */
+/** The newest non-removed local run (peer runs are skipped) for a
+ *  just-dispatched branch, optionally narrowed to a crew — an empty/undefined
+ *  run.crew.name is a wildcard (tmux-only runs belong to no crew group and
+ *  still match). */
 export function findDispatchedRun(runs: Run[], branch: string, crew?: string): Run | undefined {
   let best: Run | undefined
   for (const r of runs) {
-    if (r.removed) continue
+    if (r.removed || r.host) continue
     if (r.branch !== branch) continue
     if (crew !== undefined && r.crew?.name && r.crew.name !== crew) continue
     const t = r.since ?? r.updated_at

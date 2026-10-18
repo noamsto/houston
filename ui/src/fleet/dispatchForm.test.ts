@@ -230,6 +230,13 @@ describe('findDispatchedRun', () => {
     expect(findDispatchedRun([r], 'feat/x')).toBeUndefined()
   })
 
+  it('skips a newer peer run on the same branch', () => {
+    const local = run({ id: 'local', branch: 'feat/x', since: 100 })
+    const peer = run({ id: 'peer-b.x', branch: 'feat/x', since: 200, host: 'b' })
+    expect(findDispatchedRun([local, peer], 'feat/x')).toBe(local)
+    expect(findDispatchedRun([peer], 'feat/x')).toBeUndefined()
+  })
+
   it('narrows by crew.name when both are known and mismatched', () => {
     const r = run({ id: 'r1', branch: 'feat/x', crew: { name: 'other-crew' } })
     expect(findDispatchedRun([r], 'feat/x', 'my-crew')).toBeUndefined()
