@@ -118,20 +118,70 @@ func TestModLiveSkipsTranscriptHeal(t *testing.T) {
 func TestHookAheadFallsBack(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now().Unix()
-	writeState(t, dir, hook.SessionState{SessionID: "s1", State: hook.StateThinking, UpdatedAt: now - 11})
+	writeState(t, dir, hook.SessionState{SessionID: "s1", State: hook.StateThinking, UpdatedAt: now - 26})
 	store := claudemod.NewStore()
 	h := startModHub(t, dir, store)
 
 	f := newModFeed(t, store, "s1")
-	f.at(now-12, "turn.start", nil)
-	f.at(now-11, "turn.complete", nil)
+	f.at(now-26, "turn.start", nil)
+	f.at(now-25, "turn.complete", nil)
 	waitView(t, h, "s1", "mod live", stateIs(hook.StateWaiting))
 
-	// 11 s past the newest record: the mod stopped posting.
-	writeState(t, dir, hook.SessionState{SessionID: "s1", State: hook.StateThinking, UpdatedAt: now})
+	// 13 s past the newest record, and the mod has not answered it in 12 s:
+	// the mod stopped posting.
+	writeState(t, dir, hook.SessionState{SessionID: "s1", State: hook.StateThinking, UpdatedAt: now - 12})
 	v := waitView(t, h, "s1", "hook state", stateIs(hook.StateThinking))
-	if v.UpdatedAt != now {
-		t.Errorf("UpdatedAt = %d, want the hook's %d", v.UpdatedAt, now)
+	if v.UpdatedAt != now-12 {
+		t.Errorf("UpdatedAt = %d, want the hook's %d", v.UpdatedAt, now-12)
+	}
+}
+
+func TestFreshHookWriteDoesNotRetireLiveMod(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now().Unix()
+	writeState(t, dir, hook.SessionState{SessionID: "s1", State: hook.StateWaiting, UpdatedAt: now - 20})
+	store := claudemod.NewStore()
+	h := startModHub(t, dir, store)
+
+	f := newModFeed(t, store, "s1")
+	f.at(now-21, "turn.start", nil)
+	f.at(now-20, "turn.complete", func(r *claudemod.Record) { r.Reason = "answer" })
+	waitView(t, h, "s1", "mod waiting", stateIs(hook.StateWaiting))
+
+	// A UserPromptSubmit after an idle spell lands before the mod's queued
+	// turn.start: the mod has not had the grace to answer it yet.
+	writeState(t, dir, hook.SessionState{SessionID: "s1", State: hook.StateThinking, Turn: 2, UpdatedAt: now})
+	v := waitView(t, h, "s1", "hook state loaded", func(v SessionView) bool { return v.Turn == 2 })
+	if v.State != hook.StateWaiting {
+		t.Fatalf("state = %q, want the mod's waiting", v.State)
+	}
+
+	f.at(now, "turn.start", nil)
+	v = waitView(t, h, "s1", "mod thinking", stateIs(hook.StateThinking))
+	if v.Since != now {
+		t.Errorf("Since = %d, want the mod's %d", v.Since, now)
+	}
+}
+
+func TestModLiveGraceBoundary(t *testing.T) {
+	const rec = int64(1_000_000)
+	s := &Session{
+		hasMod:    true,
+		mod:       claudemod.Session{Known: true, Updated: rec * 1000},
+		hookState: hook.SessionState{SessionID: "s1", UpdatedAt: rec + 5},
+	}
+	if !s.modLive(time.Unix(rec+5+modLagGrace-1, 0)) {
+		t.Error("mod retired before the grace passed")
+	}
+	if s.modLive(time.Unix(rec+5+modLagGrace, 0)) {
+		t.Error("mod still live once the grace passed")
+	}
+
+	// A hook write one second past the record is the same event across a
+	// second boundary, never ahead.
+	s.hookState.UpdatedAt = rec + 1
+	if !s.modLive(time.Unix(rec+1+modLagGrace*10, 0)) {
+		t.Error("hook write within the truncation second retired the mod")
 	}
 }
 
@@ -239,11 +289,14 @@ func TestModOnlySessionNotCreatedUntilKnown(t *testing.T) {
 func TestBackgroundSwitchesWithoutDoubleCount(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now().Unix()
+	// The mod's records sit far enough back for a hook write to lead them for
+	// the whole grace.
+	rec := now - modLagGrace - 15
 	transcript := writeJSONL(t,
 		bgStartLine("tu1", "Bash", shellInput, "2026-01-01T00:00:00Z")+
 			bgResultLine("tu1", fmt.Sprintf(shellResult, "bshA"), false))
 	writeState(t, dir, hook.SessionState{
-		SessionID: "s1", State: hook.StateThinking, TranscriptPath: transcript, UpdatedAt: now - 1,
+		SessionID: "s1", State: hook.StateThinking, TranscriptPath: transcript, UpdatedAt: rec - 1,
 	})
 	store := claudemod.NewStore()
 	h := startModHub(t, dir, store)
@@ -251,27 +304,27 @@ func TestBackgroundSwitchesWithoutDoubleCount(t *testing.T) {
 
 	// Live, but the mod's list is not known yet: the transcript's stands.
 	f := newModFeed(t, store, "s1")
-	f.at(now, "turn.start", nil)
-	f.at(now, "tool.start", func(r *claudemod.Record) { r.Tool, r.ID = "Read", "tu2" })
+	f.at(rec, "turn.start", nil)
+	f.at(rec, "tool.start", func(r *claudemod.Record) { r.Tool, r.ID = "Read", "tu2" })
 	v := waitView(t, h, "s1", "mod live", stateIs(hook.StateToolRunning))
 	if !backgroundIs("bshA")(v) {
 		t.Errorf("background before the mod's list is known = %+v, want bshA", v.Background)
 	}
 
-	f.at(now, "stop", func(r *claudemod.Record) {
+	f.at(rec, "stop", func(r *claudemod.Record) {
 		r.Tasks = []claudemod.Task{{ID: "bshB", Type: "shell", Status: "running", Description: "B"}}
 	})
 	v = waitView(t, h, "s1", "mod background", backgroundIs("bshB"))
 	if len(v.Background) != 1 {
 		t.Fatalf("background = %+v", v.Background)
 	}
-	if v.Background[0].Kind != BackgroundShell || v.Background[0].Hint != "B" || v.Background[0].Since != now {
+	if v.Background[0].Kind != BackgroundShell || v.Background[0].Hint != "B" || v.Background[0].Since != rec {
 		t.Errorf("mod task = %+v", v.Background[0])
 	}
 
 	// The hook runs ahead: the mod stopped, so the transcript's list returns.
 	writeState(t, dir, hook.SessionState{
-		SessionID: "s1", State: hook.StateThinking, TranscriptPath: transcript, UpdatedAt: now + modLagGrace + 1,
+		SessionID: "s1", State: hook.StateThinking, TranscriptPath: transcript, UpdatedAt: now - modLagGrace - 2,
 	})
 	waitView(t, h, "s1", "transcript background again", func(v SessionView) bool {
 		return v.State == hook.StateThinking && backgroundIs("bshA")(v)

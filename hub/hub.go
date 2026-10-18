@@ -618,9 +618,9 @@ func (s *Session) syncTranscriptView(now time.Time) {
 // recomputation goes through it, so the mod and transcript sources switch in
 // one place and are never both counted.
 func (s *Session) refreshView(now time.Time) {
-	s.applyHook()
+	s.applyHook(now)
 	s.view.Background = s.background(now)
-	s.view.Asks = s.asksNow()
+	s.view.Asks = s.asksNow(now)
 }
 
 // applyHook merges the hook state into the view and heals a dialog the
@@ -640,7 +640,7 @@ func (s *Session) refreshView(now time.Time) {
 //
 // While the mod is live it replaces the state and the heal is off: the mod's
 // turn.complete already covers dismissals and interrupts.
-func (s *Session) applyHook() {
+func (s *Session) applyHook(now time.Time) {
 	switch {
 	case s.hookState.SessionID != "":
 		mergeStateIntoView(&s.view, s.hookState)
@@ -649,7 +649,7 @@ func (s *Session) applyHook() {
 	default:
 		return
 	}
-	if s.modLive() {
+	if s.modLive(now) {
 		s.overlayMod()
 		return
 	}

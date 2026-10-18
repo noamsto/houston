@@ -44,11 +44,17 @@ The mod is **live** for a session when both hold:
    that sets a definite main-loop state (`session.start`, `turn.start`, `tool.start`,
    `tool.end` of an in-flight id, `permission`, `turn.complete`, `compact`, `session.end`).
    A houston restart mid-session therefore uses the hook path until the next such record.
-2. **Hook not ahead:** the hook state was not written more than `modLagGrace` (10 s) after
-   the newest mod record (`hook.UpdatedAt > mod.Updated/1000 + 10`). Every hook event houston
-   handles has a mod record emitted at the same moment, so the hook path is only ahead when
-   the mod stopped posting (unloaded, broken by an engine update, a hot reload that failed),
-   and then houston falls back by itself on the next hook event.
+2. **Hook not ahead:** the hook state has not led the newest mod record for the whole
+   `modLagGrace` (10 s): it is ahead when `hook.UpdatedAt > mod.Updated/1000 + 1` and
+   `now >= hook.UpdatedAt + 10`. Every hook event houston handles has a matching mod record,
+   but the mod sends from a 200 ms timer queue while the hook writes its file synchronously,
+   so a hook write (a `UserPromptSubmit` after an idle spell) routinely lands a moment before
+   its record; the grace gives the mod that long to answer. The `+ 1` absorbs the hook's
+   whole-second `UpdatedAt` against a record of the same event a few ms earlier across a
+   second boundary. A mod that has not answered a hook write within the grace stopped
+   posting (unloaded, broken by an engine update, a hot reload that failed), and houston
+   falls back by itself: the hub's 2 s tick recomputes every session with mod data, so the
+   fallback lands within about 2 s of the grace running out, with no record traffic.
 
 Why not "a record within N seconds": an idle session posts nothing for hours, and falling
 back would restore the hook state in exactly the cases the mod exists to fix (a stale
@@ -56,12 +62,15 @@ back would restore the hook state in exactly the cases the mod exists to fix (a 
 `/clear` starts the next session with no `session.start` (first record `turn.start`), and a
 houston restart sees none.
 
-No time-based expiry is needed; liveness changes only when a record or a hook write lands.
+There is no expiry without a hook write: liveness changes when a record lands, or when a
+hook write has gone unanswered for the grace.
 
 **Hook permission while live.** Where an organization manages Claude Code, a user-installed
 plugin's `classic.*` hooks do not run, so the mod gets no `permission`, `Notification` or
 `Stop` record while the hook path still gets the `permission_prompt` Notification (~6 s after
-the dialog opened, inside the grace). So while the mod is live and its view is
+the dialog opened). That write has no mod record to answer it, so a dialog left open past the
+grace retires the mod until its next record (`tool.end` on approval, `turn.complete` on a
+dismissal); the hook path shows the same permission meanwhile. So while the mod is live and its view is
 `tool-running` (a dialog can only be up while a call is in flight), a hook state of
 `waiting:permission` written at or after the newest **main-loop** (no `agent`) mod record's
 second wins (a parallel subagent's records must not hide the main loop's dialog) the state, tool,

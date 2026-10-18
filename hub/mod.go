@@ -7,21 +7,29 @@ import (
 	"github.com/noamsto/houston/hook"
 )
 
-// modLagGrace is how far, in seconds, the hook state may run ahead of the
-// newest mod record before the mod counts as stopped. Every hook event has a
-// mod record emitted at the same moment, so a hook write further ahead means
-// the mod is no longer posting (unloaded, broken, a failed reload).
+// modLagGrace is how long, in seconds, the mod has to answer a hook write
+// with a record of its own before it counts as stopped (unloaded, broken, a
+// failed reload). Every hook event has a matching mod record, but the mod
+// sends from a timer queue while the hook writes synchronously, so a hook
+// write can land before its record; a mod that has not answered within the
+// grace is dead.
 const modLagGrace = 10
 
 // modLive reports whether the mod's fold replaces the hook state. Known
 // requires a state-defining record since houston started, so a restart
-// mid-session keeps the hook path until the next one. There is no time-based
-// expiry: an idle session posts nothing for hours and must stay on the mod.
-func (s *Session) modLive() bool {
+// mid-session keeps the hook path until the next one. There is no expiry
+// without a hook write: an idle session posts nothing for hours and must stay
+// on the mod. A hook write counts as ahead only once it has led the newest
+// mod record for the whole grace; the + 1 absorbs the hook's whole-second
+// UpdatedAt against a record of the same event a few ms earlier across a
+// second boundary.
+func (s *Session) modLive(now time.Time) bool {
 	if !s.hasMod || !s.mod.Known {
 		return false
 	}
-	return s.hookState.SessionID == "" || s.hookState.UpdatedAt <= s.mod.Updated/1000+modLagGrace
+	st := s.hookState
+	ahead := st.SessionID != "" && st.UpdatedAt > s.mod.Updated/1000+1 && now.Unix() >= st.UpdatedAt+modLagGrace
+	return !ahead
 }
 
 // mergeModCoords fills the view of a session with no hook state from the
@@ -67,7 +75,7 @@ func (s *Session) overlayMod() {
 // background is the mod's list once a stop has made it authoritative, else
 // the transcript's. Never both: one source per computation.
 func (s *Session) background(now time.Time) []BackgroundTask {
-	if !s.modLive() || !s.mod.BGKnown {
+	if !s.modLive(now) || !s.mod.BGKnown {
 		return s.bg.list(now)
 	}
 	var out []BackgroundTask
@@ -79,8 +87,8 @@ func (s *Session) background(now time.Time) []BackgroundTask {
 
 // asksNow takes the question from the mod's Stop record once one arrived this
 // turn, so it shows before the transcript tail catches up.
-func (s *Session) asksNow() string {
-	if s.modLive() && s.mod.StopSeen {
+func (s *Session) asksNow(now time.Time) string {
+	if s.modLive(now) && s.mod.StopSeen {
 		return questionTail(s.mod.Last)
 	}
 	return s.asks
