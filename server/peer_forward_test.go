@@ -351,10 +351,17 @@ func TestPeerForwardRefusesCraftedTargets(t *testing.T) {
 		t.Run(mp, func(t *testing.T) {
 			method, path, _ := strings.Cut(mp, " ")
 			rec := doReply(t, s, browserRequest(method, path, `{}`))
-			// 301 is ServeMux cleaning a dot segment; the browser would
-			// follow it to a path that is itself checked.
-			if rec.Code != http.StatusNotFound && rec.Code != http.StatusMovedPermanently {
-				t.Fatalf("status %d, want 404 or ServeMux's 301", rec.Code)
+			// ServeMux cleans a dot segment with a redirect (301 on older Go,
+			// 307 on newer); the browser would follow it to a path that is
+			// itself checked. The Location must be the cleaned path.
+			switch rec.Code {
+			case http.StatusNotFound:
+			case http.StatusMovedPermanently, http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
+				if loc := rec.Header().Get("Location"); strings.Contains(loc, "..") {
+					t.Fatalf("redirect Location %q still has a dot segment", loc)
+				}
+			default:
+				t.Fatalf("status %d, want 404 or a ServeMux clean-path redirect", rec.Code)
 			}
 		})
 	}
