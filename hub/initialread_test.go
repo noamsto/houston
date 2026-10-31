@@ -51,6 +51,11 @@ func replayState(t *testing.T, path string) transcriptState {
 	for _, ev := range evs {
 		applyTranscriptEvent(sess, ev)
 	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.transcriptAt = fi.ModTime().Unix()
 	sess.syncTranscriptView(time.Now())
 	return stateOf(sess)
 }

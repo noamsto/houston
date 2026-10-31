@@ -18,6 +18,12 @@ import (
 // still exist (see Run).
 const hookGoneCheckInterval = 5 * time.Second
 
+// panelessIdleAfter is how long a session that owns no pane may show no sign of
+// life (SeenAt) before it is published done. It matches crewStaleAfter. With no
+// pane there is no listing to prove it gone and no terminal to act on it from
+// here; its next hook write revives it.
+const panelessIdleAfter = 6 * time.Hour
+
 type paneLister interface {
 	ListPaneOptions() ([]tmux.PaneOptions, error)
 }
@@ -101,8 +107,12 @@ func (s *HookSource) Run(ctx context.Context, out chan<- Delta) error {
 		return v, foreign
 	}
 
-	build := func(v hub.SessionView) (string, Run) {
+	// build also reports whether the session was ended on evidence, so the
+	// caller may prune its state file.
+	build := func(v hub.SessionView) (string, Run, bool) {
 		gone := paneGone(v, panes.live, panes.at)
+		idle := v.TmuxPane == "" && v.State != hook.StateEnded && v.SeenAt > 0 &&
+			time.Since(time.Unix(v.SeenAt, 0)) > panelessIdleAfter
 		v, foreign := normalize(v)
 		gone = gone || foreign
 		key, r := runFromSessionView(v, s.projects.project(v.CWD))
@@ -113,13 +123,15 @@ func (s *HookSource) Run(ctx context.Context, out chan<- Delta) error {
 			}
 			if !revived[v.SessionID] {
 				endedAt[v.SessionID] = v.UpdatedAt
-				return key, endRun(r)
+				return key, endRun(r), true
 			}
+		case idle:
+			return key, endRun(r), true
 		case panes.live[v.TmuxPane]:
 			delete(endedAt, v.SessionID)
 			delete(revived, v.SessionID)
 		}
-		return key, r
+		return key, r, false
 	}
 
 	// current is the session that speaks for each key: the most recently
@@ -175,8 +187,12 @@ func (s *HookSource) Run(ctx context.Context, out chan<- Delta) error {
 	// state, capabilities and all.
 	resync := func() error {
 		now := map[string]bool{}
+		var dead []string
 		for _, v := range current() {
-			key, r := build(v)
+			key, r, ended := build(v)
+			if ended {
+				dead = append(dead, v.SessionID)
+			}
 			now[key] = true
 			if sig, ok := seen[key]; ok && sig == runSignature(r) {
 				continue
@@ -196,11 +212,14 @@ func (s *HookSource) Run(ctx context.Context, out chan<- Delta) error {
 				return ctx.Err()
 			}
 		}
+		for _, sid := range dead {
+			s.hub.PruneDead(sid)
+		}
 		return nil
 	}
 
 	for _, v := range current() {
-		key, r := build(v)
+		key, r, _ := build(v)
 		if err := emit(key, r); err != nil {
 			return err
 		}
@@ -222,7 +241,7 @@ func (s *HookSource) Run(ctx context.Context, out chan<- Delta) error {
 			if !ok {
 				continue
 			}
-			key, r := build(w)
+			key, r, _ := build(w)
 			if err := emit(key, r); err != nil {
 				return err
 			}

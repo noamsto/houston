@@ -1364,3 +1364,115 @@ func TestHookSourceModPermissionReadsBlocked(t *testing.T) {
 		return d.Key == key && d.Run.State != StateThinking
 	})
 }
+
+func TestHookSourceEndsAnIdlePanelessSession(t *testing.T) {
+	transcript := func(t *testing.T) string {
+		path := filepath.Join(t.TempDir(), "t.jsonl")
+		line := `{"type":"user","message":{"role":"user","content":"hi"}}` + "\n"
+		if err := os.WriteFile(path, []byte(line), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	tests := []struct {
+		name       string
+		state      hook.State
+		turn       int
+		age        time.Duration
+		transcript bool
+		want       State
+	}{
+		{"starting for days", hook.StateStarting, 0, 82 * time.Hour, false, StateDone},
+		{"waiting past the bound", hook.StateWaiting, 100, 9 * time.Hour, false, StateDone},
+		{"waiting under the bound", hook.StateWaiting, 0, time.Hour, false, StateIdle},
+		{"thinking past the bound", hook.StateThinking, 0, 9 * time.Hour, false, StateDone},
+		{"recent transcript write", hook.StateWaiting, 0, 9 * time.Hour, true, StateIdle},
+	}
+	listers := []struct {
+		name string
+		make func() paneLister
+	}{
+		{"no pane lister", func() paneLister { return nil }},
+		{"pane lister", func() paneLister {
+			p := &fakePanes{}
+			p.set(nil, "%1")
+			return p
+		}},
+	}
+	for _, tt := range tests {
+		for _, l := range listers {
+			t.Run(tt.name+"/"+l.name, func(t *testing.T) {
+				st := hook.SessionState{
+					SessionID: "paneless",
+					State:     tt.state,
+					Turn:      tt.turn,
+					UpdatedAt: time.Now().Add(-tt.age).Unix(),
+				}
+				if tt.transcript {
+					st.TranscriptPath = transcript(t)
+				}
+				out, _ := startHookSourceWith(t, l.make(), st, nil)
+				key := "claude/" + st.SessionID
+
+				if tt.want == StateDone {
+					waitDelta(t, out, "done run", func(d Delta) bool { return d.Key == key && d.Run.State == StateDone })
+					return
+				}
+				waitDelta(t, out, "idle run", func(d Delta) bool { return d.Key == key && d.Run.State == StateIdle })
+				expectNoDelta(t, out, "live pane-less run was ended", func(d Delta) bool {
+					return d.Key == key && d.Run.State == StateDone
+				})
+			})
+		}
+	}
+}
+
+func TestHookSourceRevivesAnIdlePanelessSession(t *testing.T) {
+	st := hook.SessionState{
+		SessionID: "paneless",
+		State:     hook.StateWaiting,
+		UpdatedAt: time.Now().Add(-9 * time.Hour).Unix(),
+	}
+	out, dir := startHookSourceWith(t, nil, st, nil)
+	key := "claude/" + st.SessionID
+	waitDelta(t, out, "done run", func(d Delta) bool { return d.Key == key && d.Run.State == StateDone })
+
+	st.UpdatedAt = time.Now().Unix()
+	if err := hook.Write(hook.Path(dir, st.SessionID), st); err != nil {
+		t.Fatal(err)
+	}
+	waitDelta(t, out, "revived run", func(d Delta) bool { return d.Key == key && d.Run.State == StateIdle })
+}
+
+func TestHookSourcePrunesAStaleGhost(t *testing.T) {
+	now := time.Now()
+	panes := &fakePanes{}
+	panes.setIdentity("100", now.Add(-time.Hour).Unix())
+	panes.set(nil, "%1")
+
+	old := hook.SessionState{SessionID: "old", State: hook.StateWaiting, TmuxPane: "%5", UpdatedAt: now.Add(-48 * time.Hour).Unix()}
+	young := hook.SessionState{SessionID: "young", State: hook.StateWaiting, TmuxPane: "%6", UpdatedAt: now.Add(-2 * time.Hour).Unix()}
+	out, dir := startHookSourceWith(t, panes, old, nil, young)
+
+	var gone, youngDone bool
+	deadline := time.After(2 * time.Second)
+	for !gone || !youngDone {
+		select {
+		case d := <-out:
+			switch {
+			case d.Key == "claude/old" && d.Gone:
+				gone = true
+			case d.Key == "claude/young" && d.Run.State == StateDone && !d.Gone:
+				youngDone = true
+			}
+		case <-deadline:
+			t.Fatalf("timed out: old ghost gone=%v, young ghost done=%v", gone, youngDone)
+		}
+	}
+	if _, err := os.Stat(hook.Path(dir, "old")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("stale ghost file: stat err = %v, want not exist", err)
+	}
+	if _, err := os.Stat(hook.Path(dir, "young")); err != nil {
+		t.Errorf("recent ghost file was pruned: %v", err)
+	}
+}

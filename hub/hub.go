@@ -41,6 +41,7 @@ type SessionView struct {
 	Turn           int         `json:"turn"`
 	Since          int64       `json:"since,omitempty"`
 	UpdatedAt      int64       `json:"updated_at"`
+	SeenAt         int64       `json:"seen_at,omitempty"` // newest sign of life (hook, transcript, mod heartbeat); not in viewSignature, so a heartbeat does not broadcast
 	Trail          []TrailChip `json:"trail,omitempty"`
 	Asks           string      `json:"asks,omitempty"` // the question the turn ended on; reset by later tool/user activity
 	InputTokens    int         `json:"input_tokens"`
@@ -95,8 +96,9 @@ type Options struct {
 	DiscoveryWindow time.Duration
 	// PruneTTL is how long an ended hook state file is kept after its last
 	// update before it is removed. Defaults to DefaultPruneTTL (24h) when
-	// <=0. A state file whose last-written State is not StateEnded is never
-	// pruned, regardless of age.
+	// <=0. A state file whose last-written State is not StateEnded is removed
+	// only through PruneDead, for a session the hooks layer ended on pane
+	// evidence.
 	PruneTTL time.Duration
 	// Mod is the Claude Code mod's record store, overlaid on hook state while
 	// the mod is live for a session. Nil leaves the hook path alone.
@@ -111,6 +113,7 @@ type Session struct {
 
 	transcriptPath   string
 	transcriptOffset int64
+	transcriptAt     int64 // transcript mtime (unix seconds) as of the last read that consumed bytes
 
 	trail  []TrailChip
 	asks   string
@@ -308,6 +311,7 @@ func (h *Hub) seed(s hook.SessionState) {
 	}
 	sess := &Session{transcriptPath: s.TranscriptPath}
 	mergeStateIntoView(&sess.view, s)
+	sess.view.SeenAt = sess.view.UpdatedAt
 	h.sessions[s.SessionID] = sess
 	view := sess.view
 	h.mu.Unlock()
@@ -371,8 +375,10 @@ func (h *Hub) scan(dir string) error {
 // trusts: hook/hook.go sets StateEnded solely on a genuine SessionEnd hook
 // event, so a live session's file, or a "ghost" session whose pane died
 // without ever firing SessionEnd, is never a candidate here regardless of
-// age. A zero UpdatedAt (unwritten or corrupted) is never a prune candidate,
-// since it can't be distinguished from a file that's merely stale. The race
+// age; a non-ended file is removed only through PruneDead, for a session the
+// hooks layer ended on pane evidence. A zero UpdatedAt (unwritten or
+// corrupted) is never a prune candidate, since it can't be distinguished from
+// a file that's merely stale. The race
 // guard compares the file's mtime read right after hook.Read against its
 // mtime read right before os.Remove; any change in between (e.g. a resumed
 // session's SessionStart re-touching an old session id) means the file
@@ -440,6 +446,79 @@ func (h *Hub) pruneEnded(dir string) {
 			h.log.Warn("prune: remove state file", "path", path, "err", err)
 		}
 	}
+}
+
+// PruneDead removes a session the caller has found dead on pane evidence: its
+// pane is gone or foreign and it did not revive, or it owns no pane and has
+// been silent. The hub decides freshness itself and removes it only after
+// pruneTTL without a sign of life (SeenAt), re-checking the file on disk with
+// pruneEnded's race guard. A discovery-seeded session (no state file) is
+// dropped from memory; pruneTTL >= DefaultDiscoveryWindow and SeenAt includes
+// the transcript mtime discovery filters on, so it is not re-seeded.
+func (h *Hub) PruneDead(sessionID string) bool {
+	h.mu.RLock()
+	sess, ok := h.sessions[sessionID]
+	var seenAt int64
+	var hasState, hasMod bool
+	if ok {
+		seenAt = sess.view.SeenAt
+		hasState = sess.hookState.SessionID != ""
+		hasMod = sess.hasMod
+	}
+	h.mu.RUnlock()
+	if !ok {
+		return false
+	}
+
+	cutoff := time.Now().Add(-h.pruneTTL).Unix()
+	if seenAt == 0 || seenAt >= cutoff {
+		return false
+	}
+
+	if !hasState {
+		if hasMod {
+			return false
+		}
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		cur, ok := h.sessions[sessionID]
+		if !ok || cur.hookState.SessionID != "" || cur.hasMod || cur.view.SeenAt == 0 || cur.view.SeenAt >= cutoff {
+			return false
+		}
+		if cur.chat != nil {
+			cur.chat.closeSubs()
+		}
+		delete(h.sessions, sessionID)
+		return true
+	}
+
+	path := hook.Path(h.stateDir, sessionID)
+	s, err := hook.Read(path)
+	if err != nil {
+		h.log.Debug("prune dead: read state file", "session", sessionID, "err", err)
+		return false
+	}
+	before, err := os.Stat(path)
+	if err != nil {
+		h.log.Debug("prune dead: stat state file", "session", sessionID, "err", err)
+		return false
+	}
+	if s.SessionID != sessionID || s.UpdatedAt == 0 || s.UpdatedAt >= cutoff {
+		return false
+	}
+	after, err := h.preRemoveStat(path)
+	if err != nil {
+		h.log.Debug("prune dead: stat state file", "session", sessionID, "err", err)
+		return false
+	}
+	if after == nil || !os.SameFile(before, after) || !after.ModTime().Equal(before.ModTime()) {
+		return false
+	}
+	if err := os.Remove(path); err != nil {
+		h.log.Debug("prune dead: remove state file", "session", sessionID, "err", err)
+		return false
+	}
+	return true
 }
 
 func (h *Hub) handleFSEvent(evt fsnotify.Event) {
@@ -510,6 +589,7 @@ func (s *Session) setTranscriptPath(p string) bool {
 	}
 	// The tail's offset and running totals belong to the old file.
 	s.transcriptOffset = 0
+	s.transcriptAt = 0
 	s.spend, s.maxCtx = nil, 0
 	s.view.ContextUsed, s.view.ContextLimit, s.view.SpendUSD = 0, 0, nil
 	s.resetTools()
@@ -580,6 +660,8 @@ func (h *Hub) refreshTranscript(sessionID string) {
 		return
 	}
 
+	fi, statErr := os.Stat(path)
+
 	h.mu.Lock()
 	if initial != nil {
 		// Read outside the lock: another read may have landed meanwhile.
@@ -593,6 +675,9 @@ func (h *Hub) refreshTranscript(sessionID string) {
 		sess.maxCtx = initial.maxCtx
 	}
 	sess.transcriptOffset = newOffset
+	if statErr == nil {
+		sess.transcriptAt = fi.ModTime().Unix()
+	}
 	for _, ev := range events {
 		// A prompt ends the previous turn's tools. Live, the hook Turn says so;
 		// a first read has no such signal and folds every turn at once.
@@ -619,6 +704,10 @@ func (s *Session) syncTranscriptView(now time.Time) {
 // one place and are never both counted.
 func (s *Session) refreshView(now time.Time) {
 	s.applyHook(now)
+	s.view.SeenAt = max(s.view.UpdatedAt, s.transcriptAt)
+	if s.hasMod {
+		s.view.SeenAt = max(s.view.SeenAt, s.mod.Updated/1000)
+	}
 	s.view.Background = s.background(now)
 	s.view.Asks = s.asksNow(now)
 }

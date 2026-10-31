@@ -2000,6 +2000,10 @@ func statusRow(ts int64, branch, state string) string {
 	return fmt.Sprintf(`{"ts":%d,"crew_id":"c1","from":"worker:%s#s1","kind":"status","body":{"state":%q}}`+"\n", ts, branch, state)
 }
 
+func watchdogRow(ts int64, branch, detail string) string {
+	return fmt.Sprintf(`{"ts":%d,"crew_id":"c1","from":"worker:%s#s1","kind":"status","body":{"state":"blocked","source":"watchdog","detail":%q}}`+"\n", ts, branch, detail)
+}
+
 func dispatchRow(ts int64, branch string) string {
 	return fmt.Sprintf(`{"ts":%d,"crew_id":"c1","kind":"dispatch","branch":%q,"engine":"claude"}`+"\n", ts, branch)
 }
@@ -2118,6 +2122,11 @@ func TestCrewRunAbandoned(t *testing.T) {
 	branch := func(state State, last int64) crewBranch {
 		return crewBranch{Run: Run{State: state}, lastActivity: last}
 	}
+	silent := func(state State, last int64) crewBranch {
+		b := branch(state, last)
+		b.workerSilent = true
+		return b
+	}
 	tests := []struct {
 		name                string
 		b                   crewBranch
@@ -2128,6 +2137,9 @@ func TestCrewRunAbandoned(t *testing.T) {
 		{"recent", branch(StateRunning, recent), true, false, false},
 		{"no activity timestamp", branch(StateRunning, 0), true, false, false},
 		{"dispatcher alive", branch(StateRunning, old), true, true, false},
+		{"dispatcher alive, worker silent, old", silent(StateRunning, old), true, true, true},
+		{"dispatcher alive, worker silent, recent", silent(StateRunning, recent), true, true, false},
+		{"dispatcher alive, worker silent, blocked", silent(StateBlocked, old), true, true, false},
 		{"has a pane", branch(StateRunning, old), false, false, false},
 		{"blocked", branch(StateBlocked, old), true, false, false},
 	}
@@ -2175,6 +2187,94 @@ func TestScanDropsALongSilentWindowlessBranch(t *testing.T) {
 	panes := []tmux.PaneOptions{{PaneID: "%1", Target: "h:2", ClaudeStatus: "idle 1 "}}
 	if _, found := scanAt(bus, crewStaleAfter+time.Minute, panes, withDispatcher)[key]; !found {
 		t.Error("a branch whose dispatcher is alive was dropped")
+	}
+}
+
+func TestDeltasFromCrewLogWorkerSilent(t *testing.T) {
+	const b = "feat/303"
+	release := `{"kind":"release","branch":"feat/303","ts":1300}` + "\n"
+	claim := `{"kind":"claim","branch":"feat/303","ts":1400}` + "\n"
+	tests := []struct {
+		name string
+		log  string
+		want bool
+	}{
+		{"dispatch only", dispatchRow(1000, b), true},
+		{"dispatch then worker status", dispatchRow(1000, b) + statusRow(1100, b, "working"), false},
+		{"worker status then watchdog", dispatchRow(1000, b) + statusRow(1100, b, "working") +
+			watchdogRow(1200, b, "stalled: no output for 300s"), true},
+		{"watchdog then worker status", watchdogRow(1000, b, "stalled: no output for 300s") +
+			statusRow(1100, b, "working"), false},
+		{"worker status then release and claim rows", dispatchRow(1000, b) + statusRow(1100, b, "working") +
+			release + claim, false},
+		{"finished, released, redispatched, watchdog", statusRow(1000, b, "pr_open") + statusRow(1100, b, "done") +
+			release + claim + dispatchRow(1500, b) + watchdogRow(1600, b, "stalled: no output for 300s"), true},
+	}
+	for _, tc := range tests {
+		got := deltasFromCrewLog(strings.NewReader(tc.log))[b].workerSilent
+		if got != tc.want {
+			t.Errorf("%s: workerSilent = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestScanDropsAFinishedWorkerUnderALiveDispatcher(t *testing.T) {
+	const (
+		t0     = int64(1_000_000_000_000)
+		branch = "feat/303"
+	)
+	finished := statusRow(t0, branch, "pr_open") + statusRow(t0+1000, branch, "done") +
+		fmt.Sprintf(`{"kind":"release","branch":%q,"ts":%d}`+"\n", branch, t0+2000) +
+		fmt.Sprintf(`{"kind":"claim","branch":%q,"ts":%d}`+"\n", branch, t0+3000) +
+		dispatchRow(t0+4000, branch) +
+		watchdogRow(t0+5000, branch, "stalled: no output for 300s")
+	asking := dispatchRow(t0, branch) + fmt.Sprintf(
+		`{"ts":%d,"crew_id":"c1","from":"worker:%s#s1","kind":"status","body":{"state":"blocked","detail":"need a decision"}}`+"\n",
+		t0+1000, branch)
+
+	tests := []struct {
+		name      string
+		events    string
+		lastTS    int64
+		age       time.Duration
+		wantFound bool
+	}{
+		{"finished, watchdog-only tail, past the stale window", finished, t0 + 5000, crewStaleAfter + time.Minute, false},
+		{"finished, watchdog-only tail, recent", finished, t0 + 5000, time.Hour, true},
+		{"worker's own blocked question, recent", asking, t0 + 1000, 2 * time.Minute, true},
+		{"worker's own blocked question, past the stale window", asking, t0 + 1000, crewStaleAfter + time.Minute, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			bus := t.TempDir()
+			writeEvents(t, bus, tc.events)
+			crewDir := filepath.Join(bus, "crews", "c1")
+			if err := os.MkdirAll(crewDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(crewDir, "pane"), []byte("%1"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			wins := []tmux.WindowOptions{
+				{Session: "h", Window: 1, Branch: "other", GitRoot: "/wt/a"},
+				{Session: "h", Window: 2, CrewName: "dispatcher"},
+			}
+			panes := []tmux.PaneOptions{{PaneID: "%1", Target: "h:2", ClaudeStatus: "idle 1 "}}
+			s := crewScanner(map[string]string{"/wt/a": bus}, wins, panes)
+			s.now = func() time.Time { return time.UnixMilli(tc.lastTS).Add(tc.age) }
+
+			got, ok := s.scan()
+			if !ok {
+				t.Fatal("scan reported failure")
+			}
+			r, found := got["crew/"+bus+"/"+branch]
+			if found != tc.wantFound {
+				t.Fatalf("listed = %v, want %v; keys %v", found, tc.wantFound, keysOf(got))
+			}
+			if found && tc.events == finished && (r.State != StateRunning || r.Attention != AttentionStuck) {
+				t.Errorf("State = %q Attention = %q, want running and stuck", r.State, r.Attention)
+			}
+		})
 	}
 }
 

@@ -114,9 +114,10 @@ func (s *CrewSource) Run(ctx context.Context, out chan<- Delta) error {
 // finished runs out during a normal session.
 const crewEvictionGrace = 10 * time.Minute
 
-// crewStaleAfter is how long a windowless branch with no live dispatcher may go
-// without a dispatch, resume or status row before scan stops listing it: the bus
-// is append-only, so a worker that died without a final status would otherwise
+// crewStaleAfter bounds how long a windowless branch may go without a dispatch,
+// resume or status row before scan stops listing it, when it has no live
+// dispatcher or its worker has gone silent (see crewRunAbandoned): the bus is
+// append-only, so a worker that died without a final status would otherwise
 // stay listed forever.
 const crewStaleAfter = 6 * time.Hour
 
@@ -184,11 +185,16 @@ func tickCrewDeltas(current map[string]Run, seen map[string]bool, now time.Time)
 }
 
 // crewRunAbandoned reports whether a branch has been silent past crewStaleAfter
-// with nothing to revive it: no window, no live dispatcher, not waiting on a
-// human. b.State must be the post-routing state. lastActivity == 0 (no row with
-// a timestamp) is never abandoned.
+// with nothing to revive it: no window, not waiting on a human, and either no
+// live dispatcher or a worker that has not spoken since its newest dispatch or
+// resume row (only a watchdog or nothing did). A live dispatcher does not keep
+// a worker that is gone. b.State must be the post-routing state. lastActivity ==
+// 0 (no row with a timestamp) is never abandoned.
 func crewRunAbandoned(b crewBranch, windowless, dispatcherAlive bool, now time.Time) bool {
-	if !windowless || dispatcherAlive || b.State == StateBlocked || b.lastActivity == 0 {
+	if !windowless || b.State == StateBlocked || b.lastActivity == 0 {
+		return false
+	}
+	if dispatcherAlive && !b.workerSilent {
 		return false
 	}
 	return now.Sub(time.UnixMilli(b.lastActivity)) > crewStaleAfter
@@ -287,7 +293,7 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 			routed.CrewBus = bus
 			routed.Worktree = worktreeFor(bus, branch, wins, s.crewDir)
 			paneID, candidates := resolvePane(bus, branch, r.State, r.UpdatedAt, r.session, r.CrewSession, paneSessions, wins, panes, s.crewDir, s.procStart)
-			if crewRunAbandoned(crewBranch{Run: routed, lastActivity: r.lastActivity}, candidates != 1, joinedCrews[r.Crew.Name], now) {
+			if crewRunAbandoned(crewBranch{Run: routed, lastActivity: r.lastActivity, workerSilent: r.workerSilent}, candidates != 1, joinedCrews[r.Crew.Name], now) {
 				continue
 			}
 			key := paneID
@@ -551,6 +557,11 @@ type crewBranch struct {
 	reaped bool
 	// lastActivity is the newest bus ts (ms) of a dispatch, resume or status row.
 	lastActivity int64
+	// workerSilent is set when the newest dispatch, resume or status row is not a
+	// status the worker itself posted (a dispatch or resume row, or a watchdog
+	// status). It follows file order while lastActivity is the max ts; the two
+	// agree because the bus is append-only.
+	workerSilent bool
 }
 
 // deltasFromCrewLog folds one bus log into the latest state per branch. The bus
@@ -616,6 +627,7 @@ func deltasFromCrewLog(rd io.Reader) map[string]crewBranch {
 		if rec.Kind == "dispatch" || rec.Kind == "resume" {
 			r.CrewSession = rec.EngineSession
 			r.Crew.Sessions++
+			r.workerSilent = true
 			if r.reaped {
 				r.reaped, r.State, r.UpdatedAt = false, "", 0
 				r.Crew.Detail, r.PR = "", nil
@@ -643,6 +655,7 @@ func deltasFromCrewLog(rd io.Reader) map[string]crewBranch {
 				r.reaped = body.State == "reaped"
 				r.UpdatedAt = rec.TS / 1000
 				r.session = sessionEpoch(rec.From)
+				r.workerSilent = body.Source == "watchdog"
 				lastStatusTS[branch] = rec.TS
 				// Latest status wins, including an empty detail: a stale phase
 				// must not outlive the status that replaced it. A watchdog
