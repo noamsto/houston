@@ -83,7 +83,7 @@ func discoverClaudeSessions(ctx context.Context, projectsDir string, window time
 			if info.ModTime().Before(cutoff) {
 				continue
 			}
-			s, ok := synthesizeFromTranscript(filepath.Join(projectDir, f.Name()), info, cwd)
+			s, ok := synthesizeFromTranscript(filepath.Join(projectDir, f.Name()), info, cwd, cutoff)
 			if ok {
 				out = append(out, s)
 			}
@@ -92,8 +92,11 @@ func discoverClaudeSessions(ctx context.Context, projectsDir string, window time
 	return out, nil
 }
 
-// synthesizeFromTranscript tails a transcript and infers current state.
-func synthesizeFromTranscript(path string, info fs.FileInfo, cwd string) (hook.SessionState, bool) {
+// synthesizeFromTranscript tails a transcript and infers current state. A
+// transcript whose own newest activity predates cutoff is rejected: Claude Code
+// appends timestamp-less bookkeeping records to an idle transcript, which keeps
+// its mtime fresh.
+func synthesizeFromTranscript(path string, info fs.FileInfo, cwd string, cutoff time.Time) (hook.SessionState, bool) {
 	sessionID := strings.TrimSuffix(info.Name(), ".jsonl")
 
 	const tailBytes = 64 * 1024
@@ -130,6 +133,9 @@ func synthesizeFromTranscript(path string, info fs.FileInfo, cwd string) (hook.S
 	updated := info.ModTime()
 	if !lastEvent.IsZero() {
 		updated = lastEvent
+	}
+	if updated.Before(cutoff) {
+		return hook.SessionState{}, false
 	}
 
 	state := hook.SessionState{

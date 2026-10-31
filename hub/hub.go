@@ -456,10 +456,11 @@ func (h *Hub) pruneEnded(dir string) {
 // been silent. The hub decides freshness itself and removes it only after
 // pruneTTL without a sign of life (SeenAt), re-checking the file on disk with
 // pruneEnded's race guard. A discovery-seeded session (no state file) is
-// dropped from memory; discovery dates a synthesized session from its newest
-// event timestamp (mtime is only a pre-filter that over-includes), which SeenAt
-// includes, and pruneTTL >= DefaultDiscoveryWindow, so it is not re-seeded
-// while that event is older than the discovery window.
+// dropped from memory. It is not re-seeded: discovery rejects a transcript
+// whose newest event is older than the discovery window (mtime is only a
+// pre-filter that over-includes), and SeenAt includes that event, so with
+// pruneTTL >= DefaultDiscoveryWindow a pruned session's transcript is already
+// outside the window.
 func (h *Hub) PruneDead(sessionID string) bool {
 	h.mu.RLock()
 	sess, ok := h.sessions[sessionID]
@@ -498,14 +499,16 @@ func (h *Hub) PruneDead(sessionID string) bool {
 	}
 
 	path := hook.Path(h.stateDir, sessionID)
-	s, err := hook.Read(path)
-	if err != nil {
-		h.log.Debug("prune dead: read state file", "session", sessionID, "err", err)
-		return false
-	}
+	// Stat before the read: a rename between them must make the guard below see
+	// a different inode than the content we judged.
 	before, err := os.Stat(path)
 	if err != nil {
 		h.log.Debug("prune dead: stat state file", "session", sessionID, "err", err)
+		return false
+	}
+	s, err := hook.Read(path)
+	if err != nil {
+		h.log.Debug("prune dead: read state file", "session", sessionID, "err", err)
 		return false
 	}
 	if s.SessionID != sessionID || s.UpdatedAt == 0 || s.UpdatedAt >= cutoff {
