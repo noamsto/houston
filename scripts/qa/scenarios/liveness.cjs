@@ -106,7 +106,7 @@ async function run(ctx) {
       const n0 = streamReqs.length
       await hide(3000)
       await ctx.sleep(2000)
-      if (streamReqs.length !== n0) throw new Error(`a 3 s hidden spell reopened the stream (${streamReqs.length - n0} new request(s)); CLAUDE.md says a shorter spell leaves it alone`)
+      if (streamReqs.length !== n0) throw new Error(`a 3 s hidden spell reopened the stream (${streamReqs.length - n0} new request(s)); docs/reference/terminal-and-mobile.md ("Stream liveness") says a shorter spell leaves it alone`)
 
       // An 11 s spell reopens it.
       const t0 = Date.now()

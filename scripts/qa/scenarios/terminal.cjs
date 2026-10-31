@@ -340,7 +340,7 @@ exports.run = async (ctx) => {
           `${ctx.baseUrl}/api/runs/${wt.id}/terminal`,
         )
         const paneResized = size()
-        // CLAUDE.md / server/pane_ws.go: the WS resize message is a no-op by design
+        // server/pane_ws.go: the WS resize message is a no-op by design
         // (the control client is created with `ignore-size`), so no step may move the pane.
         const sizes = { before: paneBefore, afterViewport: paneAfter, afterWsResize: paneResized }
         const moved = Object.values(sizes).some((v) => v !== paneBefore)
