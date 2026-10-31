@@ -260,12 +260,12 @@ func TestDiscoveryDatesSessionByLastEventNotMtime(t *testing.T) {
 		t.Fatalf("chtimes: %v", err)
 	}
 
-	got, err := DiscoverClaudeSessions(root, time.Hour)
+	got, err := DiscoverClaudeSessions(root, 72*time.Hour)
 	if err != nil {
 		t.Fatalf("DiscoverClaudeSessions: %v", err)
 	}
 	if len(got) != 1 {
-		t.Fatalf("got %d sessions, want 1 (a fresh mtime keeps it in the window)", len(got))
+		t.Fatalf("got %d sessions, want 1 (the event is inside the window, the mtime is fresh)", len(got))
 	}
 	if got[0].UpdatedAt != lastEvent.Unix() {
 		t.Errorf("UpdatedAt = %d, want %d (the last event, not the mtime %d)", got[0].UpdatedAt, lastEvent.Unix(), now.Unix())
@@ -274,6 +274,68 @@ func TestDiscoveryDatesSessionByLastEventNotMtime(t *testing.T) {
 	// claiming a human is required, and counting toward the Fleet badge.
 	if got[0].State != hook.StateEnded {
 		t.Errorf("State = %q, want %q — a transcript two days cold is not waiting on anyone", got[0].State, hook.StateEnded)
+	}
+}
+
+// idleTranscriptBody is a transcript whose only timestamped event is eventAt,
+// followed by the timestamp-less bookkeeping record Claude Code keeps appending
+// to an idle session.
+func idleTranscriptBody(eventAt time.Time) string {
+	return `{"type":"user","timestamp":"` + eventAt.UTC().Format(time.RFC3339Nano) + `","message":{"role":"user","content":"hi"}}
+{"type":"artifact-autoreact-ledger","sessionId":"s1"}
+`
+}
+
+func TestDiscoverySkipsTranscriptWhoseLastEventIsOutsideWindow(t *testing.T) {
+	// A fresh mtime passes the pre-filter, but the session's own activity is
+	// what dates it.
+	root := fakeProjectsDir(t, map[string]string{
+		"sess-idle.jsonl":   idleTranscriptBody(time.Now().Add(-30 * time.Hour)),
+		"sess-active.jsonl": idleTranscriptBody(time.Now().Add(-time.Hour)),
+	})
+
+	got, err := DiscoverClaudeSessions(root, 24*time.Hour)
+	if err != nil {
+		t.Fatalf("DiscoverClaudeSessions: %v", err)
+	}
+	if len(got) != 1 || got[0].SessionID != "sess-active" {
+		t.Fatalf("got %+v, want only sess-active (sess-idle's last event is outside the window)", got)
+	}
+}
+
+func TestPrunedDiscoverySessionIsNotReseeded(t *testing.T) {
+	const sid = "sess-idle"
+	root := fakeProjectsDir(t, map[string]string{sid + ".jsonl": idleTranscriptBody(time.Now().Add(-30 * time.Hour))})
+	ctx := context.Background()
+	h := NewWithOptions(t.TempDir(), Options{
+		ClaudeProjectsDir: root,
+		DiscoveryWindow:   72 * time.Hour,
+		PruneTTL:          24 * time.Hour,
+	}, silentLog())
+
+	h.runDiscovery(ctx)
+	if findSession(h, sid) == nil {
+		t.Fatal("first discovery did not seed the session")
+	}
+	if !h.PruneDead(sid) {
+		t.Fatal("PruneDead did not drop the session whose last event is older than pruneTTL")
+	}
+
+	// With a window wider than pruneTTL the pruned session is re-seeded: the
+	// window is what keeps it gone.
+	h.runDiscovery(ctx)
+	if findSession(h, sid) == nil {
+		t.Fatal("control: a 72h window should re-seed the pruned session")
+	}
+	if !h.PruneDead(sid) {
+		t.Fatal("PruneDead did not drop the re-seeded session")
+	}
+
+	// Production has pruneTTL == discovery window.
+	h.discoveryWindow = 24 * time.Hour
+	h.runDiscovery(ctx)
+	if findSession(h, sid) != nil {
+		t.Error("pruned session was re-seeded although its last event is outside the discovery window")
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/noamsto/houston/claudemod"
 	"github.com/noamsto/houston/hook"
 )
 
@@ -834,6 +835,184 @@ func TestHubHealsStaleToolState(t *testing.T) {
 			}
 			if got := h.sessions["s1"].view.State; got != c.want {
 				t.Fatalf("state = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// writeTranscriptAt writes one complete user-prompt line stamped at eventTime.
+func writeTranscriptAt(t *testing.T, eventTime time.Time) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "t.jsonl")
+	body := `{"type":"user","timestamp":"` + eventTime.UTC().Format(time.RFC3339Nano) +
+		`","message":{"role":"user","content":"hi"}}` + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+	return path
+}
+
+// writeBookkeepingTranscript writes timestamp-less bookkeeping records, the
+// kind Claude Code appends to an idle session; the file's mtime is now.
+func writeBookkeepingTranscript(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "t.jsonl")
+	body := `{"type":"artifact-autoreact-ledger","sessionId":"s1"}` + "\n" +
+		`{"type":"artifact-autoreact-ledger","sessionId":"s1"}` + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+	return path
+}
+
+// TestSessionViewSeenAt pins SeenAt as the newest sign of life: the view's
+// UpdatedAt, the newest timestamped transcript event, and the mod's newest
+// record (heartbeats included, a millisecond clock folded to seconds).
+func TestSessionViewSeenAt(t *testing.T) {
+	now := time.Now()
+	updated := now.Add(-48 * time.Hour).Unix()
+	transcriptNew := now.Add(-time.Minute)
+
+	tests := []struct {
+		name string
+		// transcript is the newest transcript event's timestamp; zero means no transcript.
+		transcript time.Time
+		// bookkeeping gives the session a transcript of timestamp-less records.
+		bookkeeping bool
+		// modHeartbeat is the unix second of a mod heartbeat; zero means no mod.
+		modHeartbeat int64
+		want         int64
+	}{
+		{name: "state only", want: updated},
+		{name: "fresh transcript event wins", transcript: transcriptNew, want: transcriptNew.Unix()},
+		{name: "older transcript event loses", transcript: now.Add(-72 * time.Hour), want: updated},
+		{name: "bookkeeping records without timestamps do not count", bookkeeping: true, want: updated},
+		{name: "mod heartbeat wins", modHeartbeat: now.Unix() - 10, want: now.Unix() - 10},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			store := claudemod.NewStore()
+			h := NewWithOptions(dir, Options{ClaudeProjectsDir: "-", Mod: store}, silentLog())
+
+			st := hook.SessionState{SessionID: "s1", State: hook.StateWaiting, UpdatedAt: updated}
+			if !tc.transcript.IsZero() {
+				st.TranscriptPath = writeTranscriptAt(t, tc.transcript)
+			}
+			if tc.bookkeeping {
+				st.TranscriptPath = writeBookkeepingTranscript(t)
+			}
+			writeState(t, dir, st)
+			h.loadStateFile(hook.Path(dir, "s1"))
+			h.refreshTranscript("s1")
+
+			if tc.modHeartbeat != 0 {
+				f := newModFeed(t, store, "s1")
+				f.at(tc.modHeartbeat-100, "session.start", nil)
+				f.at(tc.modHeartbeat-99, "turn.start", nil)
+				f.at(tc.modHeartbeat, "heartbeat", nil)
+				h.applyModDirty()
+				h.tickMod(now)
+			}
+
+			v := findSession(h, "s1")
+			if v == nil {
+				t.Fatal("session s1 not in snapshot")
+			}
+			if v.SeenAt != tc.want {
+				t.Errorf("SeenAt = %d, want %d (UpdatedAt %d)", v.SeenAt, tc.want, v.UpdatedAt)
+			}
+		})
+	}
+}
+
+func TestPruneDead(t *testing.T) {
+	const sid = "p1"
+	old := time.Now().Add(-48 * time.Hour)
+
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, h *Hub, dir string)
+		sid   string
+		want  bool
+		// stateFile is whether a state file for sid exists after PruneDead.
+		stateFile bool
+		// inHub is whether sid is still in the snapshot after PruneDead.
+		inHub bool
+	}{
+		{
+			name: "old state file is removed",
+			setup: func(t *testing.T, h *Hub, dir string) {
+				writeState(t, dir, hook.SessionState{SessionID: sid, State: hook.StateWaiting, UpdatedAt: old.Unix()})
+				h.loadStateFile(hook.Path(dir, sid))
+			},
+			sid: sid, want: true, stateFile: false, inHub: true,
+		},
+		{
+			name: "recent state file is kept",
+			setup: func(t *testing.T, h *Hub, dir string) {
+				writeState(t, dir, hook.SessionState{SessionID: sid, State: hook.StateWaiting, UpdatedAt: time.Now().Add(-time.Hour).Unix()})
+				h.loadStateFile(hook.Path(dir, sid))
+			},
+			sid: sid, want: false, stateFile: true, inHub: true,
+		},
+		{
+			name: "fresh transcript event keeps an old state file",
+			setup: func(t *testing.T, h *Hub, dir string) {
+				path := writeTranscriptAt(t, time.Now().Add(-time.Minute))
+				writeState(t, dir, hook.SessionState{SessionID: sid, State: hook.StateWaiting, UpdatedAt: old.Unix(), TranscriptPath: path})
+				h.loadStateFile(hook.Path(dir, sid))
+				h.refreshTranscript(sid)
+			},
+			sid: sid, want: false, stateFile: true, inHub: true,
+		},
+		{
+			name: "bookkeeping-only transcript growth does not keep an old state file",
+			setup: func(t *testing.T, h *Hub, dir string) {
+				path := writeBookkeepingTranscript(t)
+				writeState(t, dir, hook.SessionState{SessionID: sid, State: hook.StateWaiting, UpdatedAt: old.Unix(), TranscriptPath: path})
+				h.loadStateFile(hook.Path(dir, sid))
+				h.refreshTranscript(sid)
+			},
+			sid: sid, want: true, stateFile: false, inHub: true,
+		},
+		{
+			name: "file rewritten on disk since the hub loaded it",
+			setup: func(t *testing.T, h *Hub, dir string) {
+				writeState(t, dir, hook.SessionState{SessionID: sid, State: hook.StateWaiting, UpdatedAt: old.Unix()})
+				h.loadStateFile(hook.Path(dir, sid))
+				writeState(t, dir, hook.SessionState{SessionID: sid, State: hook.StateWaiting, UpdatedAt: time.Now().Unix()})
+			},
+			sid: sid, want: false, stateFile: true, inHub: true,
+		},
+		{
+			name: "discovery-seeded session is dropped from memory",
+			setup: func(t *testing.T, h *Hub, dir string) {
+				h.seed(hook.SessionState{SessionID: "d1", UpdatedAt: old.Unix()})
+			},
+			sid: "d1", want: true, stateFile: false, inHub: false,
+		},
+		{
+			name:  "unknown session",
+			setup: func(t *testing.T, h *Hub, dir string) {},
+			sid:   "nope", want: false, stateFile: false, inHub: false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			h := NewWithOptions(dir, Options{ClaudeProjectsDir: "-"}, silentLog())
+			tc.setup(t, h, dir)
+
+			if got := h.PruneDead(tc.sid); got != tc.want {
+				t.Errorf("PruneDead(%q) = %v, want %v", tc.sid, got, tc.want)
+			}
+			_, err := os.Stat(hook.Path(dir, tc.sid))
+			if exists := err == nil; exists != tc.stateFile {
+				t.Errorf("state file exists = %v, want %v (stat err %v)", exists, tc.stateFile, err)
+			}
+			if inHub := findSession(h, tc.sid) != nil; inHub != tc.inHub {
+				t.Errorf("in snapshot = %v, want %v", inHub, tc.inHub)
 			}
 		})
 	}
