@@ -1486,3 +1486,43 @@ func TestHookSourcePrunesAStaleGhost(t *testing.T) {
 		t.Errorf("recent ghost file was pruned: %v", err)
 	}
 }
+
+func TestHookSourceDropsAnEndedDiscoverySession(t *testing.T) {
+	const sid = "disc"
+	root := t.TempDir()
+	proj := filepath.Join(root, "-home-me-project")
+	if err := os.MkdirAll(proj, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Newest event 14h old: inside the 24h window, so discovery seeds it as ended.
+	line := `{"type":"user","timestamp":"` + time.Now().Add(-14*time.Hour).UTC().Format(time.RFC3339Nano) +
+		`","message":{"role":"user","content":"hi"}}` + "\n"
+	if err := os.WriteFile(filepath.Join(proj, sid+".jsonl"), []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	h := hub.NewWithOptions(dir, hub.Options{
+		ClaudeProjectsDir: root,
+		DiscoveryWindow:   24 * time.Hour,
+		PruneTTL:          13 * time.Hour,
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	ctx := startHub(t, h, dir)
+	for deadline := time.Now().Add(2 * time.Second); len(h.Snapshot()) < 1; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("hub never seeded the discovery session")
+		}
+	}
+
+	src := NewHookSource(h, nil)
+	src.every = hookTestEvery
+	out := make(chan Delta, 64)
+	go func() { _ = src.Run(ctx, out) }()
+
+	waitDelta(t, out, "gone for the dropped discovery session", func(d Delta) bool {
+		return d.Key == "claude/"+sid && d.Gone
+	})
+	if n := len(h.Snapshot()); n != 0 {
+		t.Errorf("hub still holds %d sessions", n)
+	}
+}

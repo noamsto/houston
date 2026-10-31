@@ -58,7 +58,7 @@ Behind the server: tmux CLI (`list-sessions`, `capture-pane`, `send-keys`, ...),
 | Build | Vite | Fast dev server with HMR, production bundling |
 | Live updates | SSE + WebSocket | SSE for session list, WS for pane I/O |
 | Voice input | Web Speech API | Built into browsers, no backend needed |
-| Auth | None | Rely on Tailscale/SSH tunnel for security |
+| Auth | Token gate + Origin/Host allowlists | Tailscale/SSH tunnel as extra layers; see Security essentials |
 
 
 ## Project Structure

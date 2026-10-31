@@ -350,3 +350,56 @@ func TestDiscoverClaudeSessionsStopsOnCancelledContext(t *testing.T) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
 }
+
+func TestPruneDeadDropsEndedDiscoverySessionsPastTTL(t *testing.T) {
+	const (
+		stale  = "sess-stale"
+		fresh  = "sess-fresh"
+		modded = "sess-mod"
+	)
+	root := fakeProjectsDir(t, map[string]string{
+		stale + ".jsonl":  idleTranscriptBody(time.Now().Add(-14 * time.Hour)),
+		fresh + ".jsonl":  idleTranscriptBody(time.Now().Add(-12*time.Hour - 30*time.Minute)),
+		modded + ".jsonl": idleTranscriptBody(time.Now().Add(-14 * time.Hour)),
+	})
+	ctx := context.Background()
+	h := NewWithOptions(t.TempDir(), Options{
+		ClaudeProjectsDir: root,
+		DiscoveryWindow:   24 * time.Hour,
+		PruneTTL:          13 * time.Hour,
+	}, silentLog())
+	h.runDiscovery(ctx)
+
+	for _, sid := range []string{stale, fresh, modded} {
+		v := findSession(h, sid)
+		if v == nil || v.State != hook.StateEnded {
+			t.Fatalf("%s: want a seeded ended session, got %+v", sid, v)
+		}
+	}
+	h.mu.Lock()
+	if sess := h.sessions[modded]; sess != nil {
+		sess.hasMod = true
+	}
+	h.mu.Unlock()
+
+	if !h.PruneDead(stale) {
+		t.Error("PruneDead kept an ended discovery session past the TTL")
+	}
+	if h.PruneDead(fresh) {
+		t.Error("PruneDead dropped an ended discovery session inside the TTL")
+	}
+	if h.PruneDead(modded) {
+		t.Error("PruneDead dropped a session with a live mod")
+	}
+	if findSession(h, stale) != nil || findSession(h, fresh) == nil || findSession(h, modded) == nil {
+		t.Error("snapshot does not match the prune results")
+	}
+
+	// Production has pruneTTL == discovery window, so the dropped session's
+	// newest event is outside the window and discovery cannot re-seed it.
+	h.discoveryWindow = h.pruneTTL
+	h.runDiscovery(ctx)
+	if findSession(h, stale) != nil {
+		t.Error("dropped session was re-seeded by the next discovery run")
+	}
+}
