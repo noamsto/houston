@@ -1366,9 +1366,18 @@ func TestHookSourceModPermissionReadsBlocked(t *testing.T) {
 }
 
 func TestHookSourceEndsAnIdlePanelessSession(t *testing.T) {
-	transcript := func(t *testing.T) string {
+	const (
+		noTranscript = ""
+		fresh        = "fresh event"
+		bookkeeping  = "bookkeeping only"
+	)
+	transcript := func(t *testing.T, kind string) string {
 		path := filepath.Join(t.TempDir(), "t.jsonl")
-		line := `{"type":"user","message":{"role":"user","content":"hi"}}` + "\n"
+		line := `{"type":"user","timestamp":"` + time.Now().UTC().Format(time.RFC3339Nano) +
+			`","message":{"role":"user","content":"hi"}}` + "\n"
+		if kind == bookkeeping {
+			line = `{"type":"artifact-autoreact-ledger","sessionId":"paneless"}` + "\n"
+		}
 		if err := os.WriteFile(path, []byte(line), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -1379,14 +1388,15 @@ func TestHookSourceEndsAnIdlePanelessSession(t *testing.T) {
 		state      hook.State
 		turn       int
 		age        time.Duration
-		transcript bool
+		transcript string
 		want       State
 	}{
-		{"starting for days", hook.StateStarting, 0, 82 * time.Hour, false, StateDone},
-		{"waiting past the bound", hook.StateWaiting, 100, 9 * time.Hour, false, StateDone},
-		{"waiting under the bound", hook.StateWaiting, 0, time.Hour, false, StateIdle},
-		{"thinking past the bound", hook.StateThinking, 0, 9 * time.Hour, false, StateDone},
-		{"recent transcript write", hook.StateWaiting, 0, 9 * time.Hour, true, StateIdle},
+		{"starting for days", hook.StateStarting, 0, 82 * time.Hour, noTranscript, StateDone},
+		{"waiting past the bound", hook.StateWaiting, 100, 9 * time.Hour, noTranscript, StateDone},
+		{"waiting under the bound", hook.StateWaiting, 0, time.Hour, noTranscript, StateIdle},
+		{"thinking past the bound", hook.StateThinking, 0, 9 * time.Hour, noTranscript, StateDone},
+		{"recent transcript write", hook.StateWaiting, 0, 9 * time.Hour, fresh, StateIdle},
+		{"transcript grows with bookkeeping only", hook.StateWaiting, 0, 9 * time.Hour, bookkeeping, StateDone},
 	}
 	listers := []struct {
 		name string
@@ -1408,8 +1418,8 @@ func TestHookSourceEndsAnIdlePanelessSession(t *testing.T) {
 					Turn:      tt.turn,
 					UpdatedAt: time.Now().Add(-tt.age).Unix(),
 				}
-				if tt.transcript {
-					st.TranscriptPath = transcript(t)
+				if tt.transcript != noTranscript {
+					st.TranscriptPath = transcript(t, tt.transcript)
 				}
 				out, _ := startHookSourceWith(t, l.make(), st, nil)
 				key := "claude/" + st.SessionID

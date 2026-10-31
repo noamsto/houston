@@ -840,24 +840,34 @@ func TestHubHealsStaleToolState(t *testing.T) {
 	}
 }
 
-// writeTranscriptAt writes one complete user-prompt line and backdates the
-// file's mtime (set after the write, which would otherwise bump it).
-func writeTranscriptAt(t *testing.T, mtime time.Time) string {
+// writeTranscriptAt writes one complete user-prompt line stamped at eventTime.
+func writeTranscriptAt(t *testing.T, eventTime time.Time) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "t.jsonl")
-	body := `{"type":"user","message":{"role":"user","content":"hi"}}` + "\n"
+	body := `{"type":"user","timestamp":"` + eventTime.UTC().Format(time.RFC3339Nano) +
+		`","message":{"role":"user","content":"hi"}}` + "\n"
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatalf("write transcript: %v", err)
 	}
-	if err := os.Chtimes(path, mtime, mtime); err != nil {
-		t.Fatalf("Chtimes: %v", err)
+	return path
+}
+
+// writeBookkeepingTranscript writes timestamp-less bookkeeping records, the
+// kind Claude Code appends to an idle session; the file's mtime is now.
+func writeBookkeepingTranscript(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "t.jsonl")
+	body := `{"type":"artifact-autoreact-ledger","sessionId":"s1"}` + "\n" +
+		`{"type":"artifact-autoreact-ledger","sessionId":"s1"}` + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
 	}
 	return path
 }
 
 // TestSessionViewSeenAt pins SeenAt as the newest sign of life: the view's
-// UpdatedAt, the transcript's mtime, and the mod's newest record (heartbeats
-// included, a millisecond clock folded to seconds).
+// UpdatedAt, the newest timestamped transcript event, and the mod's newest
+// record (heartbeats included, a millisecond clock folded to seconds).
 func TestSessionViewSeenAt(t *testing.T) {
 	now := time.Now()
 	updated := now.Add(-48 * time.Hour).Unix()
@@ -865,15 +875,18 @@ func TestSessionViewSeenAt(t *testing.T) {
 
 	tests := []struct {
 		name string
-		// transcript is the transcript's mtime; zero means no transcript.
+		// transcript is the newest transcript event's timestamp; zero means no transcript.
 		transcript time.Time
+		// bookkeeping gives the session a transcript of timestamp-less records.
+		bookkeeping bool
 		// modHeartbeat is the unix second of a mod heartbeat; zero means no mod.
 		modHeartbeat int64
 		want         int64
 	}{
 		{name: "state only", want: updated},
-		{name: "fresh transcript wins", transcript: transcriptNew, want: transcriptNew.Unix()},
-		{name: "older transcript loses", transcript: now.Add(-72 * time.Hour), want: updated},
+		{name: "fresh transcript event wins", transcript: transcriptNew, want: transcriptNew.Unix()},
+		{name: "older transcript event loses", transcript: now.Add(-72 * time.Hour), want: updated},
+		{name: "bookkeeping records without timestamps do not count", bookkeeping: true, want: updated},
 		{name: "mod heartbeat wins", modHeartbeat: now.Unix() - 10, want: now.Unix() - 10},
 	}
 	for _, tc := range tests {
@@ -885,6 +898,9 @@ func TestSessionViewSeenAt(t *testing.T) {
 			st := hook.SessionState{SessionID: "s1", State: hook.StateWaiting, UpdatedAt: updated}
 			if !tc.transcript.IsZero() {
 				st.TranscriptPath = writeTranscriptAt(t, tc.transcript)
+			}
+			if tc.bookkeeping {
+				st.TranscriptPath = writeBookkeepingTranscript(t)
 			}
 			writeState(t, dir, st)
 			h.loadStateFile(hook.Path(dir, "s1"))
@@ -941,7 +957,7 @@ func TestPruneDead(t *testing.T) {
 			sid: sid, want: false, stateFile: true, inHub: true,
 		},
 		{
-			name: "fresh transcript keeps an old state file",
+			name: "fresh transcript event keeps an old state file",
 			setup: func(t *testing.T, h *Hub, dir string) {
 				path := writeTranscriptAt(t, time.Now().Add(-time.Minute))
 				writeState(t, dir, hook.SessionState{SessionID: sid, State: hook.StateWaiting, UpdatedAt: old.Unix(), TranscriptPath: path})
@@ -949,6 +965,16 @@ func TestPruneDead(t *testing.T) {
 				h.refreshTranscript(sid)
 			},
 			sid: sid, want: false, stateFile: true, inHub: true,
+		},
+		{
+			name: "bookkeeping-only transcript growth does not keep an old state file",
+			setup: func(t *testing.T, h *Hub, dir string) {
+				path := writeBookkeepingTranscript(t)
+				writeState(t, dir, hook.SessionState{SessionID: sid, State: hook.StateWaiting, UpdatedAt: old.Unix(), TranscriptPath: path})
+				h.loadStateFile(hook.Path(dir, sid))
+				h.refreshTranscript(sid)
+			},
+			sid: sid, want: true, stateFile: false, inHub: true,
 		},
 		{
 			name: "file rewritten on disk since the hub loaded it",

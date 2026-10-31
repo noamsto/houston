@@ -113,7 +113,10 @@ type Session struct {
 
 	transcriptPath   string
 	transcriptOffset int64
-	transcriptAt     int64 // transcript mtime (unix seconds) as of the last read that consumed bytes
+	// newest transcript event timestamp (unix seconds); file mtime is not used
+	// because Claude Code appends timestamp-less bookkeeping records to an idle
+	// session's transcript.
+	transcriptAt int64
 
 	trail  []TrailChip
 	asks   string
@@ -453,8 +456,10 @@ func (h *Hub) pruneEnded(dir string) {
 // been silent. The hub decides freshness itself and removes it only after
 // pruneTTL without a sign of life (SeenAt), re-checking the file on disk with
 // pruneEnded's race guard. A discovery-seeded session (no state file) is
-// dropped from memory; pruneTTL >= DefaultDiscoveryWindow and SeenAt includes
-// the transcript mtime discovery filters on, so it is not re-seeded.
+// dropped from memory; discovery dates a synthesized session from its newest
+// event timestamp (mtime is only a pre-filter that over-includes), which SeenAt
+// includes, and pruneTTL >= DefaultDiscoveryWindow, so it is not re-seeded
+// while that event is older than the discovery window.
 func (h *Hub) PruneDead(sessionID string) bool {
 	h.mu.RLock()
 	sess, ok := h.sessions[sessionID]
@@ -660,8 +665,6 @@ func (h *Hub) refreshTranscript(sessionID string) {
 		return
 	}
 
-	fi, statErr := os.Stat(path)
-
 	h.mu.Lock()
 	if initial != nil {
 		// Read outside the lock: another read may have landed meanwhile.
@@ -675,9 +678,6 @@ func (h *Hub) refreshTranscript(sessionID string) {
 		sess.maxCtx = initial.maxCtx
 	}
 	sess.transcriptOffset = newOffset
-	if statErr == nil {
-		sess.transcriptAt = fi.ModTime().Unix()
-	}
 	for _, ev := range events {
 		// A prompt ends the previous turn's tools. Live, the hook Turn says so;
 		// a first read has no such signal and folds every turn at once.
@@ -899,6 +899,9 @@ const eventTypePiToolCall = "toolCall"
 // applyTranscriptEvent updates trail/telemetry on sess from one event.
 // Called under h.mu.
 func applyTranscriptEvent(s *Session, ev TranscriptEvent) {
+	if !ev.Timestamp.IsZero() {
+		s.transcriptAt = max(s.transcriptAt, ev.Timestamp.Unix())
+	}
 	s.bg.apply(ev)
 
 	switch ev.Type {
