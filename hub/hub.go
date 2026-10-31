@@ -41,7 +41,7 @@ type SessionView struct {
 	Turn           int         `json:"turn"`
 	Since          int64       `json:"since,omitempty"`
 	UpdatedAt      int64       `json:"updated_at"`
-	SeenAt         int64       `json:"seen_at,omitempty"` // newest sign of life (hook, transcript, mod heartbeat); not in viewSignature, so a heartbeat does not broadcast
+	SeenAt         int64       `json:"seen_at,omitempty"` // newest sign of life; kept out of viewSignature so a heartbeat does not broadcast
 	Trail          []TrailChip `json:"trail,omitempty"`
 	Asks           string      `json:"asks,omitempty"` // the question the turn ended on; reset by later tool/user activity
 	InputTokens    int         `json:"input_tokens"`
@@ -113,9 +113,9 @@ type Session struct {
 
 	transcriptPath   string
 	transcriptOffset int64
-	// newest transcript event timestamp (unix seconds); file mtime is not used
-	// because Claude Code appends timestamp-less bookkeeping records to an idle
-	// session's transcript.
+	// transcriptAt is the newest transcript event's time (unix seconds), not the
+	// file's mtime: Claude Code appends timestamp-less bookkeeping records to an
+	// idle session's transcript.
 	transcriptAt int64
 
 	trail  []TrailChip
@@ -381,11 +381,10 @@ func (h *Hub) scan(dir string) error {
 // age; a non-ended file is removed only through PruneDead, for a session the
 // hooks layer ended on pane evidence. A zero UpdatedAt (unwritten or
 // corrupted) is never a prune candidate, since it can't be distinguished from
-// a file that's merely stale. The race
-// guard compares the file's mtime read right after hook.Read against its
-// mtime read right before os.Remove; any change in between (e.g. a resumed
-// session's SessionStart re-touching an old session id) means the file
-// isn't ours to remove this pass.
+// a file that's merely stale. The race guard compares the file's mtime read
+// right after hook.Read against its mtime read right before os.Remove; any
+// change in between (e.g. a resumed session's SessionStart re-touching an old
+// session id) means the file isn't ours to remove this pass.
 func (h *Hub) pruneEnded(dir string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -454,8 +453,8 @@ func (h *Hub) pruneEnded(dir string) {
 // PruneDead removes a session the caller has found dead on pane evidence: its
 // pane is gone or foreign and it did not revive, or it owns no pane and has
 // been silent. The hub decides freshness itself and removes it only after
-// pruneTTL without a sign of life (SeenAt), re-checking the file on disk with
-// pruneEnded's race guard. A discovery-seeded session (no state file) is
+// pruneTTL without a sign of life (SeenAt), re-checking the file on disk under
+// a SameFile and mtime race guard. A discovery-seeded session (no state file) is
 // dropped from memory. It is not re-seeded: discovery rejects a transcript
 // whose newest event is older than the discovery window (mtime is only a
 // pre-filter that over-includes), and SeenAt includes that event, so with

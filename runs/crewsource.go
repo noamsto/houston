@@ -187,9 +187,8 @@ func tickCrewDeltas(current map[string]Run, seen map[string]bool, now time.Time)
 // crewRunAbandoned reports whether a branch has been silent past crewStaleAfter
 // with nothing to revive it: no window, not waiting on a human, and either no
 // live dispatcher or a worker that has not spoken since its newest dispatch or
-// resume row (only a watchdog or nothing did). A live dispatcher does not keep
-// a worker that is gone. b.State must be the post-routing state. lastActivity ==
-// 0 (no row with a timestamp) is never abandoned.
+// resume row (only a watchdog or nothing did). b.State must be the post-routing
+// state. lastActivity == 0 (no row with a timestamp) is never abandoned.
 func crewRunAbandoned(b crewBranch, windowless, dispatcherAlive bool, now time.Time) bool {
 	if !windowless || b.State == StateBlocked || b.lastActivity == 0 {
 		return false
