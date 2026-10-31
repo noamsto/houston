@@ -28,7 +28,7 @@ type wsEnvelope struct {
 // TestPaneWSServerToClientProtocol asserts the REAL JSON envelope protocol —
 // {"type":"...","data":{...}} with types dims/seed/output/meta — that
 // pane_ws.go actually speaks. This is NOT the output:/meta:/resize-done
-// string-prefix protocol documented in CLAUDE.md: that doc describes a
+// string-prefix protocol documented in docs/reference/terminal-and-mobile.md: that doc describes a
 // pre-control-mode wire format and is stale. Do not "fix" this test to match
 // it; fix the doc instead.
 func TestPaneWSServerToClientProtocol(t *testing.T) {
