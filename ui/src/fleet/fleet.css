@@ -44,12 +44,12 @@
 .fleet-badge.quiet { background: var(--bg-raised); color: var(--text-faint); }
 
 .fleet-filters {
-  display: flex; flex-wrap: nowrap; gap: 4px; padding: 10px 12px 4px;
+  display: flex; flex-wrap: nowrap; gap: 3px; padding: 10px 8px 4px;
   overflow-x: auto; scrollbar-width: none;
 }
 .fleet-filters::-webkit-scrollbar { display: none; }
 .fleet-filters button {
-  flex: 0 0 auto; white-space: nowrap; padding: 0 10px; min-height: var(--tap); border: 1px solid var(--line); border-radius: 8px;
+  flex: 0 0 auto; white-space: nowrap; padding: 0 8px; min-width: var(--tap); min-height: var(--tap); border: 1px solid var(--line); border-radius: 8px;
   background: var(--bg-raised); color: var(--text-faint);
   font: inherit; font-size: 12.5px; cursor: pointer;
 }
