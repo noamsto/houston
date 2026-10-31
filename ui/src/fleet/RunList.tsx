@@ -1,8 +1,10 @@
+import { useState } from 'react'
 import { needsYou } from './staleness'
 import { entryRuns } from './entryRuns'
 import { groupEntriesByProject, type FleetEntry } from './fleetEntries'
 import { CrewGroup, DispatcherGroup } from './DispatcherGroup'
 import { RunCard } from './RunCard'
+import { capHistory, HISTORY_PAGE } from './historyCap'
 import type { Run } from '../api/runs'
 
 interface RunListProps {
@@ -26,6 +28,27 @@ export function RunList({ groups, now, onOpen, selectedId, groupByProject: group
     return <RunCard key={e.key} run={e.run} now={now} onOpen={onOpen} selected={selectedId === e.run.id} />
   }
 
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set())
+
+  // Caps one section's ended runs; the button reveals them for that section only.
+  const capped = (key: string, entries: FleetEntry[]) => {
+    const { shown, hidden } = capHistory(entries, HISTORY_PAGE, expanded.has(key), selectedId)
+    return (
+      <>
+        {shown.map(entry)}
+        {hidden > 0 && (
+          <button
+            type="button"
+            className="fleet-group-more fleet-history-more"
+            onClick={() => setExpanded((prev) => new Set(prev).add(key))}
+          >
+            Show {hidden} more
+          </button>
+        )}
+      </>
+    )
+  }
+
   return (
     <>
       {groups.map(([host, list]) => (
@@ -47,11 +70,11 @@ export function RunList({ groups, now, onOpen, selectedId, groupByProject: group
                         {attention > 0 && <span className="fleet-project-attention">{attention} need you</span>}
                       </span>
                     </div>
-                    {entries.map(entry)}
+                    {capped(`${host}\0${project}`, entries)}
                   </div>
                 )
               })
-            : list.map(entry)}
+            : capped(host, list)}
         </section>
       ))}
     </>
