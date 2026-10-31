@@ -50,18 +50,16 @@ export function FleetView({ runs, connected, now, mode, onOpen }: FleetViewProps
         <button aria-pressed={filter === 'stuck'} className={filter === 'stuck' ? 'on' : ''} onClick={() => setFilter('stuck')}>Stuck</button>
         <button aria-pressed={filter === 'done'} className={filter === 'done' ? 'on' : ''} onClick={() => setFilter('done')}>Done</button>
         <button aria-pressed={filter === 'all'} className={filter === 'all' ? 'on' : ''} onClick={() => setFilter('all')}>All</button>
-      </nav>
-
-      <div className="fleet-group-row">
         <button
           type="button"
           className={`fleet-group-toggle${grouped ? ' on' : ''}`}
+          aria-label="Group by project"
           aria-pressed={grouped}
           onClick={() => setGrouped(!grouped)}
         >
-          Group by project
+          Group
         </button>
-      </div>
+      </nav>
 
       {entries.length === 0 && (
         <div className="fleet-empty">

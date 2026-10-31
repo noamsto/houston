@@ -39,15 +39,19 @@ const FeedRow = memo(function FeedRow({ entry, workerId, workerCodename }: FeedR
   const prUrl = entry.pr && PR_URL.test(entry.pr.url) ? entry.pr.url : undefined
   return (
     <li className="crew-feed-row">
-      <span className="crew-feed-time" title={new Date(entry.ts).toLocaleString()}>{clock(entry.ts)}</span>
-      <span className="crew-feed-kind">{kindLabel(entry)}</span>
+      <span className="crew-feed-meta">
+        <span className="crew-feed-time" title={new Date(entry.ts).toLocaleString()}>{clock(entry.ts)}</span>
+        <span className="crew-feed-kind">{kindLabel(entry)}</span>
+      </span>
       <span className="crew-feed-text">{entry.text}</span>
       <span className="crew-feed-chips">
         {who &&
           (workerId ? (
-            <a className="run-chip crew-feed-link" href={runHash(workerId)} onClick={onAppLink(() => openRun(workerId))}>{who}</a>
+            <a className="run-chip crew-feed-link" href={runHash(workerId)} onClick={onAppLink(() => openRun(workerId))}>
+              <span className="crew-feed-chip-text">{who}</span>
+            </a>
           ) : (
-            <span className="run-chip">{entry.codename || entry.branch}</span>
+            <span className="run-chip"><span className="crew-feed-chip-text">{entry.codename || entry.branch}</span></span>
           ))}
         {entry.pr && prUrl && (
           <a className="run-chip pr crew-feed-pr" href={prUrl} target="_blank" rel="noreferrer" aria-label={`Pull request #${entry.pr.number}`}>

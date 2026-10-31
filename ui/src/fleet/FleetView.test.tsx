@@ -111,7 +111,8 @@ describe('FleetView attention filters', () => {
     const { container } = render(<FleetView runs={mixed} connected now={now} mode="dispatcher" />)
     const nav = container.querySelector('.fleet-filters') as HTMLElement
     expect(Array.from(nav.querySelectorAll('button')).map((b) => b.textContent))
-      .toEqual(['Active', 'Needs you', 'Stuck', 'Done', 'All'])
+      .toEqual(['Active', 'Needs you', 'Stuck', 'Done', 'All', 'Group'])
+    expect(within(nav).getByRole('button', { name: 'Group by project' })).toBeTruthy()
   })
 
   it('Stuck shows only the stuck card', () => {
@@ -322,5 +323,23 @@ describe('FleetView peer runs', () => {
   it('keeps counting a local transport-stale blocked run', () => {
     render(<FleetView runs={[run({ id: 'l', state: 'blocked', stale: true })]} connected now={now} mode="dispatcher" />)
     expect(screen.getByRole('button', { name: '1 needs you' })).toBeTruthy()
+  })
+})
+
+describe('FleetView All history cap', () => {
+  const many = [
+    run({ id: 'live', branch: 'live-one' }),
+    run({ id: 'stuck', branch: 'stuck-one', state: 'failed', attention: 'stuck' }),
+    ...Array.from({ length: 40 }, (_, i) => run({ id: `e${i}`, branch: `ended-${i}`, state: 'done', since: 100 - i })),
+  ]
+
+  it('lists 30 ended runs, then reveals the rest with Show more; header keeps the full count', () => {
+    const { container } = render(<FleetView runs={many} connected now={now} mode="dispatcher" />)
+    fireEvent.click(screen.getByRole('button', { name: 'All' }))
+    expect(container.querySelectorAll('.run-card').length).toBe(32)
+    expect(container.querySelector('.fleet-group')?.textContent).toContain('42')
+    fireEvent.click(screen.getByRole('button', { name: 'Show 10 more' }))
+    expect(container.querySelectorAll('.run-card').length).toBe(42)
+    expect(screen.queryByRole('button', { name: /Show \d+ more/ })).toBeNull()
   })
 })
