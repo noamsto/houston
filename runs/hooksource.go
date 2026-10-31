@@ -107,8 +107,9 @@ func (s *HookSource) Run(ctx context.Context, out chan<- Delta) error {
 		return v, foreign
 	}
 
-	// build also reports whether the session was ended on evidence, so the
-	// caller may prune its state file.
+	// build also reports whether the session is ended (on pane evidence,
+	// pane-less idleness, or its own SessionEnd), so the caller may hand it to
+	// PruneDead.
 	build := func(v hub.SessionView) (string, Run, bool) {
 		gone := paneGone(v, panes.live, panes.at)
 		idle := v.TmuxPane == "" && v.State != hook.StateEnded && v.SeenAt > 0 &&
@@ -127,6 +128,10 @@ func (s *HookSource) Run(ctx context.Context, out chan<- Delta) error {
 			}
 		case idle:
 			return key, endRun(r), true
+		case v.State == hook.StateEnded:
+			// Already ended: report it so a session with no state file
+			// (discovery-seeded) is dropped by PruneDead's TTL.
+			return key, r, true
 		case panes.live[v.TmuxPane]:
 			delete(endedAt, v.SessionID)
 			delete(revived, v.SessionID)

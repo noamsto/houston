@@ -382,7 +382,7 @@ func (h *Hub) scan(dir string) error {
 // hooks layer ended on pane evidence. A zero UpdatedAt (unwritten or
 // corrupted) is never a prune candidate, since it can't be distinguished from
 // a file that's merely stale. The race guard compares the file's mtime read
-// right after hook.Read against its mtime read right before os.Remove; any
+// right before hook.Read against its mtime read right before os.Remove; any
 // change in between (e.g. a resumed session's SessionStart re-touching an old
 // session id) means the file isn't ours to remove this pass.
 func (h *Hub) pruneEnded(dir string) {
@@ -396,20 +396,19 @@ func (h *Hub) pruneEnded(dir string) {
 			continue
 		}
 		path := filepath.Join(dir, e.Name())
-		s, err := hook.Read(path)
-		if err != nil {
-			if !errors.Is(err, fs.ErrNotExist) {
-				h.log.Warn("prune: read state file", "path", path, "err", err)
-			}
-			continue
-		}
-
-		// Captured right after the read, so the guard below brackets the
-		// full window during which a rewrite could race us.
+		// Stat before the read: a rename between them must make the guard below
+		// see a different inode than the content we judged.
 		before, err := os.Stat(path)
 		if err != nil {
 			if !errors.Is(err, fs.ErrNotExist) {
 				h.log.Warn("prune: stat state file", "path", path, "err", err)
+			}
+			continue
+		}
+		s, err := hook.Read(path)
+		if err != nil {
+			if !errors.Is(err, fs.ErrNotExist) {
+				h.log.Warn("prune: read state file", "path", path, "err", err)
 			}
 			continue
 		}
@@ -450,9 +449,9 @@ func (h *Hub) pruneEnded(dir string) {
 	}
 }
 
-// PruneDead removes a session the caller has found dead on pane evidence: its
-// pane is gone or foreign and it did not revive, or it owns no pane and has
-// been silent. The hub decides freshness itself and removes it only after
+// PruneDead removes a session the caller has found dead: its pane is gone or
+// foreign and it did not revive, it owns no pane and has been silent, or it
+// ended itself (SessionEnd, or a discovery-seeded session with a stale transcript). The hub decides freshness itself and removes it only after
 // pruneTTL without a sign of life (SeenAt), re-checking the file on disk under
 // a SameFile and mtime race guard. A discovery-seeded session (no state file) is
 // dropped from memory. It is not re-seeded: discovery rejects a transcript
