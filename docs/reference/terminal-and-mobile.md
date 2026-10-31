@@ -40,7 +40,7 @@ isn't started, 404 for an unknown run, 409 if the run has no terminal
 capability/pane, 409 again if tmux confirms the pane id no longer exists (it
 exited or the session is gone), 409 again if the run's recorded tmux server
 and the freshly resolved pane's server are both known and disagree (see
-"Point-of-use server check" above), or 503 `tmux unavailable` if tmux itself
+"Point-of-use server check" in `docs/reference/fleet-runs.md`), or 503 `tmux unavailable` if tmux itself
 couldn't be reached (missing binary, timeout, wrong socket permissions, or a
 client/server protocol mismatch after an upgrade left a stale tmux server
 running).
@@ -48,7 +48,7 @@ running).
 Past the upgrade, a run-route socket can still close with 4409 "tmux server
 changed" (the pane is gone or has moved to a different server) or 1011
 "could not verify tmux server" (the check itself failed) — see "Point-of-use
-server check" above.
+server check" in `docs/reference/fleet-runs.md`.
 
 The run route carries a JSON envelope, `{"type":"...","data":{...}}`
 (`server/pane_ws.go`, `ui/src/hooks/usePaneSocket.ts`,

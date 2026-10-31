@@ -10,7 +10,7 @@ houston runs in one of two modes, chosen by `-mode auto|dispatcher|tmux` (defaul
 
 - **`auto`** (`mode.Resolve`, production probe `server.ModeProbe`) picks dispatcher mode when both `dispatch` and `crew` resolve (`mode.OnPath`: an executable regular file; an empty or relative PATH element never matches) on the tmux server's global PATH joined ahead of houston's own — the PATH `dispatch` runs with (`dispatchEnv`). If the tmux server PATH can't be read (server unreachable, no global PATH), only houston's PATH is searched. Otherwise tmux mode. `exec` resolves `dispatch` on houston's own PATH, so a host with `dispatch` only on the tmux server's PATH still gets dispatcher mode, and `POST /api/dispatch` then answers 502 `could not run dispatch: …`.
 - `server.Config.Mode` must be `mode.Dispatcher` or `mode.Tmux`; `server.New` errors otherwise.
-- **Dispatcher mode** is everything described below.
+- **Dispatcher mode** is everything described in the other `docs/reference/` docs.
 - **Tmux mode** is plain tmux plus hooks monitoring:
   - `POST /api/runs/:id/reply`, `POST /api/runs/:id/restart`, `GET /api/runs/:id/crew/feed`, `GET /api/runs/:id/crew/feed/stream`, `POST /api/dispatch`, `GET /api/dispatch/options`, `POST /api/dispatch/dispatcher`, `GET|POST|DELETE /api/repos`, `GET /api/repos/candidates` and the host-addressed `/api/hosts/{host}/dispatch*|repos*` forwards (see "Dispatch onto a peer") are not registered (404): the command-execution surface is gone, not hidden.
   - No `CrewSource` (`runSources`) and no `crewfeed.Store`; the registry order `runs.Order` is tmux, hooks, so nothing reads `<git-common-dir>/crew`.

@@ -31,7 +31,7 @@ houston --opencode-url http://localhost:YOUR_PORT
 
 Copy the plugin to your OpenCode config:
 ```bash
-cp ~/.config/opencode/plugins/houston.ts ~/.config/opencode/plugins/
+cp contrib/opencode-plugin/houston.ts ~/.config/opencode/plugins/
 ```
 
 The plugin automatically writes server info to `~/.local/state/houston/opencode-servers/` when OpenCode starts. Houston reads these files to discover running instances.

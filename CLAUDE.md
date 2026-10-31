@@ -133,7 +133,7 @@ Skip hooks: `git commit --no-verify`
 
 ### CI commands
 
-CI (`.github/workflows/ci.yml`) runs, each as `nix develop -c …`: `just build`, `go vet ./...`, `go test ./...` (inside a keepalive tmux session), gofmt check, `golangci-lint run`, `nilaway -include-pkgs=github.com/noamsto/houston ./...`, UI `npx eslint .`, `npx tsc -b`, `npm test` (in `ui/`), `go test -race ./...`, and `just mod-check` (Claude mod). Reproduce locally with the same commands; `just test|lint|nilaway|race|mod-check` wrap most of them. Load measurement and the QA harness: `docs/reference/dev-and-qa.md`.
+CI (`.github/workflows/ci.yml`) runs `nix build --no-link -L .#default` (the only step that catches stale `npmDepsHash`/`vendorHash` in `flake.nix` after a `go.mod` or `package-lock.json` change), then, each as `nix develop -c …`: `just build`, `go vet ./...`, `go test ./...` (inside a keepalive tmux session), gofmt check, `golangci-lint run`, `nilaway -include-pkgs=github.com/noamsto/houston ./...`, UI `npx eslint .`, `npx tsc -b`, `npm test` (in `ui/`), `go test -race ./...`, and `just mod-check` (Claude mod). Reproduce locally with the same commands; `just test|lint|nilaway|race|mod-check` wrap most of them. Load measurement and the QA harness: `docs/reference/dev-and-qa.md`.
 
 ## Security essentials
 
@@ -149,12 +149,12 @@ Full model: `docs/reference/security.md`.
 
 Each of these causes bugs when missed; the owning reference doc has the full rule.
 
-- **`chat/`, `crewfeed/` and `mode/` import only the standard library** (boundary tests fail otherwise).
+- **`chat/` and `crewfeed/` import only the standard library** (`boundary_test.go` fails otherwise); `mode/` is stdlib-only by convention.
 - **Never commit transcript content.** Fixtures under `chat/testdata/` are hand-written; real-transcript checks log counts only.
 - **needs-you ⟺ `blocked`**: `blocked` is the only state meaning a human must act now; a turn end alone is never `blocked` (`docs/reference/fleet-runs.md`).
 - **A `peer-` run id never reaches a local handler**: `findRun` and `buildWorkspace` see only `Host == ""` runs, and every run-addressed route is `peerOr(forward, local)` (`docs/reference/federation.md`).
 - **No user text in tmux argv**: tmux splits a command at an element ending in `;`, format-expands `-c`, and runs a single-argument command via `sh -c`; the dispatcher window command is always `houston launch-dispatcher <file>` (`docs/reference/dispatch.md`).
-- **Every send to a pane re-verifies the pane**: `runPane` compares the recorded tmux server pid at point of use (409 on mismatch); `/input` is unchecked, answers go through `/answer` (`docs/reference/hooks-and-state.md`, `chat.md`).
+- **Every send to a pane re-verifies the pane's tmux server**: `runPane` compares the recorded server pid at point of use (409 on mismatch). `/input` does not check which prompt is on screen (it types whatever it is given); answers go through `/answer` (`docs/reference/fleet-runs.md` "Point-of-use server check", `terminal-and-mobile.md`, `chat.md`).
 - **The Claude mod is read-only**: hooks pass `e` to `next` and return its result; only four `$` calls are allowed, enforced by `claudemod/modguard_test.go` and `just mod-check` (`docs/reference/hooks-and-state.md`).
 - **Never log secrets or task text**: tokens, task bodies, peer tokens, labels and frames stay out of logs.
 - **Fail closed on drift**: answer/permission checks that no longer match Claude Code's dialogs answer 409 and type nothing; re-record fixtures and update parsers together.
@@ -181,8 +181,8 @@ Read the doc for the area you are changing before editing it.
 Reference docs cite sections by their old CLAUDE.md heading (e.g. see "Claude mod"); headings are unchanged, so find the file by heading:
 
 - [modes-and-architecture.md](docs/reference/modes-and-architecture.md): Modes, Architecture
-- [hooks-and-state.md](docs/reference/hooks-and-state.md): Hook ingestion, Claude mod, Background tasks, Context meter and pi spend
-- [fleet-runs.md](docs/reference/fleet-runs.md): Project and role (Fleet) (incl. Needs-you, Attention, Crew-layer pane join, Dispatcher ↔ crew join, Fleet nesting)
+- [hooks-and-state.md](docs/reference/hooks-and-state.md): Hook ingestion (incl. Dismissed dialogs), Claude mod, Background tasks, Context meter and pi spend
+- [fleet-runs.md](docs/reference/fleet-runs.md): Project and role (Fleet) (incl. Ghost hook runs, Foreign panes, Point-of-use server check, Needs-you, Attention, Crew-layer pane join, Dispatcher ↔ crew join, Fleet nesting)
 - [crew-feed.md](docs/reference/crew-feed.md): Crew activity feed
 - [terminal-and-mobile.md](docs/reference/terminal-and-mobile.md): Mobile Features, WebSocket Protocol, Stream liveness
 - [navigation.md](docs/reference/navigation.md): Navigation
