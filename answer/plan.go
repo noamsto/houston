@@ -16,6 +16,7 @@ const maxOptions = 8
 // Question is one question of an AskUserQuestion call.
 type Question struct {
 	Text        string
+	Header      string
 	MultiSelect bool
 	Options     []Option
 }
@@ -41,6 +42,7 @@ func ParseQuestions(raw json.RawMessage) ([]Question, error) {
 	var in struct {
 		Questions []struct {
 			Question    string `json:"question"`
+			Header      string `json:"header"`
 			MultiSelect bool   `json:"multiSelect"`
 			Options     []struct {
 				Label       string `json:"label"`
@@ -61,9 +63,42 @@ func ParseQuestions(raw json.RawMessage) ([]Question, error) {
 		for _, o := range q.Options {
 			opts = append(opts, Option(o))
 		}
-		qs = append(qs, Question{Text: q.Question, MultiSelect: q.MultiSelect, Options: opts})
+		qs = append(qs, Question{Text: q.Question, Header: q.Header, MultiSelect: q.MultiSelect, Options: opts})
 	}
 	return qs, nil
+}
+
+// Tabbed reports whether Claude shows qs as a tabbed dialog (a tab bar, a
+// tab per question and a review) rather than a plain one-question dialog.
+func Tabbed(qs []Question) bool {
+	return len(qs) > 1 || slices.ContainsFunc(qs, func(q Question) bool { return q.MultiSelect })
+}
+
+// Repeats reports whether two questions render alike: equal normalized text
+// and option rows. The pane identifies a tab only by what it shows, so such
+// tabs cannot be told apart.
+func Repeats(qs []Question) bool {
+	for i := range qs {
+		for _, p := range qs[:i] {
+			if Normalize(p.Text) == Normalize(qs[i].Text) && slices.Equal(optionRows(p), optionRows(qs[i])) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// optionRows is each option's row as its tab spells it, normalized: the
+// label followed by its description, or the label alone in the preview layout.
+func optionRows(q Question) []string {
+	rows := make([]string, len(q.Options))
+	for k, o := range q.Options {
+		rows[k] = Normalize(o.Label)
+		if !q.PreviewLayout() {
+			rows[k] += Normalize(o.Description)
+		}
+	}
+	return rows
 }
 
 // Answer answers one question: 0-based option indexes and/or Other text.
@@ -120,7 +155,7 @@ func Plan(qs []Question, as []Answer) ([]Step, error) {
 			return nil, fmt.Errorf("question %d: %w", i, err)
 		}
 	}
-	tabbed := len(qs) > 1 || slices.ContainsFunc(qs, func(q Question) bool { return q.MultiSelect })
+	tabbed := Tabbed(qs)
 
 	var steps []Step
 	expect := func(c Check) { steps = append(steps, Step{Expect: c}) }

@@ -176,7 +176,9 @@ func TestParseQuestions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []Question{colorTab, toppings}; !reflect.DeepEqual(got, want) {
+	color, tops := colorTab, toppings
+	color.Header, tops.Header = "Color", "Toppings"
+	if want := []Question{color, tops}; !reflect.DeepEqual(got, want) {
 		t.Errorf("ParseQuestions = %+v, want %+v", got, want)
 	}
 	got, err = ParseQuestions(json.RawMessage(`{"questions":[{"question":"Pick a size?","multiSelect":false,

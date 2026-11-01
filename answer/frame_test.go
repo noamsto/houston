@@ -3,6 +3,7 @@ package answer
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -174,6 +175,303 @@ func TestQuestionChecks(t *testing.T) {
 				t.Errorf("check(%s) = %v, want %v", tt.fixture, got, tt.want)
 			}
 		})
+	}
+}
+
+// The 2.1.310 calls: three questions (single, multi, preview) and two (single,
+// multi).
+var (
+	size3 = Question{Text: "Pick a size?", Options: previews(opts("Small", "Compact", "Large", "Roomy"))}
+	m3    = []Question{colorTab, toppings, size3}
+	v2    = []Question{colorTab, toppings}
+)
+
+const longTeal = "a fairly long custom colour answer that keeps going well past the edge of this narrow pane"
+
+func TestReadView(t *testing.T) {
+	tests := []struct {
+		fixture string
+		qs      []Question
+		want    View
+		other   string // the normalized visible Other text, when the row checks it
+	}{
+		{"2.1.310/m3-q1", m3, View{Step: 0, Cursor: 1}, ""},
+		{"2.1.310/m3-q1-back-left", m3, View{Step: 0, Cursor: 1, Options: []int{1}}, ""},
+		{"2.1.310/m3-q1-back-btab", m3, View{Step: 0, Cursor: 1, Options: []int{0}}, ""},
+		{"2.1.310/m3-q2-cheese-basil", m3, View{Step: 1, Cursor: 1, Options: []int{0, 2}}, ""},
+		{"2.1.310/m3-q2-other-typed", m3, View{Step: 1, Cursor: 4, Options: []int{0, 2}, Text: "extra pepper"}, "extrapepper"},
+		{"2.1.310/m3-q2-other-next", m3, View{Step: 1, Cursor: 0, Options: []int{0, 2}, Text: "extra pepper"}, "extrapepper"},
+		{"2.1.310/m3-q3", m3, View{Step: 2, Cursor: 1}, ""},
+		{"2.1.310/m3-q3-large", m3, View{Step: 2, Cursor: 2}, ""},
+		{"2.1.310/m3-q3-back-from-review", m3, View{Step: 2, Cursor: 1, Options: []int{1}}, ""},
+		{"2.1.310/m3-q1-back-other-answered", m3, View{Step: 0, Cursor: 1, Text: "teal"}, "teal"},
+		{"2.1.310/m3-q1-back-blue2", m3, View{Step: 0, Cursor: 1, Options: []int{1}}, "navy"},
+		{"2.1.310/m3-review", m3, View{Step: 3, Cursor: 1, Review: []string{"Red", "Cheese, Basil, extra pepper", "Large"}}, ""},
+		{"2.1.310/v3-review-cancel", v2, View{Step: 2, Cursor: 2, Review: []string{"Red", "Olives"}}, ""},
+		{"2.1.310/v2-q1-back-long", v2, View{Step: 0, Cursor: 1, Text: longTeal}, Normalize(longTeal)},
+		{"2.1.310/plain-q", []Question{colorPlain}, View{Step: 0, Cursor: 1}, ""},
+		{"2.1.310/plain-other-typed", []Question{colorPlain}, View{Step: 0, Cursor: 4}, "darkteal"},
+		{"2.1.310/smulti-review", []Question{toppings}, View{Step: 1, Cursor: 1, Review: []string{"Olives, ham"}}, ""},
+		{"2.1.310/prev-q-large", []Question{size3}, View{Step: 0, Cursor: 2}, ""},
+		{"2.1.310-normal/q1", v2, View{Step: 0, Cursor: 1}, ""},
+		{"2.1.310-normal/q1-other-typed", v2, View{Step: 0, Cursor: 3}, "teal"},
+		{"2.1.310-normal/q1-back", v2, View{Step: 0, Cursor: 1, Text: "teal"}, "teal"},
+		{"2.1.310-normal/review", v2, View{Step: 2, Cursor: 1, Review: []string{"navy", "ham"}}, ""},
+		{"mfirst-review", []Question{toppings, colorTab}, View{Step: 2, Cursor: 1, Review: []string{
+			"Olives, 3 anchovies and a very long free text answer that should wrap inside the field at sixty columns",
+			"1 shade darker",
+		}}, ""},
+		{"mfirst-q1-next", []Question{toppings, colorTab}, View{Step: 0, Cursor: 0, Options: []int{1},
+			Text: "3 anchovies and a very long free text answer that should wrap inside the field at sixty columns"}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.fixture, func(t *testing.T) {
+			got, ok := ReadView(tt.qs, fixture(t, tt.fixture), fixtureWidth)
+			if !ok {
+				t.Fatal("ReadView refused")
+			}
+			if got.Step != tt.want.Step || got.Cursor != tt.want.Cursor || !slices.Equal(got.Options, tt.want.Options) ||
+				got.Text != tt.want.Text || !slices.Equal(got.Review, tt.want.Review) {
+				t.Errorf("ReadView = %+v, want %+v", got, tt.want)
+			}
+			if tt.other != "" && got.other != tt.other {
+				t.Errorf("other = %q, want %q", got.other, tt.other)
+			}
+		})
+	}
+}
+
+// The unexported fields a step plan works from.
+func TestReadViewOtherRow(t *testing.T) {
+	tests := []struct {
+		fixture   string
+		qs        []Question
+		boxes     []bool
+		lines     int
+		committed bool
+	}{
+		{"2.1.310/v2-q1-back-long", v2, []bool{true, false}, 2, true},
+		{"2.1.310/v2-q1-long-cleared", v2, []bool{true, false}, 1, true},
+		{"2.1.310/m3-q1-other-cleared", m3, []bool{true, true, true}, 1, true},
+		{"2.1.310/m3-q1-back-blue2", m3, []bool{true, true, true}, 1, false},
+		{"2.1.310/v3-q1-wrapped-up1", v2, []bool{true, true}, 2, false},
+		{"2.1.310/m3-q2-cheese-basil", m3, []bool{true, true, false}, 1, false},
+		{"mfirst-q1-other-typed", []Question{toppings, colorTab}, []bool{true, false}, 2, true},
+		{"2.1.310/plain-other-typed", []Question{colorPlain}, nil, 1, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.fixture, func(t *testing.T) {
+			got, ok := ReadView(tt.qs, fixture(t, tt.fixture), fixtureWidth)
+			if !ok {
+				t.Fatal("ReadView refused")
+			}
+			if !slices.Equal(got.boxes, tt.boxes) || got.otherLines != tt.lines || got.committed != tt.committed {
+				t.Errorf("boxes %v lines %d committed %v, want %v %d %v", got.boxes, got.otherLines, got.committed, tt.boxes, tt.lines, tt.committed)
+			}
+		})
+	}
+	// A cleared committed Other keeps its mark and has no text.
+	v, _ := ReadView(m3, fixture(t, "2.1.310/m3-q1-other-cleared"), fixtureWidth)
+	if v.Text != "" || v.other != "" || len(v.Options) != 0 {
+		t.Errorf("m3-q1-other-cleared = %+v, want a committed empty Other", v)
+	}
+}
+
+func TestReadViewRefuses(t *testing.T) {
+	down := fixture(t, "2.1.310/v2-q1-down-other")
+	if _, ok := ReadView(v2, down, fixtureWidth); !ok {
+		t.Fatal("v2-q1-down-other does not read")
+	}
+	vimNormal := strings.Replace(down,
+		"-- INSERT -- · Enter to select · Tab/Arrow keys to navigate\n· ctrl+g to edit in Nvim",
+		"-- NORMAL -- · Enter to select · Tab/Arrow keys to navigate", 1)
+	if vimNormal == down {
+		t.Fatal("footer not rewritten")
+	}
+	tests := []struct {
+		name    string
+		qs      []Question
+		capture string
+	}{
+		{"stale dialog above a permission prompt", []Question{colorPlain}, fixture(t, "stale-negative")},
+		{"scrollback quotes the question above another dialog", []Question{colorPlain}, fixture(t, "scrollback-negative")},
+		{"answered, idle", []Question{colorPlain}, fixture(t, "plain-done")},
+		{"permission prompt", []Question{colorPlain}, fixture(t, "perm-bash")},
+		{"vim normal mode footer", v2, vimNormal},
+		{"plain expected, tabbed shown", []Question{colorTab}, fixture(t, "2.1.310/v2-q1")},
+		{"tabbed expected, plain shown", []Question{colorPlain, toppings}, fixture(t, "2.1.310/plain-q")},
+		{"tab bar counts another number of questions", m3, fixture(t, "2.1.310/v2-q1")},
+		{"second mark", v2, lastReplace(fixture(t, "2.1.310/v2-q1-red-committed"), "3. teal", "3. teal ✔")},
+		{"label is a prefix of the row", []Question{colorPlain}, strings.Replace(fixture(t, "plain-q"), "❯ 1. Red\n", "❯ 1. Red-team the prod DB\n", 1)},
+		{"two cursors", v2, lastReplace(fixture(t, "2.1.310/v2-q1"), "  2. Blue", "❯ 2. Blue")},
+		{"no cursor", v2, lastReplace(fixture(t, "2.1.310/v2-q1"), "❯ 1. Red", "  1. Red")},
+		{"review answer missing", v2, lastReplace(fixture(t, "2.1.310/v2-review"), "   → Olives\n", "")},
+		{"review with an unticked box", v2, lastReplace(fixture(t, "2.1.310/v2-review"), "☒ Toppings", "☐ Toppings")},
+		{"review choices without a cursor", v2, lastReplace(fixture(t, "2.1.310/v2-review"), "❯ 1. Submit", "  1. Submit")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if v, ok := ReadView(tt.qs, tt.capture, fixtureWidth); ok {
+				t.Errorf("ReadView = %+v, want a refusal", v)
+			}
+		})
+	}
+}
+
+// TestReadViewVimFooter covers the footer vim editor mode shows while the
+// Other field has focus: "-- INSERT --" in place of "Esc to cancel".
+func TestReadViewVimFooter(t *testing.T) {
+	tests := []struct {
+		fixture string
+		qs      []Question
+		cursor  int
+		options []int
+	}{
+		{"2.1.310/repro-other-q1", v2, 3, nil},
+		{"2.1.310/plain-other-cursor", []Question{colorPlain}, 4, nil},
+		{"2.1.310/m3-q2-other-cursor", m3, 4, []int{0, 2}},
+		{"2.1.310/plain-other-typed", []Question{colorPlain}, 4, nil},
+	}
+	for _, tt := range tests {
+		v, ok := ReadView(tt.qs, fixture(t, tt.fixture), fixtureWidth)
+		if !ok || v.Cursor != tt.cursor || !slices.Equal(v.Options, tt.options) {
+			t.Errorf("ReadView(%s) = %+v, %v; want cursor %d options %v", tt.fixture, v, ok, tt.cursor, tt.options)
+		}
+	}
+}
+
+func TestFooterShapes(t *testing.T) {
+	tests := []struct {
+		footer string
+		want   bool
+	}{
+		{"Enter to select · Tab/Arrow keys to navigate · Esc to cancel", true},
+		{"Enter to select · ↑/↓ to navigate · n to add notes · Tab to switch questions · Esc to cancel", true},
+		{"Enter to select · ↑/↓ to navigate · ctrl+g to edit in Vim · Esc to cancel", true},
+		{"-- INSERT -- · Enter to select · Tab/Arrow keys to navigate · ctrl+g to edit in Nvim", true},
+		{"-- INSERT -- · Enter to select · ↑/↓ to navigate", true},
+		{"-- INSERT -- · Enter to select · Tab/Arrow keys to navigate · Esc to cancel", false},
+		{"-- NORMAL -- · Enter to select · Tab/Arrow keys to navigate", false},
+		{"Enter to select · Tab/Arrow keys to navigate", false},
+		{"Enter to select · Tab/Arrow keys to navigate · ctrl+g to edit in · Esc to cancel", false},
+		{"Enter to select · Tab/Arrow keys to navigate · ctrl+g to edit in A · B · Esc to cancel", false},
+		{"Enter to select · Tab to switch questions · ↑/↓ to navigate · Esc to cancel", false},
+		{"Enter to select · ↑/↓ to navigate · Tab to switch questions · n to add notes · Esc to cancel", false},
+	}
+	for _, tt := range tests {
+		if got := isFooter(Normalize(tt.footer)); got != tt.want {
+			t.Errorf("isFooter(%q) = %v, want %v", tt.footer, got, tt.want)
+		}
+	}
+}
+
+// fixtureQuestions returns the call behind a question fixture, or nil for a
+// frame that shows no question tab or review.
+func fixtureQuestions(t *testing.T, dir, base string) []Question {
+	t.Helper()
+	recent := strings.HasPrefix(dir, "2.1.310")
+	switch {
+	case dir == "2.1.310-normal":
+		return v2
+	case base == "plain-done", base == "stale-negative", base == "scrollback-negative", strings.HasPrefix(base, "perm-"):
+		return nil
+	case strings.HasPrefix(base, "m3-"):
+		return m3
+	case strings.HasPrefix(base, "v2-"), strings.HasPrefix(base, "v3-"), strings.HasPrefix(base, "repro-"), strings.HasPrefix(base, "tab-"):
+		return v2
+	case strings.HasPrefix(base, "plain-"):
+		return []Question{colorPlain}
+	case strings.HasPrefix(base, "smulti-"):
+		return []Question{toppings}
+	case base == "prev-q-wrap":
+		return []Question{deploy}
+	case strings.HasPrefix(base, "prev-q") && recent:
+		return []Question{size3}
+	case strings.HasPrefix(base, "prev-q"):
+		return []Question{layout}
+	case strings.HasPrefix(base, "prevtab-"):
+		return []Question{size, speed}
+	case strings.HasPrefix(base, "mfirst-"):
+		return []Question{toppings, colorTab}
+	case strings.HasPrefix(base, "wrap-"):
+		return []Question{notes, toppings}
+	case base == "md-q":
+		return []Question{race}
+	}
+	t.Fatalf("no questions known for %s/%s", dir, base)
+	return nil
+}
+
+// Every question tab and review in every fixture set reads for its call, and
+// the view it reads passes viewIs on its own frame only.
+func TestReadViewFixtures(t *testing.T) {
+	for _, dir := range []string{"", "2.1.299", "2.1.299-named", "2.1.310", "2.1.310-normal"} {
+		for _, name := range fixtureNames(t, dir) {
+			qs := fixtureQuestions(t, dir, filepath.Base(name))
+			capture := fixture(t, name)
+			v, ok := ReadView(qs, capture, fixtureWidth)
+			if qs == nil {
+				if ok {
+					t.Errorf("%s: ReadView read a question", name)
+				}
+				continue
+			}
+			if !ok {
+				t.Errorf("%s: ReadView refused", name)
+				continue
+			}
+			if !viewIs(qs, v)(capture, fixtureWidth) {
+				t.Errorf("%s: viewIs fails on its own frame", name)
+			}
+			moved := v
+			moved.Cursor = (v.Cursor + 1) % 3
+			if viewIs(qs, moved)(capture, fixtureWidth) {
+				t.Errorf("%s: viewIs passes with another cursor", name)
+			}
+		}
+	}
+}
+
+func TestViewIsIgnoresOtherLines(t *testing.T) {
+	v, ok := ReadView(v2, fixture(t, "2.1.310/v3-q1-wrapped-up2"), fixtureWidth)
+	if !ok {
+		t.Fatal("v3-q1-wrapped-up2 does not read")
+	}
+	v.otherLines++
+	if !viewIs(v2, v)(fixture(t, "2.1.310/v3-q1-wrapped-up2"), fixtureWidth) {
+		t.Error("viewIs compares the Other line count")
+	}
+	v.other = "teal"
+	if viewIs(v2, v)(fixture(t, "2.1.310/v3-q1-wrapped-up2"), fixtureWidth) {
+		t.Error("viewIs ignores the Other text")
+	}
+}
+
+func TestTabbedRepeats(t *testing.T) {
+	if Tabbed([]Question{colorPlain}) || !Tabbed([]Question{toppings}) || !Tabbed(v2) {
+		t.Error("Tabbed")
+	}
+	reworded := colorTab
+	reworded.Text = "Which  color do you\nprefer?"
+	described := colorTab
+	described.Options = opts("Red", "Hot", "Blue", "Cool")
+	previewed := size3
+	previewed.Options = previews(opts("Small", "Tiny", "Large", "Huge"))
+	tests := []struct {
+		name string
+		qs   []Question
+		want bool
+	}{
+		{"distinct", m3, false},
+		{"same text and rows after normalizing", []Question{colorTab, toppings, reworded}, true},
+		{"another description", []Question{colorTab, described}, false},
+		{"preview rows ignore descriptions", []Question{size3, previewed}, true},
+		{"one question", []Question{colorTab}, false},
+	}
+	for _, tt := range tests {
+		if got := Repeats(tt.qs); got != tt.want {
+			t.Errorf("Repeats(%s) = %v, want %v", tt.name, got, tt.want)
+		}
 	}
 }
 
