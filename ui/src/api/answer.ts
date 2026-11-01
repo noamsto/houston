@@ -1,9 +1,3 @@
-export interface QuestionAnswer {
-  question: number
-  options: number[]
-  text?: string
-}
-
 export type AnswerResult =
   | { ok: true }
   // The pane no longer shows the prompt that was answered. `partial`: some keys
@@ -120,10 +114,6 @@ export async function readQuestionState(runId: string, toolCallId: string): Prom
   if (res.status === 404) return null
   if (!res.ok) throw new Error(`readQuestionState: ${res.status} ${await res.text()}`)
   return (await res.json()) as QuestionState
-}
-
-export function answerQuestion(runId: string, toolCallId: string, answers: QuestionAnswer[]): Promise<AnswerResult> {
-  return post(runId, { kind: 'question', toolCallId, answers })
 }
 
 export function answerChoice(runId: string, ordinal: number, frame: string): Promise<AnswerResult> {

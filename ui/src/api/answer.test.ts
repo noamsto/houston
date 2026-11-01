@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   answerBack,
   answerChoice,
-  answerQuestion,
   answerStep,
   answerSubmit,
   fetchPrompt,
@@ -32,22 +31,14 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-describe('answerQuestion', () => {
-  it('POSTs the question body to /api/runs/:id/answer', async () => {
-    const answers = [{ question: 0, options: [1] }, { question: 1, options: [], text: 'x' }]
-    expect(await answerQuestion('a/b', 't1', answers)).toEqual({ ok: true })
+describe('answerChoice', () => {
+  it('POSTs the ordinal and frame to /api/runs/:id/answer', async () => {
+    expect(await answerChoice('a/b', 2, 'ab12')).toEqual({ ok: true })
     const { url, init } = lastRequest()
     expect(url).toBe('/api/runs/a%2Fb/answer')
     expect(init.method).toBe('POST')
     expect(init.headers).toEqual({ 'Content-Type': 'application/json' })
-    expect(JSON.parse(String(init.body))).toEqual({ kind: 'question', toolCallId: 't1', answers })
-  })
-})
-
-describe('answerChoice', () => {
-  it('POSTs the ordinal and frame', async () => {
-    expect(await answerChoice('r1', 2, 'ab12')).toEqual({ ok: true })
-    expect(JSON.parse(String(lastRequest().init.body))).toEqual({ kind: 'choice', ordinal: 2, frame: 'ab12' })
+    expect(JSON.parse(String(init.body))).toEqual({ kind: 'choice', ordinal: 2, frame: 'ab12' })
   })
 })
 

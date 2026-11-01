@@ -1,4 +1,4 @@
-import type { QuestionAnswer, StepAnswer } from '../api/answer'
+import type { StepAnswer } from '../api/answer'
 
 /** One question's staged answer; `options` holds ascending 0-based indexes. */
 export interface Stage {
@@ -37,20 +37,8 @@ export function isStageComplete(s: Stage): boolean {
   return s.options.length > 0 || hasText(s)
 }
 
-export function isComplete(stages: Stage[]): boolean {
-  return stages.length > 0 && stages.every(isStageComplete)
-}
-
 export function toAnswer(s: Stage): StepAnswer {
   const answer: StepAnswer = { options: s.options }
   if (hasText(s)) answer.text = s.text.trim()
   return answer
-}
-
-export function toWire(stages: Stage[]): QuestionAnswer[] {
-  return stages.map((s, question) => {
-    const answer: QuestionAnswer = { question, options: s.options }
-    if (hasText(s)) answer.text = s.text.trim()
-    return answer
-  })
 }

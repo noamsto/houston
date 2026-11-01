@@ -1,14 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
   emptyStage,
-  isComplete,
   isStageComplete,
   setText,
   stageFromSelection,
   toAnswer,
   toggleOption,
   toggleOther,
-  toWire,
 } from './questionStage'
 
 describe('single-select staging', () => {
@@ -40,44 +38,6 @@ describe('multi-select staging', () => {
     const s = toggleOther(toggleOption(emptyStage(), 1, true), true)
     expect(s).toEqual({ options: [1], otherOn: true, text: '' })
     expect(toggleOther(s, true).otherOn).toBe(false)
-  })
-})
-
-describe('isComplete', () => {
-  it('needs every question answered', () => {
-    expect(isComplete([])).toBe(false)
-    expect(isComplete([toggleOption(emptyStage(), 0, false), emptyStage()])).toBe(false)
-    expect(isComplete([toggleOption(emptyStage(), 0, false), toggleOption(emptyStage(), 1, true)])).toBe(true)
-  })
-
-  it('Other needs non-blank text', () => {
-    const on = toggleOther(emptyStage(), false)
-    expect(isComplete([on])).toBe(false)
-    expect(isComplete([setText(on, '   ')])).toBe(false)
-    expect(isComplete([setText(on, 'x')])).toBe(true)
-  })
-
-  it('a multi-select with an option and a blank Other is incomplete', () => {
-    expect(isComplete([toggleOther(toggleOption(emptyStage(), 0, true), true)])).toBe(false)
-  })
-
-  it('a multi-select accepts options and Other together', () => {
-    expect(isComplete([setText(toggleOther(toggleOption(emptyStage(), 0, true), true), 'x')])).toBe(true)
-  })
-})
-
-describe('toWire', () => {
-  it('numbers the questions and trims the Other text', () => {
-    const other = setText(toggleOther(toggleOption(emptyStage(), 1, true), true), '  mine ')
-    expect(toWire([toggleOption(emptyStage(), 0, false), other])).toEqual([
-      { question: 0, options: [0] },
-      { question: 1, options: [1], text: 'mine' },
-    ])
-  })
-
-  it('omits text when Other is off, even if text remains', () => {
-    const s = toggleOption(setText(toggleOther(emptyStage(), false), 'stale'), 0, false)
-    expect(toWire([s])).toEqual([{ question: 0, options: [0] }])
   })
 })
 
