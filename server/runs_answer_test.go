@@ -454,6 +454,20 @@ func TestRunAnswerStepOtherLands(t *testing.T) {
 		wantKeys(t, panes, "Down", "Down", "Down", "text:extra pepper", "Down", "Enter")
 	})
 
+	// No recorded Next-row frame ticks exactly Cheese and Basil, so the step
+	// stalls after the Downs; the toggle check passing on the real frame is
+	// what lets the keys past "1 3" go out.
+	t.Run("multi toggles from a fresh tab", func(t *testing.T) {
+		panes := &fakeRunPanes{}
+		screen(t, panes, "2.1.310/m3-q2-after-red",
+			[3]string{"2.1.310/m3-q2-after-red", "1 3", "2.1.310/m3-q2-cheese-basil"},
+		)
+		s, _ := newAnswerServer(t, panes, "claude")
+
+		wantPartial(t, postAnswer(t, s, stepBody(m3Call, 1, answerEntry{Options: []int{0, 2}})), http.StatusConflict)
+		wantKeys(t, panes, "1", "3", "Down", "Down", "Down", "Down")
+	})
+
 	t.Run("plain", func(t *testing.T) {
 		panes := &fakeRunPanes{}
 		plainOtherScreen(t, panes)
@@ -865,6 +879,8 @@ func TestRunAnswerRejectsBadBodies(t *testing.T) {
 		{"escape in text", color(answerEntry{Text: "a\x1b[Ab"})},
 		{"tab in text", color(answerEntry{Text: "a\tb"})},
 		{"commit mark in text", color(answerEntry{Text: "teal ✔"})},
+		{"single placeholder text", color(answerEntry{Text: " Type  something. "})},
+		{"multi placeholder text", toppings(answerEntry{Options: []int{0}, Text: "Type something"})},
 		{"commit mark in multi text", toppings(answerEntry{Options: []int{0}, Text: "✔"})},
 		{"text too long", color(answerEntry{Text: strings.Repeat("א", maxAnswerText+1)})},
 		{"invalid utf-8", `{"kind":"step","toolCallId":"` + tabbedCall + `","index":0,"answer":{"text":"a` + "\xff" + `"}}`},
@@ -890,7 +906,7 @@ func TestRunAnswerRejectsBadBodies(t *testing.T) {
 			if rec.Code != http.StatusBadRequest {
 				t.Fatalf("status %d, want 400 (%q)", rec.Code, rec.Body.String())
 			}
-			for _, quoted := range []string{"Teal", "teal", "Red", "Olives", "א"} {
+			for _, quoted := range []string{"Teal", "teal", "Red", "Olives", "א", "something"} {
 				if strings.Contains(rec.Body.String(), quoted) {
 					t.Errorf("refusal %q quotes the client's text", rec.Body.String())
 				}

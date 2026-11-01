@@ -403,6 +403,9 @@ func toAnswer(q answer.Question, e answerEntry) (answer.Answer, string) {
 	if strings.ContainsRune(text, '✔') {
 		return answer.Answer{}, "text has the commit mark"
 	}
+	if answer.IsOtherPlaceholder(text) {
+		return answer.Answer{}, "text reads as the Other placeholder"
+	}
 	hasText := text != ""
 	if q.MultiSelect {
 		if len(e.Options) == 0 && !hasText {

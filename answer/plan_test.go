@@ -40,6 +40,8 @@ func TestValidate(t *testing.T) {
 		{"newline in text", colorPlain, Answer{Text: "a\nb"}},
 		{"escape in text", toppings, Answer{Text: "a\x1b[A"}},
 		{"commit mark in text", toppings, Answer{Text: "ham ✔"}},
+		{"single placeholder text", colorPlain, Answer{Text: "Type  something."}},
+		{"multi placeholder text", toppings, Answer{Options: []int{0}, Text: "Type something"}},
 		{"text on a preview question", layout, Answer{Text: "Masonry"}},
 	}
 	for _, tt := range tests {
@@ -209,6 +211,13 @@ func TestPlanSteps(t *testing.T) {
 			plan:   step(1, Answer{Options: []int{2}}),
 			keys:   [][]string{{"1"}, rep("Down", 4), {"Enter"}, {}},
 			frames: []string{"m3-q2-reenter-toggled", "", "", ""},
+		},
+		{
+			name:   "multi toggles from a fresh tab",
+			qs:     m3,
+			plan:   step(1, Answer{Options: []int{0, 2}}),
+			keys:   [][]string{{"1", "3"}, rep("Down", 4), {"Enter"}, {}},
+			frames: []string{"m3-q2-after-red", "m3-q2-cheese-basil", "", ""},
 		},
 		{
 			name:   "multi Other",

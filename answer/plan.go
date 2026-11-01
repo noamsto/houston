@@ -153,7 +153,7 @@ func (p *plan) send(keys ...Key) {
 
 // startPlan opens every plan: the pane must show exactly v, the view the plan
 // is built from. Up then returns the cursor to the first row (Submit on the
-// review) from anywhere (finding 9), checked with the view otherwise
+// review) from anywhere (testdata/2.1.310/v3-q2-up4), checked with the view otherwise
 // unchanged, and startPlan returns that view.
 func startPlan(qs []Question, v View) (*plan, View) {
 	p := &plan{qs: qs}
@@ -264,7 +264,7 @@ func PlanStep(qs []Question, index int, a Answer, v View) ([]Step, error) {
 
 // singleOther types text into a single-select tab's Other field from row 1
 // of v. It reaches the field with Down, never the Other digit, which commits
-// any text the field still holds (finding 5), and clears that text first. A
+// any text the field still holds, and clears that text first. A
 // committed Other keeps its commit mark through clearing and typing.
 func (p *plan) singleOther(v View, text string) {
 	n := len(p.qs[v.Step].Options)
@@ -284,8 +284,7 @@ func (p *plan) singleOther(v View, text string) {
 
 // clearOther empties the focused Other field when v shows it holding text.
 // C-u clears one visual line, the focused field can wrap to one line more
-// than v shows (finding 9), and extra presses on an empty field change
-// nothing (finding 6).
+// than v shows, and extra presses on an empty field change nothing.
 func (p *plan) clearOther(v View, want *View) {
 	if v.other == "" {
 		return
@@ -402,6 +401,9 @@ func validate(q Question, a Answer) error {
 	}
 	if a.Text != "" && (Normalize(a.Text) == "" || strings.ContainsFunc(a.Text, unicode.IsControl)) {
 		return errors.New("text must be non-blank with no control characters")
+	}
+	if IsOtherPlaceholder(a.Text) {
+		return errors.New("text may not read as the Other placeholder")
 	}
 	if strings.Contains(a.Text, commitMark) {
 		return errors.New("text may not contain the commit mark ✔")

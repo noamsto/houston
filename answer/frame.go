@@ -18,6 +18,20 @@ import (
 
 const cursorMark = "❯"
 
+// The Other row's empty field, normalized, on a single-select and a
+// multi-select. The pane cannot tell typed text equal to one from no text.
+const (
+	placeholderSingle = "Typesomething."
+	placeholderMulti  = "Typesomething"
+)
+
+// IsOtherPlaceholder reports whether text reads as an Other field's
+// placeholder, which the pane shows for an empty field.
+func IsOtherPlaceholder(text string) bool {
+	norm := Normalize(text)
+	return norm == placeholderSingle || norm == placeholderMulti
+}
+
 // dialogRule stands for a dialog's own rule among dialogLines' normalized
 // lines. Normalize deletes every space, so no capture line can spell it.
 const dialogRule = "── dialog rule ──"
@@ -474,9 +488,9 @@ func (s questionSpec) readOther(lines []dialogLine, marked bool, v *View) (strin
 		parts[j] = p
 	}
 	text := strings.Join(slices.DeleteFunc(parts, func(p string) bool { return p == "" }), " ")
-	placeholder := "Typesomething."
+	placeholder := placeholderSingle
 	if s.multi {
-		placeholder = "Typesomething"
+		placeholder = placeholderMulti
 	}
 	switch norm := Normalize(text); norm {
 	case "":
