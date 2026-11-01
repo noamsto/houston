@@ -1025,7 +1025,7 @@ button.chat-divider::after { content: ''; position: absolute; left: -6px; right:
 .chat-question-wizard-review-q { color: var(--text-faint); font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; }
 .chat-question-wizard-review-a { color: var(--text-strong); font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
 .chat-question-wizard-nav {
-  position: sticky; bottom: 0; display: flex; gap: 8px; padding-top: 4px; background: var(--bg-raised);
+  display: flex; gap: 8px; padding-top: 4px;
 }
 .chat-question-wizard-back,
 .chat-question-wizard-next,
