@@ -747,12 +747,18 @@ func readReview(qs []Question, lines []dialogLine, boxes []bool) (View, bool) {
 }
 
 // viewIs checks that the pane shows exactly v: every field but the Other
-// row's line count, which changes as the field gains or loses focus.
+// row's line count, which changes as the field gains or loses focus. Text and
+// review answers compare normalized, since a focused field wraps narrower.
 func viewIs(qs []Question, v View) Check {
 	return func(capture string, width int) bool {
 		got, ok := ReadView(qs, capture, width)
-		return ok && got.Step == v.Step && got.Cursor == v.Cursor && slices.Equal(got.Options, v.Options) &&
-			got.Text == v.Text && slices.Equal(got.Review, v.Review) && slices.Equal(got.boxes, v.boxes) &&
-			got.other == v.other && got.committed == v.committed
+		return ok && sameView(got, v)
 	}
+}
+
+func sameView(got, want View) bool {
+	return got.Step == want.Step && got.Cursor == want.Cursor && slices.Equal(got.Options, want.Options) &&
+		Normalize(got.Text) == Normalize(want.Text) &&
+		slices.EqualFunc(got.Review, want.Review, func(g, w string) bool { return Normalize(g) == Normalize(w) }) &&
+		slices.Equal(got.boxes, want.boxes) && got.other == want.other && got.committed == want.committed
 }

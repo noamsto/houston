@@ -445,6 +445,29 @@ func TestViewIsIgnoresOtherLines(t *testing.T) {
 	if viewIs(v2, v)(fixture(t, "2.1.310/v3-q1-wrapped-up2"), fixtureWidth) {
 		t.Error("viewIs ignores the Other text")
 	}
+
+	// The focused field wraps narrower, so committed text and review answers
+	// compare normalized.
+	long := fixture(t, "2.1.310/v2-q1-back-long")
+	v = readFixture(t, v2, "2.1.310/v2-q1-back-long")
+	v.Text = strings.Replace(longTeal, " going ", " going\n  ", 1)
+	if !viewIs(v2, v)(long, fixtureWidth) {
+		t.Error("viewIs compares the committed text raw")
+	}
+	v.Text = "teal"
+	if viewIs(v2, v)(long, fixtureWidth) {
+		t.Error("viewIs ignores the committed text")
+	}
+	review := fixture(t, "2.1.310/m3-review")
+	v = readFixture(t, m3, "2.1.310/m3-review")
+	v.Review = []string{"Red", "Cheese,Basil, extra  pepper", "Large"}
+	if !viewIs(m3, v)(review, fixtureWidth) {
+		t.Error("viewIs compares review answers raw")
+	}
+	v.Review = []string{"Blue", "Cheese, Basil, extra pepper", "Large"}
+	if viewIs(m3, v)(review, fixtureWidth) {
+		t.Error("viewIs ignores review answers")
+	}
 }
 
 func TestTabbedRepeats(t *testing.T) {

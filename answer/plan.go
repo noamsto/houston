@@ -131,9 +131,252 @@ type Step struct {
 var (
 	keyDown  = Key{Special: "Down"}
 	keyEnter = Key{Special: "Enter"}
+	keyUp    = Key{Special: "Up"}
+	keyLeft  = Key{Special: "Left"}
+	keyClear = Key{Special: "C-u"}
 )
 
 func digit(k int) Key { return Key{Special: strconv.Itoa(k)} }
+
+// plan accumulates steps: each Expect, then the keys sent once it passes.
+type plan struct {
+	qs    []Question
+	steps []Step
+}
+
+func (p *plan) expect(c Check) { p.steps = append(p.steps, Step{Expect: c}) }
+
+func (p *plan) send(keys ...Key) {
+	last := &p.steps[len(p.steps)-1]
+	last.Keys = append(last.Keys, keys...)
+}
+
+// startPlan opens every plan: the pane must show exactly v, the view the plan
+// is built from. Up then returns the cursor to the first row (Submit on the
+// review) from anywhere (finding 9), checked with the view otherwise
+// unchanged, and startPlan returns that view.
+func startPlan(qs []Question, v View) (*plan, View) {
+	p := &plan{qs: qs}
+	p.expect(viewIs(qs, v))
+	ups := v.Cursor - 1
+	if v.Step < len(qs) && v.Cursor == 0 {
+		ups = len(qs[v.Step].Options) + 1
+	}
+	v.Cursor = 1
+	if ups > 0 {
+		p.send(slices.Repeat([]Key{keyUp}, ups)...)
+		p.expect(viewIs(qs, v))
+	}
+	return p, v
+}
+
+// tabIs checks the pane shows want after keys were sent on its tab: viewIs,
+// except that a multi-select tab's own tab-bar box may tick or clear as its
+// boxes and Other text change.
+func (p *plan) tabIs(want View) Check {
+	if !p.qs[want.Step].MultiSelect {
+		return viewIs(p.qs, want)
+	}
+	return func(capture string, width int) bool {
+		got, ok := ReadView(p.qs, capture, width)
+		if !ok || got.Step != want.Step || len(got.boxes) != len(want.boxes) {
+			return false
+		}
+		got.boxes = slices.Clone(got.boxes)
+		got.boxes[want.Step] = want.boxes[want.Step]
+		return sameView(got, want)
+	}
+}
+
+// landsOnTab checks the pane shows tab j with the cursor on row 1 and the
+// bar boxes of ticked ticked, whatever the tab holds.
+func landsOnTab(qs []Question, j int, ticked ...int) Check {
+	return func(capture string, width int) bool {
+		got, ok := ReadView(qs, capture, width)
+		if !ok || got.Step != j || got.Cursor != 1 {
+			return false
+		}
+		for _, i := range ticked {
+			if !got.boxes[i] {
+				return false
+			}
+		}
+		return true
+	}
+}
+
+// landsOnReview checks the pane shows the review of qs, whatever it holds.
+func landsOnReview(qs []Question) Check {
+	return func(capture string, width int) bool {
+		got, ok := ReadView(qs, capture, width)
+		return ok && got.Step == len(qs)
+	}
+}
+
+// PlanStep returns the steps that answer tab index of qs with a, starting
+// from v, the view the pane showed. The executor runs them as Plan's: the
+// first Expect must pass on its first capture, else nothing is typed. Only
+// this tab's keys are sent. A tabbed dialog's plan ends with a keyless
+// landing step (the next tab on row 1 with this tab's box ticked, or the
+// review); a plain dialog's last keys submit, with nothing checked after.
+func PlanStep(qs []Question, index int, a Answer, v View) ([]Step, error) {
+	if Repeats(qs) {
+		return nil, errors.New("questions repeat")
+	}
+	if index < 0 || index >= len(qs) {
+		return nil, fmt.Errorf("tab %d out of range", index)
+	}
+	if v.Step != index {
+		return nil, fmt.Errorf("pane shows tab %d, not %d", v.Step, index)
+	}
+	q := qs[index]
+	if err := validate(q, a); err != nil {
+		return nil, err
+	}
+	p, v := startPlan(qs, v)
+	switch {
+	case q.PreviewLayout():
+		// A digit only moves the cursor here; Enter commits.
+		k := a.Options[0] + 1
+		p.send(digit(k))
+		want := v
+		want.Cursor = k
+		p.expect(p.tabIs(want))
+		p.send(keyEnter)
+	case !q.MultiSelect && len(a.Options) == 1:
+		p.send(digit(a.Options[0] + 1))
+	case !q.MultiSelect:
+		p.singleOther(v, a.Text)
+	default:
+		p.multi(v, a)
+	}
+	switch {
+	case !Tabbed(qs):
+	case index == len(qs)-1:
+		p.expect(landsOnReview(qs))
+	default:
+		p.expect(landsOnTab(qs, index+1, index))
+	}
+	return p.steps, nil
+}
+
+// singleOther types text into a single-select tab's Other field from row 1
+// of v. It reaches the field with Down, never the Other digit, which commits
+// any text the field still holds (finding 5), and clears that text first. A
+// committed Other keeps its commit mark through clearing and typing.
+func (p *plan) singleOther(v View, text string) {
+	n := len(p.qs[v.Step].Options)
+	p.send(slices.Repeat([]Key{keyDown}, n)...)
+	want := v
+	want.Cursor = n + 1
+	p.expect(p.tabIs(want))
+	p.clearOther(v, &want)
+	p.send(Key{Text: text})
+	want.other = Normalize(text)
+	if want.committed {
+		want.Text = text
+	}
+	p.expect(p.tabIs(want))
+	p.send(keyEnter)
+}
+
+// clearOther empties the focused Other field when v shows it holding text.
+// C-u clears one visual line, the focused field can wrap to one line more
+// than v shows (finding 9), and extra presses on an empty field change
+// nothing (finding 6).
+func (p *plan) clearOther(v View, want *View) {
+	if v.other == "" {
+		return
+	}
+	p.send(slices.Repeat([]Key{keyClear}, 2*v.otherLines+1)...)
+	want.other, want.Text = "", ""
+	if p.qs[v.Step].MultiSelect {
+		want.committed = false
+	}
+	p.expect(p.tabIs(*want))
+}
+
+// multi sets a multi-select tab to a from row 1 of v: one digit per box to
+// flip (digits leave the cursor in place), then the Other field, then Enter
+// on the Next/Submit row.
+func (p *plan) multi(v View, a Answer) {
+	n := len(p.qs[v.Step].Options)
+	wanted := sortedOptions(a)
+	var toggles []Key
+	for o := range n {
+		if slices.Contains(wanted, o) != slices.Contains(v.Options, o) {
+			toggles = append(toggles, digit(o+1))
+		}
+	}
+	want := v
+	if len(toggles) > 0 {
+		p.send(toggles...)
+		want.Options = wanted
+		p.expect(p.tabIs(want))
+	}
+	if v.other == "" && a.Text == "" {
+		p.send(slices.Repeat([]Key{keyDown}, n+1)...)
+	} else {
+		p.send(slices.Repeat([]Key{keyDown}, n)...)
+		want.Cursor = n + 1
+		p.expect(p.tabIs(want))
+		p.clearOther(v, &want)
+		if a.Text != "" {
+			p.send(Key{Text: a.Text})
+			want.other, want.Text, want.committed = Normalize(a.Text), a.Text, true
+			p.expect(p.tabIs(want))
+		}
+		p.send(keyDown)
+	}
+	want.Cursor = 0
+	want.other, want.Text, want.committed = Normalize(a.Text), a.Text, a.Text != ""
+	p.expect(p.tabIs(want))
+	p.send(keyEnter)
+}
+
+// PlanBack returns the steps that move a tabbed dialog from tab index (or
+// the review, index len(qs)) back one tab, starting from v: Left, then a
+// keyless landing step on tab index-1, row 1.
+func PlanBack(qs []Question, index int, v View) ([]Step, error) {
+	if !Tabbed(qs) {
+		return nil, errors.New("a plain dialog has no tabs")
+	}
+	if Repeats(qs) {
+		return nil, errors.New("questions repeat")
+	}
+	if index < 1 || index > len(qs) {
+		return nil, fmt.Errorf("tab %d has no tab before it", index)
+	}
+	if v.Step != index {
+		return nil, fmt.Errorf("pane shows tab %d, not %d", v.Step, index)
+	}
+	p, _ := startPlan(qs, v)
+	p.send(keyLeft)
+	p.expect(landsOnTab(qs, index-1))
+	return p.steps, nil
+}
+
+// PlanSubmit returns the steps that submit a tabbed dialog from its review,
+// starting from v: the review must show review (normalized), then "1".
+// Nothing is checked after.
+func PlanSubmit(qs []Question, review []string, v View) ([]Step, error) {
+	if !Tabbed(qs) {
+		return nil, errors.New("a plain dialog has no review")
+	}
+	if Repeats(qs) {
+		return nil, errors.New("questions repeat")
+	}
+	if len(review) != len(qs) {
+		return nil, fmt.Errorf("%d review answers for %d questions", len(review), len(qs))
+	}
+	if v.Step != len(qs) {
+		return nil, fmt.Errorf("pane shows tab %d, not the review", v.Step)
+	}
+	v.Review = slices.Clone(review)
+	p, _ := startPlan(qs, v)
+	p.send(digit(1))
+	return p.steps, nil
+}
 
 // Plan returns the steps that answer qs with as, typing what a human would.
 // The executor runs them in order: wait until steps[i].Expect passes on a
@@ -236,6 +479,9 @@ func validate(q Question, a Answer) error {
 	}
 	if a.Text != "" && (Normalize(a.Text) == "" || strings.ContainsFunc(a.Text, unicode.IsControl)) {
 		return errors.New("text must be non-blank with no control characters")
+	}
+	if strings.Contains(a.Text, commitMark) {
+		return errors.New("text may not contain the commit mark ✔")
 	}
 	if q.MultiSelect {
 		if len(a.Options) == 0 && a.Text == "" {
