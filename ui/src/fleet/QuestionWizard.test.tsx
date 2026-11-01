@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QuestionWizard } from './QuestionWizard'
 import type { QuestionState, StateQuestion } from '../api/answer'
 import type { ToolCall } from './chatModel'
@@ -125,6 +125,46 @@ describe('QuestionWizard steps', () => {
   })
 })
 
+describe('QuestionWizard focus', () => {
+  it('keeps focus inside the wizard after Next resolves', async () => {
+    install((b) => ok(b.kind === 'step' ? at(1) : at(0)))
+    const { container } = renderWizard()
+    await screen.findByText('1 of 3')
+    fireEvent.click(screen.getByRole('radio', { name: /Blue/ }))
+    next().focus()
+    fireEvent.click(next())
+    await screen.findByText('2 of 3')
+    await waitFor(() => expect(screen.getByRole('group', { name: 'Which toppings?' }).contains(document.activeElement)).toBe(true))
+    expect(container.contains(document.activeElement)).toBe(true)
+  })
+
+  it('moves focus into the review screen after the last Review', async () => {
+    install((b) => ok(b.kind === 'step' ? review() : at(2)))
+    const { container } = renderWizard()
+    await screen.findByText('3 of 3')
+    fireEvent.click(screen.getByRole('radio', { name: /Small/ }))
+    next().focus()
+    fireEvent.click(next())
+    await screen.findByText('Review your answers')
+    await waitFor(() => expect(screen.getByRole('button', { name: /Color/ })).toBe(document.activeElement))
+    expect(container.contains(document.activeElement)).toBe(true)
+  })
+
+  it('does not take focus from elsewhere on the page', async () => {
+    install((b) => ok(b.kind === 'step' ? at(1) : at(0)))
+    const outside = document.createElement('input')
+    document.body.appendChild(outside)
+    renderWizard()
+    await screen.findByText('1 of 3')
+    fireEvent.click(screen.getByRole('radio', { name: /Blue/ }))
+    outside.focus()
+    fireEvent.click(next())
+    await screen.findByText('2 of 3')
+    expect(document.activeElement).toBe(outside)
+    outside.remove()
+  })
+})
+
 describe('QuestionWizard review', () => {
   it('lists the pane review strings and submits them', async () => {
     const mock = install((b) => (b.kind === 'submit' ? { status: 204 } : ok(review())))
@@ -161,8 +201,37 @@ describe('QuestionWizard review', () => {
     })
     renderWizard()
     fireEvent.click(await screen.findByRole('button', { name: /Color/ }))
-    await screen.findByText('The terminal moved on — nothing was typed')
+    await screen.findByText('Going back from step 3: the terminal moved on — nothing was typed')
     expect(posts(mock, 'back').map((b) => b.index)).toEqual([3, 2])
+    expect(screen.getByRole('link', { name: 'Terminal tab' }).getAttribute('href')).toBe('#/fleet/r1/terminal')
+  })
+
+  it('a partial failure part-way back names the step it was leaving', async () => {
+    const mock = install((b) => {
+      if (b.kind === 'back') return b.index === 3 ? ok(at(2)) : { status: 409, text: '{"partial":true}' }
+      return ok(review())
+    })
+    renderWizard()
+    fireEvent.click(await screen.findByRole('button', { name: /Color/ }))
+    await screen.findByText("Going back from step 3 didn't finish — check the Terminal")
+    expect(posts(mock, 'back').map((b) => b.index)).toEqual([3, 2])
+  })
+
+  it('names the review when the first back fails', async () => {
+    install((b) => (b.kind === 'back' ? { status: 409, text: '{"partial":true}' } : ok(review())))
+    renderWizard()
+    fireEvent.click(await screen.findByRole('button', { name: /Color/ }))
+    await screen.findByText("Going back from the review didn't finish — check the Terminal")
+  })
+
+  it('reads the state once after a back that typed nothing', async () => {
+    const mock = install((b) => (b.kind === 'back' ? { status: 409, text: 'prompt changed' } : ok(review())))
+    renderWizard()
+    const row = await screen.findByRole('button', { name: /Color/ })
+    const before = posts(mock, 'state').length
+    fireEvent.click(row)
+    await screen.findByText('Going back from the review: the terminal moved on — nothing was typed')
+    await waitFor(() => expect(posts(mock, 'state')).toHaveLength(before + 1))
   })
 })
 
@@ -198,9 +267,22 @@ describe('QuestionWizard errors', () => {
     fireEvent.click(next())
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
 
-    expect(screen.getByText('The terminal moved on — nothing was typed')).toBeTruthy()
+    expect(screen.getByText('Step 1: the terminal moved on — nothing was typed')).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Terminal tab' }).getAttribute('href')).toBe('#/fleet/r1/terminal')
     expect(posts(mock, 'state')).toHaveLength(2)
     expect(posts(mock, 'step')).toHaveLength(1)
+  })
+
+  it('a 200 step result without a readable state shows the error, not Sent', async () => {
+    install((b) => (b.kind === 'step' ? { status: 200, text: 'oops', body: undefined } : ok(at(0))))
+    renderWizard()
+    await screen.findByText('1 of 3')
+    fireEvent.click(screen.getByRole('radio', { name: /Red/ }))
+    fireEvent.click(next())
+    await screen.findByText('could not read the terminal state')
+    expect(screen.queryByText('Sent — waiting for Claude')).toBeNull()
+    expect(screen.getByRole('link', { name: 'Terminal tab' })).toBeTruthy()
+    expect(next().disabled).toBe(false)
   })
 
   it('shows another error with the Terminal link and keeps the staging', async () => {

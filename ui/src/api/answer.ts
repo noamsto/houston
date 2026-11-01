@@ -67,7 +67,7 @@ async function send(runId: string, body: unknown): Promise<StepResult> {
     })
     if (res.status === 200) {
       const state = (await res.json().catch(() => undefined)) as QuestionState | undefined
-      return state ? { ok: true, state } : { ok: true }
+      return state ? { ok: true, state } : { error: 'could not read the terminal state' }
     }
     if (res.ok) return { ok: true }
     if (res.status === 401) return { error: 'session expired — reload' }

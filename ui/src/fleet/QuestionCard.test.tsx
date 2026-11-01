@@ -140,7 +140,8 @@ describe('QuestionCard', () => {
     await screen.findByText('Which scope?')
     fireEvent.click(screen.getByRole('radio', { name: /^A/ }))
     fireEvent.click(screen.getByRole('button', { name: 'Send answer' }))
-    await screen.findByText('The terminal moved on — nothing was typed')
+    await screen.findByText('Step 1: the terminal moved on — nothing was typed')
+    expect(screen.getByRole('link', { name: 'Terminal tab' })).toBeTruthy()
   })
 
   it('links to the Terminal tab after an error result', async () => {

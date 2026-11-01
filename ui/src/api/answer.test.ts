@@ -172,6 +172,14 @@ describe('answerStep', () => {
     expect(await answerStep('r1', 't1', 0, { options: [1] })).toEqual({ ok: true })
   })
 
+  it('a 200 whose body is not a state is an error, not a bare ok', async () => {
+    const unreadable = { error: 'could not read the terminal state' }
+    vi.mocked(fetch).mockResolvedValue(respond(200, 'not json'))
+    expect(await answerStep('r1', 't1', 0, { options: [1] })).toEqual(unreadable)
+    vi.mocked(fetch).mockResolvedValue(respond(200, 'null'))
+    expect(await answerBack('r1', 't1', 1)).toEqual(unreadable)
+  })
+
   it('a 409 with {"partial":true} is moved and partial', async () => {
     vi.mocked(fetch).mockResolvedValue(respond(409, '{"partial":true}'))
     expect(await answerStep('r1', 't1', 0, { options: [1] })).toEqual({ moved: true, partial: true })

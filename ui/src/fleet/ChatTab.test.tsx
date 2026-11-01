@@ -1012,7 +1012,8 @@ describe('ChatTab', () => {
         const stateReads = () => answerCalls(fetchMock).filter((c) => c.body.kind === 'state').length
         const before = stateReads()
         fireEvent.click(nextBtn())
-        await screen.findByText('The terminal moved on — nothing was typed')
+        await screen.findByText('Step 1: the terminal moved on — nothing was typed')
+        expect(screen.getByRole('link', { name: 'Terminal tab' }).getAttribute('href')).toBe('#/fleet/r1/terminal')
         await waitFor(() => expect(stateReads()).toBe(before + 1))
         expect(answerCalls(fetchMock).filter((c) => c.body.kind === 'step')).toHaveLength(1)
         expect(nextBtn().disabled).toBe(false)

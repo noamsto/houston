@@ -11,9 +11,12 @@ const POLL_MS = 2000
 
 const squash = (s: string) => s.replace(/\s+/g, '')
 
+// The first control a screen offers: the tabbable pick, or a review row.
+const FOCUS_TARGET = '.chat-question-pick[tabindex="0"]:not(:disabled), .chat-question-wizard-review-row:not(:disabled)'
+
 type Notice =
-  | { kind: 'moved' }
-  // `what` names the request that stopped part-way, e.g. "Step 2".
+  // `what` names the request that was refused or stopped part-way, e.g. "Step 2".
+  | { kind: 'moved'; what: string }
   | { kind: 'partial'; what: string }
   | { kind: 'error'; message: string }
 
@@ -117,7 +120,7 @@ export function QuestionWizard({ runId, call, fallbackQuestions, onLayout }: {
       else setSent(call.status)
       return true
     }
-    if ('moved' in res) setNotice(res.partial ? { kind: 'partial', what } : { kind: 'moved' })
+    if ('moved' in res) setNotice({ kind: res.partial ? 'partial' : 'moved', what })
     else setNotice({ kind: 'error', message: res.error })
     return false
   }
@@ -152,12 +155,17 @@ export function QuestionWizard({ runId, call, fallbackQuestions, onLayout }: {
     const at = stateRef.current
     if (!at) return
     begin()
+    let reread = false
     for (let from = at.count; from > target; from--) {
       const res = await answerBack(runId, call.toolCallId, from)
       if (!alive.current) return
-      if (!settle(res, `Going back from step ${from}`)) break
+      const what = from === at.count ? 'Going back from the review' : `Going back from step ${from + 1}`
+      if (settle(res, what)) continue
+      reread = 'moved' in res && !res.partial
+      break
     }
     finish()
+    if (reread) await read()
   }
 
   const editStage = (i: number, f: (s: Stage) => Stage) => {
@@ -170,6 +178,28 @@ export function QuestionWizard({ runId, call, fallbackQuestions, onLayout }: {
   useEffect(() => {
     if (loaded) onLayout()
   }, [loaded, missing, shape, isSent, notice, onLayout])
+
+  const locked = busy || isSent
+
+  // The pressed button is disabled while its request runs, which drops focus to
+  // <body>. Once the screen has changed and the controls are live again, move
+  // focus into it, unless the user has moved focus elsewhere on the page.
+  const screenKey = !state ? null : !state.tabbed ? 'plain' : state.step >= state.count ? 'review' : `step:${state.step}`
+  const shownKey = useRef<string | null>(null)
+  const refocus = useRef(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (screenKey !== shownKey.current) {
+      refocus.current = shownKey.current !== null && screenKey !== null
+      shownKey.current = screenKey
+    }
+    if (!refocus.current || locked) return
+    refocus.current = false
+    const root = rootRef.current
+    const active = document.activeElement
+    if (!root || (active && active !== document.body && !root.contains(active))) return
+    root.querySelector<HTMLElement>(FOCUS_TARGET)?.focus()
+  }, [screenKey, locked])
 
   const questions: Question[] = state?.questions ?? fallbackQuestions
   if (questions.length === 0) return <FallbackRow call={call} terminalRunId={loaded ? runId : undefined} />
@@ -191,7 +221,11 @@ export function QuestionWizard({ runId, call, fallbackQuestions, onLayout }: {
   const statusLine = (
     <div className="chat-question-status" role="status">
       {isSent && 'Sent — waiting for Claude'}
-      {notice?.kind === 'moved' && 'The terminal moved on — nothing was typed'}
+      {notice?.kind === 'moved' && (
+        <>
+          <span>{notice.what}: the terminal moved on — nothing was typed</span> <TerminalLink runId={runId} />
+        </>
+      )}
       {notice?.kind === 'partial' && (
         <>
           <span>{notice.what} didn't finish — check the Terminal</span>{' '}
@@ -206,13 +240,11 @@ export function QuestionWizard({ runId, call, fallbackQuestions, onLayout }: {
       )}
     </div>
   )
-  const locked = busy || isSent
-
   if (!state.tabbed) {
     const q = questions[0]
     const stage = stages[0] ?? emptyStage()
     return (
-      <>
+      <div className="chat-question-plain" ref={rootRef}>
         <PickerBlock
           q={q}
           stage={stage}
@@ -232,7 +264,7 @@ export function QuestionWizard({ runId, call, fallbackQuestions, onLayout }: {
           </button>
           {statusLine}
         </div>
-      </>
+      </div>
     )
   }
 
@@ -253,7 +285,7 @@ export function QuestionWizard({ runId, call, fallbackQuestions, onLayout }: {
   if (state.step >= state.count) {
     const review = state.review ?? []
     return (
-      <div className="chat-question-wizard">
+      <div className="chat-question-wizard" ref={rootRef}>
         <div className="chat-question-wizard-top">
           <span className="chat-question-wizard-progress">Review your answers</span>
           {chips}
@@ -288,7 +320,7 @@ export function QuestionWizard({ runId, call, fallbackQuestions, onLayout }: {
   const stage = stages[step] ?? emptyStage()
   const last = step === state.count - 1
   return (
-    <div className="chat-question-wizard">
+    <div className="chat-question-wizard" ref={rootRef}>
       <div className="chat-question-wizard-top">
         <span className="chat-question-wizard-progress">{step + 1} of {state.count}</span>
         {chips}
