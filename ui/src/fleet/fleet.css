@@ -1000,7 +1000,6 @@ button.chat-divider::after { content: ''; position: absolute; left: -6px; right:
 .chat-question-send-btn:disabled { opacity: 0.5; cursor: default; }
 .chat-question-status { color: var(--text-dim); font-size: 12px; }
 .chat-question-status:empty { display: none; }
-.chat-question-plain { display: flex; flex-direction: column; gap: 12px; }
 .chat-question-wizard { display: flex; flex-direction: column; gap: 10px; }
 .chat-question-wizard-top { display: flex; flex-direction: column; gap: 6px; }
 .chat-question-wizard-progress {

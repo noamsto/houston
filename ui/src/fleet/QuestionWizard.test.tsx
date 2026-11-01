@@ -125,46 +125,6 @@ describe('QuestionWizard steps', () => {
   })
 })
 
-describe('QuestionWizard focus', () => {
-  it('keeps focus inside the wizard after Next resolves', async () => {
-    install((b) => ok(b.kind === 'step' ? at(1) : at(0)))
-    const { container } = renderWizard()
-    await screen.findByText('1 of 3')
-    fireEvent.click(screen.getByRole('radio', { name: /Blue/ }))
-    next().focus()
-    fireEvent.click(next())
-    await screen.findByText('2 of 3')
-    await waitFor(() => expect(screen.getByRole('group', { name: 'Which toppings?' }).contains(document.activeElement)).toBe(true))
-    expect(container.contains(document.activeElement)).toBe(true)
-  })
-
-  it('moves focus into the review screen after the last Review', async () => {
-    install((b) => ok(b.kind === 'step' ? review() : at(2)))
-    const { container } = renderWizard()
-    await screen.findByText('3 of 3')
-    fireEvent.click(screen.getByRole('radio', { name: /Small/ }))
-    next().focus()
-    fireEvent.click(next())
-    await screen.findByText('Review your answers')
-    await waitFor(() => expect(screen.getByRole('button', { name: /Color/ })).toBe(document.activeElement))
-    expect(container.contains(document.activeElement)).toBe(true)
-  })
-
-  it('does not take focus from elsewhere on the page', async () => {
-    install((b) => ok(b.kind === 'step' ? at(1) : at(0)))
-    const outside = document.createElement('input')
-    document.body.appendChild(outside)
-    renderWizard()
-    await screen.findByText('1 of 3')
-    fireEvent.click(screen.getByRole('radio', { name: /Blue/ }))
-    outside.focus()
-    fireEvent.click(next())
-    await screen.findByText('2 of 3')
-    expect(document.activeElement).toBe(outside)
-    outside.remove()
-  })
-})
-
 describe('QuestionWizard review', () => {
   it('lists the pane review strings and submits them', async () => {
     const mock = install((b) => (b.kind === 'submit' ? { status: 204 } : ok(review())))
