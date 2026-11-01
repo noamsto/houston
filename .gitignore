@@ -11,6 +11,7 @@ tmp/
 # Screenshots
 *.jpeg
 *.png
+!docs/images/*.png
 
 # Claude Code
 .claude/
