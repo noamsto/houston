@@ -15,7 +15,7 @@ var (
 	toppings   = Question{Text: "Which toppings do you want?", MultiSelect: true, Options: opts("Cheese", "Melty", "Olives", "Salty", "Basil", "Fresh")}
 	notes      = Question{
 		Text:    "Which of these deliberately long-winded and verbose option labels should we pick for the release notes?",
-		Options: opts("A very long first option label that keeps going past the edge", "First", "Short", "Second"),
+		Options: opts(notesFirst, "First", "Short", "Second"),
 	}
 	race = Question{Text: "Should `go test` run with **race** on?", Options: opts("Yes `-race`", "Slower", "No", "Faster")}
 	logo = Question{Text: "Which color should the logo be?", Options: opts("Red", "Warm", "Blue", "Cool", "Green", "Natural")}
@@ -31,6 +31,9 @@ var (
 		)),
 	}
 )
+
+// notesFirst is the first option label of notes, which wraps in its tab.
+const notesFirst = "A very long first option label that keeps going past the edge"
 
 // opts pairs up labels and descriptions: label, description, label, ….
 func opts(pairs ...string) []Option {
@@ -111,6 +114,21 @@ func TestNormalize(t *testing.T) {
 	}
 }
 
+// tabAt checks the pane shows tab i of qs untouched, with the cursor on row
+// cursor: nothing committed, ticked or typed.
+func tabAt(qs []Question, i, cursor int) Check {
+	return func(capture string, width int) bool {
+		v, ok := ReadView(qs, capture, width)
+		return ok && v.Step == i && v.Cursor == cursor && len(v.Options) == 0 && v.other == "" && !v.committed
+	}
+}
+
+// reviewOf checks the pane shows the review of qs with these answers and the
+// cursor on Submit.
+func reviewOf(qs []Question, review ...string) Check {
+	return viewIs(qs, View{Step: len(qs), Cursor: 1, Review: review, boxes: slices.Repeat([]bool{true}, len(qs))})
+}
+
 func TestQuestionChecks(t *testing.T) {
 	tabbed := []Question{colorTab, toppings}
 	mfirst := []Question{toppings, colorTab}
@@ -120,49 +138,52 @@ func TestQuestionChecks(t *testing.T) {
 		fixture string
 		want    bool
 	}{
-		{"plain initial", newSpec([]Question{colorPlain}, 0, false).check(tabState{cursor: 1}), "plain-q", true},
-		{"plain initial, ANSI", newSpec([]Question{colorPlain}, 0, false).check(tabState{cursor: 1}), "plain-q@ansi", true},
-		{"scrollback quotes the question above another dialog", newSpec([]Question{colorPlain}, 0, false).check(tabState{cursor: 1}), "scrollback-negative", false},
-		{"the other dialog itself", newSpec([]Question{logo}, 0, false).check(tabState{cursor: 1}), "scrollback-negative", true},
-		{"stale dialog above a permission prompt", newSpec([]Question{colorPlain}, 0, false).check(tabState{cursor: 1}), "stale-negative", false},
-		{"answered, idle", newSpec([]Question{colorPlain}, 0, false).check(tabState{cursor: 1}), "plain-done", false},
-		{"plain expected, tabbed shown", newSpec([]Question{colorTab}, 0, false).check(tabState{cursor: 1}), "tab-q1", false},
-		{"tabbed expected, plain shown", newSpec([]Question{colorPlain, toppings}, 0, true).check(tabState{cursor: 1}), "plain-q", false},
-		{"multi cursor not on row 1", newSpec(tabbed, 1, true).check(tabState{cursor: 1}), "tab-q2-cursor-row2", false},
-		{"multi pre-checked box", newSpec(tabbed, 1, true).check(tabState{cursor: 1}), "tab-q2-olives", false},
-		{"last tab shows Submit", newSpec(tabbed, 1, true).check(tabState{cursor: 1}), "tab-q2", true},
-		{"last tab expected, Next shown", newSpec([]Question{colorTab, toppings}, 1, true).check(tabState{cursor: 1}), "mfirst-q1", false},
-		{"non-last tab shows Next", newSpec(mfirst, 0, true).check(tabState{cursor: 1}), "mfirst-q1", true},
-		{"non-last tab expected, Submit shown", newSpec(mfirst, 0, true).check(tabState{cursor: 1}), "tab-q2", false},
-		{"single multi-select question is tabbed", newSpec([]Question{toppings}, 0, true).check(tabState{cursor: 1}), "smulti-q", true},
-		{"markdown shown verbatim", newSpec([]Question{race}, 0, false).check(tabState{cursor: 1}), "md-q", true},
-		{"wrapped question and label", newSpec([]Question{notes, toppings}, 0, true).check(tabState{cursor: 1}), "wrap-q1", true},
-		{"wrapped review", reviewCheck([]Question{notes, toppings}, []Answer{{Options: []int{0}}, {Options: []int{1}}}), "wrap-review", true},
-		{"review with another answer", reviewCheck([]Question{notes, toppings}, []Answer{{Options: []int{1}}, {Options: []int{1}}}), "wrap-review", false},
-		{"review, ANSI", reviewCheck(tabbed, []Answer{{Options: []int{1}}, {Options: []int{2, 0}}}), "tab-review@ansi", true},
-		{"preview wrapped label", newSpec([]Question{deploy}, 0, false).check(tabState{cursor: 1}), "prev-q-wrap", true},
-		{"preview expected, non-preview shown", newSpec([]Question{size, speed}, 1, true).check(tabState{cursor: 1}), "prevtab-q2", true},
-		{"preview cursor on another row", newSpec([]Question{layout}, 0, false).check(tabState{cursor: 1}), "prev-q-list", false},
-		{"preview cursor row 2", newSpec([]Question{layout}, 0, false).check(tabState{cursor: 2, touched: true}), "prev-q-list", true},
-		{"299 plain initial", newSpec([]Question{colorPlain}, 0, false).check(tabState{cursor: 1}), "2.1.299/plain-q", true},
-		{"299 last tab shows Submit", newSpec(tabbed, 1, true).check(tabState{cursor: 1}), "2.1.299/tab-q2", true},
-		{"299 non-last tab shows Next", newSpec(mfirst, 0, true).check(tabState{cursor: 1}), "2.1.299/mfirst-q1", true},
-		{"299 review", reviewCheck(tabbed, []Answer{{Options: []int{1}}, {Options: []int{2, 0}}}), "2.1.299/tab-review", true},
-		{"299 preview cursor row 2", newSpec([]Question{layout}, 0, false).check(tabState{cursor: 2, touched: true}), "2.1.299/prev-q-list", true},
-		{"299 smulti", newSpec([]Question{toppings}, 0, true).check(tabState{cursor: 1}), "2.1.299/smulti-q", true},
-		{"299 markdown", newSpec([]Question{race}, 0, false).check(tabState{cursor: 1}), "2.1.299/md-q", true},
-		{"299 wrapped", newSpec([]Question{notes, toppings}, 0, true).check(tabState{cursor: 1}), "2.1.299/wrap-q1", true},
-		{"299 wrapped review", reviewCheck([]Question{notes, toppings}, []Answer{{Options: []int{0}}, {Options: []int{1}}}), "2.1.299/wrap-review", true},
-		{"299 multi cursor not on row 1", newSpec(tabbed, 1, true).check(tabState{cursor: 1}), "2.1.299/tab-q2-cursor-row2", false},
-		{"named plain initial", newSpec([]Question{colorPlain}, 0, false).check(tabState{cursor: 1}), "2.1.299-named/plain-q", true},
-		{"named plain initial, ANSI", newSpec([]Question{colorPlain}, 0, false).check(tabState{cursor: 1}), "2.1.299-named/plain-q@ansi", true},
-		{"named plain, tabbed expected", newSpec([]Question{colorPlain, toppings}, 0, true).check(tabState{cursor: 1}), "2.1.299-named/plain-q", false},
-		{"named last tab shows Submit", newSpec(tabbed, 1, true).check(tabState{cursor: 1}), "2.1.299-named/tab-q2", true},
-		{"named review", reviewCheck(tabbed, []Answer{{Options: []int{1}}, {Options: []int{2, 0}}}), "2.1.299-named/tab-review", true},
-		{"named review, ANSI", reviewCheck(tabbed, []Answer{{Options: []int{1}}, {Options: []int{2, 0}}}), "2.1.299-named/tab-review@ansi", true},
-		{"named review with another answer", reviewCheck(tabbed, []Answer{{Options: []int{0}}, {Options: []int{2, 0}}}), "2.1.299-named/tab-review", false},
-		{"named preview", newSpec([]Question{layout}, 0, false).check(tabState{cursor: 1}), "2.1.299-named/prev-q", true},
-		{"typed text must match exactly", newSpec([]Question{colorPlain}, 0, false).check(tabState{cursor: 4, other: Normalize("2 mor")}), "plain-other-typed", false},
+		{"plain initial", tabAt([]Question{colorPlain}, 0, 1), "plain-q", true},
+		{"plain initial, ANSI", tabAt([]Question{colorPlain}, 0, 1), "plain-q@ansi", true},
+		{"scrollback quotes the question above another dialog", tabAt([]Question{colorPlain}, 0, 1), "scrollback-negative", false},
+		{"the other dialog itself", tabAt([]Question{logo}, 0, 1), "scrollback-negative", true},
+		{"stale dialog above a permission prompt", tabAt([]Question{colorPlain}, 0, 1), "stale-negative", false},
+		{"answered, idle", tabAt([]Question{colorPlain}, 0, 1), "plain-done", false},
+		{"plain expected, tabbed shown", tabAt([]Question{colorTab}, 0, 1), "tab-q1", false},
+		{"tabbed expected, plain shown", tabAt([]Question{colorPlain, toppings}, 0, 1), "plain-q", false},
+		{"multi cursor not on row 1", tabAt(tabbed, 1, 1), "tab-q2-cursor-row2", false},
+		{"multi pre-checked box", tabAt(tabbed, 1, 1), "tab-q2-olives", false},
+		{"last tab shows Submit", tabAt(tabbed, 1, 1), "tab-q2", true},
+		{"last tab expected, Next shown", tabAt([]Question{colorTab, toppings}, 1, 1), "mfirst-q1", false},
+		{"non-last tab shows Next", tabAt(mfirst, 0, 1), "mfirst-q1", true},
+		{"non-last tab expected, Submit shown", tabAt(mfirst, 0, 1), "tab-q2", false},
+		{"single multi-select question is tabbed", tabAt([]Question{toppings}, 0, 1), "smulti-q", true},
+		{"markdown shown verbatim", tabAt([]Question{race}, 0, 1), "md-q", true},
+		{"wrapped question and label", tabAt([]Question{notes, toppings}, 0, 1), "wrap-q1", true},
+		{"wrapped review", reviewOf([]Question{notes, toppings}, notesFirst, "Olives"), "wrap-review", true},
+		{"review with another answer", reviewOf([]Question{notes, toppings}, "Short", "Olives"), "wrap-review", false},
+		{"review, ANSI", reviewOf(tabbed, "Blue", "Cheese, Basil"), "tab-review@ansi", true},
+		{"preview wrapped label", tabAt([]Question{deploy}, 0, 1), "prev-q-wrap", true},
+		{"preview expected, non-preview shown", tabAt([]Question{size, speed}, 1, 1), "prevtab-q2", true},
+		{"preview cursor on another row", tabAt([]Question{layout}, 0, 1), "prev-q-list", false},
+		{"preview cursor row 2", tabAt([]Question{layout}, 0, 2), "prev-q-list", true},
+		{"299 plain initial", tabAt([]Question{colorPlain}, 0, 1), "2.1.299/plain-q", true},
+		{"299 last tab shows Submit", tabAt(tabbed, 1, 1), "2.1.299/tab-q2", true},
+		{"299 non-last tab shows Next", tabAt(mfirst, 0, 1), "2.1.299/mfirst-q1", true},
+		{"299 review", reviewOf(tabbed, "Blue", "Cheese, Basil"), "2.1.299/tab-review", true},
+		{"299 preview cursor row 2", tabAt([]Question{layout}, 0, 2), "2.1.299/prev-q-list", true},
+		{"299 smulti", tabAt([]Question{toppings}, 0, 1), "2.1.299/smulti-q", true},
+		{"299 markdown", tabAt([]Question{race}, 0, 1), "2.1.299/md-q", true},
+		{"299 wrapped", tabAt([]Question{notes, toppings}, 0, 1), "2.1.299/wrap-q1", true},
+		{"299 wrapped review", reviewOf([]Question{notes, toppings}, notesFirst, "Olives"), "2.1.299/wrap-review", true},
+		{"299 multi cursor not on row 1", tabAt(tabbed, 1, 1), "2.1.299/tab-q2-cursor-row2", false},
+		{"named plain initial", tabAt([]Question{colorPlain}, 0, 1), "2.1.299-named/plain-q", true},
+		{"named plain initial, ANSI", tabAt([]Question{colorPlain}, 0, 1), "2.1.299-named/plain-q@ansi", true},
+		{"named plain, tabbed expected", tabAt([]Question{colorPlain, toppings}, 0, 1), "2.1.299-named/plain-q", false},
+		{"named last tab shows Submit", tabAt(tabbed, 1, 1), "2.1.299-named/tab-q2", true},
+		{"named review", reviewOf(tabbed, "Blue", "Cheese, Basil"), "2.1.299-named/tab-review", true},
+		{"named review, ANSI", reviewOf(tabbed, "Blue", "Cheese, Basil"), "2.1.299-named/tab-review@ansi", true},
+		{"named review with another answer", reviewOf(tabbed, "Red", "Cheese, Basil"), "2.1.299-named/tab-review", false},
+		{"named preview", tabAt([]Question{layout}, 0, 1), "2.1.299-named/prev-q", true},
+		{"typed text must match exactly", func(capture string, width int) bool {
+			v, ok := ReadView([]Question{colorPlain}, capture, width)
+			return ok && v.Cursor == 4 && v.other == Normalize("2 mor")
+		}, "plain-other-typed", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -498,125 +519,6 @@ func TestTabbedRepeats(t *testing.T) {
 	}
 }
 
-// TestPlanWalk replays each answer through the frames the pane shows along
-// the way: every step's Expect passes on its own frame and on no other
-// fixture.
-func TestPlanWalk(t *testing.T) {
-	tests := []struct {
-		name   string
-		qs     []Question
-		as     []Answer
-		frames []string
-		named  bool
-	}{
-		{
-			name:   "plain option",
-			qs:     []Question{colorPlain},
-			as:     []Answer{{Options: []int{1}}},
-			frames: []string{"plain-q"},
-			named:  true,
-		},
-		{
-			name:   "plain Other with a leading digit",
-			qs:     []Question{colorPlain},
-			as:     []Answer{{Text: "2 more"}},
-			frames: []string{"plain-q", "plain-other-cursor", "plain-other-typed"},
-			named:  true,
-		},
-		{
-			name:   "tabbed options",
-			qs:     []Question{colorTab, toppings},
-			as:     []Answer{{Options: []int{1}}, {Options: []int{2, 0}}},
-			frames: []string{"tab-q1", "tab-q2", "tab-q2-checked", "tab-q2-checked-submit", "tab-review"},
-			named:  true,
-		},
-		{
-			name: "tabbed Other on single and multi",
-			qs:   []Question{colorTab, toppings},
-			as:   []Answer{{Text: `Teal, "deep"; 1`}, {Options: []int{1}, Text: "Pineapple 2"}},
-			frames: []string{
-				"tab-q1", "tab-q1-other-cursor", "tab-q1-other-typed",
-				"tab-q2", "tab-q2-olives", "tab-q2-other-cursor", "tab-q2-other-typed", "tab-q2-submit",
-				"tab-review-other",
-			},
-		},
-		{
-			name: "multi-select first tab, Next row",
-			qs:   []Question{toppings, colorTab},
-			as: []Answer{
-				{Options: []int{1}, Text: "3 anchovies and a very long free text answer that should wrap inside the field at sixty columns"},
-				{Text: "1 shade darker"},
-			},
-			frames: []string{
-				"mfirst-q1", "mfirst-q1-olives", "mfirst-q1-other-cursor", "mfirst-q1-other-typed", "mfirst-q1-next",
-				"mfirst-q2", "mfirst-q2-other-cursor", "mfirst-q2-other-typed",
-				"mfirst-review",
-			},
-		},
-		{
-			name:   "preview plain",
-			qs:     []Question{layout},
-			as:     []Answer{{Options: []int{2}}},
-			frames: []string{"prev-q", "prev-q-split"},
-			named:  true,
-		},
-		{
-			name:   "preview tabbed mixed",
-			qs:     []Question{size, speed},
-			as:     []Answer{{Options: []int{1}}, {Options: []int{0}}},
-			frames: []string{"prevtab-q1", "prevtab-q1-large", "prevtab-q2", "prevtab-review"},
-		},
-	}
-	for _, dir := range []string{"", "2.1.299", "2.1.299-named"} {
-		all := fixtureNames(t, dir)
-		have := map[string]bool{}
-		for _, name := range all {
-			have[name] = true
-		}
-		prefix := ""
-		if dir != "" {
-			prefix = dir + "/"
-		}
-		for _, tt := range tests {
-			if dir == "2.1.299-named" && !tt.named {
-				continue
-			}
-			frames := make([]string, len(tt.frames))
-			for i, f := range tt.frames {
-				frames[i] = prefix + f
-				if !have[frames[i]] {
-					t.Fatalf("%s: fixture %s missing", prefix+tt.name, frames[i])
-				}
-			}
-			t.Run(prefix+tt.name, func(t *testing.T) {
-				steps, err := Plan(tt.qs, tt.as)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if len(steps) != len(frames) {
-					t.Fatalf("%d steps, want %d", len(steps), len(frames))
-				}
-				for i, s := range steps {
-					for _, name := range all {
-						want := name == frames[i]
-						if got := s.Expect(fixture(t, name), fixtureWidth); got != want {
-							t.Errorf("step %d Expect(%s) = %v, want %v", i, name, got, want)
-						}
-					}
-					if dir == "" {
-						continue
-					}
-					for _, other := range []string{"stale-negative", "scrollback-negative"} {
-						if s.Expect(fixture(t, other), fixtureWidth) {
-							t.Errorf("step %d Expect(%s) = true", i, other)
-						}
-					}
-				}
-			})
-		}
-	}
-}
-
 func TestDialogLinesIgnoresInputBox(t *testing.T) {
 	for _, name := range []string{"plain-done", "perm-after", "perm-bash"} {
 		if _, ok := dialogLines(fixture(t, name), fixtureWidth); ok {
@@ -642,31 +544,30 @@ func TestQuestionCheckOptionRowsExactly(t *testing.T) {
 	tests := []struct {
 		name    string
 		qs      []Question
-		tabbed  bool
 		capture string
 	}{
-		{"label is a prefix of the row", []Question{colorPlain}, false,
+		{"label is a prefix of the row", []Question{colorPlain},
 			strings.Replace(fixture(t, "plain-q"), "❯ 1. Red\n", "❯ 1. Red-team the prod DB\n", 1)},
-		{"another description", with(colorPlain, 0, Option{Label: "Red", Description: "Hot"}), false, fixture(t, "plain-q")},
-		{"description missing from the call", with(colorPlain, 0, Option{Label: "Red"}), false, fixture(t, "plain-q")},
-		{"299 extra description word", []Question{colorPlain}, false,
+		{"another description", with(colorPlain, 0, Option{Label: "Red", Description: "Hot"}), fixture(t, "plain-q")},
+		{"description missing from the call", with(colorPlain, 0, Option{Label: "Red"}), fixture(t, "plain-q")},
+		{"299 extra description word", []Question{colorPlain},
 			strings.Replace(fixture(t, "2.1.299/plain-q"), "     Warm\n", "     Warm sun\n", 1)},
-		{"299 named extra description word", []Question{colorPlain}, false,
+		{"299 named extra description word", []Question{colorPlain},
 			strings.Replace(fixture(t, "2.1.299-named/plain-q"), "     Warm\n", "     Warm sun\n", 1)},
-		{"299 named label differs by a word", []Question{colorPlain}, false,
+		{"299 named label differs by a word", []Question{colorPlain},
 			lastReplace(fixture(t, "2.1.299-named/plain-q"), "Which color do you prefer?", "Which color do you really prefer?")},
-		{"299 label differs by a word", []Question{colorPlain}, false,
+		{"299 label differs by a word", []Question{colorPlain},
 			lastReplace(fixture(t, "2.1.299/plain-q"), "Which color do you prefer?", "Which color do you really prefer?")},
-		{"multi-select label is a prefix", with(toppings, 1, Option{Label: "Olive", Description: "Salty"}), true, fixture(t, "smulti-q")},
+		{"multi-select label is a prefix", with(toppings, 1, Option{Label: "Olive", Description: "Salty"}), fixture(t, "smulti-q")},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if newSpec(tt.qs, 0, tt.tabbed).check(tabState{cursor: 1})(tt.capture, fixtureWidth) {
-				t.Error("check passed")
+			if v, ok := ReadView(tt.qs, tt.capture, fixtureWidth); ok {
+				t.Errorf("ReadView = %+v, want a refusal", v)
 			}
 		})
 	}
-	if !newSpec([]Question{toppings}, 0, true).check(tabState{cursor: 1})(fixture(t, "smulti-q"), fixtureWidth) {
+	if !tabAt([]Question{toppings}, 0, 1)(fixture(t, "smulti-q"), fixtureWidth) {
 		t.Error("smulti-q does not match its own question")
 	}
 }
@@ -678,7 +579,7 @@ func TestQuestionCheckIndentedRule(t *testing.T) {
 	q.Options = append([]Option(nil), q.Options...)
 	q.Options[2].Description = "────────"
 	capture := strings.Replace(fixture(t, "plain-q"), "     Natural\n", "     ────────\n", 1)
-	if !newSpec([]Question{q}, 0, false).check(tabState{cursor: 1})(capture, fixtureWidth) {
+	if !tabAt([]Question{q}, 0, 1)(capture, fixtureWidth) {
 		t.Error("check failed on an option described by a rule")
 	}
 }
@@ -686,7 +587,7 @@ func TestQuestionCheckIndentedRule(t *testing.T) {
 // Notes the user typed under the preview are not the empty-notes hint, so the
 // dialog no longer matches.
 func TestQuestionCheckPreviewNotes(t *testing.T) {
-	check := newSpec([]Question{layout}, 0, false).check(tabState{cursor: 1})
+	check := tabAt([]Question{layout}, 0, 1)
 	base := fixture(t, "prev-q")
 	if !check(base, fixtureWidth) {
 		t.Fatal("prev-q does not match its own question")
@@ -702,7 +603,7 @@ func TestQuestionCheckShortRuleIsText(t *testing.T) {
 	q := colorPlain
 	q.Text = "Pick one:\n────\nWhich color do you prefer?"
 	capture := strings.Replace(fixture(t, "plain-q"), "\nWhich color do you prefer?\n", "\nPick one:\n────\nWhich color do you prefer?\n", 1)
-	if !newSpec([]Question{q}, 0, false).check(tabState{cursor: 1})(capture, fixtureWidth) {
+	if !tabAt([]Question{q}, 0, 1)(capture, fixtureWidth) {
 		t.Error("check failed on a question holding a short rule")
 	}
 }
@@ -717,7 +618,7 @@ func TestAnchorIgnoresWideRuneLines(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if !newSpec([]Question{colorPlain}, 0, false).check(tabState{cursor: 1})(tt.line+"\n"+fixture(t, "plain-q"), fixtureWidth) {
+			if !tabAt([]Question{colorPlain}, 0, 1)(tt.line+"\n"+fixture(t, "plain-q"), fixtureWidth) {
 				t.Error("question check failed below the line")
 			}
 			if _, ok := PermissionPrompt(tt.line+"\n"+fixture(t, "perm-bash"), fixtureWidth); !ok {
@@ -730,7 +631,7 @@ func TestAnchorIgnoresWideRuneLines(t *testing.T) {
 // A question dialog taller than the capture loses its own border, so a short
 // column-0 rule spilled above its header must not anchor it.
 func TestQuestionRefusesWithoutFullWidthRule(t *testing.T) {
-	check := newSpec([]Question{colorPlain}, 0, false).check(tabState{cursor: 1})
+	check := tabAt([]Question{colorPlain}, 0, 1)
 	base := fixture(t, "plain-q")
 	if !check(base, fixtureWidth) {
 		t.Fatal("unmodified fixture failed")
@@ -778,7 +679,7 @@ func TestSessionRule(t *testing.T) {
 // Only the pane's last line may be the session-name rule: anything else after
 // the footer, or text wedged above the rule, keeps the dialog from matching.
 func TestQuestionCheckSessionRuleOnlyAtBottom(t *testing.T) {
-	check := newSpec([]Question{colorPlain}, 0, false).check(tabState{cursor: 1})
+	check := tabAt([]Question{colorPlain}, 0, 1)
 	base := fixture(t, "2.1.299-named/plain-q")
 	if !check(base, fixtureWidth) {
 		t.Fatal("named plain-q does not match its own question")

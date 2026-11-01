@@ -180,26 +180,16 @@ type questionSpec struct {
 	labels  []string // each option's label followed by its description (label only in the preview layout)
 	marked  []string // labels with the commit mark "✔" after the label, before the description
 	multi   bool
-	preview bool // the preview layout: label rows, no Other row, unnumbered "Chat about this"
-	tabbed  bool
+	preview bool   // the preview layout: label rows, no Other row, unnumbered "Chat about this"
 	index   int    // position of the question's tab
-	count   int    // number of question tabs
 	final   string // the unnumbered row of a multi-select tab: "Next" or "Submit"
 }
 
-// tabState is what a question tab must show at one point of the answer.
-type tabState struct {
-	cursor  int    // numbered row under the cursor (1-based); 0 = the Next/Submit row
-	checked []int  // 0-based options whose box is ticked (multi-select)
-	other   string // normalized text in the Other field; "" = empty
-	touched bool   // keys were sent on this tab, so a multi-select tab-bar box may be ticked
-}
-
-func newSpec(qs []Question, i int, tabbed bool) questionSpec {
+func newSpec(qs []Question, i int) questionSpec {
 	q := qs[i]
 	s := questionSpec{
 		text: Normalize(q.Text), labels: optionRows(q), multi: q.MultiSelect, preview: q.PreviewLayout(),
-		tabbed: tabbed, index: i, count: len(qs), final: "Next",
+		index: i, final: "Next",
 	}
 	if i == len(qs)-1 {
 		s.final = "Submit"
@@ -208,70 +198,6 @@ func newSpec(qs []Question, i int, tabbed bool) questionSpec {
 		s.marked = append(s.marked, Normalize(o.Label)+"✔"+strings.TrimPrefix(s.labels[k], Normalize(o.Label)))
 	}
 	return s
-}
-
-func (s questionSpec) check(want tabState) Check {
-	return func(capture string, width int) bool {
-		bar, rows, final, ok := s.parse(capture, width)
-		return ok && s.barMatches(bar, want.touched) && s.matches(rows, final, want)
-	}
-}
-
-// parse splits the tab into its tab bar or header line, its option rows
-// (options, then Other unless in the preview layout) and, for a multi-select,
-// the Next/Submit row. The tab must hold exactly this question, followed by a
-// rule, the "Chat about this" row and the footer, so a dialog that is not at
-// the bottom of the pane never parses.
-func (s questionSpec) parse(capture string, width int) (string, []row, row, bool) {
-	lines, ok := dialogLines(capture, width)
-	if !ok || isTabBar(lines[0].norm) != s.tabbed {
-		return "", nil, row{}, false
-	}
-	body, ok := consumeText(norms(lines[1:]), s.text)
-	if !ok {
-		return "", nil, row{}, false
-	}
-	rule := slices.Index(body, dialogRule)
-	if rule < 0 || !s.isTail(body[rule+1:]) {
-		return "", nil, row{}, false
-	}
-	if s.preview {
-		start := len(lines) - len(body)
-		rows, ok := splitRows(norms(previewLeft(lines[start:start+rule])), len(s.labels))
-		return lines[0].norm, rows, row{}, ok
-	}
-	area := body[:rule]
-	var final row
-	if s.multi {
-		if len(area) == 0 {
-			return "", nil, row{}, false
-		}
-		final = cursorRow(area[len(area)-1])
-		area = area[:len(area)-1]
-	}
-	rows, ok := splitRows(area, len(s.labels)+1)
-	return lines[0].norm, rows, final, ok
-}
-
-// barMatches checks the tab bar's answered boxes: one per question, ticked
-// before this tab and clear after it, so a dialog whose questions merely look
-// alike (same text, another position or count) does not match. This tab's own
-// box stays clear while a single-select is answered, but ticks once a
-// multi-select box is, so there it is only required clear before any key.
-func (s questionSpec) barMatches(bar string, touched bool) bool {
-	if !s.tabbed {
-		return true
-	}
-	boxes := tabBoxes(bar)
-	if len(boxes) != s.count {
-		return false
-	}
-	for j, answered := range boxes {
-		if (j < s.index && !answered) || (j > s.index && answered) || (j == s.index && answered && (!touched || !s.multi)) {
-			return false
-		}
-	}
-	return true
 }
 
 // tabBoxes returns, per tab of a tab bar, whether its box is ticked.
@@ -360,96 +286,6 @@ func isEditHint(s string) bool {
 	return ok && editor != "" && !strings.Contains(editor, "·")
 }
 
-func splitRows(area []string, count int) ([]row, bool) {
-	var rows []row
-	for _, l := range area {
-		r := cursorRow(l)
-		if len(rows) < count {
-			if text, ok := strings.CutPrefix(r.text, strconv.Itoa(len(rows)+1)+"."); ok {
-				rows = append(rows, row{cursor: r.cursor, text: text})
-				continue
-			}
-		}
-		if len(rows) == 0 {
-			return nil, false
-		}
-		rows[len(rows)-1].text += l
-	}
-	return rows, len(rows) == count
-}
-
-func (s questionSpec) matches(rows []row, final row, want tabState) bool {
-	for k, label := range s.labels {
-		text := rows[k].text
-		if s.multi {
-			box := "[]"
-			if slices.Contains(want.checked, k) {
-				box = "[✔]"
-			}
-			var ok bool
-			if text, ok = strings.CutPrefix(text, box); !ok {
-				return false
-			}
-		}
-		if rows[k].cursor != (want.cursor == k+1) || text != label {
-			return false
-		}
-	}
-	n := len(s.labels)
-	if s.preview {
-		return true
-	}
-	if rows[n].cursor != (want.cursor == n+1) || rows[n].text != s.otherRow(want.other) {
-		return false
-	}
-	return !s.multi || (final.cursor == (want.cursor == 0) && final.text == s.final)
-}
-
-// otherRow is the Other row's text: a placeholder while the field is empty,
-// and a ticked box once typing has filled it (multi-select).
-func (s questionSpec) otherRow(typed string) string {
-	switch {
-	case !s.multi && typed == "":
-		return "Typesomething."
-	case !s.multi:
-		return typed
-	case typed == "":
-		return "[]Typesomething"
-	default:
-		return "[✔]" + typed
-	}
-}
-
-// reviewCheck matches the review step of a tabbed dialog: every question
-// followed by its answer as Claude summarises it, and the submit choices.
-func reviewCheck(qs []Question, as []Answer) Check {
-	var b strings.Builder
-	b.WriteString("Reviewyouranswers")
-	for i, q := range qs {
-		b.WriteString("●" + Normalize(q.Text) + "→" + Normalize(reviewAnswer(q, as[i])))
-	}
-	b.WriteString("Readytosubmityouranswers?" + cursorMark + "1.Submitanswers2.Cancel")
-	want := b.String()
-	answered := slices.Repeat([]bool{true}, len(qs))
-	return func(capture string, width int) bool {
-		lines, ok := dialogLines(capture, width)
-		return ok && isTabBar(lines[0].norm) && slices.Equal(tabBoxes(lines[0].norm), answered) &&
-			strings.Join(norms(lines[1:]), "") == want
-	}
-}
-
-// reviewAnswer is the chosen labels in option order, then the Other text.
-func reviewAnswer(q Question, a Answer) string {
-	var parts []string
-	for _, o := range sortedOptions(a) {
-		parts = append(parts, q.Options[o].Label)
-	}
-	if a.Text != "" {
-		parts = append(parts, a.Text)
-	}
-	return strings.Join(parts, ", ")
-}
-
 func sortedOptions(a Answer) []int {
 	opts := slices.Clone(a.Options)
 	slices.Sort(opts)
@@ -495,7 +331,7 @@ func ReadView(qs []Question, capture string, width int) (View, bool) {
 		}
 	}
 	for i := range qs {
-		if v, ok := readTab(newSpec(qs, i, boxes != nil), lines, boxes); ok {
+		if v, ok := readTab(newSpec(qs, i), lines, boxes); ok {
 			return v, true
 		}
 	}

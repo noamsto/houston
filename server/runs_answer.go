@@ -28,6 +28,8 @@ const (
 	// maxAnswerText bounds one Other answer, which is typed into the dialog's
 	// single-line field.
 	maxAnswerText = 500
+	// maxReviewText bounds one review answer: chosen labels plus Other text.
+	maxReviewText = 2000
 	// answerCaptureLines reaches past a tall dialog, so its top rule is in
 	// the capture.
 	answerCaptureLines = 200
@@ -41,9 +43,11 @@ var promptFrame = regexp.MustCompile(`^[0-9a-f]{64}$`)
 type answerRequest struct {
 	Kind string `json:"kind"`
 
-	// question
-	ToolCallID string        `json:"toolCallId"`
-	Answers    []answerEntry `json:"answers"`
+	// state, step, back, submit
+	ToolCallID string       `json:"toolCallId"`
+	Index      int          `json:"index"`
+	Answer     *answerEntry `json:"answer"`
+	Review     []string     `json:"review"`
 
 	// choice
 	Ordinal int    `json:"ordinal"`
@@ -51,9 +55,8 @@ type answerRequest struct {
 }
 
 type answerEntry struct {
-	Question int    `json:"question"`
-	Options  []int  `json:"options"`
-	Text     string `json:"text"`
+	Options []int  `json:"options"`
+	Text    string `json:"text"`
 }
 
 type promptResponse struct {
@@ -63,11 +66,60 @@ type promptResponse struct {
 	Frame    string   `json:"frame"`
 }
 
+// questionState is what the pane shows of an AskUserQuestion call, with the
+// server's own parse of its questions, so the client's indexes always match
+// the server's.
+type questionState struct {
+	Tabbed    bool            `json:"tabbed"`
+	Step      int             `json:"step"`
+	Count     int             `json:"count"`
+	Questions []stateQuestion `json:"questions"`
+	// Options is set on a tab, never on the review; a pointer, so a tab with
+	// nothing committed still sends [].
+	Options *[]int   `json:"options,omitempty"`
+	Text    string   `json:"text,omitempty"`
+	Review  []string `json:"review,omitempty"`
+}
+
+// stateQuestion leaves out the option previews, which can be large.
+type stateQuestion struct {
+	Question    string        `json:"question"`
+	Header      string        `json:"header,omitempty"`
+	MultiSelect bool          `json:"multiSelect"`
+	Preview     bool          `json:"preview"`
+	Options     []stateOption `json:"options"`
+}
+
+type stateOption struct {
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+}
+
+func newQuestionState(qs []answer.Question, v answer.View) questionState {
+	st := questionState{Tabbed: answer.Tabbed(qs), Step: v.Step, Count: len(qs), Questions: make([]stateQuestion, len(qs))}
+	for i, q := range qs {
+		opts := make([]stateOption, len(q.Options))
+		for k, o := range q.Options {
+			opts[k] = stateOption{Label: o.Label, Description: o.Description}
+		}
+		st.Questions[i] = stateQuestion{Question: q.Text, Header: q.Header, MultiSelect: q.MultiSelect, Preview: q.PreviewLayout(), Options: opts}
+	}
+	if v.Step == len(qs) {
+		st.Review = v.Review
+		return st
+	}
+	opts := append([]int{}, v.Options...)
+	st.Options, st.Text = &opts, v.Text
+	return st
+}
+
 // answerAttempt is what one answer request logs: never the text, labels,
-// questions or frames, which are the user's and the pane's.
+// questions or frames, which are the user's and the pane's. level is Info
+// unless the request is a poll.
 type answerAttempt struct {
 	id, pane, kind string
 	steps          int
+	level          slog.Level
 }
 
 // answerOutcome is how an answer request ended. partial means some key
@@ -82,8 +134,12 @@ func (a answerAttempt) finish(w http.ResponseWriter, code int, detail string) {
 	a.write(w, answerOutcome{code: code, detail: detail})
 }
 
+func (a answerAttempt) log(out answerOutcome) {
+	slog.Log(context.Background(), a.level, "run answer", "id", a.id, "pane", a.pane, "kind", a.kind, "steps", a.steps, "status", out.code, "outcome", out.detail, "partial", out.partial)
+}
+
 func (a answerAttempt) write(w http.ResponseWriter, out answerOutcome) {
-	slog.Info("run answer", "id", a.id, "pane", a.pane, "kind", a.kind, "steps", a.steps, "status", out.code, "outcome", out.detail, "partial", out.partial)
+	a.log(out)
 	switch {
 	case out.code == http.StatusNoContent:
 		w.WriteHeader(out.code)
@@ -97,15 +153,26 @@ func (a answerAttempt) write(w http.ResponseWriter, out answerOutcome) {
 	}
 }
 
+func (a answerAttempt) writeState(w http.ResponseWriter, qs []answer.Question, v answer.View) {
+	a.log(answerOutcome{code: http.StatusOK, detail: "state"})
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(newQuestionState(qs, v))
+}
+
 func isClaudeAgent(agent string) bool { return agent == "claude" || agent == "claude-code" }
 
 // handleRunAnswer answers the dialog open in a Claude run's pane by typing
-// what a human would, checking the pane before every key batch.
+// what a human would, one question tab at a time, checking the pane before
+// every key batch.
 //
 //	POST /api/runs/{id}/answer
-//	  {"kind":"question","toolCallId":"…","answers":[{"question":0,"options":[1],"text":"…"}]}
-//	  {"kind":"choice","ordinal":2,"frame":"<hex>"}
-//	→ 204 · 409 "prompt changed" | "pane is in copy mode" (nothing typed)
+//	  {"kind":"state","toolCallId":"…"} → 200 questionState · 404 "no question"
+//	  {"kind":"step","toolCallId":"…","index":0,"answer":{"options":[1],"text":"…"}}
+//	    → 200 questionState (tabbed) · 204 (plain, submitted)
+//	  {"kind":"back","toolCallId":"…","index":1} → 200 questionState
+//	  {"kind":"submit","toolCallId":"…","review":["…"]} → 204
+//	  {"kind":"choice","ordinal":2,"frame":"<hex>"} → 204
+//	→ 409 "prompt changed" | "pane is in copy mode" (nothing typed)
 //	  · 409/502/503 {"partial":true} · 429 busy
 func (s *Server) handleRunAnswer(w http.ResponseWriter, r *http.Request) {
 	run, pane, ok := s.runPane(w, r)
@@ -145,21 +212,14 @@ func (s *Server) handleRunAnswer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch in.Kind {
-	case "question":
+	case "state":
+		// The card polls state, so it logs below Info and takes no lock: a
+		// poll never makes a step answer 429.
+		att.kind, att.level = in.Kind, slog.LevelDebug
+		s.answerState(w, att, run.Session, pane, in.ToolCallID)
+	case "step", "back", "submit":
 		att.kind = in.Kind
-		steps, code, detail := s.questionSteps(run.Session, in)
-		if steps == nil {
-			att.finish(w, code, detail)
-			return
-		}
-		att.steps = len(steps)
-		unlock, ok := s.lockAnswer(pane)
-		if !ok {
-			att.finish(w, http.StatusTooManyRequests, "another answer is in progress")
-			return
-		}
-		defer unlock()
-		att.write(w, s.typeSteps(r.Context(), pane, steps))
+		s.answerTab(r.Context(), w, att, run.Session, pane, in)
 	case "choice":
 		att.kind = in.Kind
 		if in.Ordinal < 1 || in.Ordinal > 9 {
@@ -183,14 +243,120 @@ func (s *Server) handleRunAnswer(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// questionSteps reads the AskUserQuestion call from the transcript and plans
-// the keys that give it the client's answers. On refusal it returns nil steps
-// with the status and reason.
-func (s *Server) questionSteps(session string, in answerRequest) ([]answer.Step, int, string) {
+// answerState reports what the pane shows of the call. It types nothing.
+func (s *Server) answerState(w http.ResponseWriter, att answerAttempt, session string, pane tmux.Pane, toolCallID string) {
+	qs, code, detail := s.questionCall(session, toolCallID)
+	if qs == nil {
+		att.finish(w, code, detail)
+		return
+	}
+	capture, width, err := s.runPanes.CapturePaneWidth(pane, answerCaptureLines)
+	if err != nil {
+		slog.Warn("run answer: capture failed", "pane", pane.Target(), "err", err)
+		att.write(w, tmuxUnavailable(false))
+		return
+	}
+	v, ok := answer.ReadView(qs, capture, width)
+	if !ok {
+		att.finish(w, http.StatusNotFound, "no question")
+		return
+	}
+	att.writeState(w, qs, v)
+}
+
+// answerTab runs one step, back or submit on the call's dialog, planned from
+// the view the pane shows while the pane's answer lock is held.
+func (s *Server) answerTab(ctx context.Context, w http.ResponseWriter, att answerAttempt, session string, pane tmux.Pane, in answerRequest) {
+	qs, code, detail := s.questionCall(session, in.ToolCallID)
+	if qs == nil {
+		att.finish(w, code, detail)
+		return
+	}
+	// tab is the tab the pane must show: len(qs) for the review.
+	tab := in.Index
+	var a answer.Answer
+	switch in.Kind {
+	case "step":
+		if in.Index < 0 || in.Index >= len(qs) {
+			att.finish(w, http.StatusBadRequest, "index out of range")
+			return
+		}
+		if in.Answer == nil {
+			att.finish(w, http.StatusBadRequest, "missing answer")
+			return
+		}
+		var reason string
+		if a, reason = toAnswer(qs[in.Index], *in.Answer); reason != "" {
+			att.finish(w, http.StatusBadRequest, reason)
+			return
+		}
+	case "back":
+		if in.Index < 1 || in.Index > len(qs) {
+			att.finish(w, http.StatusBadRequest, "index out of range")
+			return
+		}
+	case "submit":
+		if reason := checkReview(qs, in.Review); reason != "" {
+			att.finish(w, http.StatusBadRequest, reason)
+			return
+		}
+		tab = len(qs)
+	}
+	if in.Kind != "step" && !answer.Tabbed(qs) {
+		att.finish(w, http.StatusUnprocessableEntity, "a plain dialog has no tabs")
+		return
+	}
+
+	unlock, ok := s.lockAnswer(pane)
+	if !ok {
+		att.finish(w, http.StatusTooManyRequests, "another answer is in progress")
+		return
+	}
+	defer unlock()
+	capture, width, err := s.runPanes.CapturePaneWidth(pane, answerCaptureLines)
+	if err != nil {
+		slog.Warn("run answer: capture failed", "pane", pane.Target(), "err", err)
+		att.write(w, tmuxUnavailable(false))
+		return
+	}
+	v, ok := answer.ReadView(qs, capture, width)
+	if !ok || v.Step != tab {
+		att.finish(w, http.StatusConflict, "prompt changed")
+		return
+	}
+	var steps []answer.Step
+	switch in.Kind {
+	case "step":
+		steps, err = answer.PlanStep(qs, in.Index, a, v)
+	case "back":
+		steps, err = answer.PlanBack(qs, in.Index, v)
+	default:
+		steps, err = answer.PlanSubmit(qs, in.Review, v)
+	}
+	if err != nil {
+		// Plan errors name indexes and rules, never the client's text.
+		att.finish(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	att.steps = len(steps)
+	out, capture, width := s.typeSteps(ctx, pane, steps)
+	if out.code != http.StatusNoContent || in.Kind == "submit" || !answer.Tabbed(qs) {
+		att.write(w, out)
+		return
+	}
+	// A tabbed step or back ends on a landing check, which passes only on a
+	// capture ReadView reads.
+	v, _ = answer.ReadView(qs, capture, width)
+	att.writeState(w, qs, v)
+}
+
+// questionCall reads the AskUserQuestion call from the transcript. On refusal
+// it returns nil questions with the status and reason.
+func (s *Server) questionCall(session, toolCallID string) ([]answer.Question, int, string) {
 	if session == "" || s.chat == nil {
 		return nil, http.StatusNotFound, "no chat"
 	}
-	u, err := s.chat.ChatTool(session, in.ToolCallID)
+	u, err := s.chat.ChatTool(session, toolCallID)
 	if errors.Is(err, chat.ErrToolNotFound) {
 		return nil, http.StatusNotFound, "no such tool call"
 	}
@@ -208,55 +374,61 @@ func (s *Server) questionSteps(session string, in answerRequest) ([]answer.Step,
 	if err != nil {
 		return nil, http.StatusUnprocessableEntity, "cannot read the questions"
 	}
-	as, reason := toAnswers(qs, in.Answers)
-	if reason != "" {
-		return nil, http.StatusBadRequest, reason
+	if answer.Repeats(qs) {
+		return nil, http.StatusUnprocessableEntity, "questions repeat"
 	}
-	steps, err := answer.Plan(qs, as)
-	if err != nil {
-		return nil, http.StatusUnprocessableEntity, err.Error()
-	}
-	return steps, 0, ""
+	return qs, 0, ""
 }
 
-// toAnswers checks the client's entries against the transcript's questions.
-// A non-empty reason refuses them; it never quotes the client's text.
-func toAnswers(qs []answer.Question, entries []answerEntry) ([]answer.Answer, string) {
-	if len(entries) != len(qs) {
-		return nil, fmt.Sprintf("%d answers for %d questions", len(entries), len(qs))
+// toAnswer checks the client's answer to q. A non-empty reason refuses it; it
+// never quotes the client's text.
+func toAnswer(q answer.Question, e answerEntry) (answer.Answer, string) {
+	for j, o := range e.Options {
+		if o < 0 || o >= len(q.Options) {
+			return answer.Answer{}, "option out of range"
+		}
+		if slices.Contains(e.Options[:j], o) {
+			return answer.Answer{}, "option chosen twice"
+		}
 	}
-	as := make([]answer.Answer, 0, len(qs))
-	for i, e := range entries {
-		if e.Question != i {
-			return nil, fmt.Sprintf("answer %d is not for question %d", i, i)
-		}
-		q := qs[i]
-		for j, o := range e.Options {
-			if o < 0 || o >= len(q.Options) {
-				return nil, fmt.Sprintf("question %d: option out of range", i)
-			}
-			if slices.Contains(e.Options[:j], o) {
-				return nil, fmt.Sprintf("question %d: option chosen twice", i)
-			}
-		}
-		text := strings.TrimSpace(e.Text)
-		if strings.ContainsFunc(text, unicode.IsControl) {
-			return nil, fmt.Sprintf("question %d: text has a control character", i)
-		}
-		if utf8.RuneCountInString(text) > maxAnswerText {
-			return nil, fmt.Sprintf("question %d: text longer than %d characters", i, maxAnswerText)
-		}
-		hasText := text != ""
-		if q.MultiSelect {
-			if len(e.Options) == 0 && !hasText {
-				return nil, fmt.Sprintf("question %d: empty answer", i)
-			}
-		} else if len(e.Options) > 1 || (len(e.Options) == 1) == hasText {
-			return nil, fmt.Sprintf("question %d: pick one option or type an answer", i)
-		}
-		as = append(as, answer.Answer{Options: e.Options, Text: text})
+	text := strings.TrimSpace(e.Text)
+	if strings.ContainsFunc(text, unicode.IsControl) {
+		return answer.Answer{}, "text has a control character"
 	}
-	return as, ""
+	if utf8.RuneCountInString(text) > maxAnswerText {
+		return answer.Answer{}, fmt.Sprintf("text longer than %d characters", maxAnswerText)
+	}
+	// The pane marks a tab's committed answer with ✔, so typed text must not
+	// hold one.
+	if strings.ContainsRune(text, '✔') {
+		return answer.Answer{}, "text has the commit mark"
+	}
+	hasText := text != ""
+	if q.MultiSelect {
+		if len(e.Options) == 0 && !hasText {
+			return answer.Answer{}, "empty answer"
+		}
+	} else if len(e.Options) > 1 || (len(e.Options) == 1) == hasText {
+		return answer.Answer{}, "pick one option or type an answer"
+	}
+	return answer.Answer{Options: e.Options, Text: text}, ""
+}
+
+// checkReview checks the review answers the client saw, one per question. A
+// non-empty reason refuses them; it never quotes them.
+func checkReview(qs []answer.Question, review []string) string {
+	if len(review) != len(qs) {
+		return fmt.Sprintf("%d review answers for %d questions", len(review), len(qs))
+	}
+	for i, r := range review {
+		if utf8.RuneCountInString(r) > maxReviewText {
+			return fmt.Sprintf("review answer %d longer than %d characters", i, maxReviewText)
+		}
+		if strings.ContainsFunc(r, unicode.IsControl) {
+			return fmt.Sprintf("review answer %d has a control character", i)
+		}
+	}
+	return ""
 }
 
 // lockAnswer takes the pane's answer lock without waiting.
@@ -271,39 +443,45 @@ func (s *Server) lockAnswer(pane tmux.Pane) (func(), bool) {
 
 // typeSteps runs an answer plan: the first capture must pass steps[0].Expect
 // or nothing is typed, and after each batch the pane must reach the next
-// step's Expect before anything more is typed.
-func (s *Server) typeSteps(ctx context.Context, pane tmux.Pane, steps []answer.Step) answerOutcome {
+// step's Expect before anything more is typed. It returns the capture and
+// width that passed the last Expect.
+func (s *Server) typeSteps(ctx context.Context, pane tmux.Pane, steps []answer.Step) (answerOutcome, string, int) {
 	capture, width, err := s.runPanes.CapturePaneWidth(pane, answerCaptureLines)
 	if err != nil {
 		slog.Warn("run answer: capture failed", "pane", pane.Target(), "err", err)
-		return tmuxUnavailable(false)
+		return tmuxUnavailable(false), "", 0
 	}
 	if !steps[0].Expect(capture, width) {
-		return answerOutcome{code: http.StatusConflict, detail: "prompt changed"}
+		return answerOutcome{code: http.StatusConflict, detail: "prompt changed"}, "", 0
 	}
 	sent := false
 	for i, step := range steps {
 		if i > 0 {
-			if out, ok := s.awaitStep(ctx, pane, step.Expect); !ok {
-				return out
+			var out answerOutcome
+			if capture, width, out = s.awaitStep(ctx, pane, step.Expect); out.code != 0 {
+				return out, "", 0
 			}
 		}
+		if len(step.Keys) == 0 {
+			continue
+		}
 		if out, ok := s.paneTakesKeys(pane, sent); !ok {
-			return out
+			return out, "", 0
 		}
 		for _, k := range step.Keys {
 			if out, ok := s.sendAnswerKey(ctx, pane, k, sent); !ok {
-				return out
+				return out, "", 0
 			}
 			sent = true
 		}
 	}
-	return answerOutcome{code: http.StatusNoContent, detail: "delivered"}
+	return answerOutcome{code: http.StatusNoContent, detail: "delivered"}, capture, width
 }
 
 // awaitStep polls the pane, after keys reached it, until expect passes,
-// returning how the answer ends when it gives up.
-func (s *Server) awaitStep(ctx context.Context, pane tmux.Pane, expect answer.Check) (answerOutcome, bool) {
+// returning the capture that passed it, or how the answer ends when it gives
+// up.
+func (s *Server) awaitStep(ctx context.Context, pane tmux.Pane, expect answer.Check) (string, int, answerOutcome) {
 	poll := time.NewTicker(orDefault(s.answerPoll, answerPollInterval))
 	defer poll.Stop()
 	deadline := time.NewTimer(orDefault(s.answerWait, answerWaitTimeout))
@@ -311,18 +489,18 @@ func (s *Server) awaitStep(ctx context.Context, pane tmux.Pane, expect answer.Ch
 	for {
 		select {
 		case <-ctx.Done():
-			return answerOutcome{code: http.StatusConflict, detail: "request cancelled", partial: true}, false
+			return "", 0, answerOutcome{code: http.StatusConflict, detail: "request cancelled", partial: true}
 		case <-deadline.C:
-			return answerOutcome{code: http.StatusConflict, detail: "pane did not reach the next step", partial: true}, false
+			return "", 0, answerOutcome{code: http.StatusConflict, detail: "pane did not reach the next step", partial: true}
 		case <-poll.C:
 		}
 		capture, width, err := s.runPanes.CapturePaneWidth(pane, answerCaptureLines)
 		if err != nil {
 			slog.Warn("run answer: capture failed", "pane", pane.Target(), "err", err)
-			return tmuxUnavailable(true), false
+			return "", 0, tmuxUnavailable(true)
 		}
 		if expect(capture, width) {
-			return answerOutcome{}, true
+			return capture, width, answerOutcome{}
 		}
 	}
 }

@@ -214,9 +214,11 @@ func landsOnReview(qs []Question) Check {
 }
 
 // PlanStep returns the steps that answer tab index of qs with a, starting
-// from v, the view the pane showed. The executor runs them as Plan's: the
-// first Expect must pass on its first capture, else nothing is typed. Only
-// this tab's keys are sent. A tabbed dialog's plan ends with a keyless
+// from v, the view the pane showed. The executor runs them in order: wait
+// until steps[i].Expect passes on a fresh capture (for i == 0, the first
+// capture must pass, else nothing is typed), then send steps[i].Keys. Any
+// Expect that does not pass means the pane moved on: stop, type nothing more.
+// Only this tab's keys are sent. A tabbed dialog's plan ends with a keyless
 // landing step (the next tab on row 1 with this tab's box ticked, or the
 // review); a plain dialog's last keys submit, with nothing checked after.
 func PlanStep(qs []Question, index int, a Answer, v View) ([]Step, error) {
@@ -376,85 +378,6 @@ func PlanSubmit(qs []Question, review []string, v View) ([]Step, error) {
 	p, _ := startPlan(qs, v)
 	p.send(digit(1))
 	return p.steps, nil
-}
-
-// Plan returns the steps that answer qs with as, typing what a human would.
-// The executor runs them in order: wait until steps[i].Expect passes on a
-// fresh capture (for i == 0, the first capture must pass, else nothing is
-// typed), send steps[i].Keys, then wait for steps[i+1].Expect. Nothing is
-// checked after the last step's keys: they submit the answer (the option digit
-// or Enter of a single-question plain dialog, "1" on a tabbed dialog's review).
-// Any Expect that does not pass means the pane moved on: stop, type nothing
-// more.
-func Plan(qs []Question, as []Answer) ([]Step, error) {
-	if len(qs) == 0 {
-		return nil, errors.New("no questions")
-	}
-	if len(as) != len(qs) {
-		return nil, fmt.Errorf("%d answers for %d questions", len(as), len(qs))
-	}
-	for i := range qs {
-		if err := validate(qs[i], as[i]); err != nil {
-			return nil, fmt.Errorf("question %d: %w", i, err)
-		}
-	}
-	tabbed := Tabbed(qs)
-
-	var steps []Step
-	expect := func(c Check) { steps = append(steps, Step{Expect: c}) }
-	send := func(keys ...Key) {
-		last := &steps[len(steps)-1]
-		last.Keys = append(last.Keys, keys...)
-	}
-	for i, q := range qs {
-		spec := newSpec(qs, i, tabbed)
-		a := as[i]
-		other := Normalize(a.Text)
-		n := len(q.Options)
-		expect(spec.check(tabState{cursor: 1}))
-		switch {
-		case q.PreviewLayout():
-			// A digit only moves the cursor here; Enter submits or advances.
-			k := a.Options[0] + 1
-			send(digit(k))
-			expect(spec.check(tabState{cursor: k, touched: true}))
-			send(keyEnter)
-		case !q.MultiSelect && len(a.Options) == 1:
-			send(digit(a.Options[0] + 1))
-		case !q.MultiSelect:
-			send(digit(n + 1))
-			expect(spec.check(tabState{cursor: n + 1, touched: true}))
-			send(Key{Text: a.Text})
-			expect(spec.check(tabState{cursor: n + 1, other: other, touched: true}))
-			send(keyEnter)
-		default:
-			// Digits toggle boxes without moving the cursor, and Down then
-			// counts rows from row 1 to reach Other and Next/Submit.
-			checked := sortedOptions(a)
-			for _, o := range checked {
-				send(digit(o + 1))
-			}
-			if len(checked) > 0 {
-				expect(spec.check(tabState{cursor: 1, checked: checked, touched: true}))
-			}
-			if a.Text == "" {
-				send(slices.Repeat([]Key{keyDown}, n+1)...)
-			} else {
-				send(slices.Repeat([]Key{keyDown}, n)...)
-				expect(spec.check(tabState{cursor: n + 1, checked: checked, touched: true}))
-				send(Key{Text: a.Text})
-				expect(spec.check(tabState{cursor: n + 1, checked: checked, other: other, touched: true}))
-				send(keyDown)
-			}
-			expect(spec.check(tabState{cursor: 0, checked: checked, other: other, touched: true}))
-			send(keyEnter)
-		}
-	}
-	if tabbed {
-		expect(reviewCheck(qs, as))
-		send(digit(1))
-	}
-	return steps, nil
 }
 
 func validate(q Question, a Answer) error {

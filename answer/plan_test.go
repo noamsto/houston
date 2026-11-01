@@ -8,159 +8,44 @@ import (
 	"testing"
 )
 
-func keys(specials ...string) []Key {
-	ks := make([]Key, 0, len(specials))
-	for _, s := range specials {
-		if t, ok := strings.CutPrefix(s, "text:"); ok {
-			ks = append(ks, Key{Text: t})
-			continue
-		}
-		ks = append(ks, Key{Special: s})
-	}
-	return ks
-}
-
-func TestPlanKeys(t *testing.T) {
-	tests := []struct {
-		name string
-		qs   []Question
-		as   []Answer
-		want [][]Key
-	}{
-		{
-			name: "plain option submits at once",
-			qs:   []Question{colorPlain},
-			as:   []Answer{{Options: []int{1}}},
-			want: [][]Key{keys("2")},
-		},
-		{
-			name: "plain Other",
-			qs:   []Question{colorPlain},
-			as:   []Answer{{Text: "Mauve"}},
-			want: [][]Key{keys("4"), keys("text:Mauve"), keys("Enter")},
-		},
-		{
-			name: "leading-digit Other text is typed, not pressed",
-			qs:   []Question{colorPlain},
-			as:   []Answer{{Text: "2 more"}},
-			want: [][]Key{keys("4"), keys("text:2 more"), keys("Enter")},
-		},
-		{
-			name: "tabbed two-question, single option + multi options",
-			qs:   []Question{colorTab, toppings},
-			as:   []Answer{{Options: []int{1}}, {Options: []int{2, 0}}},
-			want: [][]Key{
-				keys("2"),
-				keys("1", "3"),
-				keys("Down", "Down", "Down", "Down"),
-				keys("Enter"),
-				keys("1"),
-			},
-		},
-		{
-			name: "tabbed two-question, single Other + multi option and Other",
-			qs:   []Question{colorTab, toppings},
-			as:   []Answer{{Text: "Teal"}, {Options: []int{1}, Text: "Pineapple 2"}},
-			want: [][]Key{
-				keys("3"), keys("text:Teal"), keys("Enter"),
-				keys("2"), keys("Down", "Down", "Down"), keys("text:Pineapple 2"), keys("Down"), keys("Enter"),
-				keys("1"),
-			},
-		},
-		{
-			name: "multi on the first tab, Other only",
-			qs:   []Question{toppings, colorTab},
-			as:   []Answer{{Text: "Ham"}, {Options: []int{0}}},
-			want: [][]Key{
-				keys("Down", "Down", "Down"), keys("text:Ham"), keys("Down"), keys("Enter"),
-				keys("1"),
-				keys("1"),
-			},
-		},
-		{
-			name: "single multi-select question still reviews",
-			qs:   []Question{toppings},
-			as:   []Answer{{Options: []int{0}}},
-			want: [][]Key{keys("1"), keys("Down", "Down", "Down", "Down"), keys("Enter"), keys("1")},
-		},
-		{
-			name: "preview digit moves the cursor, Enter submits",
-			qs:   []Question{layout},
-			as:   []Answer{{Options: []int{2}}},
-			want: [][]Key{keys("3"), keys("Enter")},
-		},
-		{
-			name: "preview tab, Enter advances",
-			qs:   []Question{size, speed},
-			as:   []Answer{{Options: []int{1}}, {Options: []int{0}}},
-			want: [][]Key{keys("2"), keys("Enter"), keys("1"), keys("1")},
-		},
-		{
-			name: "multi-select ignores previews",
-			qs:   []Question{{Text: toppings.Text, MultiSelect: true, Options: previews(opts("Cheese", "Melty", "Olives", "Salty", "Basil", "Fresh"))}},
-			as:   []Answer{{Options: []int{0}}},
-			want: [][]Key{keys("1"), keys("Down", "Down", "Down", "Down"), keys("Enter"), keys("1")},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			steps, err := Plan(tt.qs, tt.as)
-			if err != nil {
-				t.Fatal(err)
-			}
-			got := make([][]Key, 0, len(steps))
-			for _, s := range steps {
-				if s.Expect == nil {
-					t.Fatal("step without Expect")
-				}
-				got = append(got, s.Keys)
-			}
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("keys = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestPlanDoesNotReorderCallerOptions(t *testing.T) {
-	as := []Answer{{Options: []int{2, 0}}}
-	if _, err := Plan([]Question{toppings}, as); err != nil {
+func TestPlanStepDoesNotReorderCallerOptions(t *testing.T) {
+	a := Answer{Options: []int{2, 0}}
+	if _, err := PlanStep(m3, 1, a, readFixture(t, m3, "2.1.310/m3-q2-after-blue")); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(as[0].Options, []int{2, 0}) {
-		t.Errorf("options reordered to %v", as[0].Options)
+	if !reflect.DeepEqual(a.Options, []int{2, 0}) {
+		t.Errorf("options reordered to %v", a.Options)
 	}
 }
 
-func TestPlanErrors(t *testing.T) {
+func TestValidate(t *testing.T) {
 	nine := Question{Text: "Pick", Options: opts("a", "", "b", "", "c", "", "d", "", "e", "", "f", "", "g", "", "h", "", "i", "")}
 	tests := []struct {
 		name string
-		qs   []Question
-		as   []Answer
+		q    Question
+		a    Answer
 	}{
-		{"no questions", nil, nil},
-		{"fewer answers", []Question{colorTab, toppings}, []Answer{{Options: []int{0}}}},
-		{"option out of range", []Question{colorTab}, []Answer{{Options: []int{2}}}},
-		{"negative option", []Question{colorTab}, []Answer{{Options: []int{-1}}}},
-		{"duplicate option", []Question{toppings}, []Answer{{Options: []int{1, 1}}}},
-		{"single with two options", []Question{colorPlain}, []Answer{{Options: []int{0, 1}}}},
-		{"single with option and text", []Question{colorPlain}, []Answer{{Options: []int{0}, Text: "x"}}},
-		{"single empty", []Question{colorPlain}, []Answer{{}}},
-		{"multi empty", []Question{toppings}, []Answer{{}}},
-		{"more than 8 options", []Question{nine}, []Answer{{Options: []int{0}}}},
-		{"no options", []Question{{Text: "Pick"}}, []Answer{{Text: "x"}}},
-		{"empty question", []Question{{Text: " ", Options: opts("a", "")}}, []Answer{{Options: []int{0}}}},
-		{"empty label", []Question{{Text: "Pick", Options: opts("a", "", " ", "x")}}, []Answer{{Options: []int{0}}}},
-		{"blank text", []Question{colorPlain}, []Answer{{Text: "  "}}},
-		{"newline in text", []Question{colorPlain}, []Answer{{Text: "a\nb"}}},
-		{"escape in text", []Question{toppings}, []Answer{{Text: "a\x1b[A"}}},
-		{"text on a preview question", []Question{layout}, []Answer{{Text: "Masonry"}}},
+		{"option out of range", colorTab, Answer{Options: []int{2}}},
+		{"negative option", colorTab, Answer{Options: []int{-1}}},
+		{"duplicate option", toppings, Answer{Options: []int{1, 1}}},
+		{"single with two options", colorPlain, Answer{Options: []int{0, 1}}},
+		{"single with option and text", colorPlain, Answer{Options: []int{0}, Text: "x"}},
+		{"single empty", colorPlain, Answer{}},
+		{"multi empty", toppings, Answer{}},
+		{"more than 8 options", nine, Answer{Options: []int{0}}},
+		{"no options", Question{Text: "Pick"}, Answer{Text: "x"}},
+		{"empty question", Question{Text: " ", Options: opts("a", "")}, Answer{Options: []int{0}}},
+		{"empty label", Question{Text: "Pick", Options: opts("a", "", " ", "x")}, Answer{Options: []int{0}}},
+		{"blank text", colorPlain, Answer{Text: "  "}},
+		{"newline in text", colorPlain, Answer{Text: "a\nb"}},
+		{"escape in text", toppings, Answer{Text: "a\x1b[A"}},
+		{"commit mark in text", toppings, Answer{Text: "ham ✔"}},
+		{"text on a preview question", layout, Answer{Text: "Masonry"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if steps, err := Plan(tt.qs, tt.as); err == nil {
-				t.Errorf("Plan = %d steps, want an error", len(steps))
+			if err := validate(tt.q, tt.a); err == nil {
+				t.Error("validate passed, want an error")
 			}
 		})
 	}
