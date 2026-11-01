@@ -153,8 +153,8 @@ func (p *plan) send(keys ...Key) {
 
 // startPlan opens every plan: the pane must show exactly v, the view the plan
 // is built from. Up then returns the cursor to the first row (Submit on the
-// review) from anywhere (testdata/2.1.310/v3-q2-up4), checked with the view otherwise
-// unchanged, and startPlan returns that view.
+// review) from anywhere (testdata/2.1.310/v3-q2-up4), checked with the view
+// otherwise unchanged, and startPlan returns that view.
 func startPlan(qs []Question, v View) (*plan, View) {
 	p := &plan{qs: qs}
 	p.expect(viewIs(qs, v))

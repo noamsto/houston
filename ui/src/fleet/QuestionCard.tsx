@@ -111,15 +111,14 @@ export function QuestionCard({ item, runId, canAnswer, answerable, onLayout }: {
   if (!detail) return <FallbackRow call={call} />
   const terminalRunId = !done && canAnswer ? runId : undefined
   if (detail === 'error' || detail.inputOmitted) return <FallbackRow call={call} terminalRunId={terminalRunId} />
-  const questions = parsed
-  if (questions.length === 0) return <FallbackRow call={call} terminalRunId={terminalRunId} />
+  if (parsed.length === 0) return <FallbackRow call={call} terminalRunId={terminalRunId} />
 
   const output = done ? (detail.output ?? '') : ''
-  const answers = call.status === 'completed' ? parseAnswers(questions, output) : null
+  const answers = call.status === 'completed' ? parseAnswers(parsed, output) : null
 
   return (
     <div className="chat-question" data-seq={item.seq} data-id={item.id} data-status={call.status}>
-      {questions.map((q) => <QuestionBlock key={q.question} q={q} chosen={answers?.get(q.question)} />)}
+      {parsed.map((q) => <QuestionBlock key={q.question} q={q} chosen={answers?.get(q.question)} />)}
       {!done && canAnswer && !answerable && <div className="chat-question-pending">Waiting for an answer — answer in the Terminal tab</div>}
       {!done && !canAnswer && <div className="chat-question-declined">Not answered — the run ended or has no terminal</div>}
       {call.status === 'completed' && !answers && output && <pre className="chat-tool-output">{output}</pre>}
