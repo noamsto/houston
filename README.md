@@ -1,332 +1,153 @@
-# 🚀 houston
+# houston
 
-> Mission control for Claude Code agents in tmux
+Mission control for AI coding agents: a mobile-friendly web dashboard for watching your agents, answering their questions and sending them instructions from your phone.
 
-**houston** is a mobile-friendly web dashboard for monitoring and controlling tmux sessions remotely. Built specifically for keeping an eye on AI coding agents and sending them instructions from your phone.
+<p>
+  <img src="docs/images/fleet-mobile.png" alt="Fleet list on a phone: a crew of three workers and a dispatcher, one needing attention" width="260">
+  <img src="docs/images/chat-wizard-mobile.png" alt="A run's Chat tab on a phone, showing a step-by-step question wizard" width="260">
+</p>
 
-![Go](https://img.shields.io/badge/Go-1.23-00ADD8?logo=go)
-![License](https://img.shields.io/badge/license-MIT-blue)
+The screenshots use invented data.
 
-## Why houston?
+## What it does
 
-When you're running Claude Code agents in tmux sessions, you want to check on them without SSH'ing from your phone. houston gives you:
+- **Fleet**: every agent run in one list, with state (thinking, running, blocked, done, ...), the current tool, context usage and PR status. A run that needs a human is marked *needs you*; filters narrow the list to Active, Needs you, Stuck, Done or All.
+- **Chat**: the run's transcript as a conversation, live. Permission dialogs and Claude's multi-question prompts (`AskUserQuestion`) can be answered from here, step by step, with Back and a review screen.
+- **Terminal**: the run's tmux pane in the browser (xterm.js), with a composer, quick keys, image attach and voice input for the phone.
+- **Dispatcher and crew mode**: with the `dispatch` and `crew` CLIs installed, houston can start workers, group a crew under its dispatcher, show the crew bus feed, reply to a worker's question and restart a dispatcher.
+- **Federation**: mirror other houston instances (`-peer`) so one Fleet list covers several machines, and dispatch onto a peer.
 
-- 📱 **Mobile-first UI** - Touch-friendly interface optimized for phones
-- 👁️ **Live monitoring** - Stream terminal output in real-time via SSE
-- 🎯 **Smart status detection** - Recognizes Claude modes and activity states
-- 📸 **Image support** - Send screenshots directly to Claude Code
-- ⚡ **Lightweight** - Single Go binary, minimal dependencies
-- 🔒 **Secure** - Localhost-only, designed for Tailscale/SSH tunnel access
+On a wide screen the same views appear as a three-column console.
 
-## Features
+![The console (desktop) shell](docs/images/console.png)
 
-### Current (v0.1+)
+## Quick start
 
-- ✅ List all tmux sessions with smart status indicators
-- ✅ View windows and panes for any session
-- ✅ Live-stream terminal output from selected panes (SSE)
-- ✅ Send text input to any pane
-- ✅ Send images (screenshots) to Claude Code
-- ✅ Session status tracking (idle, active, mode-based)
-- ✅ Claude mode detection (plan mode, accept edits, etc.)
-- ✅ Mobile-responsive layout with dark mode
-- ✅ Activity-based window sorting
+Build and run (needs Go, Node and tmux; `nix develop` provides them):
 
-### Roadmap
-
-- [ ] Voice-to-text input (Web Speech API integration)
-- [ ] Quick actions (Ctrl+C, clear, scroll)
-- [ ] Search/filter sessions
-- [ ] Output highlighting (errors, warnings)
-- [ ] Keyboard shortcuts for power users
-- [ ] Session creation/management from UI
-- [ ] Notification on activity (service worker)
-- [ ] Multi-agent support (Aider, Cursor, Cline, etc.) - see `docs/GENERALIZATION_PLAN.md`
-
-## Quick Start
-
-### Using Nix (Recommended)
-
-```bash
-# Clone the repository
-git clone https://github.com/noamsto/houston
-cd houston
-
-# Enter development shell
+```fish
 nix develop
-
-# Run the server (auto-finds available port 9090-9095)
-just dev
+just build
+./houston
 ```
 
-### Using Go
+Or build the Nix package: `nix build .#default` puts the binary at `result/bin/houston`.
 
-```bash
-# Clone and build
-git clone https://github.com/noamsto/houston
-cd houston
-go build -o houston .
+houston listens on `127.0.0.1:9090` by default. On first run it writes a random access token to `<status-dir>/token`; opening the page issues it to your browser as a cookie. Run `houston doctor` to check the environment.
 
-# Run
-./houston -addr localhost:9090
+### Common flags
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `-addr` | `127.0.0.1:9090` | HTTP listen address |
+| `-mode` | `auto` | `auto`, `dispatcher` or `tmux` (see [Modes](#modes)) |
+| `-status-dir` | `$HOUSTON_STATE_DIR`, else `~/.local/state/houston` | Hook status files, token, peer tokens |
+| `-hostname` | none | Extra `Host` value to accept (repeatable) |
+| `-peer` | none | Peer houston to mirror, `NAME=URL` (repeatable) |
+| `-peer-token-file` | `<status-dir>/peers/NAME.token` | Token file for a peer, `NAME=PATH` (repeatable) |
+| `-repo-root` | `$HOME/git` | Directory the repo registry and picker are confined to (repeatable) |
+| `-opencode-url` | none | OpenCode server URL (skips discovery) |
+| `-no-opencode` | off | Disable the OpenCode integration |
+| `-claude-mod` | on | Listen for the read-only Claude Code mod's records |
+| `-debug` | off | Debug logging |
+| `-no-auth` | off | Disable the token check (not recommended) |
+
+`houston -h` lists them all; [docs/reference/dev-and-qa.md](docs/reference/dev-and-qa.md) covers the rest.
+
+## Reaching it safely
+
+houston can type into your agents' terminals, so treat access to it like shell access.
+
+- Every `/api/` request needs the token, as the `houston_token` cookie or an `Authorization: Bearer` header.
+- Origin and `Host` headers are checked. `Host` is pinned to names derived from the machine itself (hostname, Tailscale address, loopback); anything else gets a 421. Behind a reverse proxy or custom DNS name, add it with `-hostname`.
+- The default bind is loopback. To use it from a phone, put a tunnel in front: Tailscale (for example `tailscale serve --bg 9090`) or `ssh -L 9090:localhost:9090 host`.
+- `-no-auth` turns off the token only; the Origin and Host checks stay, and forwarding to peers is disabled.
+
+Details, including how peer tokens are handled: [docs/reference/security.md](docs/reference/security.md).
+
+## Modes
+
+`-mode` is resolved once at startup.
+
+**Dispatcher mode** is the full feature set: Dispatch form, reply to a worker, crew feed, restart, repo registry and the crew bus. `auto` picks it when both `dispatch` and `crew` are on the tmux server's `PATH`.
+
+**Tmux mode** is plain tmux plus agent hooks monitoring. The command-running routes are not registered (they return 404), and there is no crew bus. `auto` falls back to it when `dispatch` or `crew` is missing.
+
+Peers and the host list work in both modes. More: [docs/reference/modes-and-architecture.md](docs/reference/modes-and-architecture.md).
+
+## Supported agents
+
+| Agent | How houston sees it |
+|---|---|
+| Claude Code, Amp | tmux session monitoring, plus hooks and transcripts for Claude Code |
+| OpenCode | its HTTP/WebSocket API |
+| pi, Codex, Cursor | hookyard's normalized hook envelope; Fleet shows the engine as the run's agent |
+
+### Hooks
+
+Hook events give houston the state a pane alone cannot (a permission dialog waiting, a turn ending). Register them for Claude Code with:
+
+```fish
+houston hooks install     # add --dry-run to print the result without writing
+houston hooks check       # report which hooks are missing
 ```
 
-### Configuration
+`contrib/claude-mod/` is an optional read-only Claude Code hooks module that feeds houston richer session records over a Unix socket (`claude --plugin-dir contrib/claude-mod`). Details: [docs/reference/hooks-and-state.md](docs/reference/hooks-and-state.md).
 
-```bash
-# Available flags
-./houston \
-  -addr 127.0.0.1:9090 \                      # Listen address (localhost only)
-  -status-dir ~/.local/state/houston \        # Status files directory
-  -debug                                       # Enable debug logging
+### OpenCode
+
+OpenCode's TUI picks a random port that houston cannot discover. Either start it on a fixed port (`opencode --port 4096`; houston scans 4096-4100), pass `-opencode-url http://localhost:PORT`, or install the plugin so houston finds it on its own:
+
+```fish
+cp contrib/opencode-plugin/houston.ts ~/.config/opencode/plugins/
 ```
 
-## Usage
-
-### Access Securely
-
-houston binds to localhost by default for security. Access it via:
-
-**Option 1: Tailscale (Recommended)**
-```bash
-# Access from any device on your Tailnet
-http://your-machine:9090
-```
-
-**Option 2: SSH Tunnel**
-```bash
-# From your phone/remote machine
-ssh -L 9090:localhost:9090 your-server
-
-# Then visit http://localhost:9090
-```
-
-### Monitoring Sessions
-
-1. **Dashboard** - See all tmux sessions organized by status:
-   - 🔴 **Needs Attention** - Claude asking questions, showing errors, or awaiting choices
-   - 🟢 **Active** - Claude working or servers running
-   - ⚪ **Idle** - Shells, editors, or inactive sessions
-
-2. **Session Cards** - Show session name, branch, activity status, and preview
-
-3. **Live Output** - Tap a window to stream its terminal output in real-time
-
-4. **Send Commands** - Type in the input bar and hit Enter to send to Claude
-
-5. **Send Images** - Paste or upload screenshots to send to Claude Code
-
-### Status Detection
-
-houston intelligently detects what's happening in your tmux sessions:
-
-- **Claude Modes** - Recognizes plan mode, accept edits mode, etc.
-- **Activity States** - Working, waiting for input, error, question, choice
-- **Process Types** - Distinguishes shells, servers, editors, and Claude agents
-- **Git Branches** - Shows current branch for each window
-- **Priority Sorting** - Windows needing attention appear first
-
-## Architecture
-
-```
-┌───────────────────────────────────────────────────────┐
-│                   Mobile Browser                      │
-│  ┌──────────────────────────────────────────────────┐ │
-│  │  Session List  │  Terminal View  │  Input Bar    │ │
-│  │  (cards)       │  (live output)  │  (+ image)    │ │
-│  └──────────────────────────────────────────────────┘ │
-└───────────────────────────────────────────────────────┘
-                          │
-                SSE streams + templ components
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────┐
-│                  Go HTTP Server                     │
-│  • Session listing with smart filtering             │
-│  • SSE output streaming                             │
-│  • Command input handling                           │
-│  • Image upload and forwarding                      │
-│  • ANSI parser for status detection                 │
-└─────────────────────────────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────┐
-│                   tmux CLI                          │
-│  • List sessions/windows/panes                      │
-│  • Capture output with history                      │
-│  • Send keys and special commands                   │
-└─────────────────────────────────────────────────────┘
-```
-
-### Tech Stack
-
-| Component | Technology | Why |
-|-----------|-----------|-----|
-| Backend | Go | Single binary, excellent process handling |
-| Templates | templ | Type-safe HTML components |
-| Frontend | Vanilla JS | Minimal, fast, mobile-friendly |
-| Styling | Tailwind CSS | Utility-first, no build step |
-| Live updates | SSE (Server-Sent Events) | Simple, unidirectional real-time streaming |
-| Parsing | Custom ANSI parser | Detects Claude states and terminal modes |
-
-### Why SSE instead of WebSocket?
-
-houston uses **Server-Sent Events (SSE)** rather than WebSocket because:
-
-- **Simpler protocol** - SSE is just HTTP, easier to debug
-- **One-way streaming** - We only need server → client (terminal output)
-- **Auto-reconnection** - Built into browser EventSource API
-- **Input via POST** - User input sent through regular HTTP requests
-
-SSE is perfect for streaming terminal output while keeping the architecture simple.
-
-## Project Structure
-
-```
-houston/
-├── main.go              # Entry point, CLI flags
-├── server/
-│   └── server.go        # HTTP server, routes, handlers
-├── tmux/
-│   └── client.go        # tmux command wrappers
-├── status/
-│   ├── watcher.go       # Hook file monitoring
-│   └── panes.go         # Pane status tracking
-├── parser/
-│   ├── parser.go        # ANSI/control sequence parsing
-│   └── message_parser.go # Status message extraction
-├── hub/                 # Session discovery + transcripts
-├── runs/                # Run registry (tmux/hook/crew sources)
-├── hook/                # Claude hook install/doctor/state
-├── agents/              # Agent type detection
-├── opencode/            # OpenCode client + discovery
-├── terminal/            # Terminal font control
-├── ui/                  # React frontend (Vite)
-└── docs/                # Design notes and plans
-```
+Restart OpenCode after installing the plugin. All options: [docs/reference/dev-and-qa.md](docs/reference/dev-and-qa.md).
 
 ## Development
 
-### Prerequisites
+Backend in Go (single binary; `gorilla/websocket` and `fsnotify` are the only dependencies), frontend in React + TypeScript + Vite with xterm.js, embedded into the binary with `go:embed`. The run list streams over SSE; pane I/O uses WebSocket.
 
-- Go 1.23+
-- tmux
-- (Optional) Nix for reproducible builds
+| Command | What it does |
+|---|---|
+| `just dev` | Go backend with hot reload on the first free port in 7474-7479 |
+| `just ui-dev` | Vite dev server with HMR on 5173, proxying `/api` to the backend |
+| `just ui-build` | Production frontend build into `ui/dist` |
+| `just build` | Build the `houston` binary (embeds `ui/dist`) |
+| `just test`, `just lint`, `just race` | Go tests, linters, race detector |
 
-### Development Workflow
+Setup, the git hooks and the CI commands are in [CLAUDE.md](CLAUDE.md) under "Development Setup".
 
-```bash
-# Enter dev shell (Nix)
-nix develop
-
-# Run with auto-restart on file changes
-just dev
-
-# Run tests
-go test ./...
-
-# Lint
-golangci-lint run
+```
+main.go, embed.go   entry point, flags, go:embed of ui/dist
+server/             HTTP server, routes, WebSocket pane I/O, dispatch, peer forwarding
+runs/               run registry: tmux, hook, crew and peer sources
+hub/ hook/          session discovery and transcripts; `houston hook` ingest
+chat/ crewfeed/     transcript readers and crew feed (standard library only)
+tmux/ opencode/     tmux CLI wrapper; OpenCode client
+peer/ mode/         federation; dispatcher vs tmux mode
+ui/                 React frontend
+docs/               reference docs, specs and plans
 ```
 
-### Testing
+## Docs
 
-```bash
-# Run all tests
-go test ./...
+Reference docs in [docs/reference/](docs/reference/):
 
-# Test specific package
-go test ./parser -v
+- [modes-and-architecture.md](docs/reference/modes-and-architecture.md): modes and the architecture diagram
+- [fleet-runs.md](docs/reference/fleet-runs.md): run composition, needs-you, attention, Fleet grouping
+- [chat.md](docs/reference/chat.md): the Chat tab and answering prompts from it
+- [terminal-and-mobile.md](docs/reference/terminal-and-mobile.md): the terminal WebSocket protocol and mobile features
+- [navigation.md](docs/reference/navigation.md): hash routes and history
+- [hooks-and-state.md](docs/reference/hooks-and-state.md): hooks, the Claude mod, background tasks, context meter
+- [crew-feed.md](docs/reference/crew-feed.md): the crew activity feed
+- [dispatch.md](docs/reference/dispatch.md): dispatching workers and dispatchers, the repo registry
+- [federation.md](docs/reference/federation.md): peers and forwarding
+- [security.md](docs/reference/security.md): token, Origin and Host checks
+- [dev-and-qa.md](docs/reference/dev-and-qa.md): OpenCode setup, load measurement, QA harness
 
-# Run with race detector
-go test -race ./...
-
-# Test ANSI parser
-go test ./parser -run TestParse
-```
-
-### Building
-
-```bash
-# Standard build
-go build -o houston .
-
-# Nix build
-nix build
-
-# Result in ./result/bin/houston
-```
-
-## NixOS Integration
-
-houston includes a NixOS module for easy deployment:
-
-```nix
-# In your configuration.nix
-services.houston = {
-  enable = true;
-  port = 9090;
-  address = "127.0.0.1";
-  user = "yourusername";
-};
-```
-
-This sets up a systemd user service that starts automatically.
-
-## Security Considerations
-
-houston **does not include built-in authentication** by design. It relies on network-level security:
-
-1. **Binds to localhost only** - Not accessible from external networks
-2. **Tailscale recommended** - Secure private network access
-3. **SSH tunnel fallback** - Port forwarding for secure remote access
-
-### Future Authentication
-
-Planned authentication options:
-- Basic auth with password
-- Tailscale identity integration
-- mTLS with client certificates
-
-## tmux Integration
-
-### Hook Files
-
-houston can integrate with Claude Code hooks to detect session states. Create hook scripts that write status files to `~/.local/state/houston/`:
-
-```bash
-# Example: ~/.config/claude-code/hooks/session-start.sh
-echo "started" > ~/.local/state/houston/session-$CLAUDE_SESSION_ID
-```
-
-houston watches these files and updates session status accordingly.
-
-### Control Mode
-
-houston includes special support for Claude Code's control mode architecture, detecting when Claude is working in normal vs. control mode.
-
-## Contributing
-
-Contributions welcome! Please:
-
-1. Open an issue to discuss major changes
-2. Follow existing code style (use `gofmt`)
-3. Add tests for new functionality
-4. Update documentation
-5. Run `golangci-lint run` before submitting
-
-## License
-
-MIT License - See [LICENSE](LICENSE) for details
+Design notes and plans live in `docs/superpowers/` and `docs/design/`.
 
 ## Credits
 
-Built with:
-- [templ](https://templ.guide) - Type-safe Go templating
-- [Tailwind CSS](https://tailwindcss.com) - Utility-first CSS
-
-Inspired by the need to check on AI agents from a phone without fighting with terminal SSH clients.
-
----
-
-**houston** - Because remote mission control shouldn't require a laptop.
+Built on [xterm.js](https://xtermjs.org/), [React](https://react.dev/), [Vite](https://vite.dev/) and [gorilla/websocket](https://github.com/gorilla/websocket).
