@@ -517,7 +517,7 @@ func cutBox(text string) (ticked bool, rest string, ok bool) {
 // numberedRows groups area into count rows, each starting "N." after an
 // optional cursor, with the lines that wrap or describe it.
 func numberedRows(area []dialogLine, count int) ([][]dialogLine, bool) {
-	var rows [][]dialogLine
+	rows := make([][]dialogLine, 0, count)
 	for _, l := range area {
 		if len(rows) < count && strings.HasPrefix(cursorRow(l.norm).text, strconv.Itoa(len(rows)+1)+".") {
 			rows = append(rows, []dialogLine{l})

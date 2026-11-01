@@ -37,7 +37,7 @@ const notesFirst = "A very long first option label that keeps going past the edg
 
 // opts pairs up labels and descriptions: label, description, label, ….
 func opts(pairs ...string) []Option {
-	var out []Option
+	out := make([]Option, 0, len(pairs)/2)
 	for i := 0; i < len(pairs); i += 2 {
 		out = append(out, Option{Label: pairs[i], Description: pairs[i+1]})
 	}
