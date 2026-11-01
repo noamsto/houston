@@ -66,12 +66,12 @@ exports.run = async (ctx) => {
   const pane = ctx.env.CLAUDE_PANE
   let run = pane ? await runOf(ctx, pane) : null
   if (!run) {
-    for (const id of ['ask-single', 'ask-multi', 'permission', 'stale-409']) ctx.check(AREA, id, 'skip', 'agent: no claude run in this harness')
+    for (const id of ['ask-single', 'ask-multi', 'ask-wizard', 'permission', 'stale-409']) ctx.check(AREA, id, 'skip', 'agent: no claude run in this harness')
     return
   }
   const ready = await idleAgain(ctx, pane, 60000).catch((e) => e)
   if (ready instanceof Error) {
-    for (const id of ['ask-single', 'ask-multi', 'permission', 'stale-409']) ctx.check(AREA, id, 'skip', `agent: ${ready.message} within 60 s of the start`)
+    for (const id of ['ask-single', 'ask-multi', 'ask-wizard', 'permission', 'stale-409']) ctx.check(AREA, id, 'skip', `agent: ${ready.message} within 60 s of the start`)
     return
   }
   run = ready
@@ -79,8 +79,17 @@ exports.run = async (ctx) => {
   const chatUrl = ctx.url(`#/fleet/${run.id}/chat`)
   const answerPosts = []
   const answerFrames = []
+  // The wizard polls `state` every 2 s; only the requests a check clicks are
+  // counted, so `answerPosts.length > before` means that click's answer came back.
+  const kindOf = (req) => {
+    try {
+      return JSON.parse(req.postData() ?? '{}').kind
+    } catch {
+      return undefined
+    }
+  }
   page.on('request', (r) => {
-    if (r.method() !== 'POST' || !/\/answer$/.test(r.url())) return
+    if (r.method() !== 'POST' || !/\/answer$/.test(r.url()) || kindOf(r) === 'state') return
     try {
       answerFrames.push(JSON.parse(r.postData() ?? '{}').frame)
     } catch {
@@ -88,7 +97,7 @@ exports.run = async (ctx) => {
     }
   })
   page.on('response', (r) => {
-    if (r.request().method() === 'POST' && /\/answer$/.test(r.url())) answerPosts.push(r.status())
+    if (r.request().method() === 'POST' && /\/answer$/.test(r.url()) && kindOf(r.request()) !== 'state') answerPosts.push(r.status())
   })
 
   // tapGuarded clicks a permission choice but lets the answer leave the browser only
@@ -146,6 +155,41 @@ exports.run = async (ctx) => {
     return calls.length ? calls[calls.length - 1].toolCallId : null
   }
 
+  // The tabbed wizard card; a completed question above it renders as plain blocks.
+  const wiz = () => page.locator('.chat-question:has(.chat-question-wizard)').last()
+  const pickBtn = (label) =>
+    wiz().locator('button.chat-question-pick').filter({ has: page.locator('.chat-question-option-label', { hasText: new RegExp(`^${label}$`) }) })
+  const nextBtn = (text) => wiz().locator('button.chat-question-wizard-next', { hasText: new RegExp(`^${text}$`) })
+  const backBtn = () => wiz().locator('button.chat-question-wizard-back')
+  const submitBtn = () => wiz().locator('button.chat-question-wizard-next', { hasText: /^Submit$/ })
+  const expectProgress = async (want) => {
+    let seen = ''
+    await ctx.waitFor(async () => {
+      seen = ((await wiz().locator('.chat-question-wizard-progress').textContent({ timeout: 1000 }).catch(() => '')) ?? '').trim()
+      return seen === want
+    }, { timeout: 20000, message: () => `wizard progress reads ${JSON.stringify(seen)}, want ${JSON.stringify(want)}` })
+  }
+  // makeDriver clicks one wizard button, waits for its POST /answer, checks the
+  // status and the card's progress, and records `label status` in `posts`.
+  // `dump(n, label, when)` runs before the click and after the card updated.
+  const makeDriver = (dump) => {
+    const posts = []
+    let n = 0
+    const act = async (label, locator, wantStatus, wantProgress) => {
+      n++
+      dump?.(n, label, 'before')
+      const before = answerPosts.length
+      await locator.click()
+      await ctx.waitFor(() => answerPosts.length > before, { timeout: 30000, message: `no POST /answer after ${label}` })
+      const status = answerPosts[answerPosts.length - 1]
+      posts.push(`${label} ${status}`)
+      if (status !== wantStatus) throw new Error(`${label}: POST /answer -> ${status}, want ${wantStatus}`)
+      if (wantProgress) await expectProgress(wantProgress)
+      dump?.(n, label, 'after')
+    }
+    return { act, posts }
+  }
+
   try {
     // ---- ask-single ----
     await step(ctx, 'ask-single', async () => {
@@ -178,35 +222,31 @@ exports.run = async (ctx) => {
       await askQuestion(
         'Use the AskUserQuestion tool with two multiSelect questions at once: pets (cat, dog, fish) and sizes (small, large).',
       )
-      const blocks = page.locator('.chat-question').last().locator('.chat-question-block')
-      const n = await blocks.count()
-      if (n < 2) throw new Error(`picker shows ${n} question block(s), want 2`)
+      await expectProgress('1 of 2')
       const wantByQuestion = []
       const texts = []
-      for (let i = 0; i < 2; i++) {
-        const b = blocks.nth(i)
-        texts.push((await b.locator('.chat-question-text').textContent()).trim())
-        const kind = await b.locator('.chat-question-picks').getAttribute('role')
-        if (kind !== 'group') throw new Error(`question ${i + 1} is a ${kind}, want a multi-select group`)
-        const picks = b.locator('button.chat-question-pick[role="checkbox"]')
-        const labels = (await picks.locator('.chat-question-option-label').allTextContents()).map((s) => s.trim())
-        const chosen = i === 0 ? [labels[0], labels[1]] : [labels[0]]
-        for (const idx of i === 0 ? [0, 1] : [0]) await picks.nth(idx).click()
+      const stageMulti = async (ticks, withOther) => {
+        const group = wiz().locator('.chat-question-picks')
+        const kind = await group.getAttribute('role')
+        if (kind !== 'group') throw new Error(`question ${texts.length + 1} is a ${kind}, want a multi-select group`)
+        texts.push((await wiz().locator('.chat-question-text').textContent()).trim())
+        const labels = (await group.locator('button.chat-question-pick[role="checkbox"] .chat-question-option-label').allTextContents()).map((s) => s.trim()).filter((l) => l !== 'Other')
+        const chosen = labels.slice(0, ticks)
+        for (const l of chosen) await pickBtn(l).click()
+        if (withOther) {
+          await pickBtn('Other').click()
+          await wiz().locator('input.chat-question-other-input').fill(withOther)
+          chosen.push(withOther)
+        }
         wantByQuestion.push(chosen)
       }
-      // Other text on the second question.
-      const second = blocks.nth(1)
-      const otherPick = second.locator('button.chat-question-pick[role="checkbox"]').filter({ has: page.locator('.chat-question-option-label', { hasText: /^Other$/ }) })
-      await otherPick.click()
-      const otherInput = second.locator('input.chat-question-other-input')
-      await otherInput.fill('qa-other')
-      wantByQuestion[1].push('qa-other')
+      await stageMulti(2, '')
+      const driveMulti = makeDriver()
+      await driveMulti.act('multi-step1', nextBtn('Next'), 200, '2 of 2')
+      await stageMulti(1, 'qa-other')
       const shotStaged = await ctx.shot(page, 'answer-multi-staged')
-      const sendBtn = page.locator('.chat-question-send-btn').last()
-      const before = answerPosts.length
-      await sendBtn.click()
-      await ctx.waitFor(() => answerPosts.length > before, { timeout: 30000, message: 'no POST /answer observed' })
-      if (answerPosts[answerPosts.length - 1] !== 204) throw new Error(`POST /answer -> ${answerPosts[answerPosts.length - 1]}, want 204`)
+      await driveMulti.act('multi-step2', nextBtn('Review'), 200, 'Review your answers')
+      await driveMulti.act('multi-submit', submitBtn(), 204)
       const callId = await lastQuestionCallId()
       const t = await ctx.waitFor(async () => {
         const x = await toolOutput(callId)
@@ -220,7 +260,100 @@ exports.run = async (ctx) => {
         if (JSON.stringify(got) !== JSON.stringify(want)) throw new Error(`question ${i + 1}: tool_result ${JSON.stringify(got)}, wanted exactly ${JSON.stringify(want)} (raw ${JSON.stringify(t.output)})`)
       }
       const idle = await settleNote()
-      return { note: `204; tool_result matches exactly: ${JSON.stringify(wantByQuestion)}${idle}`, shot: shotStaged }
+      return { note: `${driveMulti.posts.join(', ')}; tool_result matches exactly: ${JSON.stringify(wantByQuestion)}${idle}`, shot: shotStaged }
+    })
+
+    // ---- ask-wizard: three mixed questions, Back twice and change an answer ----
+    await step(ctx, 'ask-wizard', async () => {
+      const shotsDir = process.env.SHOTS || path.join(ctx.S, 'shots')
+      fs.mkdirSync(shotsDir, { recursive: true })
+      const dump = (n, label, when) =>
+        fs.writeFileSync(path.join(shotsDir, `wizard-${String(n).padStart(2, '0')}-${label}-${when}.txt`), ctx.capture(pane, { lines: 60 }))
+      const drive = makeDriver(dump)
+      try {
+        await askQuestion(
+          'Call AskUserQuestion exactly once with three questions. Q1 single-select "Which color do you prefer?" header "Color", options "Red" (description "Warm"), "Blue" (description "Cool"). Q2 multiSelect "Which toppings do you want?" header "Toppings", options "Cheese" (description "Melty"), "Olives" (description "Salty"), "Basil" (description "Fresh"). Q3 single-select "Pick a size?" header "Size", options "Small" (description "Compact"), "Large" (description "Roomy"). Nothing else.',
+        )
+        const callId = await ctx.waitFor(lastQuestionCallId, { timeout: 15000, message: 'no AskUserQuestion tool call in the chat page' })
+        const paneState = async () => {
+          const r = await ctx.api(`/api/runs/${run.id}/answer`, { method: 'POST', body: { kind: 'state', toolCallId: callId } })
+          if (r.status !== 200) throw new Error(`POST /answer state -> ${r.status} ${r.text.slice(0, 120)}`)
+          return r.json
+        }
+        const state0 = await paneState()
+        const labelsOf = (q) => q.options.map((o) => o.label).join('/')
+        const shape = state0.questions.map((q) => `${q.multiSelect ? 'multi' : 'single'}:${labelsOf(q)}`).join(' | ')
+        if (!state0.tabbed || shape !== 'single:Red/Blue | multi:Cheese/Olives/Basil | single:Small/Large') {
+          skipOut(`agent: asked a different question set than requested (${shape})`)
+        }
+        const texts = state0.questions.map((q) => q.question)
+        await expectProgress('1 of 3')
+
+        const squash = (s) => String(s ?? '').replace(/\s+/g, '')
+        // The pane's own report of the shown tab, then what the card renders from it.
+        const expectShown = async (stepIdx, options, text, on, off) => {
+          const st = await paneState()
+          if (st.step !== stepIdx) throw new Error(`pane reports step ${st.step}, want ${stepIdx}`)
+          if (JSON.stringify(st.options ?? []) !== JSON.stringify(options)) throw new Error(`pane reports options ${JSON.stringify(st.options ?? [])} on step ${stepIdx + 1}, want ${JSON.stringify(options)}`)
+          if (squash(st.text) !== squash(text)) throw new Error(`pane reports Other text ${JSON.stringify(st.text ?? '')} on step ${stepIdx + 1}, want ${JSON.stringify(text)}`)
+          let seen = ''
+          await ctx.waitFor(async () => {
+            const ons = await Promise.all(on.map(async (l) => (await pickBtn(l).getAttribute('aria-checked')) === 'true'))
+            const offs = await Promise.all(off.map(async (l) => (await pickBtn(l).getAttribute('aria-checked')) === 'false'))
+            const typed = text ? await wiz().locator('input.chat-question-other-input').inputValue().catch(() => null) : ''
+            seen = `on ${JSON.stringify(ons)} off ${JSON.stringify(offs)} other text ${JSON.stringify(typed)}`
+            return ons.every(Boolean) && offs.every(Boolean) && (!text || squash(typed) === squash(text))
+          }, { timeout: 10000, message: () => `card on step ${stepIdx + 1} does not show ${JSON.stringify(on)} on / ${JSON.stringify(off)} off / Other ${JSON.stringify(text)}: ${seen}` })
+        }
+
+        // Step 1: Blue.
+        await pickBtn('Blue').click()
+        await drive.act('step1-blue-next', nextBtn('Next'), 200, '2 of 3')
+        // Step 2: Cheese plus Other text.
+        await pickBtn('Cheese').click()
+        await pickBtn('Other').click()
+        await wiz().locator('input.chat-question-other-input').fill('extra pepper')
+        await drive.act('step2-next', nextBtn('Next'), 200, '3 of 3')
+        // Back to step 2, then step 1: the pane keeps both selections.
+        await drive.act('back-from-3', backBtn(), 200, '2 of 3')
+        await expectShown(1, [0], 'extra pepper', ['Cheese', 'Other'], ['Olives', 'Basil'])
+        await drive.act('back-from-2', backBtn(), 200, '1 of 3')
+        await expectShown(0, [1], '', ['Blue'], ['Red'])
+        // Change Blue to Red and walk forward again.
+        await pickBtn('Red').click()
+        await drive.act('step1-red-next', nextBtn('Next'), 200, '2 of 3')
+        await expectShown(1, [0], 'extra pepper', ['Cheese', 'Other'], ['Olives', 'Basil'])
+        await drive.act('step2-next-again', nextBtn('Next'), 200, '3 of 3')
+        // Step 3: Large, then the review screen.
+        await pickBtn('Large').click()
+        await drive.act('step3-large-review', nextBtn('Review'), 200, 'Review your answers')
+        const rows = (await wiz().locator('.chat-question-wizard-review-a').allTextContents()).map((s) => s.replace(/\s+/g, ' ').trim())
+        const wantRows = ['Red', 'Cheese, extra pepper', 'Large']
+        if (JSON.stringify(rows) !== JSON.stringify(wantRows)) throw new Error(`review rows ${JSON.stringify(rows)}, want ${JSON.stringify(wantRows)}`)
+        const paneReview = (await paneState()).review ?? []
+        if (JSON.stringify(paneReview.map((s) => s.replace(/\s+/g, ' ').trim())) !== JSON.stringify(wantRows)) throw new Error(`pane review ${JSON.stringify(paneReview)}, want ${JSON.stringify(wantRows)}`)
+        const shotReview = await ctx.shot(page, 'answer-wizard-review')
+        await drive.act('submit', submitBtn(), 204)
+
+        const t = await ctx.waitFor(async () => {
+          const x = await toolOutput(callId)
+          return x && x.status === 'completed' && x.output ? x : null
+        }, { timeout: 60000, message: 'AskUserQuestion never completed with an output' })
+        const gotRaw = parseOutput(t.output, texts)
+        if (gotRaw.some((g) => g === undefined)) throw new Error(`could not parse tool_result ${JSON.stringify(t.output)} for questions ${JSON.stringify(texts)}`)
+        const want = [['Red'], ['Cheese', 'extra pepper'], ['Large']]
+        for (let i = 0; i < 3; i++) {
+          const got = gotRaw[i].split(', ').filter(Boolean).sort()
+          if (JSON.stringify(got) !== JSON.stringify([...want[i]].sort())) throw new Error(`question ${i + 1}: tool_result ${JSON.stringify(got)}, wanted exactly ${JSON.stringify(want[i])} (raw ${JSON.stringify(t.output)})`)
+        }
+        const idle = await settleNote()
+        return { note: `POST /answer: ${drive.posts.join(', ')}; Back kept the pane selection, review ${JSON.stringify(wantRows)}; tool_result matches: ${JSON.stringify(want)}; captures wizard-NN-*.txt in ${shotsDir}${idle}`, shot: shotReview }
+      } catch (e) {
+        // A dialog left open would block the checks after this one.
+        paneEscape(ctx, pane)
+        if (e && e.skip) throw e
+        throw new Error(`${e instanceof Error ? e.message : e} (POST /answer so far: ${drive.posts.join(', ')})`)
+      }
     })
 
     // ---- permission (Yes, then No) and stale-409 on the second dialog ----

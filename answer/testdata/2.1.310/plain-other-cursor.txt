@@ -1,0 +1,22 @@
+❯ Call AskUserQuestion exactly once: one single-select
+  question "Which color do you prefer?" header "Color",
+  options label "Red" description "Warm", label "Blue"
+  description "Cool", label "Green" description "Natural".
+  Nothing else.
+────────────────────────────────────────────────────────────
+ ☐ Color
+
+Which color do you prefer?
+
+  1. Red
+     Warm
+  2. Blue
+     Cool
+  3. Green
+     Natural
+❯ 4. Type something.
+────────────────────────────────────────────────────────────
+  5. Chat about this
+
+-- INSERT -- · Enter to select · ↑/↓ to navigate · ctrl+g to
+edit in Nvim

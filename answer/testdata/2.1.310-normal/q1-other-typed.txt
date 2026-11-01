@@ -1,0 +1,44 @@
+❯ Call AskUserQuestion exactly once with two questions. Q1
+  single-select "Which color do you prefer?" header
+  "Color", options "Red" (description "Warm"), "Blue"
+  (description "Cool"). Q2 multiSelect "Which toppings do
+  you want?" header "Toppings", options "Cheese"
+  (description "Melty"), "Olives" (description "Salty"),
+  "Basil" (description "Fresh"). Nothing else.
+────────────────────────────────────────────────────────────
+←  ☐ Color  ☐ Toppings  ✔ Submit  →
+
+Which color do you prefer?
+
+  1. Red
+     Warm
+  2. Blue
+     Cool
+❯ 3. teal
+────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · Tab/Arrow keys to navigate · ctrl+g to
+edit in Nvim · Esc to cancel
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+───────────────────────────────────────────────── qa-named ─

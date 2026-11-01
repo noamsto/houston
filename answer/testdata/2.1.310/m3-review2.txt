@@ -1,0 +1,28 @@
+❯ Call AskUserQuestion exactly once with three questions.
+  Q1 single-select "Which color do you prefer?" header
+  "Color", options "Red" (description "Warm"), "Blue"
+  (description "Cool"). Q2 multiSelect "Which toppings do
+  you want?" header "Toppings", options "Cheese"
+  (description "Melty"), "Olives" (description "Salty"),
+  "Basil" (description "Fresh"). Q3 single-select "Pick a
+  size?" header "Size", options "Small" (description
+  "Compact"), "Large" (description "Roomy"); each Q3 option
+  has a preview that is a 3-line ASCII box using only + -
+  | and letters. Nothing else.
+
+────────────────────────────────────────────────────────────
+←  ☒ Color  ☒ Toppings  ☒ Size  ✔ Submit  →
+
+Review your answers
+
+ ● Which color do you prefer?
+   → Red
+ ● Which toppings do you want?
+   → Cheese, Basil, no onions
+ ● Pick a size?
+   → Small
+
+Ready to submit your answers?
+
+❯ 1. Submit answers
+  2. Cancel

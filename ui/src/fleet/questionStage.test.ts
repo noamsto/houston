@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { emptyStage, isComplete, setText, toggleOption, toggleOther, toWire } from './questionStage'
+import {
+  emptyStage,
+  isStageComplete,
+  setText,
+  stageFromSelection,
+  toAnswer,
+  toggleOption,
+  toggleOther,
+} from './questionStage'
 
 describe('single-select staging', () => {
   it('choosing an option replaces the previous one', () => {
@@ -33,40 +41,48 @@ describe('multi-select staging', () => {
   })
 })
 
-describe('isComplete', () => {
-  it('needs every question answered', () => {
-    expect(isComplete([])).toBe(false)
-    expect(isComplete([toggleOption(emptyStage(), 0, false), emptyStage()])).toBe(false)
-    expect(isComplete([toggleOption(emptyStage(), 0, false), toggleOption(emptyStage(), 1, true)])).toBe(true)
+describe('stageFromSelection', () => {
+  it('seeds options and Other from the pane selection', () => {
+    expect(stageFromSelection([0, 2], 'mine', true)).toEqual({ options: [0, 2], otherOn: true, text: 'mine' })
   })
 
-  it('Other needs non-blank text', () => {
-    const on = toggleOther(emptyStage(), false)
-    expect(isComplete([on])).toBe(false)
-    expect(isComplete([setText(on, '   ')])).toBe(false)
-    expect(isComplete([setText(on, 'x')])).toBe(true)
+  it('treats missing options and text as an empty stage', () => {
+    expect(stageFromSelection(undefined, undefined, false)).toEqual(emptyStage())
   })
 
-  it('a multi-select with an option and a blank Other is incomplete', () => {
-    expect(isComplete([toggleOther(toggleOption(emptyStage(), 0, true), true)])).toBe(false)
+  it('sorts a copy of the options', () => {
+    const options = [2, 0, 1]
+    expect(stageFromSelection(options, undefined, true).options).toEqual([0, 1, 2])
+    expect(options).toEqual([2, 0, 1])
   })
 
-  it('a multi-select accepts options and Other together', () => {
-    expect(isComplete([setText(toggleOther(toggleOption(emptyStage(), 0, true), true), 'x')])).toBe(true)
+  it('single-select keeps at most the first option', () => {
+    expect(stageFromSelection([1, 2], undefined, false).options).toEqual([1])
+  })
+
+  it('Other is on only when the text is non-empty', () => {
+    expect(stageFromSelection([0], '', true).otherOn).toBe(false)
+    expect(stageFromSelection([0], 'x', true).otherOn).toBe(true)
   })
 })
 
-describe('toWire', () => {
-  it('numbers the questions and trims the Other text', () => {
+describe('toAnswer', () => {
+  it('sends options and trimmed Other text without a question field', () => {
     const other = setText(toggleOther(toggleOption(emptyStage(), 1, true), true), '  mine ')
-    expect(toWire([toggleOption(emptyStage(), 0, false), other])).toEqual([
-      { question: 0, options: [0] },
-      { question: 1, options: [1], text: 'mine' },
-    ])
+    expect(toAnswer(other)).toEqual({ options: [1], text: 'mine' })
   })
 
-  it('omits text when Other is off, even if text remains', () => {
-    const s = toggleOption(setText(toggleOther(emptyStage(), false), 'stale'), 0, false)
-    expect(toWire([s])).toEqual([{ question: 0, options: [0] }])
+  it('omits text when Other is off or blank', () => {
+    expect(toAnswer(toggleOption(setText(toggleOther(emptyStage(), false), 'stale'), 0, false))).toEqual({ options: [0] })
+    expect(toAnswer(setText(toggleOther(toggleOption(emptyStage(), 0, true), true), '  '))).toEqual({ options: [0] })
+  })
+})
+
+describe('isStageComplete', () => {
+  it('needs an option or non-blank Other text, and a blank Other blocks', () => {
+    expect(isStageComplete(emptyStage())).toBe(false)
+    expect(isStageComplete(toggleOption(emptyStage(), 0, false))).toBe(true)
+    expect(isStageComplete(toggleOther(toggleOption(emptyStage(), 0, true), true))).toBe(false)
+    expect(isStageComplete(setText(toggleOther(emptyStage(), false), 'x'))).toBe(true)
   })
 })

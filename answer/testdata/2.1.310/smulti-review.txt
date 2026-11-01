@@ -1,0 +1,18 @@
+❯ Call AskUserQuestion exactly once: one multiSelect
+  question "Which toppings do you want?" header "Toppings",
+  options "Cheese" (description "Melty"), "Olives"
+  (description "Salty"), "Basil" (description "Fresh").
+  Nothing else.
+
+────────────────────────────────────────────────────────────
+←  ☒ Toppings  ✔ Submit  →
+
+Review your answers
+
+ ● Which toppings do you want?
+   → Olives, ham
+
+Ready to submit your answers?
+
+❯ 1. Submit answers
+  2. Cancel

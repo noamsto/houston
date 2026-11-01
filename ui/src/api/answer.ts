@@ -1,9 +1,3 @@
-export interface QuestionAnswer {
-  question: number
-  options: number[]
-  text?: string
-}
-
 export type AnswerResult =
   | { ok: true }
   // The pane no longer shows the prompt that was answered. `partial`: some keys
@@ -29,14 +23,52 @@ function isPartial(body: string): boolean {
   }
 }
 
-async function post(runId: string, body: unknown): Promise<AnswerResult> {
+export interface StateOption {
+  label: string
+  description?: string
+}
+
+export interface StateQuestion {
+  question: string
+  header?: string
+  multiSelect: boolean
+  preview: boolean
+  options: StateOption[]
+}
+
+/** The pane's view of a question call. `options`/`text` are the selection on
+ *  the current tab; `review` is the pane's answer strings on the review screen. */
+export interface QuestionState {
+  tabbed: boolean
+  step: number
+  count: number
+  questions: StateQuestion[]
+  options?: number[]
+  text?: string
+  review?: string[]
+}
+
+export interface StepAnswer {
+  options: number[]
+  text?: string
+}
+
+export type StepResult = { ok: true; state?: QuestionState } | { moved: true; partial: boolean } | { error: string }
+
+const answerUrl = (runId: string) => `/api/runs/${encodeURIComponent(runId)}/answer`
+
+async function send(runId: string, body: unknown): Promise<StepResult> {
   try {
-    const res = await fetch(`/api/runs/${encodeURIComponent(runId)}/answer`, {
+    const res = await fetch(answerUrl(runId), {
       method: 'POST',
       signal: AbortSignal.timeout(15000),
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     })
+    if (res.status === 200) {
+      const state = (await res.json().catch(() => undefined)) as QuestionState | undefined
+      return state ? { ok: true, state } : { error: 'could not read the terminal state' }
+    }
     if (res.ok) return { ok: true }
     if (res.status === 401) return { error: 'session expired — reload' }
     const text = (await res.text().catch(() => '')).trim()
@@ -53,8 +85,35 @@ async function post(runId: string, body: unknown): Promise<AnswerResult> {
   }
 }
 
-export function answerQuestion(runId: string, toolCallId: string, answers: QuestionAnswer[]): Promise<AnswerResult> {
-  return post(runId, { kind: 'question', toolCallId, answers })
+async function post(runId: string, body: unknown): Promise<AnswerResult> {
+  const r = await send(runId, body)
+  return 'ok' in r ? { ok: true } : r
+}
+
+export function answerStep(runId: string, toolCallId: string, index: number, answer: StepAnswer): Promise<StepResult> {
+  return send(runId, { kind: 'step', toolCallId, index, answer })
+}
+
+export function answerBack(runId: string, toolCallId: string, index: number): Promise<StepResult> {
+  return send(runId, { kind: 'back', toolCallId, index })
+}
+
+export function answerSubmit(runId: string, toolCallId: string, review: string[]): Promise<StepResult> {
+  return send(runId, { kind: 'submit', toolCallId, review })
+}
+
+/** The pane's state for this question call, or null when it shows none (404).
+ *  Any other failure throws, so a poller can keep its last value. */
+export async function readQuestionState(runId: string, toolCallId: string): Promise<QuestionState | null> {
+  const res = await fetch(answerUrl(runId), {
+    method: 'POST',
+    signal: AbortSignal.timeout(10000),
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kind: 'state', toolCallId }),
+  })
+  if (res.status === 404) return null
+  if (!res.ok) throw new Error(`readQuestionState: ${res.status} ${await res.text()}`)
+  return (await res.json()) as QuestionState
 }
 
 export function answerChoice(runId: string, ordinal: number, frame: string): Promise<AnswerResult> {

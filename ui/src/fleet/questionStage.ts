@@ -1,4 +1,4 @@
-import type { QuestionAnswer } from '../api/answer'
+import type { StepAnswer } from '../api/answer'
 
 /** One question's staged answer; `options` holds ascending 0-based indexes. */
 export interface Stage {
@@ -22,23 +22,23 @@ export function toggleOther(s: Stage, multi: boolean): Stage {
   return { ...s, otherOn: !s.otherOn }
 }
 
+/** Seeds a stage from the pane's selection; Other is on when it holds text. */
+export function stageFromSelection(options: number[] | undefined, text: string | undefined, multi: boolean): Stage {
+  const sorted = [...(options ?? [])].sort((a, b) => a - b)
+  return { options: multi ? sorted : sorted.slice(0, 1), otherOn: !!text, text: text ?? '' }
+}
+
 export const setText = (s: Stage, text: string): Stage => ({ ...s, text })
 
 const hasText = (s: Stage) => s.otherOn && s.text.trim() !== ''
 
-function isStageComplete(s: Stage): boolean {
+export function isStageComplete(s: Stage): boolean {
   if (s.otherOn && !hasText(s)) return false
   return s.options.length > 0 || hasText(s)
 }
 
-export function isComplete(stages: Stage[]): boolean {
-  return stages.length > 0 && stages.every(isStageComplete)
-}
-
-export function toWire(stages: Stage[]): QuestionAnswer[] {
-  return stages.map((s, question) => {
-    const answer: QuestionAnswer = { question, options: s.options }
-    if (hasText(s)) answer.text = s.text.trim()
-    return answer
-  })
+export function toAnswer(s: Stage): StepAnswer {
+  const answer: StepAnswer = { options: s.options }
+  if (hasText(s)) answer.text = s.text.trim()
+  return answer
 }
