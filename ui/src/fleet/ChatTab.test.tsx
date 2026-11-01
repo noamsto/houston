@@ -250,7 +250,7 @@ describe('ChatTab', () => {
 
     await waitFor(() => expect(container.querySelector('.chat-diff')).toBeTruthy())
     expect(container.querySelector('.chat-diff')!.textContent).toBe('- foo\n- bar\n+ foo\n+ baz')
-    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/chat/tool/t1'))
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/chat/tool/t1'), expect.anything())
   })
 
   async function expandTool(container: HTMLElement, tool: string) {

@@ -91,7 +91,9 @@ export async function fetchChatPage(
 }
 
 export async function fetchTool(runId: string, callId: string): Promise<ChatToolDetail> {
-  const res = await fetch(`/api/runs/${encodeURIComponent(runId)}/chat/tool/${encodeURIComponent(callId)}`)
+  const res = await fetch(`/api/runs/${encodeURIComponent(runId)}/chat/tool/${encodeURIComponent(callId)}`, {
+    signal: AbortSignal.timeout(10000),
+  })
   if (!res.ok) throw new Error(`fetchTool: ${res.status} ${await res.text()}`)
   return (await res.json()) as ChatToolDetail
 }
