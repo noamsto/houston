@@ -26,6 +26,8 @@
             dontNpmInstall = true;
           };
         in {
+          pre-commit.settings.package = pkgs.prek;
+
           pre-commit.settings.hooks = {
             golangci-lint.enable = true;
 
