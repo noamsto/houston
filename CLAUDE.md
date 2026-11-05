@@ -121,13 +121,13 @@ go build -o houston .
 
 ### Pre-commit Hooks
 
-Managed by `git-hooks.nix`. Auto-installed on `nix develop` / `direnv reload`.
+Managed by `git-hooks.nix` and run by `prek`. Auto-installed on `nix develop` / `direnv reload`.
 
 - **golangci-lint** — runs on staged `.go` files
 - **eslint** — runs `npx eslint .` in `ui/` when `.ts`/`.tsx` files change
 - **tsc** — runs `tsc -b` in `ui/` when `.ts`/`.tsx` files change
 
-Run all hooks manually: `pre-commit run -a`
+Run all hooks manually: `prek run -a`
 Skip hooks: `git commit --no-verify`
 
 
