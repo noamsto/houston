@@ -87,7 +87,7 @@ race:
 # The Claude Code release the read-only mod is written against
 claude_code := "@anthropic-ai/claude-code@2.1.302"
 
-# Validate and test the Claude Code mod as CI does; fails on a call on $ beyond the allowed four
+# Validate and test the Claude Code mod and the pi extension as CI does; fails on a call on $ beyond the allowed four
 mod-check:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -108,3 +108,5 @@ mod-check:
         exit 1
     fi
     npx -y {{claude_code}} plugin test contrib/claude-mod
+    go test ./claudemod -run 'TestScanPi|TestPiExtension' -count=1
+    node --test contrib/pi-mod/houston.test.ts

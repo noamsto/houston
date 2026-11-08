@@ -1,0 +1,11 @@
+[
+  {"v": 1, "engine": "pi", "sid": "sid-1", "boot": "BOOT", "seq": 1, "ts": 1000, "ev": "session.start", "cwd": "/tmp/p", "transcript": "/tmp/p/s.jsonl", "pane": "%7", "tmux_server": "4242"},
+  {"v": 1, "engine": "pi", "sid": "sid-1", "boot": "BOOT", "seq": 2, "ts": 1000, "ev": "turn.start", "cwd": "/tmp/p", "transcript": "/tmp/p/s.jsonl", "pane": "%7", "tmux_server": "4242"},
+  {"v": 1, "engine": "pi", "sid": "sid-1", "boot": "BOOT", "seq": 3, "ts": 1000, "ev": "step.start"},
+  {"v": 1, "engine": "pi", "sid": "sid-1", "boot": "BOOT", "seq": 4, "ts": 1000, "ev": "tool.start", "tool": "bash", "id": "tc1"},
+  {"v": 1, "engine": "pi", "sid": "sid-1", "boot": "BOOT", "seq": 5, "ts": 1000, "ev": "tool.end", "tool": "bash", "id": "tc1"},
+  {"v": 1, "engine": "pi", "sid": "sid-1", "boot": "BOOT", "seq": 6, "ts": 1000, "ev": "compact.end"},
+  {"v": 1, "engine": "pi", "sid": "sid-1", "boot": "BOOT", "seq": 7, "ts": 1000, "ev": "turn.complete", "reason": "answer"},
+  {"v": 1, "engine": "pi", "sid": "sid-1", "boot": "BOOT", "seq": 8, "ts": 1000, "ev": "heartbeat"},
+  {"v": 1, "engine": "pi", "sid": "sid-1", "boot": "BOOT", "seq": 9, "ts": 1000, "ev": "session.end", "reason": "quit"}
+]

@@ -66,12 +66,13 @@ type Ask struct {
 
 // Record is one mod event as posted.
 type Record struct {
-	V    int    `json:"v"`
-	SID  string `json:"sid"`
-	Boot string `json:"boot"`
-	Seq  int64  `json:"seq"`
-	TS   int64  `json:"ts"`
-	Ev   string `json:"ev"`
+	V      int    `json:"v"`
+	SID    string `json:"sid"`
+	Boot   string `json:"boot"`
+	Seq    int64  `json:"seq"`
+	TS     int64  `json:"ts"`
+	Ev     string `json:"ev"`
+	Engine string `json:"engine,omitempty"`
 
 	Turn     string `json:"turn,omitempty"`
 	Agent    string `json:"agent,omitempty"`
@@ -102,8 +103,15 @@ type Record struct {
 	Ask         []Ask  `json:"ask,omitempty"`
 }
 
+// EnginePi is the engine value a pi extension's records carry.
+const EnginePi = "pi"
+
+// engineClaude is the engine value a Claude Code mod's records carry.
+const engineClaude = "claude"
+
 // Event names a record's ev can carry.
 const (
+	evStepStart    = "step.start"
 	evSessionStart = "session.start"
 	evSessionEnd   = "session.end"
 	evCompact      = "compact"
@@ -124,12 +132,12 @@ var validEv = map[string]bool{
 	evSessionStart: true, evSessionEnd: true, evCompact: true, evTurnStart: true,
 	evTurnComplete: true, evToolStart: true, evToolEnd: true, evToolCheck: true,
 	evNotification: true, evPermission: true, evStop: true, evTaskEnd: true,
-	evCompactEnd: true, evHeartbeat: true,
+	evCompactEnd: true, evHeartbeat: true, evStepStart: true,
 }
 
 // Decode reads exactly one record from r. It returns ErrTooLarge for a body
 // over MaxBody and rejects invalid JSON, trailing data, v != 1, an empty or
-// over-long sid or boot, seq < 1, ts < 1 and an unknown ev.
+// over-long sid or boot, seq < 1, ts < 1, an unknown engine and an unknown ev.
 func Decode(r io.Reader) (Record, error) {
 	body, err := io.ReadAll(io.LimitReader(r, MaxBody+1))
 	if err != nil {
@@ -161,6 +169,8 @@ func Decode(r io.Reader) (Record, error) {
 		return Record{}, fmt.Errorf("invalid seq %d", rec.Seq)
 	case rec.TS < 1:
 		return Record{}, fmt.Errorf("invalid ts %d", rec.TS)
+	case rec.Engine != "" && rec.Engine != engineClaude && rec.Engine != EnginePi:
+		return Record{}, fmt.Errorf("unknown engine %q", rec.Engine)
 	case !validEv[rec.Ev]:
 		return Record{}, fmt.Errorf("unknown ev %q", rec.Ev)
 	}
