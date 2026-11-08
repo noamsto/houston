@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QuestionWizard } from './QuestionWizard'
 import type { QuestionState, StateQuestion } from '../api/answer'
@@ -385,5 +385,158 @@ describe('QuestionWizard without a dialog', () => {
     reply = ok(at(0))
     await act(async () => { await vi.advanceTimersByTimeAsync(2000) })
     expect(screen.getAllByRole('radio').length).toBeGreaterThan(0)
+  })
+})
+
+describe('QuestionWizard keyboard focus', () => {
+  // jsdom keeps focus on an element that becomes disabled; browsers drop it to body.
+  let observer: MutationObserver
+  beforeEach(() => {
+    observer = new MutationObserver((records) => {
+      for (const r of records) {
+        const el = r.target as HTMLButtonElement
+        if (!el.disabled || document.activeElement !== el) continue
+        // jsdom's blur() ignores an element that is already disabled.
+        el.disabled = false
+        el.blur()
+        el.disabled = true
+      }
+    })
+    observer.observe(document.body, { subtree: true, attributes: true, attributeFilter: ['disabled'] })
+  })
+  afterEach(() => {
+    observer.disconnect()
+    vi.restoreAllMocks()
+  })
+
+  const hold = () => {
+    let release: (r: Reply) => void = () => {}
+    const promise = new Promise<Reply>((res) => { release = res })
+    return { promise, release: (r: Reply) => act(async () => { release(r) }) }
+  }
+  // jsdom delivers mutation records on a later task than a microtask.
+  const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)) })
+  const card = (container: HTMLElement) => container.querySelector('.chat-question-wizard') as HTMLElement
+  const press = async (el: HTMLElement) => {
+    el.focus()
+    fireEvent.click(el)
+    await flush()
+    expect(document.activeElement).toBe(document.body)
+  }
+
+  it('Next keeps focus in the card after the step moves on', async () => {
+    const gate = hold()
+    install((b) => (b.kind === 'step' ? gate.promise : ok(at(0))))
+    const { container } = renderWizard()
+    await screen.findByText('1 of 3')
+    fireEvent.click(screen.getByRole('radio', { name: /Red/ }))
+    await press(next())
+    await gate.release(ok(at(1)))
+    await screen.findByText('2 of 3')
+    expect(card(container).contains(document.activeElement)).toBe(true)
+  })
+
+  it('Back keeps focus in the card after the step moves back', async () => {
+    const gate = hold()
+    install((b) => (b.kind === 'back' ? gate.promise : ok(at(1))))
+    const { container } = renderWizard()
+    await screen.findByText('2 of 3')
+    await press(back())
+    await gate.release(ok(at(0)))
+    await screen.findByText('1 of 3')
+    expect(card(container).contains(document.activeElement)).toBe(true)
+  })
+
+  it('a review row keeps focus in the card after jumping to its step', async () => {
+    const gate = hold()
+    install((b) => (b.kind === 'back' ? gate.promise : ok(review())))
+    const { container } = renderWizard()
+    await press(await screen.findByRole('button', { name: /Size/ }))
+    await gate.release(ok(at(2)))
+    await screen.findByText('3 of 3')
+    expect(card(container).contains(document.activeElement)).toBe(true)
+  })
+
+  it('a failed step puts focus back on the pressed button', async () => {
+    const gate = hold()
+    install((b) => (b.kind === 'step' ? gate.promise : ok(at(0))))
+    renderWizard()
+    await screen.findByText('1 of 3')
+    fireEvent.click(screen.getByRole('radio', { name: /Red/ }))
+    const button = next()
+    await press(button)
+    await gate.release({ status: 429, text: 'busy' })
+    await screen.findByText('busy')
+    expect(document.activeElement).toBe(button)
+  })
+
+  it('does not steal focus the user moved elsewhere while the request was pending', async () => {
+    const gate = hold()
+    install((b) => (b.kind === 'step' ? gate.promise : ok(at(0))))
+    renderWizard()
+    await screen.findByText('1 of 3')
+    fireEvent.click(screen.getByRole('radio', { name: /Red/ }))
+    await press(next())
+    const outside = document.body.appendChild(document.createElement('input'))
+    outside.focus()
+    await gate.release(ok(at(1)))
+    await screen.findByText('2 of 3')
+    expect(document.activeElement).toBe(outside)
+    outside.remove()
+  })
+
+  it('a 409 with nothing typed focuses once, after the re-read', async () => {
+    const gate = hold()
+    let moved = false
+    install((b) => {
+      if (b.kind === 'step') return gate.promise
+      return ok(at(moved ? 1 : 0))
+    })
+    const { container } = renderWizard()
+    await screen.findByText('1 of 3')
+    fireEvent.click(screen.getByRole('radio', { name: /Red/ }))
+    await press(next())
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus')
+    moved = true
+    await gate.release({ status: 409, text: 'prompt changed' })
+    await screen.findByText('2 of 3')
+    expect(focus).toHaveBeenCalledTimes(1)
+    expect(card(container).contains(document.activeElement)).toBe(true)
+  })
+
+  it('a poll that moves the card never takes focus or scrolls', async () => {
+    vi.useFakeTimers()
+    const scroll = vi.fn()
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { value: scroll, configurable: true, writable: true })
+    let reply = ok(at(0))
+    install(() => reply)
+    const outside = document.body.appendChild(document.createElement('button'))
+    renderWizard()
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    outside.focus()
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus')
+    reply = ok(at(1))
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000) })
+    expect(screen.getByText('2 of 3')).toBeTruthy()
+    expect(document.activeElement).toBe(outside)
+    expect(focus).not.toHaveBeenCalled()
+    expect(scroll).not.toHaveBeenCalled()
+    delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView
+    outside.remove()
+  })
+
+  it('a control pressed without focus leaves focus alone', async () => {
+    const gate = hold()
+    install((b) => (b.kind === 'step' ? gate.promise : ok(at(0))))
+    renderWizard()
+    await screen.findByText('1 of 3')
+    fireEvent.click(screen.getByRole('radio', { name: /Red/ }))
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus')
+    fireEvent.click(next())
+    await flush()
+    await gate.release(ok(at(1)))
+    await screen.findByText('2 of 3')
+    expect(focus).not.toHaveBeenCalled()
+    expect(document.activeElement).toBe(document.body)
   })
 })
