@@ -404,6 +404,60 @@ describe('MobileInputBar staged attachment', () => {
     expect(field().value).toBe('')
   })
 
+  const pickMany = (...names: string[]) => {
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    fireEvent.change(input, { target: { files: names.map((n) => new File(['x'], n, { type: 'image/png' })) } })
+  }
+
+  it('two files in one pick show two chips; one Send posts both in order with the text', async () => {
+    render(<MobileInputBar address={runAddress} />)
+    fireEvent.change(field(), { target: { value: 'both' } })
+    pickMany('a.png', 'b.png')
+    expect(screen.getAllByTestId('staged-image')).toHaveLength(2)
+    await sendWithImage()
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(lastJSONRequest().body).toEqual({
+      type: 'image',
+      text: 'both',
+      images: [
+        { name: 'a.png', type: 'image/png', data: 'eA==' },
+        { name: 'b.png', type: 'image/png', data: 'eA==' },
+      ],
+    })
+    expect(screen.queryByTestId('staged-image')).toBeNull()
+    expect(field().value).toBe('')
+  })
+
+  it('a failed send keeps both chips', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce({ ok: false, status: 500 } as Response)
+    render(<MobileInputBar address={runAddress} />)
+    pickMany('a.png', 'b.png')
+    await sendWithImage()
+    expect(screen.getByTestId('send-error').textContent).toContain('HTTP 500')
+    expect(screen.getAllByTestId('staged-image')).toHaveLength(2)
+  })
+
+  it('removing one chip leaves the other, and Send posts only that one', async () => {
+    render(<MobileInputBar address={runAddress} />)
+    pickMany('a.png', 'b.png')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Remove attachment' })[0])
+    const chips = screen.getAllByTestId('staged-image')
+    expect(chips).toHaveLength(1)
+    expect(chips[0].textContent).toContain('b.png')
+    await sendWithImage()
+    expect(lastJSONRequest().body).toMatchObject({ images: [{ name: 'b.png' }] })
+  })
+
+  it('a pick past the size cap keeps the files that fit and names how many were skipped', () => {
+    render(<MobileInputBar address={runAddress} />)
+    const big = new File(['x'], 'big.png', { type: 'image/png' })
+    Object.defineProperty(big, 'size', { value: 40 * 1024 * 1024 })
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    fireEvent.change(input, { target: { files: [new File(['x'], 'a.png', { type: 'image/png' }), big] } })
+    expect(screen.getAllByTestId('staged-image')).toHaveLength(1)
+    expect(screen.getByTestId('send-error').textContent).toContain('1 file skipped')
+  })
+
   it('a failed image send keeps the chip and the text, and retry delivers', async () => {
     vi.mocked(fetch).mockResolvedValueOnce({ ok: false, status: 500 } as Response)
     render(<MobileInputBar address={runAddress} />)

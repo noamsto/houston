@@ -19,9 +19,9 @@ export function terminalSocketPath(a: TerminalAddress): string {
 const longSendTimeout = 'timed out — the text may have been partly sent; check the agent before resending'
 
 // Resolves to a short reason on failure, null on success.
-async function request(url: string, init: RequestInit, onTimeout = 'timed out'): Promise<string | null> {
+async function request(url: string, init: RequestInit, onTimeout = 'timed out', timeoutMs = 15000): Promise<string | null> {
   try {
-    const res = await fetch(url, { method: 'POST', signal: AbortSignal.timeout(15000), ...init })
+    const res = await fetch(url, { method: 'POST', signal: AbortSignal.timeout(timeoutMs), ...init })
     if (res.ok) return null
     if (res.status === 401) return 'session expired — reload'
     if (res.status === 502) {
@@ -40,7 +40,7 @@ async function request(url: string, init: RequestInit, onTimeout = 'timed out'):
   }
 }
 
-const runInput = (id: string, body: unknown, onTimeout?: string) =>
+const runInput = (id: string, body: unknown, onTimeout?: string, timeoutMs?: number) =>
   request(
     `/api/runs/${encodeURIComponent(id)}/input`,
     {
@@ -48,6 +48,7 @@ const runInput = (id: string, body: unknown, onTimeout?: string) =>
       headers: { 'Content-Type': 'application/json' },
     },
     onTimeout,
+    timeoutMs,
   )
 
 export interface TerminalImage {
@@ -64,6 +65,9 @@ export function sendKey(a: TerminalAddress, key: string): Promise<string | null>
   return runInput(a.id, { type: 'key', key })
 }
 
-export function sendImage(a: TerminalAddress, text: string, image: TerminalImage): Promise<string | null> {
-  return runInput(a.id, { type: 'image', text, images: [image] }, longSendTimeout)
+// Tens of MiB over a phone connection outlast the default timeout.
+const imageSendTimeoutMs = 60000
+
+export function sendImages(a: TerminalAddress, text: string, images: TerminalImage[]): Promise<string | null> {
+  return runInput(a.id, { type: 'image', text, images }, longSendTimeout, imageSendTimeoutMs)
 }
