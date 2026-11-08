@@ -11,6 +11,17 @@ const POLL_MS = 2000
 
 const squash = (s: string) => s.replace(/\s+/g, '')
 
+const shapeOf = (s: QuestionState | null) => (s ? `${s.tabbed}:${s.step}:${s.count}` : '')
+
+// Where focus lands when the control the user pressed is gone: the picks' tab
+// stop, then a review row, then any enabled wizard control.
+const FALLBACK_TARGETS = [
+  '.chat-question-picks [role="radio"][tabindex="0"]',
+  '.chat-question-picks [role="checkbox"][tabindex="0"]',
+  '.chat-question-wizard-review-row',
+  '[data-wizard-ctl]',
+]
+
 type Notice =
   // `what` names the request that was refused or stopped part-way, e.g. "Step 2".
   | { kind: 'moved'; what: string }
@@ -45,6 +56,12 @@ export function QuestionWizard({ runId, call, fallbackQuestions, onLayout }: {
   const epoch = useRef(0)
   const alive = useRef(true)
   const sentRef = useRef(false)
+  const cardRef = useRef<HTMLDivElement>(null)
+  // The control that had focus when a request began: a browser drops focus of a
+  // button that turns disabled, so it is put back once the request settles.
+  // `hold` keeps it armed across the re-read that follows a refused request.
+  const armed = useRef<{ ctl?: string; shape: string; hold: boolean } | null>(null)
+  const [settled, setSettled] = useState(0)
 
   const isSent = sent !== false && sent === call.status
   useEffect(() => {
@@ -100,6 +117,10 @@ export function QuestionWizard({ runId, call, fallbackQuestions, onLayout }: {
   }, [read])
 
   const begin = () => {
+    const active = document.activeElement
+    armed.current = active instanceof HTMLElement && cardRef.current?.contains(active)
+      ? { ctl: active.dataset.wizardCtl, shape: shapeOf(stateRef.current), hold: false }
+      : null
     busyRef.current = true
     epoch.current++
     setBusy(true)
@@ -108,6 +129,15 @@ export function QuestionWizard({ runId, call, fallbackQuestions, onLayout }: {
   const finish = () => {
     busyRef.current = false
     setBusy(false)
+  }
+  /** Finishes a request the pane refused without typing, then reads what it shows. */
+  const finishAndReread = async () => {
+    if (armed.current) armed.current.hold = true
+    finish()
+    await read()
+    if (!alive.current || !armed.current) return
+    armed.current.hold = false
+    setSettled((n) => n + 1)
   }
 
   /** Applies one request's result; true when it moved the card on. */
@@ -129,8 +159,8 @@ export function QuestionWizard({ runId, call, fallbackQuestions, onLayout }: {
     const ok = settle(res, what)
     // A 409 with nothing typed means the pane moved on: read it, never key it.
     const reread = !ok && 'moved' in res && !res.partial
-    finish()
-    if (reread) await read()
+    if (reread) await finishAndReread()
+    else finish()
   }
 
   const recheck = async () => {
@@ -161,8 +191,8 @@ export function QuestionWizard({ runId, call, fallbackQuestions, onLayout }: {
       reread = 'moved' in res && !res.partial
       break
     }
-    finish()
-    if (reread) await read()
+    if (reread) await finishAndReread()
+    else finish()
   }
 
   const editStage = (i: number, f: (s: Stage) => Stage) => {
@@ -171,10 +201,22 @@ export function QuestionWizard({ runId, call, fallbackQuestions, onLayout }: {
     commitStages(list)
   }
 
-  const shape = state ? `${state.tabbed}:${state.step}:${state.count}` : ''
+  const shape = shapeOf(state)
   useEffect(() => {
     if (loaded) onLayout()
   }, [loaded, missing, shape, isSent, notice, onLayout])
+
+  useEffect(() => {
+    const a = armed.current
+    if (busy || !a) return
+    if (!a.hold) armed.current = null
+    const card = cardRef.current
+    if (!alive.current || isSent || !card) return
+    const enabled = (sel: string) => card.querySelector<HTMLElement>(`${sel}:not(:disabled)`)
+    const same = a.ctl && a.shape === shapeOf(stateRef.current) ? enabled(`[data-wizard-ctl="${a.ctl}"]`) : null
+    const target = same ?? FALLBACK_TARGETS.map(enabled).find(Boolean)
+    target?.focus({ preventScroll: true })
+  }, [busy, settled, isSent])
 
   const questions: Question[] = state?.questions ?? fallbackQuestions
   if (questions.length === 0) return <FallbackRow call={call} terminalRunId={loaded ? runId : undefined} />
@@ -205,7 +247,7 @@ export function QuestionWizard({ runId, call, fallbackQuestions, onLayout }: {
         <>
           <span>{notice.what} didn't finish — check the Terminal</span>{' '}
           <TerminalLink runId={runId} />{' '}
-          <button type="button" className="chat-question-wizard-recheck" disabled={busy} onClick={recheck}>Re-check</button>
+          <button type="button" className="chat-question-wizard-recheck" data-wizard-ctl="recheck" disabled={busy} onClick={recheck}>Re-check</button>
         </>
       )}
       {notice?.kind === 'error' && (
@@ -221,7 +263,7 @@ export function QuestionWizard({ runId, call, fallbackQuestions, onLayout }: {
     const q = questions[0]
     const stage = stages[0] ?? emptyStage()
     return (
-      <>
+      <div ref={cardRef} style={{ display: 'contents' }}>
         <PickerBlock
           q={q}
           stage={stage}
@@ -234,6 +276,7 @@ export function QuestionWizard({ runId, call, fallbackQuestions, onLayout }: {
           <button
             type="button"
             className="chat-question-send-btn"
+            data-wizard-ctl="send"
             disabled={locked || !isStageComplete(stage)}
             onClick={() => void act('Step 1', () => answerStep(runId, call.toolCallId, 0, toAnswer(stage)))}
           >
@@ -241,7 +284,7 @@ export function QuestionWizard({ runId, call, fallbackQuestions, onLayout }: {
           </button>
           {statusLine}
         </div>
-      </>
+      </div>
     )
   }
 
@@ -262,7 +305,7 @@ export function QuestionWizard({ runId, call, fallbackQuestions, onLayout }: {
   if (state.step >= state.count) {
     const review = state.review ?? []
     return (
-      <div className="chat-question-wizard">
+      <div className="chat-question-wizard" ref={cardRef}>
         <div className="chat-question-wizard-top">
           <span className="chat-question-wizard-progress">Review your answers</span>
           {chips}
@@ -270,7 +313,7 @@ export function QuestionWizard({ runId, call, fallbackQuestions, onLayout }: {
         <ul className="chat-question-wizard-review">
           {questions.map((q, i) => (
             <li key={i}>
-              <button type="button" className="chat-question-wizard-review-row" disabled={locked} onClick={() => void jumpTo(i)}>
+              <button type="button" className="chat-question-wizard-review-row" data-wizard-ctl={`review-${i}`} disabled={locked} onClick={() => void jumpTo(i)}>
                 <span className="chat-question-wizard-review-q">{q.header ?? q.question}</span>
                 <span className="chat-question-wizard-review-a">{review[i] ?? ''}</span>
               </button>
@@ -282,6 +325,7 @@ export function QuestionWizard({ runId, call, fallbackQuestions, onLayout }: {
           <button
             type="button"
             className="chat-question-wizard-next"
+            data-wizard-ctl="submit"
             disabled={locked || review.length !== state.count}
             onClick={() => void act('Submit', () => answerSubmit(runId, call.toolCallId, review))}
           >
@@ -297,7 +341,7 @@ export function QuestionWizard({ runId, call, fallbackQuestions, onLayout }: {
   const stage = stages[step] ?? emptyStage()
   const last = step === state.count - 1
   return (
-    <div className="chat-question-wizard">
+    <div className="chat-question-wizard" ref={cardRef}>
       <div className="chat-question-wizard-top">
         <span className="chat-question-wizard-progress">{step + 1} of {state.count}</span>
         {chips}
@@ -317,6 +361,7 @@ export function QuestionWizard({ runId, call, fallbackQuestions, onLayout }: {
           <button
             type="button"
             className="chat-question-wizard-back"
+            data-wizard-ctl="back"
             disabled={locked}
             onClick={() => void act(`Step ${step + 1}`, () => answerBack(runId, call.toolCallId, step))}
           >
@@ -326,6 +371,7 @@ export function QuestionWizard({ runId, call, fallbackQuestions, onLayout }: {
         <button
           type="button"
           className="chat-question-wizard-next"
+          data-wizard-ctl="next"
           disabled={locked || !isStageComplete(stage)}
           onClick={() => void act(`Step ${step + 1}`, () => answerStep(runId, call.toolCallId, step, toAnswer(stage)))}
         >
