@@ -132,11 +132,12 @@ export function QuestionWizard({ runId, call, fallbackQuestions, onLayout }: {
   }
   /** Finishes a request the pane refused without typing, then reads what it shows. */
   const finishAndReread = async () => {
-    if (armed.current) armed.current.hold = true
+    const mine = armed.current
+    if (mine) mine.hold = true
     finish()
     await read()
-    if (!alive.current || !armed.current) return
-    armed.current.hold = false
+    if (!alive.current || !mine || armed.current !== mine) return
+    mine.hold = false
     setSettled((n) => n + 1)
   }
 
@@ -213,7 +214,7 @@ export function QuestionWizard({ runId, call, fallbackQuestions, onLayout }: {
     const card = cardRef.current
     if (!alive.current || isSent || !card) return
     const now = document.activeElement
-    if (now && now !== document.body && !card.contains(now)) return
+    if (now && now !== document.body) return
     const enabled = (sel: string) => card.querySelector<HTMLElement>(`${sel}:not(:disabled)`)
     const same = a.ctl && a.shape === shapeOf(stateRef.current) ? enabled(`[data-wizard-ctl="${a.ctl}"]`) : null
     const target = same ?? FALLBACK_TARGETS.map(enabled).find(Boolean)
