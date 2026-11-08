@@ -208,10 +208,12 @@ export function QuestionWizard({ runId, call, fallbackQuestions, onLayout }: {
 
   useEffect(() => {
     const a = armed.current
-    if (busy || !a) return
-    if (!a.hold) armed.current = null
+    if (busy || !a || a.hold) return
+    armed.current = null
     const card = cardRef.current
     if (!alive.current || isSent || !card) return
+    const now = document.activeElement
+    if (now && now !== document.body && !card.contains(now)) return
     const enabled = (sel: string) => card.querySelector<HTMLElement>(`${sel}:not(:disabled)`)
     const same = a.ctl && a.shape === shapeOf(stateRef.current) ? enabled(`[data-wizard-ctl="${a.ctl}"]`) : null
     const target = same ?? FALLBACK_TARGETS.map(enabled).find(Boolean)

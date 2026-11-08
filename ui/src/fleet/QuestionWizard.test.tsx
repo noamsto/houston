@@ -470,6 +470,40 @@ describe('QuestionWizard keyboard focus', () => {
     expect(document.activeElement).toBe(button)
   })
 
+  it('does not steal focus the user moved elsewhere while the request was pending', async () => {
+    const gate = hold()
+    install((b) => (b.kind === 'step' ? gate.promise : ok(at(0))))
+    renderWizard()
+    await screen.findByText('1 of 3')
+    fireEvent.click(screen.getByRole('radio', { name: /Red/ }))
+    await press(next())
+    const outside = document.body.appendChild(document.createElement('input'))
+    outside.focus()
+    await gate.release(ok(at(1)))
+    await screen.findByText('2 of 3')
+    expect(document.activeElement).toBe(outside)
+    outside.remove()
+  })
+
+  it('a 409 with nothing typed focuses once, after the re-read', async () => {
+    const gate = hold()
+    let moved = false
+    install((b) => {
+      if (b.kind === 'step') return gate.promise
+      return ok(at(moved ? 1 : 0))
+    })
+    const { container } = renderWizard()
+    await screen.findByText('1 of 3')
+    fireEvent.click(screen.getByRole('radio', { name: /Red/ }))
+    await press(next())
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus')
+    moved = true
+    await gate.release({ status: 409, text: 'prompt changed' })
+    await screen.findByText('2 of 3')
+    expect(focus).toHaveBeenCalledTimes(1)
+    expect(card(container).contains(document.activeElement)).toBe(true)
+  })
+
   it('a poll that moves the card never takes focus or scrolls', async () => {
     vi.useFakeTimers()
     const scroll = vi.fn()
