@@ -559,3 +559,161 @@ func TestDiscoverySeededSessionGetsModBackground(t *testing.T) {
 			v.TranscriptPath, v.CWD, seeded.TranscriptPath, seeded.CWD)
 	}
 }
+
+func piRecord(r *claudemod.Record) { r.Engine = claudemod.EnginePi }
+
+// piTool is a tool.start setter for a pi stream.
+func piTool(name string) func(*claudemod.Record) {
+	return func(r *claudemod.Record) {
+		piRecord(r)
+		r.Tool, r.ID = name, "tu1"
+	}
+}
+
+func TestPiModDrivesState(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now().Unix()
+	store := claudemod.NewStore()
+	h := startModHub(t, dir, store)
+
+	f := newModFeed(t, store, "p1")
+	f.at(now-5, "turn.start", piRecord)
+	f.at(now-4, "tool.start", piTool("bash"))
+	f.at(now-2, "turn.complete", func(r *claudemod.Record) { piRecord(r); r.Reason = "answer" })
+
+	v := waitView(t, h, "p1", "mod waiting", stateIs(hook.StateWaiting))
+	if v.Agent != "pi" {
+		t.Errorf("Agent = %q, want pi", v.Agent)
+	}
+}
+
+func TestPiHookHintPassThrough(t *testing.T) {
+	for _, tc := range []struct {
+		name, hookTool, wantHint string
+	}{
+		{"same tool", "Bash", "go test"},
+		{"different tool", "Read", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			now := time.Now().Unix()
+			store := claudemod.NewStore()
+			h := startModHub(t, dir, store)
+
+			f := newModFeed(t, store, "p1")
+			f.at(now-3, "turn.start", piRecord)
+			f.at(now-2, "tool.start", piTool("bash"))
+			waitView(t, h, "p1", "mod tool-running", stateIs(hook.StateToolRunning))
+
+			writeState(t, dir, hook.SessionState{
+				SessionID: "p1", Agent: "pi", State: hook.StateToolRunning, Tool: tc.hookTool,
+				ToolInputHint: "go test", Turn: 7, UpdatedAt: now,
+			})
+			v := waitView(t, h, "p1", "hook state loaded", func(v SessionView) bool { return v.Turn == 7 })
+			if v.State != hook.StateToolRunning || v.ToolInputHint != tc.wantHint {
+				t.Errorf("state = %q hint = %q, want tool-running with hint %q", v.State, v.ToolInputHint, tc.wantHint)
+			}
+		})
+	}
+}
+
+func TestPiCompactingPassThrough(t *testing.T) {
+	compacting := func(at int64) hook.SessionState {
+		return hook.SessionState{SessionID: "p1", Agent: "pi", State: hook.StateCompacting, Turn: 7, UpdatedAt: at}
+	}
+
+	t.Run("mod thinking", func(t *testing.T) {
+		dir := t.TempDir()
+		now := time.Now().Unix()
+		store := claudemod.NewStore()
+		h := startModHub(t, dir, store)
+		newModFeed(t, store, "p1").at(now-1, "turn.start", piRecord)
+		waitView(t, h, "p1", "mod thinking", stateIs(hook.StateThinking))
+
+		writeState(t, dir, compacting(now))
+		v := waitView(t, h, "p1", "hook state loaded", func(v SessionView) bool { return v.Turn == 7 })
+		if v.State != hook.StateCompacting {
+			t.Errorf("state = %q, want compacting", v.State)
+		}
+	})
+
+	t.Run("mod waiting ignores later hook", func(t *testing.T) {
+		dir := t.TempDir()
+		now := time.Now().Unix()
+		store := claudemod.NewStore()
+		h := startModHub(t, dir, store)
+		f := newModFeed(t, store, "p1")
+		f.at(now-2, "turn.start", piRecord)
+		f.at(now-1, "turn.complete", func(r *claudemod.Record) { piRecord(r); r.Reason = "answer" })
+		waitView(t, h, "p1", "mod waiting", stateIs(hook.StateWaiting))
+
+		writeState(t, dir, compacting(now))
+		v := waitView(t, h, "p1", "hook state loaded", func(v SessionView) bool { return v.Turn == 7 })
+		if v.State != hook.StateWaiting {
+			t.Errorf("state = %q, want waiting", v.State)
+		}
+	})
+
+	t.Run("later main record wins", func(t *testing.T) {
+		dir := t.TempDir()
+		now := time.Now().Unix()
+		store := claudemod.NewStore()
+		h := startModHub(t, dir, store)
+		f := newModFeed(t, store, "p1")
+		f.at(now-3, "turn.start", piRecord)
+		waitView(t, h, "p1", "mod thinking", stateIs(hook.StateThinking))
+		writeState(t, dir, compacting(now-2))
+		waitView(t, h, "p1", "hook state loaded", func(v SessionView) bool { return v.Turn == 7 })
+
+		f.at(now-1, "tool.start", piTool("bash"))
+		v := waitView(t, h, "p1", "mod tool-running", stateIs(hook.StateToolRunning))
+		if v.State != hook.StateToolRunning {
+			t.Errorf("state = %q, want tool-running", v.State)
+		}
+	})
+}
+
+func TestPiExtensionAbsentMatchesHookPath(t *testing.T) {
+	for _, st := range []hook.State{hook.StateThinking, hook.StateWaiting} {
+		t.Run(string(st), func(t *testing.T) {
+			state := hook.SessionState{
+				SessionID: "p1", Agent: "pi", State: st, Tool: "bash", ToolInputHint: "go test",
+				Turn: 3, UpdatedAt: time.Now().Unix(),
+			}
+			view := func(store *claudemod.Store) SessionView {
+				dir := t.TempDir()
+				writeState(t, dir, state)
+				h := NewWithOptions(dir, Options{ClaudeProjectsDir: "-", Mod: store}, silentLog())
+				startHub(t, h)
+				return waitView(t, h, "p1", "hook state loaded", func(v SessionView) bool { return v.Turn == 3 })
+			}
+			without, with := view(nil), view(claudemod.NewStore())
+			if with.State != without.State || with.Tool != without.Tool ||
+				with.ToolInputHint != without.ToolInputHint || with.Agent != without.Agent {
+				t.Errorf("with empty store %+v, without %+v", with, without)
+			}
+			if with.State != st || with.Agent != "pi" {
+				t.Errorf("state = %q agent = %q, want the file's %q and pi", with.State, with.Agent, st)
+			}
+		})
+	}
+}
+
+func TestClaudeRecordWithoutEngine(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now().Unix()
+	store := claudemod.NewStore()
+	h := startModHub(t, dir, store)
+
+	newModFeed(t, store, "c1").at(now-1, "turn.start", nil)
+	v := waitView(t, h, "c1", "mod thinking", stateIs(hook.StateThinking))
+	if v.Agent != hook.AgentClaude {
+		t.Errorf("Agent = %q, want claude", v.Agent)
+	}
+
+	writeState(t, dir, hook.SessionState{SessionID: "c1", State: hook.StateCompacting, Turn: 7, UpdatedAt: now})
+	v = waitView(t, h, "c1", "hook state loaded", func(v SessionView) bool { return v.Turn == 7 })
+	if v.State != hook.StateThinking {
+		t.Errorf("state = %q, want the fold's thinking", v.State)
+	}
+}

@@ -1288,6 +1288,36 @@ func startModHookSource(t *testing.T) (<-chan Delta, modRecords) {
 	return out, modRecords{t: t, store: store, sid: st.SessionID, dir: dir}
 }
 
+// startModOnlyHookSource is startModHookSource without a hook state: the
+// session exists only once its first mod record lands.
+func startModOnlyHookSource(t *testing.T) (<-chan Delta, modRecords) {
+	t.Helper()
+	dir := t.TempDir()
+	store := claudemod.NewStore()
+	h := hub.NewWithOptions(dir, hub.Options{ClaudeProjectsDir: "-", Mod: store}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	ctx := startHub(t, h, dir)
+
+	src := NewHookSource(h, nil)
+	src.every = hookTestEvery
+	out := make(chan Delta, 64)
+	go func() { _ = src.Run(ctx, out) }()
+	return out, modRecords{t: t, store: store, sid: "pi1", dir: dir}
+}
+
+func TestHookSourcePiModAbortReadsIdle(t *testing.T) {
+	out, m := startModOnlyHookSource(t)
+	pi := func(r *claudemod.Record) { r.Engine = claudemod.EnginePi }
+
+	m.apply(1, "turn.start", pi)
+	m.apply(2, "tool.start", func(r *claudemod.Record) { pi(r); r.Tool, r.ID = "bash", "a" })
+	m.apply(3, "turn.complete", func(r *claudemod.Record) { pi(r); r.Reason = "aborted" })
+
+	d := waitDelta(t, out, "idle pi run", func(d Delta) bool { return d.Key == "claude/pi1" && d.Run.State == StateIdle })
+	if d.Run.Agent != "pi" {
+		t.Fatalf("Agent = %q, want pi", d.Run.Agent)
+	}
+}
+
 func TestHookSourceModLateToolEndReadsIdle(t *testing.T) {
 	out, m := startModHookSource(t)
 	const key = "claude/s1"

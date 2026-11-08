@@ -83,7 +83,7 @@ houston/
 ├── terminal/            # Host terminal font-size control (kitty)
 ├── cmd/                 # loadfixture, sessionlog (tools build tag)
 ├── internal/            # ansi, loadfixture
-├── contrib/             # claude-mod (hooks module), opencode-plugin
+├── contrib/             # claude-mod (hooks module), pi-mod (read-only pi extension), opencode-plugin
 ├── scripts/             # claude-hook.sh, perf/ (load measurement), qa/ (end-to-end harness)
 ├── docs/                # reference/ (subsystem docs), superpowers/ (specs, plans), design/
 ├── ui/                  # React frontend (Vite): src/{api,components,fleet,hooks,lib,theme}
@@ -155,7 +155,7 @@ Each of these causes bugs when missed; the owning reference doc has the full rul
 - **A `peer-` run id never reaches a local handler**: `findRun` and `buildWorkspace` see only `Host == ""` runs, and every run-addressed route is `peerOr(forward, local)` (`docs/reference/federation.md`).
 - **No user text in tmux argv**: tmux splits a command at an element ending in `;`, format-expands `-c`, and runs a single-argument command via `sh -c`; the dispatcher window command is always `houston launch-dispatcher <file>` (`docs/reference/dispatch.md`).
 - **Every send to a pane re-verifies the pane's tmux server**: `runPane` compares the recorded server pid at point of use (409 on mismatch). `/input` does not check which prompt is on screen (it types whatever it is given); answers go through `/answer` (`docs/reference/fleet-runs.md` "Point-of-use server check", `terminal-and-mobile.md`, `chat.md`).
-- **The Claude mod is read-only**: hooks pass `e` to `next` and return its result; only four `$` calls are allowed, enforced by `claudemod/modguard_test.go` and `just mod-check` (`docs/reference/hooks-and-state.md`).
+- **The Claude mod is read-only**: hooks pass `e` to `next` and return its result; only four `$` calls are allowed, enforced by `claudemod/modguard_test.go` and `just mod-check` (`docs/reference/hooks-and-state.md`). The pi extension is read-only too, enforced by `claudemod/piguard_test.go`.
 - **Never log secrets or task text**: tokens, task bodies, peer tokens, labels and frames stay out of logs.
 - **Fail closed on drift**: answer/permission checks that no longer match Claude Code's dialogs answer 409 and type nothing; re-record fixtures and update parsers together.
 - **Both shells**: dispatcher-only tabs and routes need changes in `MobileShell` and `ConsoleShell`, and tmux mode must 404 them.

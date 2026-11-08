@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"strings"
 	"time"
 
 	"github.com/noamsto/houston/claudemod"
@@ -49,6 +50,9 @@ func (s *Session) mergeModCoords() {
 	}
 	v.TranscriptPath = s.transcriptPath
 	v.Agent = hook.AgentClaude
+	if m.Engine == claudemod.EnginePi {
+		v.Agent = claudemod.EnginePi
+	}
 	v.UpdatedAt = m.Active / 1000
 	v.Turn = m.Turns
 }
@@ -71,6 +75,25 @@ func (s *Session) overlayMod() {
 	st := s.hookState
 	if m.State == hook.StateToolRunning && st.State == hook.StatePermission && st.UpdatedAt >= m.MainUpdated/1000 {
 		v.State, v.Tool, v.ToolInputHint, v.LastMessage = st.State, st.Tool, st.ToolInputHint, st.LastMessage
+	}
+	if m.Engine == claudemod.EnginePi {
+		s.overlayPiHook()
+	}
+}
+
+// overlayPiHook restores the two things a live pi extension cannot report: it
+// sends no tool arguments, so the hint comes from the hook's same-tool
+// tool-running state, and it cannot see a compaction start, so a hook
+// compacting written at or after the newest main record shows while the mod
+// reads a running phase. The phase gate means turn.complete always ends it, so
+// a late detached pre_compact cannot stick on a settled card.
+func (s *Session) overlayPiHook() {
+	m, v, st := &s.mod, &s.view, s.hookState
+	if m.State == hook.StateToolRunning && m.Hint == "" && st.State == hook.StateToolRunning && strings.EqualFold(st.Tool, m.Tool) {
+		v.ToolInputHint = st.ToolInputHint
+	}
+	if (m.State == hook.StateThinking || m.State == hook.StateToolRunning) && st.State == hook.StateCompacting && st.UpdatedAt >= m.MainUpdated/1000 {
+		v.State, v.Tool, v.ToolInputHint = st.State, "", ""
 	}
 }
 

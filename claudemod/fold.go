@@ -64,6 +64,8 @@ type fold struct {
 
 	cwd, transcript, pane, tmuxServer string
 
+	engine string
+
 	known, bgKnown bool
 }
 
@@ -95,9 +97,12 @@ func (f *fold) viewState() hook.State {
 func (f *fold) apply(rec Record) {
 	before := f.viewState()
 	f.coords(rec)
-	if rec.Agent != "" {
+	switch {
+	case rec.Engine == EnginePi:
+		f.applyPi(rec)
+	case rec.Agent != "":
 		f.applyAgent(rec)
-	} else {
+	default:
 		f.applyMain(rec)
 	}
 	if f.viewState() != before {
@@ -115,6 +120,7 @@ func (f *fold) coords(rec Record) {
 	set(&f.transcript, rec.Transcript)
 	set(&f.pane, rec.Pane)
 	set(&f.tmuxServer, rec.TmuxServer)
+	set(&f.engine, rec.Engine)
 }
 
 // applyAgent folds a subagent's record: it never moves the main loop, only
@@ -210,6 +216,61 @@ func (f *fold) applyMain(rec Record) {
 			}
 		}
 	}
+}
+
+// applyPi folds a pi extension's record. Only agent_start (turn.start) opens a
+// run, so a step or tool record after the run settled cannot reopen it. Pi has
+// no permission dialogs, background tasks or stop records: those evs fall
+// through unfolded.
+func (f *fold) applyPi(rec Record) {
+	switch rec.Ev {
+	case evSessionStart:
+		f.phase = hook.StateStarting
+		f.inflight = nil
+		f.known = true
+	case evTurnStart:
+		// agent_start also fires on a retry or continuation of the same run.
+		if f.phase != hook.StateThinking && f.phase != hook.StateToolRunning {
+			f.turns++
+		}
+		f.phase = hook.StateThinking
+		f.dropMainFlights()
+		f.known = true
+	case evStepStart:
+		if f.settled() {
+			return
+		}
+		if len(f.inflight) == 0 {
+			f.phase = hook.StateThinking
+		}
+		f.known = true
+	case evToolStart:
+		if f.settled() {
+			return
+		}
+		f.inflight = append(f.inflight, flight{id: rec.ID, tool: rec.Tool})
+		f.phase = hook.StateToolRunning
+		f.known = true
+	case evToolEnd:
+		f.endMainTool(rec)
+	case evTurnComplete:
+		if f.phase == hook.StateEnded {
+			return
+		}
+		f.phase = hook.StateWaiting
+		f.dropMainFlights()
+		f.known = true
+	case evCompactEnd:
+		f.endCompact()
+	case evSessionEnd:
+		f.phase = hook.StateEnded
+		f.dropMainFlights()
+		f.known = true
+	}
+}
+
+func (f *fold) settled() bool {
+	return f.phase == hook.StateWaiting || f.phase == hook.StateEnded
 }
 
 // endCompact resumes the phase a compaction interrupted. A compact.end that

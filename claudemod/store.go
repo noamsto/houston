@@ -36,6 +36,7 @@ const retiredCap = 16
 // Session is the folded view of one Claude Code session.
 type Session struct {
 	SID         string     `json:"sid"`
+	Engine      string     `json:"engine,omitempty"`
 	State       hook.State `json:"state"`
 	Tool        string     `json:"tool,omitempty"`
 	Hint        string     `json:"hint,omitempty"`
@@ -335,7 +336,8 @@ func (ss *session) view(sid string) Session {
 		Updated: ss.updated, Active: ss.active, MainUpdated: ss.mainUpdated,
 		Known: f.known, Turns: f.turns, Last: f.last, StopSeen: f.stopSeen, BGKnown: f.bgKnown,
 		CWD: f.cwd, Transcript: f.transcript, Pane: f.pane, TmuxServer: f.tmuxServer,
-		Boot: ss.boot, LastSeq: ss.maxSeq, Applied: ss.applied, Stale: ss.stale, Reordered: ss.reordered,
+		Engine: f.engine,
+		Boot:   ss.boot, LastSeq: ss.maxSeq, Applied: ss.applied, Stale: ss.stale, Reordered: ss.reordered,
 	}
 	var newest *flight
 	for i, fl := range f.inflight {

@@ -60,6 +60,33 @@ func TestDecodeStopTasks(t *testing.T) {
 	}
 }
 
+func TestDecodeMinimalBodies(t *testing.T) {
+	const head = `"v":1,"sid":"s","boot":"b","seq":1,"ts":1`
+	cases := []struct {
+		name    string
+		body    string
+		engine  string
+		wantErr bool
+	}{
+		{name: "no engine", body: `{` + head + `,"ev":"stop"}`},
+		{name: "engine pi", body: `{` + head + `,"ev":"stop","engine":"pi"}`, engine: "pi"},
+		{name: "engine claude", body: `{` + head + `,"ev":"stop","engine":"claude"}`, engine: "claude"},
+		{name: "engine bogus", body: `{` + head + `,"ev":"stop","engine":"bogus"}`, wantErr: true},
+		{name: "ev step.start", body: `{` + head + `,"ev":"step.start"}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec, err := Decode(strings.NewReader(tc.body))
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
+			}
+			if err == nil && rec.Engine != tc.engine {
+				t.Fatalf("Engine = %q, want %q", rec.Engine, tc.engine)
+			}
+		})
+	}
+}
+
 func TestDecodeMalformed(t *testing.T) {
 	cases := map[string]string{
 		"invalid json":   `{"v":1,`,
