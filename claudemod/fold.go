@@ -221,7 +221,8 @@ func (f *fold) applyMain(rec Record) {
 // applyPi folds a pi extension's record. Only agent_start (turn.start) opens a
 // run, so a step or tool record after the run settled cannot reopen it. Pi has
 // no permission dialogs, background tasks or stop records: those evs fall
-// through unfolded.
+// through unfolded. compact.end folds nothing, it only advances MainUpdated
+// (Store.apply), which ends the hook compacting pass-through.
 func (f *fold) applyPi(rec Record) {
 	switch rec.Ev {
 	case evSessionStart:
@@ -260,8 +261,6 @@ func (f *fold) applyPi(rec Record) {
 		f.phase = hook.StateWaiting
 		f.dropMainFlights()
 		f.known = true
-	case evCompactEnd:
-		f.endCompact()
 	case evSessionEnd:
 		f.phase = hook.StateEnded
 		f.dropMainFlights()

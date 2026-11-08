@@ -671,6 +671,21 @@ func TestPiCompactingPassThrough(t *testing.T) {
 			t.Errorf("state = %q, want tool-running", v.State)
 		}
 	})
+
+	t.Run("later compact.end hides the hook", func(t *testing.T) {
+		dir := t.TempDir()
+		now := time.Now().Unix()
+		store := claudemod.NewStore()
+		h := startModHub(t, dir, store)
+		f := newModFeed(t, store, "p1")
+		f.at(now-3, "turn.start", piRecord)
+		waitView(t, h, "p1", "mod thinking", stateIs(hook.StateThinking))
+		writeState(t, dir, compacting(now-2))
+		waitView(t, h, "p1", "hook compacting", stateIs(hook.StateCompacting))
+
+		f.at(now-1, "compact.end", piRecord)
+		waitView(t, h, "p1", "mod thinking again", stateIs(hook.StateThinking))
+	})
 }
 
 func TestPiExtensionAbsentMatchesHookPath(t *testing.T) {

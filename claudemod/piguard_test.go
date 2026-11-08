@@ -27,16 +27,30 @@ var (
 	piOn        = regexp.MustCompile(`^pi\s*\.\s*on\s*\(`)
 	piFactory   = regexp.MustCompile(`export\s+default\s+function\s*[\w$]*\s*\(\s*(pi)\s*:\s*ExtensionAPI\s*\)`)
 	eventName   = regexp.MustCompile(`^\s*(["'])([^"']+)["']\s*,`)
-	handlerHead = regexp.MustCompile(`^\s*(?:async\s*)?\([^()]*\)\s*=>\s*\{`)
+	handlerHead = regexp.MustCompile(`^\s*(?:async\s*)?\(([^()]*)\)\s*=>\s*\{`)
+	identifier  = regexp.MustCompile(`[A-Za-z_$][\w$]*`)
+	plainParam  = regexp.MustCompile(`^\s*([A-Za-z_$][\w$]*)\s*\??\s*(?::[^=]*)?$`)
+
+	eventField  = regexp.MustCompile(`^\s*\.\s*(toolName|toolCallId|isError|aborted|reason)(?:[^\w$]|$)`)
+	writeAfter  = regexp.MustCompile(`^\s*(?:` + assignOp + `|\+\+|--)`)
+	writeBefore = regexp.MustCompile(`(?:\+\+|--|\bdelete)\s*$`)
+
+	forbiddenToken = regexp.MustCompile(`\b(?:arguments|eval|Function|globalThis|process)\b`)
+	processEnv     = regexp.MustCompile(`^\s*\.\s*env\b`)
 
 	ctxWord    = regexp.MustCompile(`\bctx\b`)
 	ctxRead    = regexp.MustCompile(`^ctx\s*\.\s*sessionManager\s*\.\s*(?:getSessionId|getSessionFile|getCwd)\s*\(`)
 	paramHead  = regexp.MustCompile(`\bfunction\s*\*?\s*[\w$]*\s*(?:<[^>]*>)?\s*$`)
 	calleeName = regexp.MustCompile(`([A-Za-z_$][\w$]*)\s*$`)
+	ctxFirst   = regexp.MustCompile(`^\s*ctx\s*\??\s*[,:)]`)
 
 	returnValue = regexp.MustCompile(`\breturn\b\s*[^\s;}]`)
 
-	replyAPI = regexp.MustCompile(`\.\s*on\s*\(\s*["']data["']|\.\s*pipe\s*\(|\.\s*read\s*\(|\bsetEncoding\b`)
+	replyAPI    = regexp.MustCompile(`\.\s*on\s*\(\s*["']data["']|\.\s*pipe\s*\(|\.\s*read\s*\(|\bsetEncoding\b`)
+	httpRequest = regexp.MustCompile(`\bhttp\s*\.\s*request\s*\(`)
+	replyParam  = regexp.MustCompile(`^\s*(?:async\s*)?\(\s*([A-Za-z_$][\w$]*)\s*(?::[^()=]*)?\)\s*=>`)
+	drainCall   = regexp.MustCompile(`^\s*\.\s*resume\s*\(\s*\)\s*[;}]`)
+	stmtStart   = regexp.MustCompile(`[{;}]\s*$`)
 )
 
 // codeAt returns the matches of re in text that start on a code byte.
@@ -70,6 +84,34 @@ func matchBrace(l lexed, text string, open int) int {
 		}
 	}
 	return -1
+}
+
+// identUses returns where the identifier name appears as code in text[from:to].
+// \b cannot delimit it: a name may start with $.
+func identUses(l lexed, text, name string, from, to int) []int {
+	var out []int
+	for _, m := range identifier.FindAllStringIndex(text[from:to], -1) {
+		if at := from + m[0]; l.code[at] && text[at:from+m[1]] == name {
+			out = append(out, at)
+		}
+	}
+	return out
+}
+
+// listItems splits a parameter or argument list, dropping the blank item after
+// a trailing comma or of an empty list.
+func listItems(l lexed, text string, open, end int) []span {
+	return slices.DeleteFunc(splitList(l, text, open, end, true), func(p span) bool {
+		return strings.TrimSpace(text[p.from:p.to]) == ""
+	})
+}
+
+func paramName(text string, p span) string {
+	m := plainParam.FindStringSubmatch(text[p.from:p.to])
+	if m == nil {
+		return ""
+	}
+	return m[1]
 }
 
 func checkPiImports(l lexed, text string) error {
@@ -119,7 +161,7 @@ func checkPiUse(l lexed, text string) (map[string]bool, error) {
 		}
 		events[text[open+1+name[4]:open+1+name[5]]] = true
 		rest := open + 1 + name[1]
-		head := handlerHead.FindStringIndex(text[rest:])
+		head := handlerHead.FindStringSubmatchIndex(text[rest:])
 		if head == nil {
 			return nil, fmt.Errorf("pi.on handler on line %d must be an inline arrow function with a block body", lineOf(text, i))
 		}
@@ -133,11 +175,42 @@ func checkPiUse(l lexed, text string) (map[string]bool, error) {
 				return nil, fmt.Errorf("handler returns a value on line %d", lineOf(text, bodyOpen+r[0]))
 			}
 		}
+		if err := checkPiHandler(l, text, rest+head[2]-1, rest+head[3], bodyOpen, end); err != nil {
+			return nil, err
+		}
 	}
 	if calls == 0 {
 		return nil, fmt.Errorf("scan found no pi.on( call; the scan cannot see it")
 	}
 	return events, nil
+}
+
+// checkPiHandler holds a handler to at most (event, ctx). The body may only read
+// the event's run-state fields, and a second parameter must be spelled ctx so
+// checkPiCtx sees every use of it.
+func checkPiHandler(l lexed, text string, open, end, bodyOpen, bodyEnd int) error {
+	params := listItems(l, text, open, end)
+	if len(params) == 0 {
+		return nil
+	}
+	if len(params) > 2 {
+		return fmt.Errorf("handler on line %d takes a third parameter", lineOf(text, open))
+	}
+	event := paramName(text, params[0])
+	if event == "" {
+		return fmt.Errorf("handler on line %d: first parameter must be a plain name", lineOf(text, open))
+	}
+	if len(params) == 2 && paramName(text, params[1]) != "ctx" {
+		return fmt.Errorf("handler on line %d: second parameter must be ctx", lineOf(text, open))
+	}
+	for _, i := range identUses(l, text, event, bodyOpen, bodyEnd) {
+		rest := text[i+len(event):]
+		f := eventField.FindStringSubmatchIndex(rest)
+		if f == nil || writeAfter.MatchString(rest[f[3]:]) || writeBefore.MatchString(text[:i]) {
+			return fmt.Errorf("handler event used beyond a read of its run-state fields on line %d", lineOf(text, i))
+		}
+	}
+	return nil
 }
 
 func checkPiEvents(events map[string]bool) error {
@@ -154,9 +227,23 @@ func checkPiEvents(events map[string]bool) error {
 	return nil
 }
 
+// ctxFuncs names the functions this file declares with ctx as first parameter.
+func ctxFuncs(l lexed, text string) map[string]bool {
+	out := map[string]bool{}
+	for _, re := range []*regexp.Regexp{funcDecl, arrowDecl} {
+		for _, m := range codeAt(l, text, re) {
+			if ctxFirst.MatchString(text[m[1]:]) {
+				out[text[m[2]:m[3]]] = true
+			}
+		}
+	}
+	return out
+}
+
 // ctxAllowed reports whether the ctx at i is a read of the session, a
-// parameter, or the whole argument of a call.
-func ctxAllowed(l lexed, text string, i int) bool {
+// parameter, or the whole argument of a call to a function in declared, whose
+// body the ctx rules then cover under the same name.
+func ctxAllowed(l lexed, text string, i int, declared map[string]bool) bool {
 	if ctxRead.MatchString(text[i:]) {
 		return true
 	}
@@ -182,14 +269,59 @@ func ctxAllowed(l lexed, text string, i int) bool {
 		return false
 	}
 	callee := calleeName.FindStringSubmatch(text[:open])
-	return callee != nil && !slices.Contains([]string{"if", "while", "for", "switch", "return", "typeof", "await"}, callee[1])
+	return callee != nil && declared[callee[1]]
 }
 
 func checkPiCtx(l lexed, text string) error {
+	declared := ctxFuncs(l, text)
 	for _, m := range codeAt(l, text, ctxWord) {
 		i := m[0]
-		if (i > 0 && (text[i-1] == '.' || text[i-1] == '$')) || !ctxAllowed(l, text, i) {
-			return fmt.Errorf("ctx used beyond the session reads, a parameter or a call argument on line %d", lineOf(text, i))
+		if (i > 0 && (text[i-1] == '.' || text[i-1] == '$')) || !ctxAllowed(l, text, i, declared) {
+			return fmt.Errorf("ctx used beyond the session reads, a parameter or the argument of a function declared with ctx on line %d", lineOf(text, i))
+		}
+	}
+	return nil
+}
+
+func checkPiTokens(l lexed, text string) error {
+	for _, m := range codeAt(l, text, forbiddenToken) {
+		tok := text[m[0]:m[1]]
+		if tok != "process" || !processEnv.MatchString(text[m[1]:]) {
+			return fmt.Errorf("forbidden token %s on line %d", tok, lineOf(text, m[0]))
+		}
+	}
+	return nil
+}
+
+// checkPiReply limits each http.request( response to a statement draining it.
+func checkPiReply(l lexed, text string) error {
+	calls := codeAt(l, text, httpRequest)
+	if len(calls) == 0 {
+		return fmt.Errorf("scan found no http.request( call; the scan cannot see the reply")
+	}
+	for _, c := range calls {
+		line := lineOf(text, c[0])
+		end := matchParen(l, text, c[1]-1)
+		if end < 0 {
+			return fmt.Errorf("unbalanced http.request( on line %d", line)
+		}
+		args := listItems(l, text, c[1]-1, end)
+		if len(args) == 0 {
+			return fmt.Errorf("http.request( on line %d has no response callback", line)
+		}
+		last := args[len(args)-1]
+		m := replyParam.FindStringSubmatchIndex(text[last.from:last.to])
+		if m == nil {
+			return fmt.Errorf("http.request( on line %d needs an inline (name) => response callback as its last argument", line)
+		}
+		name, paramAt := text[last.from+m[2]:last.from+m[3]], last.from+m[2]
+		for _, i := range identUses(l, text, name, 0, len(text)) {
+			if i == paramAt {
+				continue
+			}
+			if !drainCall.MatchString(text[i+len(name):]) || !stmtStart.MatchString(text[:i]) {
+				return fmt.Errorf("extension reads houston's reply: %s used beyond a %s.resume() statement on line %d", name, name, lineOf(text, i))
+			}
 		}
 	}
 	return nil
@@ -201,6 +333,9 @@ func scanPi(src string) error {
 	l := lex(src)
 	text := string(l.text)
 	if err := checkPiImports(l, text); err != nil {
+		return err
+	}
+	if err := checkPiTokens(l, text); err != nil {
 		return err
 	}
 	events, err := checkPiUse(l, text)
@@ -216,7 +351,7 @@ func scanPi(src string) error {
 	if m := codeAt(l, text, replyAPI); len(m) > 0 {
 		return fmt.Errorf("extension reads houston's reply (%s) on line %d", strings.TrimSpace(text[m[0][0]:m[0][1]]), lineOf(text, m[0][0]))
 	}
-	return nil
+	return checkPiReply(l, text)
 }
 
 // The extension must never act on the session or read houston's reply.
@@ -237,6 +372,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 /*IMPORTS*/
 type Ctx = { sessionManager: { getCwd(): string } };
 function coords(ctx: Ctx) { return { cwd: ctx.sessionManager.getCwd() }; }
+function send() { http.request({}, (res) => { res.resume(); }); }
 /*HELPERS*/
 export default function (pi: ExtensionAPI) {
   /*EXTRA*/
@@ -251,6 +387,10 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_shutdown", async (event) => { await post(event.reason); });
 }
 `
+	const send = `function send() { http.request({}, (res) => { res.resume(); }); }`
+	const onReply = `(res) => { res.resume(); }`
+	const onAgentStart = `async (_event, ctx) => { post(coords(ctx)); }`
+	const onSettled = `async (event) => { post(event.aborted); }`
 	const compact = `  pi.on("session_compact", async () => { post("x"); });` + "\n"
 	const compactFailed = `  pi.on("session_compact_failed", async () => { post("x"); });` + "\n"
 	tests := []struct {
@@ -291,7 +431,43 @@ export default function (pi: ExtensionAPI) {
 		{"handler returning a call", compact, `  pi.on("session_compact", async () => { if (a) return post("x"); });` + "\n", "returns a value"},
 		{"handler with a bare return", compact, `  pi.on("session_compact", async () => { if (a) return; post("x"); });` + "\n", ""},
 		{"helper returning a value", "/*HELPERS*/", `function mk() { return { a: 1 }; }`, ""},
-		{"ctx as a call argument", "/*HELPERS*/", `function f(ctx: Ctx) { g(ctx); }`, ""},
+		{"ctx to a declared function", "/*HELPERS*/", `function g(ctx: Ctx) {} function f(ctx: Ctx) { g(ctx); }`, ""},
+		{"ctx to a declared arrow", "/*HELPERS*/", `const g = async (ctx: Ctx) => {}; function f(ctx: Ctx) { g(ctx); }`, ""},
+		{"ctx to a declared member name", "/*HELPERS*/", `function g(ctx: Ctx) {} function f(ctx: Ctx) { o.g(ctx); }`, ""},
+		{"ctx to a helper with another parameter name", "/*HELPERS*/", `function g(x: any) { x.abort(); } function f(ctx: Ctx) { g(ctx); }`, "ctx used"},
+		{"ctx to an arrow with another parameter name", "/*HELPERS*/", `const g = (x: any) => { x.abort(); }; function f(ctx: Ctx) { g(ctx); }`, "ctx used"},
+		{"ctx to a helper that declares it second", "/*HELPERS*/", `function g(x: any, ctx: Ctx) { x.abort(); } function f(ctx: Ctx) { g(ctx); }`, "ctx used"},
+		{"ctx to an undeclared function", "/*HELPERS*/", `function f(ctx: Ctx) { g(ctx); }`, "ctx used"},
+		{"ctx to an undeclared member", "/*HELPERS*/", `function f(ctx: Ctx) { o.abort(ctx); }`, "ctx used"},
+		{"ctx renamed in a handler", onAgentStart, `async (_e, c) => { c.abort(); }`, "second parameter"},
+		{"third handler parameter", onAgentStart, `async (_e, ctx, x) => { post(coords(ctx)); }`, "third parameter"},
+		{"typed ctx parameter", onAgentStart, `async (_e: any, ctx: Ctx) => { post(coords(ctx)); }`, ""},
+		{"event field written", `post(event.toolName);`, `event.args.command = "true";`, "beyond a read"},
+		{"typed event written", onSettled, `async (event: any) => { event.args.command = "true"; }`, "beyond a read"},
+		{"event with a dollar name written", onSettled, `async ($e) => { $e.args.command = "true"; }`, "beyond a read"},
+		{"event passed to a function", `post(event.toolName);`, `post(event);`, "beyond a read"},
+		{"event aliased", `post(event.toolName);`, `const x = event;`, "beyond a read"},
+		{"event spread", `post(event.toolName);`, `post(...event);`, "beyond a read"},
+		{"event.reason assigned", `await post(event.reason);`, `event.reason = "x";`, "beyond a read"},
+		{"event.reason compound assigned", `await post(event.reason);`, `event.reason += "x";`, "beyond a read"},
+		{"event.reason incremented", `await post(event.reason);`, `event.reason++;`, "beyond a read"},
+		{"event.reason decremented first", `await post(event.reason);`, `--event.reason;`, "beyond a read"},
+		{"event.reason deleted", `await post(event.reason);`, `delete event.reason;`, "beyond a read"},
+		{"longer field name", `await post(event.reason);`, `post(event.reason$x);`, "beyond a read"},
+		{"destructured event", onSettled, `async ({ args }) => { args.command = "true"; }`, "plain name"},
+		{"rest handler parameters", onSettled, `async (...a) => { a[0].args = 1; }`, "plain name"},
+		{"defaulted event", onSettled, `async (event = 1) => { post("x"); }`, "plain name"},
+		{"typed event read", onSettled, `async (event: any) => { post(event.aborted); }`, ""},
+		{"event reads", `post(event.toolName);`, `post(event.toolName, event.toolCallId, event.isError || undefined, event.aborted, event.reason === "x");`, ""},
+		{"arguments", "/*HELPERS*/", `function f() { return arguments; }`, "forbidden token arguments"},
+		{"eval", "/*HELPERS*/", `eval("x");`, "forbidden token eval"},
+		{"Function", "/*HELPERS*/", `new Function("x");`, "forbidden token Function"},
+		{"globalThis", "/*HELPERS*/", `globalThis.x;`, "forbidden token globalThis"},
+		{"process.exit", "/*HELPERS*/", `process.exit(0);`, "forbidden token process"},
+		{"process.getBuiltinModule", "/*HELPERS*/", `process.getBuiltinModule("node:fs");`, "forbidden token process"},
+		{"process aliased", "/*HELPERS*/", `const p = process;`, "forbidden token process"},
+		{"process.env", "/*HELPERS*/", `const h = process.env.HOME;`, ""},
+		{"forbidden tokens in a string", "/*HELPERS*/", `const s = "eval(process.exit(arguments))";`, ""},
 		{"ctx session reads", "/*HELPERS*/", `function f(ctx: Ctx) { ctx.sessionManager.getSessionId(); ctx.sessionManager.getSessionFile(); }`, ""},
 		{"response data listener", "/*HELPERS*/", `res.on("data", () => {});`, "reply"},
 		{"response data listener, single quotes", "/*HELPERS*/", `res.on('data', () => {});`, "reply"},
@@ -299,6 +475,16 @@ export default function (pi: ExtensionAPI) {
 		{"read", "/*HELPERS*/", `res.read();`, "reply"},
 		{"setEncoding", "/*HELPERS*/", `res.setEncoding("utf8");`, "reply"},
 		{"error listener is no reply read", "/*HELPERS*/", `req.on("error", () => {}); res.resume();`, ""},
+		{"response once data", "/*HELPERS*/", `res.once("data", () => {});`, "reply"},
+		{"renamed response read", onReply, `(r) => { r.once("data", () => {}); }`, "reply"},
+		{"response passed on", onReply, `(res) => { f(res); }`, "reply"},
+		{"read chained after resume", onReply, `(res) => { res.resume().once("data", f); }`, "reply"},
+		{"resume result kept", onReply, `(res) => { const r = res.resume(); }`, "reply"},
+		{"renamed response drained", onReply, `(r) => { r.resume(); }`, ""},
+		{"no http.request", send, "", "no http.request"},
+		{"http.request only in a comment", send, "// " + send, "no http.request"},
+		{"http.request without a callback", onReply, `onReply`, "response callback"},
+		{"http.request with an unnamed callback", onReply, `({ socket }) => { socket.read; }`, "response callback"},
 		{"commented pi call", "/*HELPERS*/", `// pi.sendMessage("x")`, ""},
 		{"commented ctx call", "/*HELPERS*/", `/* ctx.abort() */`, ""},
 		{"pi and ctx in strings", "/*HELPERS*/", `const s = "pi.sendMessage(ctx.abort())"; const e = { engine: "pi" };`, ""},

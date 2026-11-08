@@ -40,6 +40,7 @@ async function harness(onRequest?: OnRequest) {
   const { default: factory } = await import("./houston.ts");
   mock.timers.enable({ apis: ["setInterval"] });
   const spy = mock.method(globalThis, "setInterval");
+  const timeoutSpy = mock.method(globalThis, "setTimeout");
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-mod-"));
   process.env.HOUSTON_STATE_DIR = stateDir;
   delete process.env.HOUSTON_STATUS_DIR;
@@ -49,6 +50,7 @@ async function harness(onRequest?: OnRequest) {
   const bodies: Record[] = [];
   const raws: string[] = [];
   let connections = 0;
+  let closedConnections = 0;
   const server = http.createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on("data", (c) => chunks.push(c));
@@ -62,23 +64,35 @@ async function harness(onRequest?: OnRequest) {
       res.end();
     });
   });
-  server.on("connection", () => connections++);
+  server.on("connection", (sock) => {
+    connections++;
+    sock.on("close", () => closedConnections++);
+  });
   await new Promise<void>((r) => server.listen(path.join(stateDir, "claude-mod.sock"), r));
 
-  const handlers: { [name: string]: Handler } = {};
-  const pi = {
-    on(name: string, fn: Handler) {
-      handlers[name] = fn;
-    },
+  const load = () => {
+    const loaded: { [name: string]: Handler } = {};
+    const pi = {
+      on(name: string, fn: Handler) {
+        loaded[name] = fn;
+      },
+    };
+    factory(pi as never);
+    return loaded;
   };
-  factory(pi as never);
+  const handlers = load();
+  const factorySetTimeoutCalls = timeoutSpy.mock.callCount();
+  timeoutSpy.mock.restore();
 
   return {
     bodies,
     raws,
     handlers,
+    load,
     connections: () => connections,
+    closedConnections: () => closedConnections,
     setIntervalCalls: () => spy.mock.callCount(),
+    factorySetTimeoutCalls,
     fire: (name: string, event: unknown = {}) => handlers[name](event, ctx),
     async close() {
       mock.timers.reset();
@@ -96,6 +110,7 @@ test("factory opens no connection and starts no timer", async () => {
     await sleep(100);
     assert.equal(h.connections(), 0);
     assert.equal(h.setIntervalCalls(), 0);
+    assert.equal(h.factorySetTimeoutCalls, 0);
     mock.timers.tick(15000);
     await sleep(50);
     assert.equal(h.bodies.length, 0);
@@ -124,6 +139,7 @@ test("golden record stream", async () => {
     await h.fire("session_compact", {});
     await h.fire("agent_settled", { aborted: false });
     await waitFor(() => h.bodies.length === 7);
+    await sleep(50);
     mock.timers.tick(15000);
     await waitFor(() => h.bodies.length === 8);
     await h.fire("session_shutdown", { reason: "quit" });
@@ -230,7 +246,9 @@ test("shutdown quit flushes session.end and stops posting", async () => {
 });
 
 test("retries a record whose connection dropped", async () => {
+  const arrivals: number[] = [];
   const h = await harness((req, res, _body, i) => {
+    arrivals.push(Date.now());
     if (i === 0) return req.socket.destroy();
     res.statusCode = 204;
     res.end();
@@ -249,6 +267,8 @@ test("retries a record whose connection dropped", async () => {
       ],
     );
     assert.deepEqual(h.bodies[0], h.bodies[1]);
+    const gap = arrivals[1] - arrivals[0];
+    assert.ok(gap >= 900, `retry came after ${gap}ms`);
   } finally {
     await h.close();
   }
@@ -323,6 +343,63 @@ test("shutdown flush is bounded when the server never answers", async () => {
     await h.fire("session_shutdown", { reason: "quit" });
     const elapsed = Date.now() - t0;
     assert.ok(elapsed < 2000, `flush took ${elapsed}ms`);
+    await waitFor(() => h.closedConnections() === 1, 500);
+    await sleep(1500);
+    assert.equal(h.bodies.length, 1);
+  } finally {
+    await h.close();
+  }
+});
+
+test("shutdown quit during retry backoff still delivers session.end", async () => {
+  const h = await harness((req, res, _body, i) => {
+    if (i === 0) return req.socket.destroy();
+    res.statusCode = 204;
+    res.end();
+  });
+  try {
+    await h.fire("session_start", { reason: "startup" });
+    await waitFor(() => h.bodies.length === 1);
+    await sleep(50);
+    await h.fire("session_shutdown", { reason: "quit" });
+    assert.equal(h.bodies[h.bodies.length - 1].ev, "session.end");
+  } finally {
+    await h.close();
+  }
+});
+
+test("each load of the extension gets its own boot", async () => {
+  const h = await harness();
+  try {
+    await h.fire("session_start", { reason: "startup" });
+    await waitFor(() => h.bodies.length === 1);
+    await h.fire("session_shutdown", { reason: "reload" });
+
+    const second = h.load();
+    await second.session_start({ reason: "reload" }, ctx);
+    await waitFor(() => h.bodies.length === 2);
+
+    assert.notEqual(h.bodies[0].boot, h.bodies[1].boot);
+    assert.equal(h.bodies[1].seq, 1);
+  } finally {
+    await h.close();
+  }
+});
+
+test("heartbeat is skipped while a dropped record waits to retry", async () => {
+  const h = await harness((req, res, _body, i) => {
+    if (i === 0) return req.socket.destroy();
+    res.statusCode = 204;
+    res.end();
+  });
+  try {
+    await h.fire("session_start", { reason: "startup" });
+    await waitFor(() => h.bodies.length === 1);
+    await sleep(50);
+    mock.timers.tick(15000);
+    await waitFor(() => h.bodies.length === 2, 4000);
+    await sleep(150);
+    assert.equal(h.bodies.filter((b) => b.ev === "heartbeat").length, 0);
   } finally {
     await h.close();
   }

@@ -33,7 +33,7 @@ The factory opens no socket and no timer; both start with the first record.
 - Any HTTP answer counts as delivered, and houston's reply is never read. A
   connection error or a timeout puts the record back at the head of the queue
   and retries after 1 s.
-- When nothing is queued for 15 s the extension posts a `heartbeat`, so houston
+- Every 15 s, if nothing is queued or in flight, the extension posts a `heartbeat`, so houston
   can judge liveness by recency.
 - `session_shutdown` flushes the queue, bounded at 1 s.
 

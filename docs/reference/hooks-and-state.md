@@ -16,7 +16,7 @@ ignored (that arg exists so wrapper scripts can name the event for a native
 Claude payload; `houston hooks install` registers a bare `<binary> hook` and
 relies on `hook_event_name`).
 
-For Claude Code, the mod's fold replaces the hook state's `State`, tool, message and background list while the mod is live for the session (see "Claude mod"); the pi extension does the same for pi (see "pi extension"); the hook state is the fallback, and stays the only source for codex and cursor. The transcript heal below runs only on that fallback path.
+For Claude Code, the mod's fold replaces the hook state's `State`, tool, message and background list while the mod is live for the session (see "Claude mod"); the pi extension does the same for pi's `State` and tool only, since pi has no background list (see "pi extension"); the hook state is the fallback, and stays the only source for codex and cursor. The transcript heal below runs only on that fallback path.
 
 `engine: claude-code` decodes `native` as a Claude `Event`; the event is
 `native.hook_event_name`, else the envelope's `native_event` (neither →
@@ -193,10 +193,11 @@ router, not the agent — and isn't read anywhere in houston.
   - `step.start` → `thinking` when no tool is in flight. Its purpose: after a houston restart mid-run it is the first state-defining record, so the fold takes over at the next LLM turn rather than the next run.
   - `step.start` and `tool.start` are ignored after the run settled or ended: only `agent_start` opens a run, so a late record never reopens a settled run.
   - `permission`, `notification`, `tool.check`, `stop` and `compact` are ignored for pi.
+  - `compact.end` folds nothing and only advances `MainUpdated`, which ends the hook `compacting` pass-through (see Overlay).
 - **Liveness**: the same rule as the Claude mod (`hub.Session.modLive`, 45 s, `Known`; see "Claude mod").
 - **Overlay**: while a pi session's extension is live, the fold drives state through the same overlay as Claude's. Two pass-throughs from the hook state (`hub/mod.go` `overlayPiHook`), pi only: the tool-argument hint comes from the hook state when the hook reads `tool-running` for the same tool (case-insensitive), since the extension sends no arguments; and a hook `compacting` written at or after the newest main record shows while the mod reads `thinking` or `tool-running`. A manual `/compact` at idle reads idle, and `turn.complete` always ends a compaction, so a late detached `pre_compact` cannot stick. `v.Agent` for a mod-only pi session is `pi`.
 - **Fallback**: with no extension nothing changes; the hook path runs as today, the late-`turn_end` guard in `hook.apply` included.
-- **Read-only guard**: `claudemod/piguard_test.go` scans `houston.ts`. `just mod-check` runs it and `node --test contrib/pi-mod/houston.test.ts`, and the CI `mod` job runs `just mod-check`.
+- **Read-only guard**: `claudemod/piguard_test.go` scans `houston.ts`. Like the Claude mod's guard it is a name-based tripwire, not a proof: it checks handler parameter use, `ctx` and response use by name, so review keeps the contract. `just mod-check` runs it and `node --test contrib/pi-mod/houston.test.ts`, and the CI `mod` job runs `just mod-check`.
 
 ## Background tasks
 
