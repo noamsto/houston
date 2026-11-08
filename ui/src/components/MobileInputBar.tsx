@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { sendImage, sendKey, sendText, terminalKey, type TerminalAddress } from '../api/terminal'
+import { sendImages, sendKey, sendText, terminalKey, type TerminalAddress } from '../api/terminal'
 import { AttachButton, SendButton, VoiceButton } from './ComposerControls'
 import { autoGrow, useVoiceInput } from './composerHooks'
 import { QuickCommands } from './QuickCommands'
 import { StagedImageChip } from './StagedImageChip'
 import { useComposerDraft } from './useComposerDraft'
-import { readBase64, useStagedImage } from './useStagedImage'
+import { readBase64, skippedMessage, useStagedImage } from './useStagedImage'
 
 interface Props {
   address: TerminalAddress
@@ -66,7 +66,7 @@ const errorStyle: React.CSSProperties = {
 
 export function MobileInputBar({ address, choices, inputText, agent, runAgent, runState, suggestion, draftKey }: Props) {
   const [text, setText, clearIf] = useComposerDraft(draftKey !== undefined ? `run:${draftKey}` : terminalKey(address))
-  const { staged, stage, clear: clearStaged } = useStagedImage()
+  const { staged, stage, remove, clear: clearStaged } = useStagedImage()
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState<string | null>(null)
   const [keyError, setKeyError] = useState<string | null>(null)
@@ -84,9 +84,9 @@ export function MobileInputBar({ address, choices, inputText, agent, runAgent, r
     sendingRef.current = true
     setSending(true)
     setSendError(null)
-    const err = staged
-      ? await readBase64(staged.file).then(
-          (data) => sendImage(address, line, { name: staged.file.name, type: staged.file.type, data }),
+    const err = staged.length > 0
+      ? await Promise.all(staged.map(async ({ file }) => ({ name: file.name, type: file.type, data: await readBase64(file) }))).then(
+          (images) => sendImages(address, line, images),
           () => 'could not read file',
         )
       : line
@@ -125,7 +125,7 @@ export function MobileInputBar({ address, choices, inputText, agent, runAgent, r
   }, [address, reportKeyError])
 
   const prefill = (value: string) => {
-    if (text.trim() || staged) return false
+    if (text.trim() || staged.length > 0) return false
     setText(value)
     textareaRef.current?.focus()
     return true
@@ -138,16 +138,17 @@ export function MobileInputBar({ address, choices, inputText, agent, runAgent, r
   const voice = useVoiceInput(onTranscript)
 
   const handleFileAttach = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
+    const files = Array.from(e.target.files ?? [])
     // Reset so the same file can be selected again
     e.target.value = ''
-    if (!file) return
-    // The in-flight send's success clears the staged file.
+    if (files.length === 0) return
+    // The in-flight send's success clears the staged files.
     if (sendingRef.current) {
       setSendError('busy — pick the file again')
       return
     }
-    stage(file)
+    const skipped = stage(files)
+    if (skipped > 0) setSendError(skippedMessage(skipped))
   }
 
 
@@ -250,7 +251,13 @@ export function MobileInputBar({ address, choices, inputText, agent, runAgent, r
                 </div>
               )}
 
-              {staged && <StagedImageChip staged={staged} onRemove={clearStaged} disabled={sending} />}
+              {staged.length > 0 && (
+                <div className="staged-chips">
+                  {staged.map((s) => (
+                    <StagedImageChip key={s.id} staged={s} onRemove={() => remove(s.id)} disabled={sending} />
+                  ))}
+                </div>
+              )}
 
               <textarea
                 className="composer-field"
@@ -275,7 +282,7 @@ export function MobileInputBar({ address, choices, inputText, agent, runAgent, r
               />
 
               <div className="composer-actions">
-                <input ref={fileInputRef} type="file" onChange={handleFileAttach} style={{ display: 'none' }} />
+                <input ref={fileInputRef} type="file" multiple onChange={handleFileAttach} style={{ display: 'none' }} />
                 <AttachButton onClick={() => fileInputRef.current?.click()} disabled={sending} />
                 {voice.supported && <VoiceButton listening={voice.listening} onClick={voice.toggle} />}
                 {commandsToggle}

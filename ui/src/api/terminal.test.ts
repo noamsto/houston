@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { sendImage, sendKey, sendText, terminalKey, terminalSocketPath, type TerminalAddress } from './terminal'
+import { sendImages, sendKey, sendText, terminalKey, terminalSocketPath, type TerminalAddress } from './terminal'
 
 const runAddr: TerminalAddress = { kind: 'run', id: 'run-1' }
 
@@ -53,14 +53,17 @@ describe('sendKey', () => {
   })
 })
 
-describe('sendImage', () => {
+describe('sendImages', () => {
   const image = { name: 'a.png', type: 'image/png', data: 'ZGF0YQ==' }
 
-  it('JSON POST with type image, text, and a one-element images array', async () => {
-    await sendImage(runAddr, 'look at this', image)
+  it('JSON POST with type image, text, and an images array and a 60s timeout', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout')
+    const second = { ...image, name: 'b.png' }
+    await sendImages(runAddr, 'look at this', [image, second])
     const { url, init } = lastRequest()
     expect(url).toBe('/api/runs/run-1/input')
-    expect(JSON.parse(String(init.body))).toEqual({ type: 'image', text: 'look at this', images: [image] })
+    expect(JSON.parse(String(init.body))).toEqual({ type: 'image', text: 'look at this', images: [image, second] })
+    expect(timeout).toHaveBeenCalledWith(60000)
   })
 })
 

@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, use
 import type { Run } from '../api/runs'
 import { fetchTool } from '../api/chat'
 import type { ChatToolDetail } from '../api/chat'
-import { sendImage, sendKey, sendText } from '../api/terminal'
+import { sendImages, sendKey, sendText } from '../api/terminal'
 import type { TerminalAddress } from '../api/terminal'
 import { AttachButton, SendButton, VoiceButton } from '../components/ComposerControls'
 import { COMPOSER_TAP_PX, autoGrow, useVoiceInput } from '../components/composerHooks'
@@ -10,7 +10,7 @@ import { QuickCommands } from '../components/QuickCommands'
 import { StagedImageChip } from '../components/StagedImageChip'
 import { isClaudeAgent, suggestedCommand } from '../components/quickCommands'
 import { useComposerDraft } from '../components/useComposerDraft'
-import { readBase64, useStagedImage } from '../components/useStagedImage'
+import { readBase64, skippedMessage, useStagedImage } from '../components/useStagedImage'
 import { useRunChat } from '../hooks/useRunChat'
 import { useStickyScroll } from '../hooks/useStickyScroll'
 import { buildItems, provisionalTool, reconcileOptimistic, toolRowLabel } from './chatModel'
@@ -233,7 +233,7 @@ function ChatItemRow({ item, runId, canAnswer, answerable, live, reducedMotion, 
 /** `onSend` resolves to an error reason, or null once the text was sent. */
 function Composer({ run, suggestion, onSend }: { run: Run; suggestion: string | null; onSend: (text: string) => Promise<string | null> }) {
   const [text, setText, clearIf] = useComposerDraft(`chat:${run.draft_key ?? run.id}`)
-  const { staged, stage, clear } = useStagedImage()
+  const { staged, stage, remove, clear } = useStagedImage()
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -251,7 +251,7 @@ function Composer({ run, suggestion, onSend }: { run: Run; suggestion: string | 
   const sendingRef = useRef(false)
 
   const prefill = (value: string) => {
-    if (text.trim() || staged) return false
+    if (text.trim() || staged.length > 0) return false
     setText(value)
     textareaRef.current?.focus()
     return true
@@ -286,16 +286,16 @@ function Composer({ run, suggestion, onSend }: { run: Run; suggestion: string | 
 
   const handleSend = () => {
     const trimmed = text.trim()
-    if (staged) {
-      const { file } = staged
+    if (staged.length > 0) {
+      const files = staged.map((s) => s.file)
       void attempt(async () => {
-        let data: string
+        let images: { name: string; type: string; data: string }[]
         try {
-          data = await readBase64(file)
+          images = await Promise.all(files.map(async (file) => ({ name: file.name, type: file.type, data: await readBase64(file) })))
         } catch {
           return 'could not read file'
         }
-        return sendImage(address, trimmed, { name: file.name, type: file.type, data })
+        return sendImages(address, trimmed, images)
       }, text)
       return
     }
@@ -304,14 +304,15 @@ function Composer({ run, suggestion, onSend }: { run: Run; suggestion: string | 
   }
 
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
+    const files = Array.from(e.target.files ?? [])
     e.target.value = ''
-    if (!file) return
+    if (files.length === 0) return
     if (sendingRef.current) {
       setError('busy — pick the file again')
       return
     }
-    stage(file)
+    const skipped = stage(files)
+    if (skipped > 0) setError(skippedMessage(skipped))
   }
 
   return (
@@ -321,7 +322,13 @@ function Composer({ run, suggestion, onSend }: { run: Run; suggestion: string | 
           <>
             {disabled && <div className="chat-composer-reason">No live terminal for this run</div>}
             {error && <div className="chat-composer-error" role="alert">{error}</div>}
-            {staged && <StagedImageChip staged={staged} onRemove={clear} disabled={sending} />}
+            {staged.length > 0 && (
+              <div className="staged-chips">
+                {staged.map((s) => (
+                  <StagedImageChip key={s.id} staged={s} onRemove={() => remove(s.id)} disabled={sending} />
+                ))}
+              </div>
+            )}
             <textarea
               className="composer-field chat-composer-textarea"
               ref={textareaRef}
@@ -338,7 +345,7 @@ function Composer({ run, suggestion, onSend }: { run: Run; suggestion: string | 
               rows={1}
             />
             <div className="composer-actions">
-              <input ref={fileInputRef} type="file" style={{ display: 'none' }} onChange={handleFile} />
+              <input ref={fileInputRef} type="file" multiple style={{ display: 'none' }} onChange={handleFile} />
               <AttachButton disabled={disabled || sending} onClick={() => fileInputRef.current?.click()} />
               {voice.supported && <VoiceButton listening={voice.listening} disabled={disabled} onClick={voice.toggle} />}
               {!disabled && commandsToggle}

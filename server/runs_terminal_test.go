@@ -518,6 +518,46 @@ func TestRunInputTextTooLong(t *testing.T) {
 	}
 }
 
+func TestRunInputTwoImages(t *testing.T) {
+	panes := &fakeRunPanes{}
+	s := newRunTerminalServer(t, panes, termDelta())
+
+	img := func(name, data string) map[string]string {
+		return map[string]string{"name": name, "type": "image/png", "data": base64.StdEncoding.EncodeToString([]byte(data))}
+	}
+	body := inputBody(t, map[string]any{
+		"type":   "image",
+		"text":   "both",
+		"images": []map[string]string{img("first.png", "one"), img("second.png", "two")},
+	})
+	rec := doReply(t, s, replyRequest("POST", "/api/runs/"+termRunID+"/input", body))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status %d, want 204 (%q)", rec.Code, rec.Body.String())
+	}
+
+	_, sent := panes.calls()
+	if len(sent) != 1 {
+		t.Fatalf("sent %+v, want one message", sent)
+	}
+	parts := strings.Split(sent[0].keys, " ")
+	if len(parts) != 3 || parts[2] != "both" {
+		t.Fatalf("message %q, want two paths then the text", sent[0].keys)
+	}
+	for i, want := range []struct{ suffix, data string }{{"-first.png", "one"}, {"-second.png", "two"}} {
+		path := parts[i]
+		t.Cleanup(func() { _ = os.Remove(path) })
+		if !strings.HasSuffix(path, want.suffix) {
+			t.Errorf("path %d = %q, want suffix %q", i, path, want.suffix)
+		}
+		if got, err := os.ReadFile(path); err != nil || string(got) != want.data {
+			t.Errorf("path %d holds %q (err %v), want %q", i, got, err, want.data)
+		}
+	}
+	if !sent[0].enter {
+		t.Errorf("sent %+v, want one Enter", sent[0])
+	}
+}
+
 func TestRunInputImageTextTooLong(t *testing.T) {
 	panes := &fakeRunPanes{}
 	s := newRunTerminalServer(t, panes, termDelta())

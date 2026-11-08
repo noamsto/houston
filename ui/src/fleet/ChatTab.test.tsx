@@ -504,6 +504,62 @@ describe('ChatTab', () => {
       expect(document.querySelector('.chat-optimistic')).toBeNull()
     })
 
+    const pickTwo = () =>
+      fireEvent.change(input(), {
+        target: { files: [new File(['x'], 'a.png', { type: 'image/png' }), new File(['x'], 'b.png', { type: 'image/png' })] },
+      })
+
+    it('two files in one pick show two chips; one Send posts both in order with the text', async () => {
+      const { fetchMock } = await renderReady({}, { page: page('e1', []) })
+      fireEvent.change(textarea(), { target: { value: 'both' } })
+      pickTwo()
+      expect(screen.getAllByTestId('staged-image')).toHaveLength(2)
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+
+      await waitFor(() => expect(screen.queryByTestId('staged-image')).toBeNull())
+      expect(textarea().value).toBe('')
+      const calls = inputCalls(fetchMock)
+      expect(calls).toHaveLength(1)
+      expect(JSON.parse(String(calls[0][1].body))).toEqual({
+        type: 'image',
+        text: 'both',
+        images: [
+          { name: 'a.png', type: 'image/png', data: 'eA==' },
+          { name: 'b.png', type: 'image/png', data: 'eA==' },
+        ],
+      })
+    })
+
+    it('a failed send keeps both chips', async () => {
+      const { fetchMock } = await renderReady({}, { page: page('e1', []) })
+      fetchMock.mockImplementation((url: string) => {
+        if (url.includes('/input')) return Promise.resolve({ status: 500, ok: false, json: async () => ({}), text: async () => '' } as Response)
+        return Promise.resolve(jsonResponse(page('e1', [])))
+      })
+      pickTwo()
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+      await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('HTTP 500'))
+      expect(screen.getAllByTestId('staged-image')).toHaveLength(2)
+    })
+
+    it('removing one chip leaves the other', async () => {
+      await renderReady({}, { page: page('e1', []) })
+      pickTwo()
+      fireEvent.click(screen.getAllByRole('button', { name: 'Remove attachment' })[0])
+      const chips = screen.getAllByTestId('staged-image')
+      expect(chips).toHaveLength(1)
+      expect(chips[0].textContent).toContain('b.png')
+    })
+
+    it('a pick past the size cap keeps the files that fit and names how many were skipped', async () => {
+      await renderReady({}, { page: page('e1', []) })
+      const big = new File(['x'], 'big.png', { type: 'image/png' })
+      Object.defineProperty(big, 'size', { value: 40 * 1024 * 1024 })
+      fireEvent.change(input(), { target: { files: [png(), big] } })
+      expect(screen.getAllByTestId('staged-image')).toHaveLength(1)
+      expect(screen.getByRole('alert').textContent).toContain('1 file skipped')
+    })
+
     it('Send with only a chip (no text) is allowed', async () => {
       const { fetchMock } = await renderReady({}, { page: page('e1', []) })
       pick()
