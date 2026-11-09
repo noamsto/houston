@@ -19,7 +19,8 @@ from `r.RemoteAddr` alone (`X-Forwarded-For`, `X-Real-IP` and `Forwarded` are
 ignored), because the Host allowlist admits the Tailscale names and so cannot
 keep a network client from loading the page. A browser reaches a non-loopback
 houston through a local reverse proxy, an SSH tunnel or another houston's Fleet.
-A non-loopback client still gets the page but no token, so its API calls get
+A local proxy arrives from loopback, so every client it admits receives the
+token: the proxy must authenticate or restrict who can reach it. A non-loopback client still gets the page but no token, so its API calls get
 401; peers keep authenticating with `Authorization: Bearer`.
 
 **Origin allowlist.** Requests are checked against same-origin plus, under
@@ -48,7 +49,7 @@ sits behind the same token and Host gates as the rest of `/api/`.
 
 This model is the primary defense; the following are additional layers:
 1. Default bind: `127.0.0.1:9090` (localhost only)
-2. Browser access through a local reverse proxy (for example Tailscale Serve)
+2. Browser access through a local reverse proxy that restricts its clients (Tailscale Serve admits the whole tailnet)
 3. Or SSH tunnel: `ssh -L 9090:localhost:9090 host`
 
 

@@ -58,7 +58,7 @@ Behind the server: tmux CLI (`list-sessions`, `capture-pane`, `send-keys`, ...),
 | Build | Vite | Fast dev server with HMR, production bundling |
 | Live updates | SSE + WebSocket | SSE for session list, WS for pane I/O |
 | Voice input | Web Speech API | Built into browsers, no backend needed |
-| Auth | Token gate + Origin/Host allowlists | Tailscale/SSH tunnel as extra layers; see Security essentials |
+| Auth | Token gate + Origin/Host allowlists | Local reverse proxy/SSH tunnel as extra layers; see Security essentials |
 
 
 ## Project Structure
@@ -143,7 +143,7 @@ Full model: `docs/reference/security.md`.
 - **Origin allowlist**: same-origin (plus the Vite dev server under `-debug`) for HTTP and WS handshakes.
 - **Host allowlist**: the `Host` header is pinned to names derived from the machine itself (hostname, Tailscale address and its reverse name, loopback); anything else is 421 and never issued a token. Add names with `-hostname` (repeatable). Houston never resolves a client-supplied name.
 - **`-no-auth`** disables the token only; Origin and Host checks stay, and forwarding to peers is turned off (403 `peer actions need auth`).
-- Default bind `127.0.0.1:9090`; reach it from a browser through a local reverse proxy or an SSH tunnel.
+- Default bind `127.0.0.1:9090`; a browser reaches a non-loopback houston through a local reverse proxy that restricts its clients (every client it admits gets the token), an SSH tunnel or another houston's Fleet.
 
 ## Cross-cutting invariants
 
