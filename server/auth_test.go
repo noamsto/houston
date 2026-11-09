@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
+
+	"github.com/noamsto/houston/mode"
 )
 
 func TestLoadOrCreateTokenGeneratesAndPersists(t *testing.T) {
@@ -329,7 +332,9 @@ func TestSPAHandlerIssuesCookie(t *testing.T) {
 	a := &authGate{token: "secret", enabled: true}
 	rec := httptest.NewRecorder()
 
-	SPAHandler(nil, a).ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "127.0.0.1:1"
+	SPAHandler(nil, a).ServeHTTP(rec, req)
 
 	found := false
 	for _, c := range rec.Result().Cookies() {
@@ -339,5 +344,101 @@ func TestSPAHandlerIssuesCookie(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("loading the SPA did not issue the auth cookie; the UI could never authenticate")
+	}
+}
+
+func newLoopbackCookieServer(t *testing.T) *Server {
+	t.Helper()
+	s := newFullServer(t, Config{StatusDir: t.TempDir(), AuthEnabled: true, UIFS: fstest.MapFS{}, Mode: mode.Dispatcher})
+	s.hosts = newHostGate([]string{"houston-host"}, nil, nil)
+	return s
+}
+
+func hasAuthCookie(rec *httptest.ResponseRecorder) bool {
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == authCookie {
+			return true
+		}
+	}
+	return false
+}
+
+func TestSPACookieOnlyToLoopbackConnections(t *testing.T) {
+	s := newLoopbackCookieServer(t)
+
+	for _, tc := range []struct {
+		remote string
+		want   bool
+	}{
+		{"127.0.0.1:1", true},
+		{"127.0.0.2:1", true},
+		{"[::1]:1", true},
+		{"[::ffff:127.0.0.1]:1", true},
+		{"100.64.1.2:1", false},
+		{"192.0.2.1:1", false},
+		{"not-an-address", false},
+	} {
+		t.Run(tc.remote, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "http://houston-host/", nil)
+			req.Host = "houston-host"
+			req.RemoteAddr = tc.remote
+			rec := httptest.NewRecorder()
+
+			s.Handler().ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status %d, want 200", rec.Code)
+			}
+			if got := hasAuthCookie(rec); got != tc.want {
+				t.Fatalf("cookie issued = %v, want %v", got, tc.want)
+			}
+			if !tc.want && rec.Header().Get("Set-Cookie") != "" {
+				t.Fatal("non-loopback connection got a Set-Cookie header")
+			}
+		})
+	}
+}
+
+func TestSPACookieIgnoresForwardingHeaders(t *testing.T) {
+	s := newLoopbackCookieServer(t)
+
+	req := httptest.NewRequest("GET", "http://houston-host/", nil)
+	req.Host = "houston-host"
+	req.RemoteAddr = "100.64.1.2:1"
+	req.Header.Set("X-Forwarded-For", "127.0.0.1")
+	req.Header.Set("X-Real-IP", "127.0.0.1")
+	req.Header.Set("Forwarded", "for=127.0.0.1")
+	rec := httptest.NewRecorder()
+
+	s.Handler().ServeHTTP(rec, req)
+
+	if hasAuthCookie(rec) {
+		t.Fatal("a forwarding header made a non-loopback connection look local")
+	}
+}
+
+func TestBearerStillAuthenticatesFromNonLoopback(t *testing.T) {
+	s := newLoopbackCookieServer(t)
+	if s.auth.token == "" {
+		t.Fatal("test server has no token; the gate is not really enabled")
+	}
+
+	get := func(bearer bool) int {
+		req := httptest.NewRequest("GET", "http://houston-host/api/hosts", nil)
+		req.Host = "houston-host"
+		req.RemoteAddr = "100.64.1.2:1"
+		if bearer {
+			req.Header.Set("Authorization", "Bearer "+s.auth.token)
+		}
+		rec := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	if got := get(false); got != http.StatusUnauthorized {
+		t.Fatalf("no credentials: status %d, want 401", got)
+	}
+	if got := get(true); got != http.StatusOK {
+		t.Fatalf("bearer token: status %d, want 200", got)
 	}
 }

@@ -14,6 +14,13 @@ which is the one request a browser can't attach a header to; everywhere else it
 would just leak the token into history and proxy logs. Loading the SPA issues
 the cookie as an httpOnly `SameSite=Strict` response cookie, so a browser that
 has opened the UI once authenticates transparently on every subsequent call.
+The cookie is issued **only to connections from a loopback address**, decided
+from `r.RemoteAddr` alone (`X-Forwarded-For`, `X-Real-IP` and `Forwarded` are
+ignored), because the Host allowlist admits the Tailscale names and so cannot
+keep a network client from loading the page. A browser reaches a non-loopback
+houston through a local reverse proxy, an SSH tunnel or another houston's Fleet.
+A non-loopback client still gets the page but no token, so its API calls get
+401; peers keep authenticating with `Authorization: Bearer`.
 
 **Origin allowlist.** Requests are checked against same-origin plus, under
 `-debug`, the Vite dev server — covering both the HTTP API and the WebSocket
@@ -41,7 +48,7 @@ sits behind the same token and Host gates as the rest of `/api/`.
 
 This model is the primary defense; the following are additional layers:
 1. Default bind: `127.0.0.1:9090` (localhost only)
-2. Access via Tailscale (recommended)
+2. Browser access through a local reverse proxy (for example Tailscale Serve)
 3. Or SSH tunnel: `ssh -L 9090:localhost:9090 host`
 
 
