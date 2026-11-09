@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -99,9 +100,10 @@ func originAllowed(r *http.Request, allowed []string) bool {
 	return slices.Contains(allowed, origin)
 }
 
-// authCookie is the httpOnly cookie the SPA is issued when it loads. Every UI
-// call is a same-origin relative path, so the browser attaches it to fetch,
-// EventSource and WebSocket alike without any frontend involvement.
+// authCookie is the httpOnly cookie a loopback browser is issued when it loads
+// the SPA. Every UI call is a same-origin relative path, so the browser
+// attaches it to fetch, EventSource and WebSocket alike without any frontend
+// involvement.
 const authCookie = "houston_token"
 
 // authGate guards /api/. Disabled, it is a pass-through, which is what
@@ -178,9 +180,21 @@ func (a *authGate) middleware(next http.Handler) http.Handler {
 	})
 }
 
-// setCookie issues the token to a browser loading the SPA. It has no Secure
-// flag: houston serves plaintext over a tailnet or loopback, and Secure would
-// break the cookie on both.
+// isLoopbackConn reports whether the TCP peer is a loopback address. It reads
+// only r.RemoteAddr: forwarding headers are client-controlled, so trusting
+// them would let any network client claim to be local.
+func isLoopbackConn(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// setCookie issues the token to a browser loading the SPA; SPAHandler limits it
+// to loopback connections. It has no Secure flag: houston serves plaintext over
+// loopback, and Secure would break the cookie there.
 func (a *authGate) setCookie(w http.ResponseWriter) {
 	if a == nil || !a.enabled {
 		return
