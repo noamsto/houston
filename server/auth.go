@@ -192,11 +192,9 @@ func isLoopbackConn(r *http.Request) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// setCookie issues the token to a browser loading the SPA. Callers must hand
-// it out only to loopback connections: the Host allowlist includes the
-// Tailscale names, so it cannot stop a network client from loading the page.
-// It has no Secure flag: houston serves plaintext over loopback, and Secure
-// would break the cookie there.
+// setCookie issues the token to a browser loading the SPA; SPAHandler limits it
+// to loopback connections. It has no Secure flag: houston serves plaintext over
+// loopback, and Secure would break the cookie there.
 func (a *authGate) setCookie(w http.ResponseWriter) {
 	if a == nil || !a.enabled {
 		return
