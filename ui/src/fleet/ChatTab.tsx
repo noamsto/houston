@@ -130,11 +130,14 @@ function diffText(diff: { oldText: string; newText: string }): string {
 type ToolDetailState = { status: 'idle' } | { status: 'loading' } | { status: 'error' } | { status: 'ready'; data: ChatToolDetail }
 
 function ToolCallRow({ call, runId }: { call: ToolCall; runId: string }) {
+  const [open, setOpen] = useState(false)
   const [detail, setDetail] = useState<ToolDetailState>({ status: 'idle' })
   const status = statusGlyph(call.status)
 
   const handleClick = () => {
-    if (detail.status === 'loading' || detail.status === 'ready') return
+    const next = !open
+    setOpen(next)
+    if (!next || detail.status === 'loading' || detail.status === 'ready') return
     setDetail({ status: 'loading' })
     fetchTool(runId, call.toolCallId).then(
       (data) => setDetail({ status: 'ready', data }),
@@ -144,7 +147,7 @@ function ToolCallRow({ call, runId }: { call: ToolCall; runId: string }) {
 
   return (
     <div className="chat-tool-call">
-      <button type="button" className="chat-tool-call-row" onClick={handleClick}>
+      <button type="button" className="chat-tool-call-row" aria-expanded={open} onClick={handleClick}>
         <span className="chat-tool-kind" aria-hidden="true">{kindGlyph(call.kind)}</span>
         <span className="chat-tool-name">{call.tool}</span>
         {call.title && <span className="chat-tool-title">{call.title}</span>}
@@ -161,9 +164,9 @@ function ToolCallRow({ call, runId }: { call: ToolCall; runId: string }) {
           </span>
         )}
       </button>
-      {detail.status === 'loading' && <div className="chat-tool-detail">Loading…</div>}
-      {detail.status === 'error' && <div className="chat-tool-detail error">Couldn't load tool detail</div>}
-      {detail.status === 'ready' && (
+      {open && detail.status === 'loading' && <div className="chat-tool-detail">Loading…</div>}
+      {open && detail.status === 'error' && <div className="chat-tool-detail error">Couldn't load tool detail</div>}
+      {open && detail.status === 'ready' && (
         <div className="chat-tool-detail">
           {detail.data.inputOmitted && (
             <span className="chat-tool-input-omitted">input omitted (over 16 KiB)</span>
