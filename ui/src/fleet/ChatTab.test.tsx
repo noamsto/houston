@@ -265,6 +265,29 @@ describe('ChatTab', () => {
     fireEvent.click(within(container.querySelector('.chat-tools-calls')!).getByRole('button', { name: `${tool} completed` }))
   }
 
+  it('folds an opened tool call back and reuses its loaded detail', async () => {
+    const { container, fetchMock } = await renderReady({}, {
+      page: page('e1', [toolCall('t1', 1, 'Write')]),
+      tool: { toolCallId: 't1', name: 'write', output: 'written' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Write' }))
+    const row = within(container.querySelector('.chat-tools-calls')!).getByRole('button', { name: 'Write completed' })
+
+    fireEvent.click(row)
+    expect(row.getAttribute('aria-expanded')).toBe('true')
+    await waitFor(() => expect(container.querySelector('.chat-tool-output')).toBeTruthy())
+
+    fireEvent.click(row)
+    expect(row.getAttribute('aria-expanded')).toBe('false')
+    expect(container.querySelector('.chat-tool-detail')).toBeNull()
+
+    fireEvent.click(row)
+    expect(row.getAttribute('aria-expanded')).toBe('true')
+    expect(container.querySelector('.chat-tool-output')!.textContent).toBe('written')
+    const toolFetches = fetchMock.mock.calls.filter(([url]) => String(url).includes('/chat/tool/'))
+    expect(toolFetches).toHaveLength(1)
+  })
+
   it('labels a truncated output but not a kept input', async () => {
     const { container } = await renderReady({}, {
       page: page('e1', [toolCall('t1', 1, 'Write')]),
