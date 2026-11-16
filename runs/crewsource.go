@@ -1,10 +1,8 @@
 package runs
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
-	"io"
 	"log/slog"
 	"maps"
 	"os"
@@ -17,12 +15,15 @@ import (
 	"time"
 
 	"github.com/noamsto/houston/crewfeed"
+	"github.com/noamsto/houston/crewview"
 )
 
-// CrewSource reads dispatcher's git-backed bus. It contributes what no other
-// source can express: a worker's question, addressed to its dispatcher — it
-// surfaces to you only when the dispatcher is gone or has been silent for
-// crewDispatcherSilence — and the watchdog's verdict that a worker is stuck.
+// CrewSource publishes the crew layer: each worker's state from crew's own
+// view of its bus (crewViews), joined to its pane with identity read from the
+// bus. It contributes what no other source can express: a worker's question,
+// addressed to its dispatcher — it surfaces to you only when the dispatcher is
+// gone or has been silent for crewDispatcherSilence — and the watchdog's
+// verdict that a worker is stuck.
 //
 // It derives its own repo roots from the same ListWindowOptions call tmuxsource
 // uses, rather than taking them from the caller — that keeps construction free
@@ -50,10 +51,17 @@ type CrewSource struct {
 	// with no hub.
 	sessions hookSessions
 
-	// logs caches each bus log's parse by path, reused while size and mtime
-	// hold. Same single-goroutine rule as crewDirs. The cached Runs are shared
-	// across ticks, so nothing may write through their pointer fields.
-	logs map[string]crewLog
+	// ids caches each bus log's identity fold by path, reused while size and
+	// mtime hold. Same single-goroutine rule as crewDirs.
+	ids map[string]identityLog
+
+	// views supplies crew's view per bus; nil means no worker runs, only
+	// dispatcher joins (tests that do not care).
+	views crewViews
+
+	// mem keeps blocked-episode starts across views. Same single-goroutine
+	// rule as crewDirs.
+	mem blockedMemory
 
 	// feed tails every resolved bus's events.jsonl for the activity feed; nil
 	// disables it (tests, tmux mode).
@@ -63,17 +71,18 @@ type CrewSource struct {
 	now func() time.Time
 }
 
-type crewLog struct {
-	size int64
-	mod  time.Time
-	runs map[string]crewBranch
+// crewViews is crew's view per bus (crewview.Manager).
+type crewViews interface {
+	Ensure(bus, root string)
+	Retain(buses map[string]bool)
+	Latest(bus string) (crewview.Overview, crewview.Status, bool)
 }
 
-func NewCrewSource(c lister, sessions hookSessions, feed *crewfeed.Store, every time.Duration) *CrewSource {
+func NewCrewSource(c lister, sessions hookSessions, feed *crewfeed.Store, views crewViews, every time.Duration) *CrewSource {
 	if every <= 0 {
 		every = 3 * time.Second
 	}
-	return &CrewSource{client: c, sessions: sessions, feed: feed, every: every, crewDirs: map[string]string{}, logs: map[string]crewLog{}, procStart: foregroundStart, procs: hostProcs{}}
+	return &CrewSource{client: c, sessions: sessions, feed: feed, views: views, every: every, crewDirs: map[string]string{}, ids: map[string]identityLog{}, mem: blockedMemory{}, procStart: foregroundStart, procs: hostProcs{}}
 }
 
 func (s *CrewSource) Name() string { return "crew" }
@@ -121,7 +130,7 @@ const crewEvictionGrace = 10 * time.Minute
 // stay listed forever.
 const crewStaleAfter = 6 * time.Hour
 
-// crewRunFinished reports whether r's bus status has been terminal for
+// crewRunFinished reports whether r's state has been terminal for
 // longer than crewEvictionGrace. UpdatedAt == 0 covers both a malformed
 // status record and a dispatch-only branch with no status yet — neither is
 // eligible, since treating a zero timestamp as "infinitely old" would evict
@@ -137,11 +146,13 @@ func crewRunFinished(r Run, now time.Time) bool {
 }
 
 // identityOnly keeps who a finished worker is (crew, codename, project, branch,
-// PR) and drops what the bus last said it was doing, so the evicted layer
+// PR) and drops what crew's view last said it was doing, so the evicted layer
 // stops contributing state, attention and a question to the composed run.
 func identityOnly(r Run) Run {
 	crew := *r.Crew
 	crew.Detail = ""
+	crew.Attention = nil
+	crew.ViewNotice = ""
 	r.Crew = &crew
 	r.State = ""
 	r.Attention = ""
@@ -154,7 +165,8 @@ func identityOnly(r Run) Run {
 
 // tickCrewDeltas computes this cycle's deltas from the runs scan() currently
 // sees, already keyed by their final registry keys, evicting anything whose
-// bus status has been terminal for longer than crewEvictionGrace. A pane-keyed
+// state has been terminal for longer than crewEvictionGrace. A crew/ or
+// crewremote/ run is dropped, having no other layer to group. A pane-keyed
 // run is not dropped but reduced to its identity (identityOnly): its pane still
 // has tmux/hooks cards, which need crew.name and project to stay grouped under
 // their dispatcher. seen is the previous tick's emitted key set; it returns the
@@ -168,7 +180,7 @@ func tickCrewDeltas(current map[string]Run, seen map[string]bool, now time.Time)
 	newSeen := map[string]bool{}
 	for key, r := range current {
 		if crewRunFinished(r, now) {
-			if strings.HasPrefix(key, "crew/") {
+			if strings.HasPrefix(key, "crew/") || strings.HasPrefix(key, crewRemotePrefix) {
 				continue
 			}
 			r = identityOnly(r)
@@ -199,11 +211,14 @@ func crewRunAbandoned(b crewBranch, windowless, dispatcherAlive bool, now time.T
 	return now.Sub(time.UnixMilli(b.lastActivity)) > crewStaleAfter
 }
 
-// scan returns this tick's runs under their final registry keys: the pane id
-// where the branch joins exactly one agent pane, otherwise "crew/<bus>/<branch>".
-// It also returns, under its pane id, a dispatcher layer for every crew that
-// joins its dispatcher pane (joinDispatchers) — Role, crew id and bus only, so
-// the key lists only while another layer supplies an agent.
+// scan returns this tick's runs under their final registry keys: for a local
+// worker the pane id where its branch joins exactly one agent pane, otherwise
+// "crew/<bus>/<branch>"; for a worker crew's view reports on another machine,
+// CrewRemoteKey. Only workers in crew's view are listed. It also returns, under
+// its pane id, a dispatcher layer for every crew that joins its dispatcher pane
+// (joinDispatchers) — Role, crew id, bus, the crew's own attention items and
+// the view's notice, so the key lists only while another layer supplies an
+// agent.
 //
 // ok=false means a tmux query failed — a transient error, not evidence every
 // crew-sourced branch vanished. The caller must skip the tick entirely rather
@@ -232,10 +247,7 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 		}
 	}
 
-	rootList := make([]string, 0, len(roots))
-	for repo := range roots {
-		rootList = append(rootList, repo)
-	}
+	rootList := slices.Sorted(maps.Keys(roots))
 
 	// The pane → hook session map the terminal join consults, built from the
 	// same listing and the hooks layer's own trust rules (paneSetFrom,
@@ -246,20 +258,42 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 	}
 
 	// Every bus, not only those whose log names a branch: a dispatcher that
-	// has not dispatched yet still joins its pane.
+	// has not dispatched yet still joins its pane. busRoot is the first root,
+	// sorted, that resolved to the bus and still exists: crew dash runs there.
 	joins := map[string]map[string]string{}
+	busRoot := map[string]string{}
 	for _, repo := range rootList {
-		if bus := s.crewDir(repo); bus != "" {
-			if _, done := joins[bus]; !done {
-				joins[bus] = joinDispatchers(bus, wins, panes, s.procs)
-				if s.feed != nil {
-					s.feed.Advance(bus)
-				}
+		bus := s.crewDir(repo)
+		if bus == "" {
+			continue
+		}
+		if _, done := joins[bus]; !done {
+			joins[bus] = joinDispatchers(bus, wins, panes, s.procs)
+			if s.feed != nil {
+				s.feed.Advance(bus)
+			}
+		}
+		if _, has := busRoot[bus]; !has {
+			if fi, err := os.Stat(repo); err == nil && fi.IsDir() {
+				busRoot[bus] = repo
 			}
 		}
 	}
+	buses := slices.Sorted(maps.Keys(joins))
+	if s.views != nil {
+		for _, bus := range buses {
+			if root := busRoot[bus]; root != "" {
+				s.views.Ensure(bus, root)
+			}
+		}
+		live := make(map[string]bool, len(buses))
+		for _, bus := range buses {
+			live[bus] = true
+		}
+		s.views.Retain(live)
+	}
 
-	homes := crewHomes(slices.Collect(maps.Keys(joins)))
+	homes := crewHomes(buses)
 
 	// A dispatcher joined on any bus keeps its crew's windowless workers, even
 	// those reporting on another bus.
@@ -273,26 +307,42 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 	}
 
 	out := map[string]Run{}
-	for bus, branches := range s.scanRoots(rootList) {
+	liveIDs := map[string]identityLog{}
+	inView := map[crewWorkerKey]bool{}
+	crewItems := map[string]map[string][]CrewAttention{} // bus -> crew id -> items
+	notices := map[string]string{}
+	for _, bus := range buses {
+		if s.views == nil {
+			continue
+		}
+		ids, replies := s.busIdentity(bus, liveIDs)
+		ov, st, ok := s.views.Latest(bus)
+		if st.State == crewview.StateUnsupported || st.State == crewview.StateUnavailable {
+			notices[bus] = st.Notice
+		}
+		if !ok {
+			continue
+		}
+		for _, w := range ov.Workers {
+			inView[crewWorkerKey{w.Crew, w.Branch}] = true
+		}
+		vr := crewRunsFromView(ov, ids, replies, s.mem)
+		crewItems[bus] = vr.crewItems
+
 		project := ProjectFromCommonDir(filepath.Dir(bus))
-		for branch, r := range branches {
-			if r.reaped {
-				continue
-			}
-			alive := dispatcherLive(joins[bus], r.Crew.Name)
-			routed := routeCrewQuestion(r, alive, now)
-			if home := homes[r.Crew.Name]; home != "" {
-				// routed.Crew is shared with the parse cache.
-				c := *routed.Crew
-				c.Home = home
-				routed.Crew = &c
+		for branch, b := range vr.local {
+			alive := dispatcherLive(joins[bus], b.Crew.Name)
+			routed := routeCrewQuestion(b, alive, now)
+			if home := homes[b.Crew.Name]; home != "" {
+				routed.Crew.Home = home
 			}
 			routed.Project = project
 			routed.Role = RoleWorker
 			routed.CrewBus = bus
 			routed.Worktree = worktreeFor(bus, branch, wins, s.crewDir)
-			paneID, candidates := resolvePane(bus, branch, r.State, r.UpdatedAt, r.session, r.CrewSession, paneSessions, wins, panes, s.crewDir, s.procStart)
-			if crewRunAbandoned(crewBranch{Run: routed, lastActivity: r.lastActivity, workerSilent: r.workerSilent}, candidates != 1, joinedCrews[r.Crew.Name], now) {
+			paneID, candidates := resolvePane(bus, branch, b.State, b.UpdatedAt, b.session, b.CrewSession, paneSessions, wins, panes, s.crewDir, s.procStart)
+			activity := crewBranch{Run: routed, lastActivity: max(b.lastActivity, b.UpdatedAt*1000), workerSilent: b.workerSilent}
+			if crewRunAbandoned(activity, candidates != 1, joinedCrews[b.Crew.Name], now) {
 				continue
 			}
 			key := paneID
@@ -302,19 +352,55 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 			}
 			out[key] = routed
 		}
+		// CrewBus is the bus whose view reported the row, so the action route
+		// can find its items; it has no worktree, which keeps /reply off it.
+		for _, r := range vr.remote {
+			r.Project = project
+			r.CrewBus = bus
+			out[CrewRemoteKey(r.Crew.Name, r.Branch)] = r
+		}
+	}
+	s.ids = liveIDs
+	for k := range s.mem {
+		if !inView[k] {
+			delete(s.mem, k)
+		}
 	}
 
 	// Sorted so that two buses naming one pane resolve the same way every tick.
-	for _, bus := range slices.Sorted(maps.Keys(joins)) {
+	for _, bus := range buses {
 		for crewID, paneID := range joins[bus] {
 			if held, taken := out[paneID]; taken {
 				slog.Debug("crew source: dispatcher pane already keyed", "bus", bus, "crew", crewID, "pane", paneID, "branch", held.Branch)
 				continue
 			}
-			out[paneID] = Run{Role: RoleDispatcher, Crew: &CrewRef{Name: crewID}, CrewBus: bus}
+			out[paneID] = Run{Role: RoleDispatcher, Crew: &CrewRef{Name: crewID, Attention: crewItems[bus][crewID], ViewNotice: notices[bus]}, CrewBus: bus}
 		}
 	}
 	return out, true
+}
+
+// busIdentity folds every log in bus into the identity and newest dispatcher
+// reply per branch, recording each log it read in live (the next tick's cache).
+func (s *CrewSource) busIdentity(bus string, live map[string]identityLog) (map[string]crewIdentity, map[string]int64) {
+	ids := map[string]crewIdentity{}
+	replies := map[string]int64{}
+	logs, err := filepath.Glob(filepath.Join(bus, "*.jsonl"))
+	if err != nil {
+		return ids, replies
+	}
+	for _, path := range logs {
+		il, ok := readIdentityLog(path, s.ids)
+		if !ok {
+			continue
+		}
+		live[path] = il
+		maps.Copy(ids, il.ids)
+		for branch, ts := range il.replies {
+			replies[branch] = max(replies[branch], ts)
+		}
+	}
+	return ids, replies
 }
 
 // crewHomes maps each crew id to the project name of the one bus holding
@@ -345,59 +431,6 @@ func crewHomes(buses []string) map[string]string {
 		}
 	}
 	return homes
-}
-
-// scanRoots reads every root's crew bus and folds it into the latest state per
-// branch, grouped by bus directory. Several worktrees of one repo resolve to
-// the same common git dir and therefore to one bus, which is the correct
-// dedupe; two repos each holding a `main` record stay apart. Split out from
-// scan() so the root list can be injected in tests without going through tmux.
-func (s *CrewSource) scanRoots(roots []string) map[string]map[string]crewBranch {
-	merged := map[string]map[string]crewBranch{}
-	live := map[string]crewLog{}
-	for _, repo := range roots {
-		dir := s.crewDir(repo)
-		if dir == "" {
-			continue
-		}
-		logs, err := filepath.Glob(filepath.Join(dir, "*.jsonl"))
-		if err != nil {
-			continue
-		}
-		for _, path := range logs {
-			cl, ok := s.readCrewLog(path)
-			if !ok {
-				continue
-			}
-			live[path] = cl
-			for branch, r := range cl.runs {
-				if merged[dir] == nil {
-					merged[dir] = map[string]crewBranch{}
-				}
-				merged[dir][branch] = r
-			}
-		}
-	}
-	s.logs = live
-	return merged
-}
-
-func (s *CrewSource) readCrewLog(path string) (crewLog, bool) {
-	fi, err := os.Stat(path)
-	if err != nil {
-		slog.Debug("crew log", "path", path, "error", err)
-		return crewLog{}, false
-	}
-	if cl, ok := s.logs[path]; ok && cl.size == fi.Size() && cl.mod.Equal(fi.ModTime()) {
-		return cl, true
-	}
-	f, err := os.Open(path) //nolint:gosec // path comes from houston's own state/transcript dirs, not from a request
-	if err != nil {
-		slog.Debug("crew log", "path", path, "error", err)
-		return crewLog{}, false
-	}
-	defer func() { _ = f.Close() }()
-	return crewLog{size: fi.Size(), mod: fi.ModTime(), runs: deltasFromCrewLog(f)}, true
 }
 
 // crewDirTimeout bounds the git call below so a hung git cannot park this
@@ -463,14 +496,6 @@ type crewRecord struct {
 	// record, so decoding straight into a struct fails on every msg line and
 	// drops that record whole. Decode it only where the shape is known.
 	Body json.RawMessage `json:"body"`
-}
-
-// crewStatusBody is crewRecord.Body decoded for a "status" record.
-type crewStatusBody struct {
-	State  string `json:"state"`
-	Detail string `json:"detail"`
-	PRURL  string `json:"pr_url"`
-	Source string `json:"source"`
 }
 
 // crewBlockedNoDetail is the question synthesised for a `crew status <from>
@@ -541,19 +566,16 @@ func watchdogClassOf(detail string) (watchdogClass, bool) {
 // for you.
 const crewDispatcherSilence = 15 * time.Minute
 
-// crewBranch is deltasFromCrewLog's per-branch fold result. session is the
-// s<epoch> of the worker id on the latest status record (0 when unknown) —
-// kept off Run because it is crew-join evidence, not API.
+// crewBranch is one local worker from crew's view (crewRunsFromView) with the
+// bus identity evidence the pane join needs. session is the s<epoch> of the
+// worker id on the latest status record (0 when unknown) — kept off Run
+// because it is crew-join evidence, not API.
 type crewBranch struct {
 	Run
 	session int64
-	// blockedSince is the bus ts (ms) of the first worker-blocked status of the
-	// current episode: kept across re-stamps, restarted by any other status or
-	// a dispatcher reply, 0 when the branch is not asking its dispatcher.
+	// blockedSince is when (unix ms) the current episode of asking its
+	// dispatcher began (blockedMemory), 0 when the worker is not asking.
 	blockedSince int64
-	// reaped is set by a "reaped" status or a reap row and cleared by a later
-	// dispatch, resume or other status: the branch was torn down and is not listed.
-	reaped bool
 	// lastActivity is the newest bus ts (ms) of a dispatch, resume or status row.
 	lastActivity int64
 	// workerSilent is set when the newest dispatch, resume or status row is not a
@@ -563,174 +585,11 @@ type crewBranch struct {
 	workerSilent bool
 }
 
-// deltasFromCrewLog folds one bus log into the latest state per branch. The bus
-// is append-only, so later records win.
-func deltasFromCrewLog(rd io.Reader) map[string]crewBranch {
-	out := map[string]crewBranch{}
-	// lastStatusTS and dispatcherReplyTS are compared by timestamp, not by
-	// line order, to decide whether a blocked question has been answered —
-	// see the retirement pass below.
-	lastStatusTS := map[string]int64{}
-	dispatcherReplyTS := map[string]int64{}
-
-	sc := bufio.NewScanner(rd)
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-
-	for sc.Scan() {
-		var rec crewRecord
-		if err := json.Unmarshal(sc.Bytes(), &rec); err != nil {
-			continue // the bus is written by shell; a torn line is not fatal
-		}
-
-		// A dispatcher reply is addressed with from: "dispatcher:…", to:
-		// "worker:<branch>#…" — its branch lives in To, not From, since From
-		// never resolves through branchFromWorker.
-		branch := rec.Branch
-		switch {
-		case branch != "":
-		case rec.Kind == "msg" && strings.HasPrefix(rec.From, "dispatcher:"):
-			branch = branchFromWorker(rec.To)
-		default:
-			branch = branchFromWorker(rec.From)
-		}
-		if branch == "" {
-			continue
-		}
-
-		r := out[branch]
-		r.Branch = branch
-		if r.Crew == nil {
-			r.Crew = &CrewRef{}
-		}
-		if rec.CrewID != "" {
-			r.Crew.Name = rec.CrewID
-		}
-		if rec.Tier != "" {
-			r.Crew.Tier = rec.Tier
-		}
-		if rec.Title != "" {
-			r.Crew.Title = rec.Title
-		}
-		if rec.Model != "" {
-			r.Crew.Model = rec.Model
-		}
-		// Engine only appears on the dispatch record, but every status record
-		// for the branch shares this map entry, so it sticks once set. Without
-		// it a crew run carries no agent and the listing predicate would drop
-		// it — this source exists specifically to surface blocked questions.
-		if rec.Engine != "" {
-			r.Agent = rec.Engine
-		}
-		// The newest dispatch/resume row is authoritative: a --fresh resume mints
-		// a new session id.
-		if rec.Kind == "dispatch" || rec.Kind == "resume" {
-			r.CrewSession = rec.EngineSession
-			r.Crew.Sessions++
-			r.workerSilent = true
-			if r.reaped {
-				r.reaped, r.State, r.UpdatedAt = false, "", 0
-				r.Crew.Detail, r.PR = "", nil
-			}
-		}
-		if rec.Kind == "reap" {
-			r.reaped = true
-		}
-		if rec.Kind == "dispatch" || rec.Kind == "resume" || rec.Kind == "status" {
-			r.lastActivity = max(r.lastActivity, rec.TS)
-		}
-		// The branch's identity is its last well-formed dispatch row, as the crew
-		// CLI records it. Bus text is untrusted, hence both patterns.
-		if rec.Kind == "dispatch" && codenameRe.MatchString(rec.Name) && tmuxColorRe.MatchString(rec.TmuxColor) {
-			r.Crew.Codename = rec.Name
-			r.Crew.Color = tmuxColorToHex(rec.TmuxColor)
-		}
-		if rec.Kind == "msg" && strings.HasPrefix(rec.From, "dispatcher:") && rec.TS > dispatcherReplyTS[branch] {
-			dispatcherReplyTS[branch] = rec.TS
-		}
-		if rec.Kind == "status" {
-			var body crewStatusBody
-			if err := json.Unmarshal(rec.Body, &body); err == nil && body.State != "" {
-				r.State = FromCrewState(body.State)
-				r.reaped = body.State == "reaped"
-				r.UpdatedAt = rec.TS / 1000
-				r.session = sessionEpoch(rec.From)
-				r.workerSilent = body.Source == "watchdog"
-				lastStatusTS[branch] = rec.TS
-				// Latest status wins, including an empty detail: a stale phase
-				// must not outlive the status that replaced it. A watchdog
-				// note is never a legitimate "current phase" for the card.
-				if body.Source == "watchdog" {
-					r.Crew.Detail = ""
-				} else {
-					r.Crew.Detail = body.Detail
-				}
-				if body.PRURL != "" {
-					r.PR = &PRRef{URL: body.PRURL, Number: prNumberFromURL(body.PRURL)}
-				}
-				r.Question = nil
-				r.Attention, r.AttentionNote = AttentionNone, ""
-				if r.State != StateBlocked || body.Source == "watchdog" {
-					r.blockedSince = 0
-				}
-				switch {
-				case r.State == StateFailed && body.Source == "watchdog":
-					r.AttentionNote = crewWatchdogDeadNote
-				case r.State != StateBlocked:
-				case body.Source != "watchdog":
-					r.Question = &Question{Text: crewBlockedNoDetail, Via: "crew", Kind: QuestionCrew}
-					if body.Detail != "" {
-						r.Question.Text = body.Detail
-					}
-					// A re-stamp keeps the episode unless the dispatcher answered
-					// since it began.
-					if r.blockedSince == 0 || dispatcherReplyTS[branch] > r.blockedSince {
-						r.blockedSince = rec.TS
-					}
-				default:
-					// Liveness bookkeeping the dispatcher owns: it never raises a
-					// worker question, so the run reads running.
-					r.State = StateRunning
-					if c, ok := watchdogClassOf(body.Detail); ok {
-						if c.needsYou {
-							// Actionable at the pane: a human clears the prompt there, so
-							// the question routes to the terminal rather than the bus.
-							r.State = StateBlocked
-							r.Question = &Question{Text: c.note, Via: "pane", Kind: QuestionDialog}
-						} else {
-							r.Attention, r.AttentionNote = AttentionStuck, c.note
-						}
-					}
-				}
-			}
-		}
-		out[branch] = r
-	}
-
-	// A dispatcher reply newer than the blocking status has answered the
-	// question: measured on this repo's own bus, a worker's next status
-	// arrived 783s and 348s after the dispatcher's reply, so without this the
-	// question — and the attention badge — persists for minutes after it was
-	// answered. The layer then has no opinion left to publish: no Question,
-	// no State.
-	for branch, r := range out {
-		if r.State == StateBlocked && dispatcherReplyTS[branch] > lastStatusTS[branch] {
-			r.State = ""
-			r.Question = nil
-			r.blockedSince = 0
-			r.Crew.Detail = ""
-			out[branch] = r
-		}
-	}
-
-	return out
-}
-
 // routeCrewQuestion decides whether a worker's question reaches the human. It
 // is addressed to the dispatcher, so while the dispatcher is live and has been
 // asked for less than crewDispatcherSilence the run reads running and the
 // question stays only in Crew.Detail. A watchdog prompt (pane) question is the
-// human's regardless. It returns a copy: b comes from the per-file parse cache,
-// shared across ticks.
+// human's regardless. It returns a copy and never writes through b.
 func routeCrewQuestion(b crewBranch, live bool, now time.Time) Run {
 	if b.State == StateBlocked && b.Question != nil && b.Question.Via == "crew" &&
 		live && now.Sub(time.UnixMilli(b.blockedSince)) < crewDispatcherSilence {

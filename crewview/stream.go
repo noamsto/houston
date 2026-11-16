@@ -464,11 +464,23 @@ func (m *Manager) Retain(keep map[string]bool) {
 	}
 }
 
-func (m *Manager) Root(bus string) string {
+// Root is the root bus's stream runs in; false for an unknown bus.
+func (m *Manager) Root(bus string) (string, bool) {
 	if s := m.stream(bus); s != nil {
-		return s.Root()
+		return s.Root(), true
 	}
-	return ""
+	return "", false
+}
+
+// Close stops every stream and waits for their processes to be gone.
+func (m *Manager) Close() {
+	m.mu.Lock()
+	streams := m.streams
+	m.streams = map[string]*Stream{}
+	m.mu.Unlock()
+	for _, s := range streams {
+		s.Stop()
+	}
 }
 
 // Latest is the bus's Stream.Latest; an unknown bus has no view and a zero

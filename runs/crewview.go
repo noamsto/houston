@@ -1,6 +1,8 @@
 package runs
 
 import (
+	"slices"
+
 	"github.com/noamsto/houston/crewview"
 )
 
@@ -19,8 +21,10 @@ type viewRuns struct {
 	crewItems map[string][]CrewAttention // crew id -> items with no branch
 }
 
-func projectItem(it crewview.Item) CrewAttention {
-	a := CrewAttention{ID: it.ID, Kind: it.Kind, Severity: it.Severity, Message: it.Message, AgeSec: it.AgeSec}
+// projectItem keeps the item's start (generatedAt - age_sec) rather than its
+// age, so an unchanged item does not change the run's signature every view.
+func projectItem(it crewview.Item, generatedAt int64) CrewAttention {
+	a := CrewAttention{ID: it.ID, Kind: it.Kind, Severity: it.Severity, Message: it.Message, Since: generatedAt - it.AgeSec}
 	switch {
 	case crewview.Executable(it):
 		a.Action = &CrewAction{Verb: it.Action.Verb, Label: it.Action.Label, Command: it.Action.Command, NeedsInput: it.Action.NeedsInput, PR: it.Action.PR}
@@ -46,7 +50,7 @@ func crewRunsFromView(v crewview.Overview, ids map[string]crewIdentity, replies 
 	byWorker := map[itemKey][]crewview.Item{}
 	for _, it := range v.Attention {
 		if it.Branch == "" {
-			out.crewItems[it.Crew] = append(out.crewItems[it.Crew], projectItem(it))
+			out.crewItems[it.Crew] = append(out.crewItems[it.Crew], projectItem(it, v.GeneratedAt))
 			continue
 		}
 		k := itemKey{it.Crew, it.Branch}
@@ -93,7 +97,7 @@ func crewRunsFromView(v crewview.Overview, ids map[string]crewIdentity, replies 
 			}
 		}
 		for _, it := range items {
-			r.Crew.Attention = append(r.Crew.Attention, projectItem(it))
+			r.Crew.Attention = append(r.Crew.Attention, projectItem(it, v.GeneratedAt))
 		}
 
 		detail := deref(w.Detail)
@@ -138,10 +142,8 @@ func crewRunsFromView(v crewview.Overview, ids map[string]crewIdentity, replies 
 func applyItemKinds(r *Run, items []crewview.Item, detail string) {
 	find := func(kinds ...string) (crewview.Item, bool) {
 		for _, it := range items {
-			for _, k := range kinds {
-				if it.Kind == k {
-					return it, true
-				}
+			if slices.Contains(kinds, it.Kind) {
+				return it, true
 			}
 		}
 		return crewview.Item{}, false

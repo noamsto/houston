@@ -477,7 +477,7 @@ func attentionDigest(items []CrewAttention) string {
 	var b strings.Builder
 	for _, a := range items {
 		b.WriteString(a.ID + "\x00" + a.Kind + "\x00" + a.Severity + "\x00" + a.Message + "\x00")
-		b.WriteString(strconv.FormatInt(a.AgeSec, 10) + "\x00" + a.Command + "\x00")
+		b.WriteString(strconv.FormatInt(a.Since, 10) + "\x00" + a.Command + "\x00")
 		if act := a.Action; act != nil {
 			b.WriteString(act.Verb + "\x00" + act.Label + "\x00" + act.Command + "\x00")
 			b.WriteString(flagDigit(act.NeedsInput))

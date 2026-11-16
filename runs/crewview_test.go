@@ -31,7 +31,7 @@ func TestCrewRunsFromViewGolden(t *testing.T) {
 	}
 	l := got.local
 
-	// replaces: deltasFromCrewLog working-status case
+	// replaces: bus fold working-status case
 	a := l["feat/a"]
 	if a.State != StateRunning || a.Crew.Detail != "execute" || a.Crew.Codename != "otter" ||
 		a.Crew.Tier != "standard" || a.Crew.Model != "sonnet" || a.Crew.Title != "Task feat/a" ||
@@ -104,7 +104,7 @@ func TestCrewRunsFromViewGolden(t *testing.T) {
 	if it := got.crewItems["c2"]; len(it) != 1 || it[0].Action != nil || it[0].Command != "crew stream --crew c2 --status" {
 		t.Errorf("c2 items = %+v", it)
 	}
-	if it := got.crewItems["c1"]; len(it) != 1 || it[0].Kind != "hold_matured" || it[0].Action != nil || it[0].Command != "crew hold due --crew c1" {
+	if it := got.crewItems["c1"]; len(it) != 1 || it[0].Kind != "hold_matured" || it[0].Action != nil || it[0].Command != "crew hold due --crew c1" || it[0].Since != v.GeneratedAt-120 {
 		t.Errorf("c1 items = %+v", it)
 	}
 }
@@ -187,5 +187,48 @@ func TestCrewRunsFromViewReplyShim(t *testing.T) {
 	r := crewRunsFromView(v, nil, map[string]int64{"feat/x": (g-300)*1000 + 1}, mem).local["feat/x"]
 	if r.State != "" || r.Question != nil || r.Crew.Detail != "" || len(mem) != 0 {
 		t.Errorf("got %+v mem %v", r.Run, mem)
+	}
+}
+
+func TestCrewRunsFromViewWatchdogPrefixes(t *testing.T) {
+	// replaces: bus fold watchdog prefix table
+	cases := []struct {
+		msg  string
+		att  Attention
+		note string
+	}{
+		{"quota: quota exhausted", AttentionStuck, crewWatchdogQuotaNote},
+		{"turn-stall: token count static", AttentionStuck, crewWatchdogTurnStallNote},
+		{"quiet: pane unchanged for 1800s", AttentionStuck, crewWatchdogQuietNote},
+		{"stalled: no output for 300s", AttentionStuck, crewWatchdogStalledNote},
+		{"runaway: sentinel tokens leaked", AttentionStuck, crewWatchdogRunawayNote},
+		{"unread: lead has not read the verdict", AttentionStuck, crewWatchdogUnreadNote},
+		{"budget: token budget reached", AttentionStuck, crewWatchdogBudgetNote},
+		{"load: 1m load 9 on 8 cores", AttentionNone, ""},
+		{"mystery: x", AttentionNone, ""},
+		{"quietly waiting", AttentionNone, ""},
+		{"", AttentionNone, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.msg, func(t *testing.T) {
+			v := oneWorker("blocked", sp(c.msg), 0)
+			v.Attention = []crewview.Item{{ID: "w", Crew: "c1", Branch: "feat/x", Origin: "local", Kind: "watchdog", Message: c.msg}}
+			mem := blockedMemory{}
+			r := crewRunsFromView(v, nil, nil, mem).local["feat/x"]
+			if r.State != StateRunning || r.Question != nil || r.Attention != c.att || r.AttentionNote != c.note ||
+				r.Crew.Detail != "" || r.blockedSince != 0 || len(mem) != 0 {
+				t.Errorf("got %+v detail %q blockedSince %d mem %v", r.Run, r.Crew.Detail, r.blockedSince, mem)
+			}
+		})
+	}
+}
+
+func TestCrewRunsFromViewStates(t *testing.T) {
+	// replaces: bus fold done/pr_open and worker-failed/exited cases
+	for state, want := range map[string]State{"done": StateDone, "pr_open": StateReview, "failed": StateFailed, "exited": StateFailed} {
+		r := crewRunsFromView(oneWorker(state, sp("gate won't pass"), 0), nil, nil, blockedMemory{}).local["feat/x"]
+		if r.State != want || r.Attention != "" || r.AttentionNote != "" || r.Question != nil || r.Crew.Detail != "gate won't pass" {
+			t.Errorf("%s: got %+v detail %q, want %q with the detail kept", state, r.Run, r.Crew.Detail, want)
+		}
 	}
 }

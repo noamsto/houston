@@ -419,8 +419,11 @@ func TestManager(t *testing.T) {
 	if len(made) != 2 {
 		t.Fatalf("made %d streams, want 2", len(made))
 	}
-	if got := m.Root("a"); got != rootA {
-		t.Errorf("Root(a) = %q, want the first root", got)
+	if got, ok := m.Root("a"); !ok || got != rootA {
+		t.Errorf("Root(a) = %q, %v; want the first root", got, ok)
+	}
+	if _, ok := m.Root("nope"); ok {
+		t.Error("Root(nope) found a bus")
 	}
 	if ov, st, ok := m.Latest("nope"); ok || st != (Status{}) || ov.SchemaVersion != 0 {
 		t.Errorf("unknown bus: ok = %v, status = %+v", ok, st)
@@ -436,12 +439,49 @@ func TestManager(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("bus a's stream still running after Retain")
 	}
-	if _, st, ok := m.Latest("a"); ok || st != (Status{}) || m.Root("a") != "" {
+	if _, st, ok := m.Latest("a"); ok || st != (Status{}) {
 		t.Errorf("retained-out bus still known: ok = %v, status = %+v", ok, st)
+	}
+	if _, ok := m.Root("a"); ok {
+		t.Error("retained-out bus still has a root")
 	}
 	select {
 	case <-made[1].done:
 		t.Fatal("bus b's stream stopped")
 	default:
+	}
+}
+
+func TestManagerCloseKillsEveryStream(t *testing.T) {
+	m := NewManager(context.Background(), "crew-unused")
+	m.newStream = func(root string) *Stream {
+		return testStream(t, helper{mode: "grandchild"})
+	}
+	t.Cleanup(m.Close)
+	m.Ensure("a", t.TempDir())
+	m.Ensure("b", t.TempDir())
+
+	var pids []int
+	for _, bus := range []string{"a", "b"} {
+		waitFor(t, "grandchild pid of "+bus, 5*time.Second, func() bool {
+			ov, _, ok := m.Latest(bus)
+			return ok && len(ov.Errors) == 1
+		})
+		ov, _, _ := m.Latest(bus)
+		pid, err := strconv.Atoi(ov.Errors[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		pids = append(pids, pid)
+	}
+
+	m.Close()
+	for _, pid := range pids {
+		waitFor(t, "grandchild to die", 2*time.Second, func() bool {
+			return errors.Is(syscall.Kill(pid, 0), syscall.ESRCH)
+		})
+	}
+	if _, ok := m.Root("a"); ok {
+		t.Error("bus a still known after Close")
 	}
 }

@@ -99,3 +99,66 @@ func TestReadIdentityLogCachesOnSizeAndMtime(t *testing.T) {
 		t.Fatalf("second read differs: %+v vs %+v", first, second)
 	}
 }
+
+func TestIdentitySurvivesGarbageLines(t *testing.T) {
+	// replaces: bus fold garbage-line case
+	ids, _ := identityFromCrewLog(strings.NewReader("not json at all\n" + idDispatch + "\n"))
+	if ids["feat/a"].codename != "otter" {
+		t.Fatalf("a torn line stopped later rows being read: %+v", ids)
+	}
+}
+
+func TestIdentityLastWellFormedDispatchStands(t *testing.T) {
+	// replaces: bus fold codename and colour cases
+	log := `{"ts":1,"crew_id":"c1","kind":"dispatch","branch":"c","name":"ok","tmux":"#ff0000"}
+{"ts":4,"crew_id":"c1","kind":"dispatch","branch":"d","name":"old","tmux":"colour25"}
+{"ts":5,"crew_id":"c1","kind":"dispatch","branch":"d","name":"Bad name","tmux":"colour131"}
+`
+	ids, _ := identityFromCrewLog(strings.NewReader(log))
+	if c := ids["c"]; c.codename != "" || c.color != "" {
+		t.Errorf("c = %+v, want no identity for a malformed colour", c)
+	}
+	if d := ids["d"]; d.codename != "old" || d.color != tmuxColorToHex("colour25") {
+		t.Errorf("d = %+v, want the last well-formed row to stand", d)
+	}
+}
+
+func TestIdentityWorkerSilent(t *testing.T) {
+	// replaces: bus fold workerSilent table
+	const b = "feat/303"
+	release := `{"kind":"release","branch":"feat/303","ts":1300}` + "\n"
+	claim := `{"kind":"claim","branch":"feat/303","ts":1400}` + "\n"
+	tests := []struct {
+		name string
+		log  string
+		want bool
+	}{
+		{"dispatch only", dispatchRow(1000, b), true},
+		{"dispatch then worker status", dispatchRow(1000, b) + statusRow(1100, b, "working"), false},
+		{"worker status then watchdog", dispatchRow(1000, b) + statusRow(1100, b, "working") +
+			watchdogRow(1200, b, "stalled: no output for 300s"), true},
+		{"watchdog then worker status", watchdogRow(1000, b, "stalled: no output for 300s") +
+			statusRow(1100, b, "working"), false},
+		{"worker status then release and claim rows", dispatchRow(1000, b) + statusRow(1100, b, "working") +
+			release + claim, false},
+		{"finished, released, redispatched, watchdog", statusRow(1000, b, "pr_open") + statusRow(1100, b, "done") +
+			release + claim + dispatchRow(1500, b) + watchdogRow(1600, b, "stalled: no output for 300s"), true},
+	}
+	for _, tc := range tests {
+		ids, _ := identityFromCrewLog(strings.NewReader(tc.log))
+		if got := ids[b].workerSilent; got != tc.want {
+			t.Errorf("%s: workerSilent = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestIdentityRepliesOnlyFromTheDispatcherToTheirBranch(t *testing.T) {
+	// replaces: bus fold answered-question cases for another branch and a non-dispatcher sender
+	log := `{"ts":3000,"crew_id":"c1","from":"dispatcher:c1","to":"worker:other/branch#s1","kind":"msg","body":"unrelated"}
+{"ts":3100,"crew_id":"c1","from":"worker:other#s1","to":"worker:fix/9#s1","kind":"msg","body":"not the dispatcher"}
+`
+	_, replies := identityFromCrewLog(strings.NewReader(log))
+	if replies["fix/9"] != 0 || replies["other/branch"] != 3000 {
+		t.Errorf("replies = %v, want only other/branch=3000", replies)
+	}
+}

@@ -9,7 +9,7 @@ vi.mock('../api/crewAction', () => ({ runCrewAction: vi.fn() }))
 const run = vi.mocked(runCrewAction)
 
 function item(p: Partial<Item> = {}): Item {
-  return { id: 'stall:c1:feat/e', kind: 'stalled_worker', severity: 'warning', message: 'stuck', age_sec: 5, ...p }
+  return { id: 'stall:c1:feat/e', kind: 'stalled_worker', severity: 'warning', message: 'stuck', since: 5, ...p }
 }
 
 beforeEach(() => run.mockResolvedValue({ ok: true, output: '' }))

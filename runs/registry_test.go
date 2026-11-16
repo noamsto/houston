@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/noamsto/houston/crewview"
 	"github.com/noamsto/houston/mode"
 )
 
@@ -1259,22 +1260,32 @@ func TestRunSignatureSeesAttention(t *testing.T) {
 	}
 }
 
-// TestComposeAttentionFromCrewLog feeds the crew layer from a real bus fold
-// (deltasFromCrewLog + routeCrewQuestion).
-func TestComposeAttentionFromCrewLog(t *testing.T) {
+// TestComposeAttentionFromCrewView feeds the crew layer from crew's view
+// (crewRunsFromView + routeCrewQuestion).
+func TestComposeAttentionFromCrewView(t *testing.T) {
 	const (
-		statusTS = int64(1_700_000_000_000)
-		branch   = "fix/7"
+		gen    = int64(1_700_000_000)
+		branch = "fix/7"
 	)
-	busLog := func(status string) string {
-		return `{"ts":1000,"crew_id":"c1","kind":"dispatch","branch":"fix/7","engine":"claude"}` + "\n" +
-			fmt.Sprintf(`{"ts":%d,"crew_id":"c1","from":"worker:fix/7#s1","kind":"status","body":%s}`, statusTS, status) + "\n"
+	view := func(state, detail, itemKind string) crewview.Overview {
+		w := crewview.Worker{Crew: "c1", Branch: branch, Origin: crewview.OriginLocal, State: state, Engine: sp("claude"), AgeSec: ip(0)}
+		if detail != "" {
+			w.Detail = sp(detail)
+		}
+		if state == "pr_open" {
+			w.PRURL = sp("https://github.com/x/y/pull/3")
+		}
+		v := crewview.Overview{GeneratedAt: gen, Workers: []crewview.Worker{w}}
+		if itemKind != "" {
+			v.Attention = []crewview.Item{{ID: "i", Crew: "c1", Branch: branch, Origin: crewview.OriginLocal, Kind: itemKind, Message: detail}}
+		}
+		return v
 	}
-	soon := time.UnixMilli(statusTS + 1000)
+	soon := time.Unix(gen+1, 0)
 
 	cases := []struct {
 		name      string
-		status    string
+		view      crewview.Overview
 		live      bool
 		hooks     State
 		wantAtt   Attention
@@ -1282,22 +1293,22 @@ func TestComposeAttentionFromCrewLog(t *testing.T) {
 		wantState State
 		wantVia   string
 	}{
-		{"watchdog dead under hooks thinking", `{"state":"failed","detail":"dead: engine process gone","source":"watchdog"}`,
+		{"watchdog dead under hooks thinking", view("failed", "dead: engine process gone", "dead"),
 			false, StateThinking, AttentionStuck, crewWatchdogDeadNote, StateThinking, ""},
-		{"done under hooks idle", `{"state":"done"}`,
+		{"done under hooks idle", view("done", "", ""),
 			false, StateIdle, AttentionDone, "", StateIdle, ""},
-		{"pr_open under hooks idle", `{"state":"pr_open","pr_url":"https://github.com/x/y/pull/3"}`,
+		{"pr_open under hooks idle", view("pr_open", "", ""),
 			false, StateIdle, AttentionDone, "", StateIdle, ""},
-		{"worker question while the dispatcher is live", `{"state":"blocked","detail":"keep the legacy route?"}`,
+		{"worker question while the dispatcher is live", view("blocked", "keep the legacy route?", "blocked"),
 			true, StateRunning, AttentionNone, "", StateRunning, ""},
-		{"worker question with no dispatcher", `{"state":"blocked","detail":"keep the legacy route?"}`,
+		{"worker question with no dispatcher", view("blocked", "keep the legacy route?", "blocked"),
 			false, StateRunning, AttentionNeedsYou, "", StateBlocked, "crew"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			b, ok := deltasFromCrewLog(strings.NewReader(busLog(tc.status)))[branch]
+			b, ok := crewRunsFromView(tc.view, nil, nil, blockedMemory{}).local[branch]
 			if !ok {
-				t.Fatalf("no fold result for %q", branch)
+				t.Fatalf("no view run for %q", branch)
 			}
 			r := NewRegistry(DefaultOrder)
 			r.Apply(Delta{Source: "crew", Key: "%1", Run: routeCrewQuestion(b, tc.live, soon)})
@@ -1424,7 +1435,7 @@ func TestRunJSONHasNoPreview(t *testing.T) {
 
 func TestMergeCrewViewFields(t *testing.T) {
 	r := NewRegistry(DefaultOrder)
-	attention := []CrewAttention{{ID: "a", Kind: "blocked", Severity: "high", Message: "waiting on you", AgeSec: 30}}
+	attention := []CrewAttention{{ID: "a", Kind: "blocked", Severity: "high", Message: "waiting on you", Since: 30}}
 	r.Apply(Delta{Source: "tmux", Key: "%1", Run: Run{Agent: "claude", Crew: &CrewRef{Codename: "Ferris"}}})
 	r.Apply(Delta{Source: "crew", Key: "%1", Run: Run{Crew: &CrewRef{
 		Name: "c1", Origin: "remote_worker", Host: "halo", ViewNotice: "n", Attention: attention,
@@ -1450,7 +1461,7 @@ func TestSignatureCrewAttention(t *testing.T) {
 			Name:       "c1",
 			ViewNotice: "n",
 			Attention: []CrewAttention{{
-				ID: "a", Kind: "blocked", Severity: "high", Message: "m", AgeSec: 5,
+				ID: "a", Kind: "blocked", Severity: "high", Message: "m", Since: 5,
 				Action: &CrewAction{Verb: "reply", Label: "Reply", Command: "crew reply", PR: &pr},
 			}},
 		}}

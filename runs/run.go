@@ -143,7 +143,7 @@ type CrewAttention struct {
 	Kind     string `json:"kind"`
 	Severity string `json:"severity"`
 	Message  string `json:"message"`
-	AgeSec   int64  `json:"age_sec"`
+	Since    int64  `json:"since"` // unix seconds: view generated_at minus the item's age_sec, stable across views
 	// Command is display-only text for an item whose action houston will not
 	// run (an inspect verb); it is empty whenever Action is set or the item is
 	// peer-origin.

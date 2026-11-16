@@ -7,82 +7,17 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/noamsto/houston/crewfeed"
+	"github.com/noamsto/houston/crewview"
 	"github.com/noamsto/houston/hook"
 	"github.com/noamsto/houston/hub"
 	"github.com/noamsto/houston/tmux"
 )
-
-const crewFixture = `{"ts":1000,"crew_id":"c1","kind":"dispatch","branch":"fix/412","title":"fix the ws drop","tier":"standard","engine":"claude","model":"sonnet","session":"houston"}
-{"ts":1100,"crew_id":"c1","from":"worker:fix/412#s1","kind":"status","body":{"state":"working"}}
-{"ts":1200,"crew_id":"c1","from":"worker:fix/412#s1","kind":"status","body":{"state":"blocked","detail":"Keep the legacy route?"}}
-{"ts":1300,"crew_id":"c1","from":"worker:feat/413#s2","kind":"status","body":{"state":"pr_open","pr_url":"https://github.com/x/y/pull/9"}}
-not json at all
-`
-
-func TestDeltasFromCrewLogTakesLatestStatePerBranch(t *testing.T) {
-	got := deltasFromCrewLog(strings.NewReader(crewFixture))
-
-	r, ok := got["fix/412"]
-	if !ok {
-		t.Fatalf("no entry for fix/412, got keys %v", keysOf(got))
-	}
-	if r.State != StateBlocked {
-		t.Errorf("State = %q, want blocked — the latest status wins", r.State)
-	}
-	if r.Question == nil || r.Question.Text != "Keep the legacy route?" {
-		t.Errorf("Question = %+v, want the blocking detail", r.Question)
-	}
-	if r.Question != nil && r.Question.Kind != QuestionCrew {
-		t.Errorf("Question.Kind = %q, want crew", r.Question.Kind)
-	}
-	if r.Question != nil && r.Question.Via != "crew" {
-		t.Errorf("Question.Via = %q, want crew — it is answered with `crew reply`", r.Question.Via)
-	}
-}
-
-func TestDeltasFromCrewLogCarriesDispatchMetadata(t *testing.T) {
-	got := deltasFromCrewLog(strings.NewReader(crewFixture))
-	r := got["fix/412"]
-	if r.Crew == nil || r.Crew.Name != "c1" || r.Crew.Tier != "standard" {
-		t.Fatalf("Crew = %+v, want name c1 tier standard", r.Crew)
-	}
-	if r.Branch != "fix/412" {
-		t.Errorf("Branch = %q", r.Branch)
-	}
-	if r.Agent != "claude" {
-		t.Errorf("Agent = %q, want claude — without it a crew run has no agent and is never listed", r.Agent)
-	}
-}
-
-func TestDeltasFromCrewLogSurvivesGarbageLines(t *testing.T) {
-	got := deltasFromCrewLog(strings.NewReader(crewFixture))
-	if _, ok := got["feat/413"]; !ok {
-		t.Fatal("a malformed line stopped later records being read")
-	}
-	if got["feat/413"].State != StateReview {
-		t.Errorf("feat/413 State = %q, want review", got["feat/413"].State)
-	}
-}
-
-func TestDeltasFromCrewLogTracksSessionEpoch(t *testing.T) {
-	log := `{"ts":1000,"crew_id":"c1","from":"worker:fix/412#s10-1","kind":"status","body":{"state":"working"}}
-{"ts":1100,"crew_id":"c1","from":"worker:fix/412#s20-2","kind":"status","body":{"state":"working"}}
-{"ts":1200,"crew_id":"c1","from":"worker:b","kind":"status","body":{"state":"working"}}
-`
-	got := deltasFromCrewLog(strings.NewReader(log))
-
-	if got["fix/412"].session != 20 {
-		t.Errorf("fix/412 session = %d, want 20 — the latest status wins, same as State/UpdatedAt", got["fix/412"].session)
-	}
-	if got["b"].session != 0 {
-		t.Errorf("b session = %d, want 0 — a bare worker id carries no session", got["b"].session)
-	}
-}
 
 func TestSessionEpoch(t *testing.T) {
 	tests := []struct {
@@ -107,7 +42,7 @@ func TestSessionEpoch(t *testing.T) {
 	}
 }
 
-func TestScanFindsBusFromInsideAWorktree(t *testing.T) {
+func TestCrewDirFindsBusFromInsideAWorktree(t *testing.T) {
 	// Worktree-per-branch is this project's mandated topology, and it is the
 	// case that was broken: <worktree>/.git is a file, so the bus lives under
 	// the main checkout's git dir, not the worktree's.
@@ -133,54 +68,33 @@ func TestScanFindsBusFromInsideAWorktree(t *testing.T) {
 	}
 
 	busDir := filepath.Join(main, ".git", "crew")
-	if err := os.MkdirAll(busDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	line := `{"ts":1000,"crew_id":"c1","from":"worker:feat/x#s1","kind":"status","body":{"state":"blocked","detail":"Keep the alias?"}}` + "\n"
-	if err := os.WriteFile(filepath.Join(busDir, "events.jsonl"), []byte(line), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
 	s := &CrewSource{crewDirs: map[string]string{}}
-	got := s.scanRoots([]string{wt})
-
-	byBranch, ok := got[busDir]
-	if !ok {
-		t.Fatalf("no bus keyed on the main checkout's crew dir %q — buses %v", busDir, busKeysOf(got))
-	}
-	r, ok := byBranch["feat/x"]
-	if !ok {
-		t.Fatalf("scan found nothing from inside a worktree — keys %v", keysOf(byBranch))
-	}
-	if r.State != StateBlocked || r.Question == nil {
-		t.Fatalf("got %+v, want a blocked run carrying its question", r)
+	if got := s.crewDir(wt); got != busDir {
+		t.Fatalf("crewDir(worktree) = %q, want the main checkout's crew dir %q", got, busDir)
 	}
 }
 
-func TestScanRootsSeesAppendAfterCachedParse(t *testing.T) {
-	busDir := t.TempDir()
-	path := filepath.Join(busDir, "events.jsonl")
-	working := `{"ts":1000,"crew_id":"c1","from":"worker:feat/x#s1","kind":"status","body":{"state":"working"}}` + "\n"
-	if err := os.WriteFile(path, []byte(working), 0o644); err != nil {
-		t.Fatal(err)
+func TestBusIdentitySeesAppendAfterCachedRead(t *testing.T) {
+	bus := t.TempDir()
+	writeEvents(t, bus, `{"ts":1000,"crew_id":"c1","kind":"dispatch","branch":"feat/x","engine_session":"s-1"}`+"\n")
+	s := &CrewSource{}
+	live := map[string]identityLog{}
+	if ids, _ := s.busIdentity(bus, live); ids["feat/x"].engineSession != "s-1" {
+		t.Fatalf("first read engineSession = %q, want s-1", ids["feat/x"].engineSession)
 	}
-	s := &CrewSource{crewDirs: map[string]string{"root": busDir}}
-	if got := s.scanRoots([]string{"root"})[busDir]["feat/x"].State; got != StateRunning {
-		t.Fatalf("first scan State = %q, want running", got)
-	}
+	s.ids = live
 
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	f, err := os.OpenFile(filepath.Join(bus, "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	blocked := `{"ts":1100,"crew_id":"c1","from":"worker:feat/x#s1","kind":"status","body":{"state":"blocked","detail":"Keep the alias?"}}` + "\n"
-	if _, err := f.WriteString(blocked); err != nil {
+	if _, err := f.WriteString(`{"ts":1100,"crew_id":"c1","kind":"resume","branch":"feat/x","engine_session":"s-2"}` + "\n"); err != nil {
 		t.Fatal(err)
 	}
 	_ = f.Close()
 
-	if got := s.scanRoots([]string{"root"})[busDir]["feat/x"].State; got != StateBlocked {
-		t.Fatalf("after append State = %q, want blocked — the cached parse went stale", got)
+	if ids, _ := s.busIdentity(bus, map[string]identityLog{}); ids["feat/x"].engineSession != "s-2" {
+		t.Fatalf("after append engineSession = %q, want s-2 — the cached read went stale", ids["feat/x"].engineSession)
 	}
 }
 
@@ -287,178 +201,6 @@ func keysOf[V any](m map[string]V) []string {
 		out = append(out, k)
 	}
 	return out
-}
-
-func busKeysOf[V any](m map[string]map[string]V) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	return out
-}
-
-func TestDeltasFromCrewLogParsesMsgRecords(t *testing.T) {
-	// Before the Body/json.RawMessage fix, a msg record's string body failed
-	// to unmarshal into the old struct-typed Body, which failed the whole
-	// line's json.Unmarshal — dropping fields ordinary to any record, like
-	// tier, along with it. This msg record carries a tier the dispatch record
-	// did not; seeing it stick is proof the line was actually parsed, not
-	// skipped.
-	const fixture = `{"ts":1000,"crew_id":"c1","kind":"dispatch","branch":"fix/4","engine":"claude"}
-{"ts":1100,"crew_id":"c1","from":"worker:fix/4#s1","kind":"msg","tier":"deep","body":"{\"ok\":true}"}
-`
-	got := deltasFromCrewLog(strings.NewReader(fixture))
-	r, ok := got["fix/4"]
-	if !ok {
-		t.Fatalf("no entry for fix/4, got keys %v", keysOf(got))
-	}
-	if r.Crew == nil || r.Crew.Tier != "deep" {
-		t.Fatalf("Crew = %+v, want Tier deep from the msg record", r.Crew)
-	}
-}
-
-func TestDeltasFromCrewLogBlockedAlwaysCarriesAQuestion(t *testing.T) {
-	t.Run("with detail", func(t *testing.T) {
-		const fixture = `{"ts":1000,"crew_id":"c1","kind":"dispatch","branch":"fix/5","engine":"claude"}
-{"ts":1100,"crew_id":"c1","from":"worker:fix/5#s1","kind":"status","body":{"state":"blocked","detail":"Keep the alias?"}}
-`
-		got := deltasFromCrewLog(strings.NewReader(fixture))
-		r := got["fix/5"]
-		if r.State != StateBlocked {
-			t.Fatalf("State = %q, want blocked", r.State)
-		}
-		if r.Question == nil || r.Question.Via != "crew" || r.Question.Text != "Keep the alias?" {
-			t.Fatalf("Question = %+v, want the detail text with Via crew", r.Question)
-		}
-	})
-
-	t.Run("without detail", func(t *testing.T) {
-		const fixture = `{"ts":1000,"crew_id":"c1","kind":"dispatch","branch":"fix/6","engine":"claude"}
-{"ts":1100,"crew_id":"c1","from":"worker:fix/6#s1","kind":"status","body":{"state":"blocked"}}
-`
-		got := deltasFromCrewLog(strings.NewReader(fixture))
-		r := got["fix/6"]
-		if r.State != StateBlocked {
-			t.Fatalf("State = %q, want blocked", r.State)
-		}
-		if r.Question == nil || r.Question.Via != "crew" || r.Question.Text != crewBlockedNoDetail {
-			t.Fatalf("Question = %+v, want the synthesised text with Via crew", r.Question)
-		}
-	})
-
-	t.Run("watchdog informational source", func(t *testing.T) {
-		const fixture = `{"ts":1000,"crew_id":"c1","kind":"dispatch","branch":"fix/7","engine":"claude"}
-{"ts":1100,"crew_id":"c1","from":"worker:fix/7#s1","kind":"status","body":{"state":"blocked","detail":"quiet: pane unchanged for 1800s","source":"watchdog"}}
-`
-		got := deltasFromCrewLog(strings.NewReader(fixture))
-		r := got["fix/7"]
-		if r.State == StateBlocked {
-			t.Fatalf("State = %q, want not needs-attention — a watchdog check-in asks nobody anything", r.State)
-		}
-		if r.Question != nil {
-			t.Fatalf("Question = %+v, want nil", r.Question)
-		}
-		if r.Crew.Detail != "" {
-			t.Errorf("Detail = %q, want cleared — a watchdog note is not a current phase", r.Crew.Detail)
-		}
-	})
-}
-
-func TestDeltasFromCrewLogWatchdogDetailDoesNotLeakOntoLaterStatus(t *testing.T) {
-	const blocked = `{"ts":1000,"crew_id":"c1","kind":"dispatch","branch":"fix/8","engine":"claude"}
-{"ts":1100,"crew_id":"c1","from":"worker:fix/8#s1","kind":"status","body":{"state":"blocked","detail":"quiet: cleared — awaited 300s, no reply (cycle 3 of 24)","source":"watchdog"}}
-`
-
-	t.Run("followed by another watchdog status", func(t *testing.T) {
-		fixture := blocked + `{"ts":1200,"crew_id":"c1","from":"worker:fix/8#s1","kind":"status","body":{"state":"working","detail":"quiet: cleared","source":"watchdog"}}
-`
-		got := deltasFromCrewLog(strings.NewReader(fixture))
-		r := got["fix/8"]
-		if r.Crew.Detail != "" {
-			t.Errorf("Detail = %q, want cleared — watchdog detail must not leak", r.Crew.Detail)
-		}
-		if r.Question != nil {
-			t.Errorf("Question = %+v, want nil — no longer blocked", r.Question)
-		}
-	})
-
-	t.Run("followed by the worker's own status", func(t *testing.T) {
-		fixture := blocked + `{"ts":1200,"crew_id":"c1","from":"worker:fix/8#s1","kind":"status","body":{"state":"working","detail":"running tests"}}
-`
-		got := deltasFromCrewLog(strings.NewReader(fixture))
-		r := got["fix/8"]
-		if r.Crew.Detail != "running tests" {
-			t.Errorf("Detail = %q, want the worker's own detail", r.Crew.Detail)
-		}
-		if r.Question != nil {
-			t.Errorf("Question = %+v, want nil — no longer blocked", r.Question)
-		}
-	})
-}
-
-func TestDeltasFromCrewLogRetiresAnAnsweredQuestion(t *testing.T) {
-	const blocked = `{"ts":1000,"crew_id":"c1","kind":"dispatch","branch":"fix/9","engine":"claude"}
-{"ts":2000,"crew_id":"c1","from":"worker:fix/9#s1","kind":"status","body":{"state":"blocked","detail":"Keep the alias?"}}
-`
-
-	t.Run("answered", func(t *testing.T) {
-		fixture := blocked + `{"ts":3000,"crew_id":"c1","from":"dispatcher:c1","to":"worker:fix/9#s1","kind":"msg","body":"keep it"}
-`
-		got := deltasFromCrewLog(strings.NewReader(fixture))
-		r, ok := got["fix/9"]
-		if !ok {
-			t.Fatalf("no entry for fix/9, got keys %v", keysOf(got))
-		}
-		if r.State != "" {
-			t.Errorf("State = %q, want \"\" — the question was answered", r.State)
-		}
-		if r.Question != nil {
-			t.Errorf("Question = %+v, want nil — the question was answered", r.Question)
-		}
-		if r.Branch != "fix/9" || r.Crew == nil || r.Crew.Name != "c1" || r.Agent != "claude" {
-			t.Errorf("Branch/Crew/Agent must survive retirement: Branch=%q Crew=%+v Agent=%q", r.Branch, r.Crew, r.Agent)
-		}
-	})
-
-	t.Run("unanswered", func(t *testing.T) {
-		got := deltasFromCrewLog(strings.NewReader(blocked))
-		r := got["fix/9"]
-		if r.State != StateBlocked || r.Question == nil {
-			t.Fatalf("got %+v, want still blocked with a question — no reply exists", r)
-		}
-	})
-
-	t.Run("reply older than the block", func(t *testing.T) {
-		const fixture = `{"ts":1000,"crew_id":"c1","kind":"dispatch","branch":"fix/9","engine":"claude"}
-{"ts":1500,"crew_id":"c1","from":"dispatcher:c1","to":"worker:fix/9#s1","kind":"msg","body":"old news"}
-{"ts":2000,"crew_id":"c1","from":"worker:fix/9#s1","kind":"status","body":{"state":"blocked","detail":"Keep the alias?"}}
-`
-		got := deltasFromCrewLog(strings.NewReader(fixture))
-		r := got["fix/9"]
-		if r.State != StateBlocked || r.Question == nil {
-			t.Fatalf("got %+v, want still blocked — the reply predates the block", r)
-		}
-	})
-
-	t.Run("reply addressed to a different branch", func(t *testing.T) {
-		fixture := blocked + `{"ts":3000,"crew_id":"c1","from":"dispatcher:c1","to":"worker:other/branch#s1","kind":"msg","body":"unrelated"}
-`
-		got := deltasFromCrewLog(strings.NewReader(fixture))
-		r := got["fix/9"]
-		if r.State != StateBlocked || r.Question == nil {
-			t.Fatalf("got %+v, want still blocked — the reply was addressed elsewhere", r)
-		}
-	})
-
-	t.Run("reply from a non-dispatcher sender", func(t *testing.T) {
-		fixture := blocked + `{"ts":3000,"crew_id":"c1","from":"worker:other#s1","to":"worker:fix/9#s1","kind":"msg","body":"not the dispatcher"}
-`
-		got := deltasFromCrewLog(strings.NewReader(fixture))
-		r := got["fix/9"]
-		if r.State != StateBlocked || r.Question == nil {
-			t.Fatalf("got %+v, want still blocked — only a dispatcher reply retires the question", r)
-		}
-	})
 }
 
 // testBus stands in for a bus directory in tests that never touch git.
@@ -930,6 +672,7 @@ func TestScanRejectsStaleJoin(t *testing.T) {
 
 	s := crewScanner(
 		map[string]string{"/wt/a": bus},
+		viewsOn(bus, overviewOf(nil, viewWorker("fix/412", "done", "", 2))),
 		[]tmux.WindowOptions{{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"}},
 		[]tmux.PaneOptions{agentPaneAt("%307", "h:1", 999)},
 	)
@@ -970,6 +713,7 @@ func TestScanJoinsTerminalRecordToItsOwnIdlePane(t *testing.T) {
 
 	s := crewScanner(
 		map[string]string{"/wt/a": bus},
+		viewsOn(bus, overviewOf(nil, viewWorker("fix/412", "done", "", 2))),
 		[]tmux.WindowOptions{{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"}},
 		[]tmux.PaneOptions{agentPaneAt("%307", "h:1", 2)},
 	)
@@ -1013,19 +757,23 @@ func TestScanEngineSession(t *testing.T) {
 	}
 
 	t.Run("matching hook session joins", func(t *testing.T) {
-		s := crewScanner(map[string]string{"/wt/a": bus}, wins, panes, fakeHookSessions{views: []hub.SessionView{view("sid-1")}})
+		s := crewScanner(map[string]string{"/wt/a": bus}, viewsOn(bus, overviewOf(nil, viewWorker("fix/412", "done", "", 2))), wins, panes, fakeHookSessions{views: []hub.SessionView{view("sid-1")}})
 		s.procStart = startAt(1)
 		got, ok := s.scan()
 		if !ok {
 			t.Fatal("scan reported failure")
 		}
-		if _, found := got["%307"]; !found {
+		r, found := got["%307"]
+		if !found {
 			t.Fatalf("run did not join %%307 — keys: %v", keysOf(got))
+		}
+		if r.CrewSession != "sid-1" {
+			t.Errorf("CrewSession = %q, want sid-1 from the bus identity", r.CrewSession)
 		}
 	})
 
 	t.Run("cleared hook session does not join", func(t *testing.T) {
-		s := crewScanner(map[string]string{"/wt/a": bus}, wins, panes, fakeHookSessions{views: []hub.SessionView{view("sid-2")}})
+		s := crewScanner(map[string]string{"/wt/a": bus}, viewsOn(bus, overviewOf(nil, viewWorker("fix/412", "done", "", 2))), wins, panes, fakeHookSessions{views: []hub.SessionView{view("sid-2")}})
 		s.procStart = startAt(1)
 		got, ok := s.scan()
 		if !ok {
@@ -1057,7 +805,7 @@ func TestScanRejectsIdleNewOccupantWithinGrace(t *testing.T) {
 
 	t.Run("engine started after the record does not join", func(t *testing.T) {
 		var gotPID int
-		s := crewScanner(map[string]string{"/wt/a": bus}, wins, panes)
+		s := crewScanner(map[string]string{"/wt/a": bus}, viewsOn(bus, overviewOf(nil, viewWorker("fix/412", "done", "", 2000))), wins, panes)
 		s.procStart = func(panePID int) int64 {
 			gotPID = panePID
 			return 2050
@@ -1080,7 +828,7 @@ func TestScanRejectsIdleNewOccupantWithinGrace(t *testing.T) {
 	})
 
 	t.Run("engine started before the record joins", func(t *testing.T) {
-		s := crewScanner(map[string]string{"/wt/a": bus}, wins, panes)
+		s := crewScanner(map[string]string{"/wt/a": bus}, viewsOn(bus, overviewOf(nil, viewWorker("fix/412", "done", "", 2000))), wins, panes)
 		s.procStart = startAt(1500)
 
 		got, ok := s.scan()
@@ -1093,7 +841,8 @@ func TestScanRejectsIdleNewOccupantWithinGrace(t *testing.T) {
 	})
 }
 
-// writeBus creates a bus directory holding one dispatch record per branch.
+// writeBus creates a bus directory holding one dispatch record per branch: the
+// identity side of a worker, whose state a test's view supplies.
 func writeBus(t *testing.T, branches ...string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -1112,14 +861,17 @@ func writeBus(t *testing.T, branches ...string) string {
 const busFixtureNow = 2000
 
 // crewScanner builds a CrewSource whose bus lookup is pre-seeded, so scan()
-// exercises the join without shelling out to git. procStart defaults to
+// exercises the join without shelling out to git. views is crew's view per bus
+// (nil lists no worker). procStart defaults to
 // startAt(0) — unknown, so a terminal join fails closed unless a test
 // overrides s.procStart. procs likewise knows no start time, so a crew with a
 // pid file does not join its dispatcher pane unless a test overrides s.procs.
-func crewScanner(dirs map[string]string, wins []tmux.WindowOptions, panes []tmux.PaneOptions, sessions ...hookSessions) *CrewSource {
+func crewScanner(dirs map[string]string, views crewViews, wins []tmux.WindowOptions, panes []tmux.PaneOptions, sessions ...hookSessions) *CrewSource {
 	s := &CrewSource{
 		client:    &fakeLister{steps: []fakeStep{{wins: wins, panes: panes}}},
 		crewDirs:  dirs,
+		views:     views,
+		mem:       blockedMemory{},
 		procStart: startAt(0),
 		procs:     fakeProcs{},
 		now:       func() time.Time { return time.UnixMilli(busFixtureNow) },
@@ -1130,10 +882,74 @@ func crewScanner(dirs map[string]string, wins []tmux.WindowOptions, panes []tmux
 	return s
 }
 
+// testViewGen is the generated_at of the views tests build; viewWorker derives
+// age_sec from it, so a worker's UpdatedAt is exactly the time a test names.
+const testViewGen = int64(4_000_000_000)
+
+func viewWorker(branch, state, detail string, updatedAt int64) crewview.Worker {
+	w := crewview.Worker{Crew: "c1", Branch: branch, Origin: crewview.OriginLocal, State: state, Engine: sp("claude"), AgeSec: ip(testViewGen - updatedAt)}
+	if detail != "" {
+		w.Detail = sp(detail)
+	}
+	return w
+}
+
+func viewItem(kind, branch, message string) crewview.Item {
+	return crewview.Item{ID: kind + ":c1:" + branch, Crew: "c1", Branch: branch, Origin: crewview.OriginLocal, Kind: kind, Message: message}
+}
+
+func overviewOf(items []crewview.Item, workers ...crewview.Worker) crewview.Overview {
+	return crewview.Overview{SchemaVersion: 1, View: crewview.ViewOverview, GeneratedAt: testViewGen, Attention: items, Workers: workers}
+}
+
+// workingView lists each branch as a working c1 worker last stamped at 1 s,
+// the time writeBus's dispatch rows carry.
+func workingView(branches ...string) crewview.Overview {
+	ov := overviewOf(nil)
+	for _, b := range branches {
+		ov.Workers = append(ov.Workers, viewWorker(b, "working", "", 1))
+	}
+	return ov
+}
+
+func workingOn(bus string, branches ...string) *fakeViews {
+	return viewsOn(bus, workingView(branches...))
+}
+
+// blockedOn is a view of one worker asking its dispatcher, stamped at (unix s).
+func blockedOn(bus, branch, detail string, at int64) *fakeViews {
+	return viewsOn(bus, overviewOf([]crewview.Item{viewItem("blocked", branch, detail)}, viewWorker(branch, "blocked", detail, at)))
+}
+
+func viewsOn(bus string, ov crewview.Overview) *fakeViews {
+	return &fakeViews{views: map[string]crewview.Overview{bus: ov}}
+}
+
+// fakeViews is a crewViews over fixed views that records what scan asks of it.
+type fakeViews struct {
+	views    map[string]crewview.Overview // a bus absent here has no view
+	status   map[string]crewview.Status   // zero reads ok when the bus has a view
+	ensured  [][2]string                  // (bus, root) per Ensure call
+	retained []map[string]bool
+}
+
+func (f *fakeViews) Ensure(bus, root string)      { f.ensured = append(f.ensured, [2]string{bus, root}) }
+func (f *fakeViews) Retain(buses map[string]bool) { f.retained = append(f.retained, buses) }
+
+func (f *fakeViews) Latest(bus string) (crewview.Overview, crewview.Status, bool) {
+	ov, ok := f.views[bus]
+	st := f.status[bus]
+	if ok && st.State == "" {
+		st.State = crewview.StateOK
+	}
+	return ov, st, ok
+}
+
 func TestScanPublishesUnderTheJoinedPaneKey(t *testing.T) {
 	bus := writeBus(t, "fix/412")
 	s := crewScanner(
 		map[string]string{"/wt/a": bus},
+		workingOn(bus, "fix/412"),
 		[]tmux.WindowOptions{{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"}},
 		[]tmux.PaneOptions{agentPane("%307", "h:1")},
 	)
@@ -1165,6 +981,7 @@ func TestScanStampsProjectAndWorkerRole(t *testing.T) {
 	}
 	s := crewScanner(
 		map[string]string{"/wt/a": bus},
+		workingOn(bus, "fix/412"),
 		[]tmux.WindowOptions{{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"}},
 		[]tmux.PaneOptions{agentPane("%307", "h:1")},
 	)
@@ -1198,6 +1015,7 @@ func TestScanWorkerBlockedOnLiveDispatcherIsNotNeedsYou(t *testing.T) {
 	}
 	s := crewScanner(
 		map[string]string{"/wt/a": bus},
+		blockedOn(bus, "fix/412", "spec: which engine?", statusTS/1000),
 		[]tmux.WindowOptions{
 			{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"},
 			{Session: "h", Window: 2, CrewName: "dispatcher"},
@@ -1240,6 +1058,7 @@ func TestScanWorkerBlockedWithoutDispatcherNeedsYou(t *testing.T) {
 	}
 	s := crewScanner(
 		map[string]string{"/wt/a": bus},
+		blockedOn(bus, "fix/412", "spec: which engine?", statusTS/1000),
 		[]tmux.WindowOptions{
 			{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"},
 			{Session: "h", Window: 2, CrewName: "dispatcher"},
@@ -1272,6 +1091,7 @@ func TestScanFallsBackWhenNoPaneJoins(t *testing.T) {
 		bus := writeBus(t, "fix/412")
 		s := crewScanner(
 			map[string]string{"/wt/a": bus},
+			workingOn(bus, "fix/412"),
 			[]tmux.WindowOptions{{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"}},
 			[]tmux.PaneOptions{{PaneID: "%9", Target: "h:1"}},
 		)
@@ -1293,6 +1113,7 @@ func TestScanFallsBackWhenNoPaneJoins(t *testing.T) {
 		bus := writeBus(t, "fix/412")
 		s := crewScanner(
 			map[string]string{"/wt/a": bus},
+			workingOn(bus, "fix/412"),
 			[]tmux.WindowOptions{{Session: "h", Window: 1, Branch: "main", GitRoot: "/wt/a"}},
 			[]tmux.PaneOptions{agentPane("%1", "h:1")},
 		)
@@ -1317,6 +1138,7 @@ func TestScanKeepsTwoBusesApart(t *testing.T) {
 	busB := writeBus(t, "main")
 	s := crewScanner(
 		map[string]string{"/wt/a": busA, "/other": busB},
+		&fakeViews{views: map[string]crewview.Overview{busA: workingView("main"), busB: workingView("main")}},
 		[]tmux.WindowOptions{
 			{Session: "h", Window: 1, Branch: "main", GitRoot: "/wt/a"},
 			{Session: "h", Window: 2, Branch: "main", GitRoot: "/other"},
@@ -1359,9 +1181,14 @@ func (errPaneLister) ListPaneOptions() ([]tmux.PaneOptions, error) {
 }
 
 func TestScanSkipsTheTickOnAPaneQueryError(t *testing.T) {
-	s := &CrewSource{client: errPaneLister{}, crewDirs: map[string]string{"/wt/a": writeBus(t, "fix/412")}}
+	bus := writeBus(t, "fix/412")
+	views := workingOn(bus, "fix/412")
+	s := &CrewSource{client: errPaneLister{}, crewDirs: map[string]string{"/wt/a": bus}, views: views, mem: blockedMemory{}}
 	if got, ok := s.scan(); ok {
 		t.Fatalf("scan reported success with %v — a tmux error must skip the tick, not retire every branch", keysOf(got))
+	}
+	if len(views.ensured) != 0 || len(views.retained) != 0 {
+		t.Errorf("Ensure %v Retain %v, want neither on a failed tmux query — Retain would stop every stream", views.ensured, views.retained)
 	}
 }
 
@@ -1412,36 +1239,6 @@ func TestKeyFlipBroadcastsTheNewRunThenRemovesTheOldID(t *testing.T) {
 	}
 }
 
-func TestDeltasFromCrewLogCarriesTitleModelDetailAndPR(t *testing.T) {
-	got := deltasFromCrewLog(strings.NewReader(crewFixture))
-
-	r := got["fix/412"]
-	if r.Crew.Title != "fix the ws drop" || r.Crew.Model != "sonnet" {
-		t.Errorf("Crew = %+v, want title and model from the dispatch record", r.Crew)
-	}
-	if r.Crew.Detail != "Keep the legacy route?" {
-		t.Errorf("Detail = %q, want the latest status detail", r.Crew.Detail)
-	}
-
-	pr := got["feat/413"]
-	if pr.PR == nil || pr.PR.URL != "https://github.com/x/y/pull/9" || pr.PR.Number != "9" {
-		t.Errorf("PR = %+v, want url and number 9 from pr_url", pr.PR)
-	}
-}
-
-func TestDeltasFromCrewLogLaterStatusClearsDetailButKeepsPR(t *testing.T) {
-	log := `{"ts":1,"crew_id":"c","from":"worker:b#s","kind":"status","body":{"state":"pr_open","detail":"opening","pr_url":"https://github.com/x/y/pull/3"}}
-{"ts":2,"crew_id":"c","from":"worker:b#s","kind":"status","body":{"state":"done"}}
-`
-	r := deltasFromCrewLog(strings.NewReader(log))["b"]
-	if r.Crew.Detail != "" {
-		t.Errorf("Detail = %q, want cleared by the newer status", r.Crew.Detail)
-	}
-	if r.PR == nil || r.PR.URL == "" {
-		t.Errorf("PR = %+v, want the URL to stick", r.PR)
-	}
-}
-
 func TestPRNumberFromURL(t *testing.T) {
 	for in, want := range map[string]string{
 		"https://github.com/x/y/pull/9":  "9",
@@ -1452,136 +1249,6 @@ func TestPRNumberFromURL(t *testing.T) {
 		if got := prNumberFromURL(in); got != want {
 			t.Errorf("prNumberFromURL(%q) = %q, want %q", in, got, want)
 		}
-	}
-}
-
-// TestDeltasFromCrewLogWatchdogPrefixes pins what each watchdog blocked prefix
-// means for the card: only prompt: needs a human (at the pane); the prefixes
-// that signal a stalled or limited worker mark it stuck while it reads
-// running; load: and anything unlisted claim nothing. The prefix must be
-// followed by a colon.
-func TestDeltasFromCrewLogWatchdogPrefixes(t *testing.T) {
-	cases := []struct {
-		detail        string
-		state         State
-		question      string // "" = no Question; else its pane text
-		attention     Attention
-		attentionNote string
-	}{
-		{"prompt: interactive prompt in pane %326 — worker is waiting on input nobody can give", StateBlocked, crewWatchdogPromptNote, AttentionNone, ""},
-		{"quota: quota exhausted — worker parked on the rate-limit prompt in pane %326", StateRunning, "", AttentionStuck, crewWatchdogQuotaNote},
-		{"turn-stall: token count static at 25.0k for 1800s", StateRunning, "", AttentionStuck, crewWatchdogTurnStallNote},
-		{"quiet: pane unchanged for 1800s", StateRunning, "", AttentionStuck, crewWatchdogQuietNote},
-		{"stalled: no output for 300s", StateRunning, "", AttentionStuck, crewWatchdogStalledNote},
-		{"runaway: sentinel tokens leaked", StateRunning, "", AttentionStuck, crewWatchdogRunawayNote},
-		{"unread: lead has not read the reviewer verdict", StateRunning, "", AttentionStuck, crewWatchdogUnreadNote},
-		{"budget: token budget reached", StateRunning, "", AttentionStuck, crewWatchdogBudgetNote},
-		{"load: 1m load 9 on 8 cores for 60s", StateRunning, "", AttentionNone, ""},
-		{"mystery: x", StateRunning, "", AttentionNone, ""},
-		{"quietly waiting", StateRunning, "", AttentionNone, ""},
-		{"", StateRunning, "", AttentionNone, ""},
-	}
-	for _, c := range cases {
-		t.Run(c.detail, func(t *testing.T) {
-			fixture := `{"ts":1000,"crew_id":"c1","kind":"dispatch","branch":"fix/10","engine":"claude"}` + "\n" +
-				fmt.Sprintf(`{"ts":1100,"crew_id":"c1","from":"worker:fix/10#s1","kind":"status","body":{"state":"blocked","detail":%q,"source":"watchdog"}}`, c.detail) + "\n"
-			r := deltasFromCrewLog(strings.NewReader(fixture))["fix/10"]
-			if r.State != c.state {
-				t.Errorf("State = %q, want %q", r.State, c.state)
-			}
-			switch {
-			case c.question == "" && r.Question != nil:
-				t.Errorf("Question = %+v, want nil", r.Question)
-			case c.question != "" && (r.Question == nil || r.Question.Via != "pane" || r.Question.Kind != QuestionDialog || r.Question.Text != c.question):
-				t.Errorf("Question = %+v, want Via pane Kind dialog text %q", r.Question, c.question)
-			}
-			if r.Attention != c.attention || r.AttentionNote != c.attentionNote {
-				t.Errorf("Attention = %q %q, want %q %q", r.Attention, r.AttentionNote, c.attention, c.attentionNote)
-			}
-			if r.Crew.Detail != "" {
-				t.Errorf("Detail = %q, want cleared — a watchdog note never reaches the card", r.Crew.Detail)
-			}
-			if r.blockedSince != 0 {
-				t.Errorf("blockedSince = %d, want 0 — a watchdog status is not a question to the dispatcher", r.blockedSince)
-			}
-		})
-	}
-}
-
-func TestDeltasFromCrewLogFailedIsStuck(t *testing.T) {
-	const head = `{"ts":1000,"crew_id":"c1","kind":"dispatch","branch":"fix/11","engine":"claude"}` + "\n"
-	cases := []struct {
-		name, status string
-		note, detail string
-	}{
-		{"watchdog dead", `{"state":"failed","detail":"dead: engine process gone","source":"watchdog"}`, crewWatchdogDeadNote, ""},
-		{"worker failed", `{"state":"failed","detail":"gate won't pass"}`, "", "gate won't pass"},
-		{"exited", `{"state":"exited"}`, "", ""},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			fixture := head + `{"ts":1100,"crew_id":"c1","from":"worker:fix/11#s1","kind":"status","body":` + c.status + "}\n"
-			r := deltasFromCrewLog(strings.NewReader(fixture))["fix/11"]
-			if r.State != StateFailed {
-				t.Errorf("State = %q, want failed", r.State)
-			}
-			if r.AttentionNote != c.note {
-				t.Errorf("AttentionNote = %q, want %q", r.AttentionNote, c.note)
-			}
-			if r.Crew.Detail != c.detail {
-				t.Errorf("Detail = %q, want %q", r.Crew.Detail, c.detail)
-			}
-		})
-	}
-
-	t.Run("latest status resets the attention", func(t *testing.T) {
-		fixture := head +
-			`{"ts":1100,"crew_id":"c1","from":"worker:fix/11#s1","kind":"status","body":{"state":"blocked","detail":"quota: limit","source":"watchdog"}}` + "\n" +
-			`{"ts":1200,"crew_id":"c1","from":"worker:fix/11#s1","kind":"status","body":{"state":"working"}}` + "\n"
-		r := deltasFromCrewLog(strings.NewReader(fixture))["fix/11"]
-		if r.Attention != AttentionNone || r.AttentionNote != "" {
-			t.Errorf("Attention = %q %q, want none — the later status replaced the stuck one", r.Attention, r.AttentionNote)
-		}
-	})
-}
-
-func TestDeltasFromCrewLogDoneAndPROpen(t *testing.T) {
-	const fixture = `{"ts":1000,"crew_id":"c1","kind":"dispatch","branch":"fix/13","engine":"claude"}
-{"ts":1100,"crew_id":"c1","from":"worker:fix/13#s1","kind":"status","body":{"state":"done"}}
-{"ts":1200,"crew_id":"c1","from":"worker:fix/14#s1","kind":"status","body":{"state":"pr_open","pr_url":"https://github.com/x/y/pull/9"}}
-`
-	got := deltasFromCrewLog(strings.NewReader(fixture))
-	if got["fix/13"].State != StateDone || got["fix/14"].State != StateReview {
-		t.Errorf("States = %q, %q; want done, review", got["fix/13"].State, got["fix/14"].State)
-	}
-}
-
-func TestDeltasFromCrewLogBlockedSince(t *testing.T) {
-	const head = `{"ts":500,"crew_id":"c1","kind":"dispatch","branch":"fix/12","engine":"claude"}` + "\n"
-	status := func(ts int64, state string) string {
-		return fmt.Sprintf(`{"ts":%d,"crew_id":"c1","from":"worker:fix/12#s1","kind":"status","body":{"state":%q,"detail":"which way?"}}`+"\n", ts, state)
-	}
-	reply := func(ts int64) string {
-		return fmt.Sprintf(`{"ts":%d,"crew_id":"c1","from":"dispatcher:c1","to":"worker:fix/12#s1","kind":"msg","body":"this way"}`+"\n", ts)
-	}
-	cases := []struct {
-		name string
-		log  string
-		want int64
-	}{
-		{"re-stamp keeps the episode start", head + status(1000, "blocked") + status(2000, "blocked"), 1000},
-		{"working in between starts a new episode", head + status(1000, "blocked") + status(3000, "working") + status(4000, "blocked"), 4000},
-		{"a reply in between starts a new episode", head + status(1000, "blocked") + reply(4500) + status(5000, "blocked"), 5000},
-		{"a reply older than the episode does not end it", head + reply(900) + status(1000, "blocked") + status(2000, "blocked"), 1000},
-		{"not blocked", head + status(1000, "working"), 0},
-		{"answered and retired", head + status(1000, "blocked") + reply(2000), 0},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if got := deltasFromCrewLog(strings.NewReader(c.log))["fix/12"].blockedSince; got != c.want {
-				t.Errorf("blockedSince = %d, want %d", got, c.want)
-			}
-		})
 	}
 }
 
@@ -1707,46 +1374,6 @@ func TestDispatcherLive(t *testing.T) {
 
 func ptr[T any](v T) *T { return &v }
 
-func TestCrewLogReadsEngineSessionNewestWins(t *testing.T) {
-	log := `{"ts":1,"kind":"dispatch","branch":"feat/a","engine":"claude","engine_session":"old"}
-{"ts":2,"from":"worker:feat/a#s1-2","kind":"status","body":{"state":"working"}}
-{"ts":3,"kind":"resume","branch":"feat/a","engine":"claude","engine_session":"new"}
-{"ts":4,"kind":"dispatch","branch":"feat/b","engine":"codex","engine_session":null}
-{"ts":5,"kind":"dispatch","branch":"feat/c","engine":"claude"}
-`
-	got := deltasFromCrewLog(strings.NewReader(log))
-	for branch, want := range map[string]string{"feat/a": "new", "feat/b": "", "feat/c": ""} {
-		if got[branch].CrewSession != want {
-			t.Errorf("%s: CrewSession = %q, want %q", branch, got[branch].CrewSession, want)
-		}
-	}
-}
-
-func TestDeltasFromCrewLogCarriesRosterFields(t *testing.T) {
-	const fixture = `{"ts":1000,"crew_id":"c1","kind":"dispatch","branch":"feat/7","title":"add the roster","tier":"standard","engine":"claude","model":"sonnet","engine_session":"s-1"}
-{"ts":1100,"crew_id":"c1","from":"worker:feat/7#s1","kind":"status","body":{"state":"working","detail":"executing plan"}}
-{"ts":1200,"crew_id":"c1","kind":"resume","branch":"feat/7","engine_session":"s-2"}
-{"ts":1300,"crew_id":"c1","from":"worker:feat/7#s2","kind":"status","body":{"state":"pr_open","detail":"AC1 pass","pr_url":"https://github.com/x/y/pull/12"}}
-`
-	r := deltasFromCrewLog(strings.NewReader(fixture))["feat/7"]
-	if r.Crew == nil {
-		t.Fatal("no crew ref")
-	}
-	c := r.Crew
-	if c.Title != "add the roster" || c.Tier != "standard" || c.Model != "sonnet" || c.Detail != "AC1 pass" {
-		t.Errorf("Crew = %+v, want title/tier/model/latest detail", c)
-	}
-	if r.Agent != "claude" {
-		t.Errorf("Agent = %q, want claude", r.Agent)
-	}
-	if c.Sessions != 2 {
-		t.Errorf("Sessions = %d, want 2 (dispatch + resume)", c.Sessions)
-	}
-	if r.PR == nil || r.PR.URL != "https://github.com/x/y/pull/12" || r.PR.Number != "12" {
-		t.Errorf("PR = %+v, want the status pr_url", r.PR)
-	}
-}
-
 // A dispatcher that has dispatched nothing yet has a crews/ dir but no log;
 // its pane still gets the crew layer, which lists only beside the tmux layer.
 func TestScanEmitsTheDispatcherLayer(t *testing.T) {
@@ -1754,7 +1381,7 @@ func TestScanEmitsTheDispatcherLayer(t *testing.T) {
 	writeCrew(t, bus, crewFiles{id: "c1", pane: ptr("%1"), paneMod: regT, pid: ptr("200"), pidMod: regT})
 	wins := []tmux.WindowOptions{{Session: "h", Window: 2, CrewName: "dispatcher", GitRoot: "/wt/a"}}
 	panes := []tmux.PaneOptions{dispatcherPane("%1", "h:2")}
-	s := crewScanner(map[string]string{"/wt/a": bus}, wins, panes)
+	s := crewScanner(map[string]string{"/wt/a": bus}, nil, wins, panes)
 	s.procs = liveDispatcher()
 
 	got, ok := s.scan()
@@ -1800,6 +1427,7 @@ func TestScanDispatcherJoinYieldsToAWorkerKey(t *testing.T) {
 	writeCrew(t, bus, crewFiles{id: "c1", pane: ptr("%307"), paneMod: regT})
 	s := crewScanner(
 		map[string]string{"/wt/a": bus},
+		workingOn(bus, "fix/412"),
 		[]tmux.WindowOptions{{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a", CrewName: "dispatcher"}},
 		[]tmux.PaneOptions{agentPane("%307", "h:1")},
 	)
@@ -1843,6 +1471,7 @@ func TestScanWorkerQuestionWithAGoneDispatcher(t *testing.T) {
 			worker.ServerStart = serverT.Unix()
 			s := crewScanner(
 				map[string]string{"/wt/a": bus},
+				blockedOn(bus, "fix/412", "spec: which engine?", statusTS/1000),
 				[]tmux.WindowOptions{
 					{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"},
 					{Session: "h", Window: 2, CrewName: "dispatcher"},
@@ -1871,6 +1500,7 @@ func TestScanAdvancesTheFeedForEveryBus(t *testing.T) {
 	bare := t.TempDir()
 	s := crewScanner(
 		map[string]string{"/wt/a": logged, "/wt/a2": logged, "/wt/b": bare},
+		nil,
 		[]tmux.WindowOptions{
 			{Session: "h", Window: 1, GitRoot: "/wt/a"},
 			{Session: "h", Window: 2, GitRoot: "/wt/a2"},
@@ -1895,28 +1525,6 @@ func TestScanAdvancesTheFeedForEveryBus(t *testing.T) {
 	p, err = s.feed.Page(bare, "c1", 0, 0)
 	if err != nil || len(p.Entries) != 0 || p.Epoch == "" {
 		t.Errorf("bare bus page = %+v, %v; want an empty page with an epoch", p, err)
-	}
-}
-
-func TestDeltasFromCrewLogTakesCodenameAndColourFromDispatchRow(t *testing.T) {
-	log := `{"ts":1,"crew_id":"c1","kind":"dispatch","branch":"a","engine":"claude","name":"brick","color":"brown","tmux":"colour131"}
-{"ts":2,"crew_id":"c1","kind":"dispatch","branch":"b","engine":"claude","name":"Brick!","color":"red","tmux":"colour131"}
-{"ts":3,"crew_id":"c1","kind":"dispatch","branch":"c","engine":"claude","name":"ok","tmux":"#ff0000"}
-{"ts":4,"crew_id":"c1","kind":"dispatch","branch":"d","engine":"claude","name":"old","tmux":"colour25"}
-{"ts":5,"crew_id":"c1","kind":"dispatch","branch":"d","engine":"claude","name":"Bad name","tmux":"colour131"}
-`
-	got := deltasFromCrewLog(strings.NewReader(log))
-	if c := got["a"].Crew; c.Codename != "brick" || c.Color != tmuxColorToHex("colour131") || c.Color == "" {
-		t.Errorf("a: Crew = %+v, want brick and the colour131 hex", c)
-	}
-	if c := got["b"].Crew; c.Codename != "" || c.Color != "" {
-		t.Errorf("b: Crew = %+v, want no identity for a malformed name", c)
-	}
-	if c := got["c"].Crew; c.Codename != "" || c.Color != "" {
-		t.Errorf("c: Crew = %+v, want no identity for a malformed colour", c)
-	}
-	if c := got["d"].Crew; c.Codename != "old" {
-		t.Errorf("d: Crew = %+v, want the last well-formed row to stand", c)
 	}
 }
 
@@ -1970,8 +1578,14 @@ func TestScanSetsCrewHomeFromTheBusHoldingTheCrewDir(t *testing.T) {
 		_, _ = fmt.Fprintf(f, `{"ts":2,"crew_id":"shared","kind":"dispatch","branch":%q,"engine":"claude"}`+"\n", branch)
 	}
 	logShared(busA, "sh-a")
+	shared := viewWorker("sh-a", "working", "", 1)
+	shared.Crew = "shared"
+	views := &fakeViews{views: map[string]crewview.Overview{
+		busA: overviewOf(nil, viewWorker("on-a", "working", "", 1), shared),
+		busB: overviewOf(nil, viewWorker("on-b", "working", "", 1)),
+	}}
 
-	s := crewScanner(map[string]string{"/a": busA, "/b": busB},
+	s := crewScanner(map[string]string{"/a": busA, "/b": busB}, views,
 		[]tmux.WindowOptions{{Session: "h", Window: 1, GitRoot: "/a"}, {Session: "h", Window: 2, GitRoot: "/b"}}, nil)
 	got, ok := s.scan()
 	if !ok {
@@ -2016,91 +1630,27 @@ func writeEvents(t *testing.T, bus, events string) {
 	}
 }
 
-func TestDeltasFromCrewLogReapedAndRedispatched(t *testing.T) {
-	reaped := dispatchRow(1000, "b") + statusRow(1100, "b", "done") +
-		`{"ts":1150,"crew_id":"c1","kind":"reap","branch":"b"}` + "\n" + statusRow(1200, "b", "reaped")
-	r := deltasFromCrewLog(strings.NewReader(reaped))["b"]
-	if !r.reaped || r.lastActivity != 1200 {
-		t.Errorf("reaped = %v lastActivity = %d, want true and 1200", r.reaped, r.lastActivity)
-	}
-
-	r = deltasFromCrewLog(strings.NewReader(reaped + dispatchRow(1300, "b")))["b"]
-	if r.reaped || r.State != "" || r.UpdatedAt != 0 || r.lastActivity != 1300 {
-		t.Errorf("after a redispatch: reaped = %v State = %q UpdatedAt = %d lastActivity = %d, want an opinion-free live branch", r.reaped, r.State, r.UpdatedAt, r.lastActivity)
-	}
-
-	r = deltasFromCrewLog(strings.NewReader(reaped + statusRow(1300, "b", "working")))["b"]
-	if r.reaped || r.State != StateRunning {
-		t.Errorf("after a later status: reaped = %v State = %q, want live and running", r.reaped, r.State)
-	}
-}
-
-func TestDeltasFromCrewLogReapRowAloneMarksReaped(t *testing.T) {
-	reap := dispatchRow(1000, "b") + statusRow(1100, "b", "done") +
-		`{"ts":1150,"crew_id":"c1","kind":"reap","branch":"b"}` + "\n"
-	r := deltasFromCrewLog(strings.NewReader(reap))["b"]
-	if !r.reaped || r.lastActivity != 1100 {
-		t.Errorf("reaped = %v lastActivity = %d, want true and 1100", r.reaped, r.lastActivity)
-	}
-	r = deltasFromCrewLog(strings.NewReader(reap + dispatchRow(1300, "b")))["b"]
-	if r.reaped {
-		t.Error("a redispatch did not clear a reap row")
-	}
-	r = deltasFromCrewLog(strings.NewReader(reap + statusRow(1300, "b", "working")))["b"]
-	if r.reaped {
-		t.Error("a later status did not clear a reap row")
-	}
-}
-
-func TestDeltasFromCrewLogRevivalClearsDetailAndPR(t *testing.T) {
-	log := dispatchRow(1000, "b") +
-		`{"ts":1100,"crew_id":"c1","from":"worker:b#s1","kind":"status","body":{"state":"pr_open","detail":"waiting on review","pr_url":"https://github.com/o/r/pull/7"}}` + "\n" +
-		statusRow(1200, "b", "reaped") + dispatchRow(1300, "b")
-	r := deltasFromCrewLog(strings.NewReader(log))["b"]
-	if r.Crew.Detail != "" || r.PR != nil {
-		t.Errorf("after a revival Detail = %q PR = %+v, want both cleared", r.Crew.Detail, r.PR)
-	}
-}
-
-func TestScanListsNoReapedBranch(t *testing.T) {
+func TestScanListsNoBranchMissingFromTheView(t *testing.T) {
 	bus := t.TempDir()
-	writeEvents(t, bus, dispatchRow(1000, "fix/412")+statusRow(1100, "fix/412", "done")+
-		`{"ts":1150,"crew_id":"c1","kind":"reap","branch":"fix/412"}`+"\n"+statusRow(1200, "fix/412", "reaped"))
+	writeEvents(t, bus, dispatchRow(1000, "fix/412")+statusRow(1100, "fix/412", "working")+dispatchRow(1000, "fix/413"))
 	wins := []tmux.WindowOptions{{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"}}
-	s := crewScanner(map[string]string{"/wt/a": bus}, wins, nil)
+	s := crewScanner(map[string]string{"/wt/a": bus}, workingOn(bus, "fix/413"), wins, nil)
 
 	got, ok := s.scan()
 	if !ok {
 		t.Fatal("scan reported failure")
 	}
-	if len(got) != 0 {
-		t.Errorf("scan listed %v, want nothing for a reaped branch", keysOf(got))
+	if len(got) != 1 || got["crew/"+bus+"/fix/413"].Branch != "fix/413" {
+		t.Errorf("scan listed %v, want only fix/413 — a bus branch crew's view leaves out is not listed", keysOf(got))
 	}
 }
 
-func TestScanListsARedispatchedReapedBranchPastTheGrace(t *testing.T) {
-	bus := t.TempDir()
+func TestTickCrewDeltasGoneWhenAWorkerLeavesTheView(t *testing.T) {
+	bus := writeBus(t, "fix/412")
 	key := "crew/" + bus + "/fix/412"
-	writeEvents(t, bus, dispatchRow(1000, "fix/412")+statusRow(1100, "fix/412", "reaped")+dispatchRow(1200, "fix/412"))
 	wins := []tmux.WindowOptions{{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"}}
-	s := crewScanner(map[string]string{"/wt/a": bus}, wins, nil)
-
-	got, _ := s.scan()
-	if _, found := got[key]; !found {
-		t.Fatalf("no run under %q — keys %v", key, keysOf(got))
-	}
-	deltas, _ := tickCrewDeltas(got, nil, time.UnixMilli(1100).Add(2*crewEvictionGrace))
-	if len(deltas) != 1 || deltas[0].Gone || deltas[0].Key != key {
-		t.Errorf("deltas = %+v, want one live delta for %q: the old reaped ts must not evict the new dispatch", deltas, key)
-	}
-}
-
-func TestTickCrewDeltasGoneWhenASeenBranchIsReaped(t *testing.T) {
-	bus := t.TempDir()
-	key := "crew/" + bus + "/fix/412"
-	writeEvents(t, bus, dispatchRow(1000, "fix/412"))
-	wins := []tmux.WindowOptions{{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"}}
-	s := crewScanner(map[string]string{"/wt/a": bus}, wins, nil)
+	views := workingOn(bus, "fix/412")
+	s := crewScanner(map[string]string{"/wt/a": bus}, views, wins, nil)
 
 	first, _ := s.scan()
 	_, seen := tickCrewDeltas(first, map[string]bool{}, time.UnixMilli(busFixtureNow))
@@ -2108,7 +1658,7 @@ func TestTickCrewDeltasGoneWhenASeenBranchIsReaped(t *testing.T) {
 		t.Fatalf("first tick did not see %q: %v", key, seen)
 	}
 
-	writeEvents(t, bus, dispatchRow(1000, "fix/412")+statusRow(1100, "fix/412", "reaped"))
+	views.views[bus] = workingView()
 	second, _ := s.scan()
 	deltas, _ := tickCrewDeltas(second, seen, time.UnixMilli(busFixtureNow))
 	if len(deltas) != 1 || !deltas[0].Gone || deltas[0].Key != key {
@@ -2158,7 +1708,7 @@ func TestScanDropsALongSilentWindowlessBranch(t *testing.T) {
 		writeEvents(t, bus, dispatchRow(t0, "fix/412")+statusRow(t0+1000, "fix/412", "working"))
 	}
 	scanAt := func(bus string, age time.Duration, panes []tmux.PaneOptions, wins []tmux.WindowOptions) map[string]Run {
-		s := crewScanner(map[string]string{"/wt/a": bus}, wins, panes)
+		s := crewScanner(map[string]string{"/wt/a": bus}, viewsOn(bus, overviewOf(nil, viewWorker("fix/412", "working", "", (t0+1000)/1000))), wins, panes)
 		s.now = func() time.Time { return time.UnixMilli(t0 + 1000).Add(age) }
 		got, ok := s.scan()
 		if !ok {
@@ -2191,34 +1741,6 @@ func TestScanDropsALongSilentWindowlessBranch(t *testing.T) {
 	}
 }
 
-func TestDeltasFromCrewLogWorkerSilent(t *testing.T) {
-	const b = "feat/303"
-	release := `{"kind":"release","branch":"feat/303","ts":1300}` + "\n"
-	claim := `{"kind":"claim","branch":"feat/303","ts":1400}` + "\n"
-	tests := []struct {
-		name string
-		log  string
-		want bool
-	}{
-		{"dispatch only", dispatchRow(1000, b), true},
-		{"dispatch then worker status", dispatchRow(1000, b) + statusRow(1100, b, "working"), false},
-		{"worker status then watchdog", dispatchRow(1000, b) + statusRow(1100, b, "working") +
-			watchdogRow(1200, b, "stalled: no output for 300s"), true},
-		{"watchdog then worker status", watchdogRow(1000, b, "stalled: no output for 300s") +
-			statusRow(1100, b, "working"), false},
-		{"worker status then release and claim rows", dispatchRow(1000, b) + statusRow(1100, b, "working") +
-			release + claim, false},
-		{"finished, released, redispatched, watchdog", statusRow(1000, b, "pr_open") + statusRow(1100, b, "done") +
-			release + claim + dispatchRow(1500, b) + watchdogRow(1600, b, "stalled: no output for 300s"), true},
-	}
-	for _, tc := range tests {
-		got := deltasFromCrewLog(strings.NewReader(tc.log))[b].workerSilent
-		if got != tc.want {
-			t.Errorf("%s: workerSilent = %v, want %v", tc.name, got, tc.want)
-		}
-	}
-}
-
 func TestScanDropsAFinishedWorkerUnderALiveDispatcher(t *testing.T) {
 	const (
 		t0     = int64(1_000_000_000_000)
@@ -2233,17 +1755,23 @@ func TestScanDropsAFinishedWorkerUnderALiveDispatcher(t *testing.T) {
 		`{"ts":%d,"crew_id":"c1","from":"worker:%s#s1","kind":"status","body":{"state":"blocked","detail":"need a decision"}}`+"\n",
 		t0+1000, branch)
 
+	stalled := overviewOf([]crewview.Item{viewItem("stall", branch, "stalled: no output for 300s")},
+		viewWorker(branch, "blocked", "", (t0+5000)/1000))
+	blocked := overviewOf([]crewview.Item{viewItem("blocked", branch, "need a decision")},
+		viewWorker(branch, "blocked", "need a decision", (t0+1000)/1000))
+
 	tests := []struct {
 		name      string
 		events    string
+		view      crewview.Overview
 		lastTS    int64
 		age       time.Duration
 		wantFound bool
 	}{
-		{"finished, watchdog-only tail, past the stale window", finished, t0 + 5000, crewStaleAfter + time.Minute, false},
-		{"finished, watchdog-only tail, recent", finished, t0 + 5000, time.Hour, true},
-		{"worker's own blocked question, recent", asking, t0 + 1000, 2 * time.Minute, true},
-		{"worker's own blocked question, past the stale window", asking, t0 + 1000, crewStaleAfter + time.Minute, true},
+		{"finished, watchdog-only tail, past the stale window", finished, stalled, t0 + 5000, crewStaleAfter + time.Minute, false},
+		{"finished, watchdog-only tail, recent", finished, stalled, t0 + 5000, time.Hour, true},
+		{"worker's own blocked question, recent", asking, blocked, t0 + 1000, 2 * time.Minute, true},
+		{"worker's own blocked question, past the stale window", asking, blocked, t0 + 1000, crewStaleAfter + time.Minute, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2261,7 +1789,7 @@ func TestScanDropsAFinishedWorkerUnderALiveDispatcher(t *testing.T) {
 				{Session: "h", Window: 2, CrewName: "dispatcher"},
 			}
 			panes := []tmux.PaneOptions{{PaneID: "%1", Target: "h:2", ClaudeStatus: "idle 1 "}}
-			s := crewScanner(map[string]string{"/wt/a": bus}, wins, panes)
+			s := crewScanner(map[string]string{"/wt/a": bus}, viewsOn(bus, tc.view), wins, panes)
 			s.now = func() time.Time { return time.UnixMilli(tc.lastTS).Add(tc.age) }
 
 			got, ok := s.scan()
@@ -2296,7 +1824,7 @@ func TestScanKeepsAStaleWindowlessWorkerWhoseDispatcherIsJoinedOnAnotherBus(t *t
 		{Session: "h", Window: 2, CrewName: "dispatcher"},
 	}
 	panes := []tmux.PaneOptions{{PaneID: "%1", Target: "h:2", ClaudeStatus: "idle 1 "}}
-	s := crewScanner(map[string]string{"/wt/a": busA, "/wt/b": busB}, wins, panes)
+	s := crewScanner(map[string]string{"/wt/a": busA, "/wt/b": busB}, viewsOn(busB, overviewOf(nil, viewWorker("fix/412", "working", "", (t0+1000)/1000))), wins, panes)
 	s.now = func() time.Time { return time.UnixMilli(t0 + 1000).Add(crewStaleAfter + time.Minute) }
 
 	got, ok := s.scan()
@@ -2318,6 +1846,8 @@ func finishedJoinedWorker(now time.Time) Run {
 		Crew: &CrewRef{
 			Name: "c1", Codename: "mauve", Color: "#d75f87", Title: "fix it", Tier: "standard",
 			Model: "sonnet", Detail: "all done", Sessions: 2, Home: "houston",
+			Attention:  []CrewAttention{{ID: "merge_ready:c1:fix/412", Kind: "merge_ready", Severity: "info", Message: "ready"}},
+			ViewNotice: "n",
 		},
 		Since: now.Add(-time.Hour).Unix(), UpdatedAt: now.Add(-30 * time.Minute).Unix(),
 	}
@@ -2345,12 +1875,21 @@ func TestTickCrewDeltasKeepsIdentityOfAnEvictedPaneKeyedRun(t *testing.T) {
 		t.Errorf("identity layer lost identity fields: %+v", got)
 	}
 	want := *in.Crew
-	want.Detail = ""
+	want.Detail, want.Attention, want.ViewNotice = "", nil, ""
 	if !reflect.DeepEqual(*got.Crew, want) {
 		t.Errorf("Crew = %+v, want %+v", *got.Crew, want)
 	}
-	if in.Crew.Detail != "all done" {
+	if in.Crew.Detail != "all done" || len(in.Crew.Attention) != 1 || in.Crew.ViewNotice != "n" {
 		t.Error("identityOnly mutated the input's shared CrewRef")
+	}
+}
+
+func TestTickCrewDeltasDropsAFinishedRemoteRun(t *testing.T) {
+	now := time.Now()
+	key := CrewRemoteKey("c1", "fix/412")
+	deltas, newSeen := tickCrewDeltas(map[string]Run{key: finishedJoinedWorker(now)}, map[string]bool{key: true}, now)
+	if len(deltas) != 1 || !deltas[0].Gone || deltas[0].Key != key || newSeen[key] {
+		t.Errorf("deltas = %+v, want Gone for %q — a remote row has no pane to keep identity on", deltas, key)
 	}
 }
 
@@ -2389,5 +1928,152 @@ func TestEvictedJoinedWorkerKeepsCrewIdentityWithoutCrewAttention(t *testing.T) 
 	}
 	if got.Attention == AttentionDone || got.Attention == AttentionStuck || got.State != StateIdle {
 		t.Errorf("composed run state=%q attention=%q, want the live idle state and no crew attention", got.State, got.Attention)
+	}
+}
+
+// crew's golden view over one bus: local workers key on their joined pane or
+// crew/<bus>/<branch>, remote and peer rows on CrewRemoteKey.
+func TestScanGoldenView(t *testing.T) {
+	v := goldenView(t)
+	bus := filepath.Join(t.TempDir(), "houston", ".git", "crew")
+	if err := os.MkdirAll(bus, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeEvents(t, bus, `{"ts":1000,"crew_id":"c1","kind":"dispatch","branch":"feat/a","engine":"claude","engine_session":"sid-a"}`+"\n")
+	wins := []tmux.WindowOptions{
+		{Session: "h", Window: 1, Branch: "feat/a", GitRoot: "/wt/a"},
+		{Session: "h", Window: 2, Branch: "feat/c", GitRoot: "/wt/a"},
+	}
+	panes := []tmux.PaneOptions{agentPane("%1", "h:1"), agentPane("%2", "h:2")}
+	s := crewScanner(map[string]string{"/wt/a": bus}, viewsOn(bus, v), wins, panes)
+	s.now = func() time.Time { return time.Unix(v.GeneratedAt, 0) }
+
+	got, ok := s.scan()
+	if !ok {
+		t.Fatal("scan reported failure")
+	}
+	want := []string{"%1", "%2"}
+	for _, b := range []string{"feat/b", "feat/d", "feat/e", "feat/f", "feat/g", "feat/h", "feat/j"} {
+		want = append(want, "crew/"+bus+"/"+b)
+	}
+	for _, b := range []string{"feat/p", "feat/q", "feat/r"} {
+		want = append(want, CrewRemoteKey("c1", b))
+	}
+	if keys := keysOf(got); !reflect.DeepEqual(slices.Sorted(slices.Values(keys)), slices.Sorted(slices.Values(want))) {
+		t.Fatalf("keys = %v, want %v", slices.Sorted(slices.Values(keys)), slices.Sorted(slices.Values(want)))
+	}
+
+	a := got["%1"]
+	if a.Branch != "feat/a" || a.Role != RoleWorker || a.CrewBus != bus || a.Project != "houston" ||
+		a.Worktree != "/wt/a" || a.CrewSession != "sid-a" || a.State != StateRunning || len(a.Crew.Attention) != 1 {
+		t.Errorf("feat/a = %+v crew %+v", a, a.Crew)
+	}
+	if c := got["%2"]; c.Branch != "feat/c" || c.State != StateBlocked || c.Question == nil {
+		t.Errorf("feat/c = %+v, want blocked with its question (no dispatcher to answer)", c)
+	}
+	r := got[CrewRemoteKey("c1", "feat/r")]
+	if r.Role != RoleWorker || r.CrewBus != bus || r.Project != "houston" || r.Worktree != "" ||
+		r.Crew.Origin != crewview.OriginRemote || r.Crew.Host != "halo" {
+		t.Errorf("feat/r = %+v crew %+v, want a remote worker carrying the reporting bus and no worktree", r, r.Crew)
+	}
+}
+
+// The dispatcher run carries crew's view status: the notice when the view is
+// unsupported or unavailable (no worker runs then), else the crew's own items.
+func TestScanCarriesTheViewOnTheDispatcherRun(t *testing.T) {
+	scan := func(t *testing.T, views func(bus string) *fakeViews) map[string]Run {
+		t.Helper()
+		bus := writeBus(t, "feat/a")
+		writeCrew(t, bus, crewFiles{id: "c1", pane: ptr("%1"), paneMod: regT, pid: ptr("200"), pidMod: regT})
+		wins := []tmux.WindowOptions{{Session: "h", Window: 2, CrewName: "dispatcher", GitRoot: "/wt/a"}}
+		s := crewScanner(map[string]string{"/wt/a": bus}, views(bus), wins, []tmux.PaneOptions{dispatcherPane("%1", "h:2")})
+		s.procs = liveDispatcher()
+		got, ok := s.scan()
+		if !ok {
+			t.Fatal("scan reported failure")
+		}
+		return got
+	}
+	withStatus := func(st crewview.Status) func(string) *fakeViews {
+		return func(bus string) *fakeViews { return &fakeViews{status: map[string]crewview.Status{bus: st}} }
+	}
+
+	for _, tc := range []struct {
+		name   string
+		status crewview.Status
+		notice string
+	}{
+		{"unsupported", crewview.Status{State: crewview.StateUnsupported, Notice: "crew dash schema_version 2 is not supported"}, "crew dash schema_version 2 is not supported"},
+		{"unavailable", crewview.Status{State: crewview.StateUnavailable, Notice: "crew view unavailable: exit 1"}, "crew view unavailable: exit 1"},
+		{"starting", crewview.Status{State: crewview.StateStarting}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := scan(t, withStatus(tc.status))
+			if len(got) != 1 {
+				t.Fatalf("keys = %v, want only the dispatcher run — no view, no worker runs", keysOf(got))
+			}
+			d := got["%1"]
+			if d.Role != RoleDispatcher || d.Crew == nil || d.Crew.ViewNotice != tc.notice || d.Crew.Attention != nil {
+				t.Errorf("dispatcher = %+v crew %+v, want ViewNotice %q", d, d.Crew, tc.notice)
+			}
+		})
+	}
+
+	t.Run("ok", func(t *testing.T) {
+		v := goldenView(t)
+		got := scan(t, func(bus string) *fakeViews { return viewsOn(bus, v) })
+		d := got["%1"]
+		if d.Role != RoleDispatcher || d.Crew == nil || d.Crew.ViewNotice != "" {
+			t.Fatalf("dispatcher = %+v crew %+v", d, d.Crew)
+		}
+		if it := d.Crew.Attention; len(it) != 1 || it[0].Kind != "hold_matured" || it[0].Since != v.GeneratedAt-120 {
+			t.Errorf("dispatcher attention = %+v, want c1's hold_matured item since generated_at-120", it)
+		}
+	})
+}
+
+func TestScanEnsuresOneStreamPerBus(t *testing.T) {
+	parent := t.TempDir()
+	gone := filepath.Join(parent, "0gone")
+	rootB, rootA1, rootA2 := filepath.Join(parent, "1b"), filepath.Join(parent, "2a"), filepath.Join(parent, "3a")
+	for _, d := range []string{rootB, rootA1, rootA2} {
+		if err := os.Mkdir(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	busA, busB := t.TempDir(), t.TempDir()
+	unresolved := filepath.Join(parent, "4none")
+	views := &fakeViews{}
+	var wins []tmux.WindowOptions
+	for i, root := range []string{rootA2, unresolved, rootA1, gone, rootB} {
+		wins = append(wins, tmux.WindowOptions{Session: "h", Window: i, GitRoot: root})
+	}
+	s := crewScanner(map[string]string{rootA1: busA, rootA2: busA, gone: busB, rootB: busB, unresolved: ""}, views, wins, nil)
+
+	if _, ok := s.scan(); !ok {
+		t.Fatal("scan reported failure")
+	}
+	want := [][2]string{{busA, rootA1}, {busB, rootB}}
+	slices.SortFunc(want, func(x, y [2]string) int { return strings.Compare(x[0], y[0]) })
+	if !reflect.DeepEqual(views.ensured, want) {
+		t.Errorf("Ensure calls = %v, want %v — once per bus, from its first existing root", views.ensured, want)
+	}
+	if len(views.retained) != 1 || !reflect.DeepEqual(views.retained[0], map[string]bool{busA: true, busB: true}) {
+		t.Errorf("Retain calls = %v, want one with both live buses", views.retained)
+	}
+}
+
+func TestScanForgetsABlockedEpisodeOnceTheWorkerLeavesTheView(t *testing.T) {
+	bus := writeBus(t, "fix/412")
+	views := blockedOn(bus, "fix/412", "q?", 1)
+	wins := []tmux.WindowOptions{{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"}}
+	s := crewScanner(map[string]string{"/wt/a": bus}, views, wins, nil)
+
+	if _, ok := s.scan(); !ok || len(s.mem) != 1 {
+		t.Fatalf("mem = %v after a blocked view, want the episode recorded", s.mem)
+	}
+	views.views[bus] = workingView()
+	if _, ok := s.scan(); !ok || len(s.mem) != 0 {
+		t.Errorf("mem = %v after the worker left the view, want it forgotten", s.mem)
 	}
 }

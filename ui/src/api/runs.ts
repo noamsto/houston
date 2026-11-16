@@ -54,7 +54,7 @@ export interface CrewAttention {
   kind: string
   severity: string
   message: string
-  age_sec: number
+  since: number // unix seconds the item has been open since
   command?: string // display-only text for an item houston will not run
   action?: CrewAction
 }

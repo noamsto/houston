@@ -94,7 +94,9 @@ func TestCrewWorkerRunOffersChat(t *testing.T) {
 			if paneSID == "" {
 				paneSID = sid
 			}
-			cs := crewScanner(map[string]string{root: bus}, wins, panes, fakeHookSessions{views: []hub.SessionView{{
+			vw := viewWorker(branch, tc.busState, "", record)
+			vw.Tier = sp("deep")
+			cs := crewScanner(map[string]string{root: bus}, viewsOn(bus, overviewOf(nil, vw)), wins, panes, fakeHookSessions{views: []hub.SessionView{{
 				SessionID: paneSID, TmuxPane: lead, TmuxServer: server, UpdatedAt: now, State: tc.hookState,
 			}}})
 			cs.procStart = startAt(session + 2)
