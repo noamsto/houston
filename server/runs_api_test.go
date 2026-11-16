@@ -433,3 +433,50 @@ func TestRunAddressedRoutesDoNotResolvePeerRuns(t *testing.T) {
 		wantRefusal(t, rec, http.StatusNotFound, "no such run")
 	}
 }
+
+func crewOriginDelta(origin, branch string) runs.Delta {
+	return runs.Delta{Source: "crew", Key: "w-" + origin, Run: runs.Run{
+		Agent: "claude", State: runs.StateIdle, Branch: branch,
+		Crew: &runs.CrewRef{Name: "w-" + origin, Origin: origin},
+	}}
+}
+
+func crewOriginRegistry() *runs.Registry {
+	reg := runs.NewRegistry(runs.DefaultOrder)
+	reg.Apply(localScopeDelta("local-branch"))
+	for _, o := range []string{"remote_worker", "peer", "local"} {
+		reg.Apply(crewOriginDelta(o, "crew-"+o))
+	}
+	return reg
+}
+
+func TestRunsScopeLocalDropsCrewRowsForOtherMachines(t *testing.T) {
+	s := &Server{runs: crewOriginRegistry()}
+	if got := snapshotIDs(t, s, "/api/runs"); len(got) != 4 {
+		t.Fatalf("no scope: %v, want all four", got)
+	}
+	got := snapshotIDs(t, s, "/api/runs?scope=local")
+	if len(got) != 2 {
+		t.Fatalf("scope=local: %v, want the local worker and the local-origin crew run", got)
+	}
+}
+
+func TestRunsStreamLocalScopeSkipsCrewRowsForOtherMachines(t *testing.T) {
+	reg := crewOriginRegistry()
+	s := &Server{runs: reg}
+	rec := startRunsStream(t, s, "/api/runs/stream?scope=local")
+	waitBody(t, rec, "\n\n")
+	reg.Apply(crewOriginDelta("remote_worker", "remote-update"))
+	reg.Apply(crewOriginDelta("peer", "peer-update"))
+	reg.Apply(crewOriginDelta("local", "local-update"))
+	waitBody(t, rec, "local-update")
+	body := rec.body()
+	for _, leak := range []string{"crew-remote_worker", "crew-peer", "remote-update", "peer-update"} {
+		if strings.Contains(body, leak) {
+			t.Fatalf("local scope leaked %q\n%s", leak, body)
+		}
+	}
+	if !strings.Contains(body, "crew-local") {
+		t.Fatalf("snapshot lost the local-origin crew run\n%s", body)
+	}
+}

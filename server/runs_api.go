@@ -27,11 +27,22 @@ func scopeOf(w http.ResponseWriter, r *http.Request) (localOnly, ok bool) {
 	return false, false
 }
 
-// localRuns keeps the runs this host composed itself, dropping peer mirrors.
+// localToHost reports whether a run belongs to this host alone: not a peer
+// mirror, and not a crew row for a worker on another machine (a peer's
+// dispatcher owns the former; the latter's own houston lists the pane).
+func localToHost(run runs.Run) bool {
+	if run.Host != "" {
+		return false
+	}
+	return run.Crew == nil || run.Crew.Origin == "" || run.Crew.Origin == "local"
+}
+
+// localRuns keeps the runs localToHost accepts: it drops peer mirrors and crew
+// rows for workers on other machines.
 func localRuns(all []runs.Run) []runs.Run {
 	out := make([]runs.Run, 0, len(all))
 	for _, r := range all {
-		if r.Host == "" {
+		if localToHost(r) {
 			out = append(out, r)
 		}
 	}
@@ -111,7 +122,7 @@ func (s *Server) handleRunsStream(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
-			if localOnly && run.Host != "" {
+			if localOnly && !localToHost(run) {
 				continue
 			}
 			b, err := json.Marshal(run)
