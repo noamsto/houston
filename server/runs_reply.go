@@ -6,8 +6,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"os"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -41,33 +39,23 @@ type replyResult struct {
 
 type replyRunner func(ctx context.Context, x replyExec) replyResult
 
-// execCrewReply is the real runner. The argv slice reaches execve untouched,
-// with no shell. crew reply parses options, so the "--" ahead of the answer is
-// what keeps one that starts with a dash the body; the recipient goes before
-// it and always starts with "worker:", so it never reads as an option either.
-func execCrewReply(ctx context.Context, x replyExec) replyResult {
-	cmd := exec.CommandContext(ctx, x.Argv[0], x.Argv[1:]...) //nolint:gosec // argv is built by the handler from validated run ids; recipient is guarded against option parsing
-	cmd.Dir = x.Dir
-	cmd.Env = append(os.Environ(), "CREW_ID="+x.CrewID)
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-
-	res := replyResult{Stderr: strings.TrimSpace(stderr.String())}
-	var exitErr *exec.ExitError
-	switch {
-	case err == nil:
-	case errors.Is(ctx.Err(), context.DeadlineExceeded):
-		// A timeout kills the child, so Run reports "signal: killed" — an
-		// ExitError. Checking the context first is what keeps 504 from being
-		// misread as crew's own refusal.
-		res.Err = context.DeadlineExceeded
-	case errors.As(err, &exitErr):
-		res.ExitCode = exitErr.ExitCode()
-	default:
-		res.Err = err
+// crewReplyRunner is the real runner over the resolved crew binary. The argv
+// slice reaches execve untouched, with no shell. crew reply parses options, so
+// the "--" ahead of the answer is what keeps one that starts with a dash the
+// body; the recipient goes before it and always starts with "worker:", so it
+// never reads as an option either. Argv[0] is the handler's name for the
+// command and is replaced by crewPath.
+func crewReplyRunner(crewPath string) replyRunner {
+	return func(ctx context.Context, x replyExec) replyResult {
+		res := runCrew(ctx, crewPath, crewExec{Dir: x.Dir, CrewID: x.CrewID, Args: x.Argv[1:]})
+		return replyResult{Stderr: res.Stderr, ExitCode: res.ExitCode, Err: res.Err}
 	}
-	return res
+}
+
+// execCrewReply runs Argv[0] as given, for tests that exercise the runner
+// without a crew binary.
+func execCrewReply(ctx context.Context, x replyExec) replyResult {
+	return crewReplyRunner(x.Argv[0])(ctx, x)
 }
 
 // handleRunReply delivers a crew answer to a blocked worker.

@@ -125,6 +125,11 @@ type Server struct {
 	// no command ran, which no assertion about the response alone can prove.
 	replyRunner replyRunner
 
+	// crewPath is the crew binary, resolved once at startup over the tmux
+	// server's PATH ahead of houston's, the same search mode resolution used;
+	// never logged.
+	crewPath string
+
 	// wsRepos classifies a @git_root as a main checkout or a linked
 	// worktree for the Workspace tab's bucketing.
 	wsRepos mainCheckoutChecker
@@ -306,6 +311,17 @@ func New(cfg Config) (*Server, error) {
 		}
 	}
 
+	crewPath := "crew"
+	if cfg.Mode == mode.Dispatcher {
+		pathCtx, pathCancel := context.WithTimeout(ctx, 5*time.Second)
+		sp, err := serverGlobalPath(pathCtx, execTmux)
+		pathCancel()
+		if err != nil {
+			sp = ""
+		}
+		crewPath = resolveCrew(sp)
+	}
+
 	s := &Server{
 		instance:       hex.EncodeToString(instance[:]),
 		mode:           cfg.Mode,
@@ -317,7 +333,8 @@ func New(cfg Config) (*Server, error) {
 		font:           cfg.FontController,
 		uiFS:           cfg.UIFS,
 		hub:            hub.NewWithOptions(cfg.StatusDir, hub.Options{Mod: modStore}, slog.Default()),
-		replyRunner:    execCrewReply,
+		replyRunner:    crewReplyRunner(crewPath),
+		crewPath:       crewPath,
 		wsRepos:        newRepoClassifier(),
 		wsTmux:         tmuxClient,
 		runPanes:       tmuxClient,
