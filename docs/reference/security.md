@@ -52,4 +52,16 @@ This model is the primary defense; the following are additional layers:
 2. Browser access through a local reverse proxy that restricts its clients (Tailscale Serve admits the whole tailnet)
 3. Or SSH tunnel: `ssh -L 9090:localhost:9090 host`
 
+## Crew actions
 
+`POST /api/runs/{id}/crew/action` (dispatcher mode, 404 in tmux mode) lets the UI run a verb crew itself offered for an attention item (`runs/crewview.go`, `server/runs_crewaction.go`, `crewview/action.go`). It runs a command, so each rule below closes a specific hole:
+
+- **No client argv.** The body is `{item, text?, confirm?}`: an item id, never a command. The server looks the id up in its own current view for that run's bus (`ownedItem`: same crew, and the run's branch for a worker or a branchless item for a dispatcher), so a client cannot name another crew's or worker's item. The wire (`crew.attention`) carries `action.{verb,label,command,needs_input,pr}` for display; the argv never leaves the server.
+- **Allowlist by exact shape** (`crewview.Check`). Only `peek` (runs `where`), `nudge`, `reply` and `merge`, each with the exact argv after `crew` that houston derives from the item (`--crew` matching the item's crew, the item's branch or worker, `reply`'s last word the `<text>` placeholder, `merge <pr> --crew <crew>`). A producer's argv that differs, a verb outside the list, an origin other than `local` or `remote_worker`, or an `argv[0]` whose base name is not `crew` is 403 `not executable`, so a compromised or newer crew cannot make houston run an arbitrary command.
+- **houston runs its own `crew`.** `argv[0]` is never executed; `server/crew_exec.go` runs the binary resolved once at startup (`resolveCrew`: the tmux server's PATH ahead of houston's own, `mode.Find`) with `argv[1:]`, directly (no shell), with cwd the git root the view was started in. The same binary serves the view stream and `/reply`.
+- **Environment stripped.** The view stream (`crewview` `strippedEnv`) and the action (`strippedCrewEnv`, `server/crew_exec.go`) run without `CREW_BIN`, `CREW_ID`, `CREW_WORKER_ID`, `TMUX_PANE` and `DISPATCH_SPEC`: `crew dash` folds `CREW_BIN` into every argv it prints, so an inherited value would put another program in `argv[0]`, and the others would make crew act as houston's own pane or worker. The action then sets `CREW_ID` to the item's crew.
+- **Merge needs confirmation.** `merge` without `"confirm": true` is 428 `{"confirm": "Squash-merge PR #N?"}` and runs nothing; the UI asks inline. It is the only irreversible verb.
+- **Reply text** is required for `reply` (empty or over 8 KiB, `crewview.MaxReplyText`, is 400) and replaces the placeholder as one argv element; it is the only client-supplied content, and a `--` precedes it so a leading dash is not a flag. Body over the size cap is 413.
+- **Timeouts**: 15 s, 120 s for `merge` (it waits on `gh` and the remote); a timeout is 504.
+- **Never forwarded to a peer.** The route is `localOnlyRun`: a `peer-` run id gets 403 `peer actions are not available`, and the peer source's `sanitise` (`peer/source.go`) drops `action` from every mirrored run's attention items (the display-only `command` text stays), so a mirrored run never offers a button.
+- **Logging.** One line per attempt with run id, item kind, verb and status; never the text, argv, item message or command output, which carry task content.

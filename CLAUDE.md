@@ -40,6 +40,7 @@ All `/api/` routes are behind the token gate. (D) = dispatcher mode only, 404 in
 | `POST /api/runs/:id/reply` (D) | Reply to a crew worker's question |
 | `POST /api/runs/:id/restart` (D) | Restart a dispatcher |
 | `GET /api/runs/:id/crew/feed*` (D) | Crew activity feed, SSE |
+| `POST /api/runs/:id/crew/action` (D) | Run an allowlisted action from crew's view |
 | `GET /api/dispatch/options`, `POST /api/dispatch`, `POST /api/dispatch/dispatcher` (D) | Dispatch form, start a worker, new dispatcher |
 | `GET\|POST\|DELETE /api/repos`, `GET /api/repos/candidates` (D) | Repo registry and picker |
 | `/api/hosts/:host/dispatch*\|repos*` (D) | Forwarded to that peer |
@@ -76,6 +77,7 @@ houston/
 ├── peer/                # Federation: -peer parsing, one runs.Source per peer, forwarding transport
 ├── chat/                # ACP transcript readers (claude, pi); stdlib only
 ├── crewfeed/            # Crew-bus activity feed fold + store; stdlib only
+├── crewview/            # crew dash view decode, action allowlist, stream supervisor; stdlib only
 ├── answer/              # Question/permission dialog parsing + key plans (pane text in, keys out)
 ├── agents/              # Agent type detection and parsing (claude-code, amp)
 ├── mode/                # Dispatcher vs tmux mode resolution; stdlib only
@@ -149,13 +151,14 @@ Full model: `docs/reference/security.md`.
 
 Each of these causes bugs when missed; the owning reference doc has the full rule.
 
-- **`chat/` and `crewfeed/` import only the standard library** (`boundary_test.go` fails otherwise); `mode/` is stdlib-only by convention.
+- **`chat/`, `crewfeed/` and `crewview/` import only the standard library** (`boundary_test.go` fails otherwise); `mode/` is stdlib-only by convention.
 - **Never commit transcript content.** Fixtures under `chat/testdata/` are hand-written; real-transcript checks log counts only.
 - **needs-you ⟺ `blocked`**: `blocked` is the only state meaning a human must act now; a turn end alone is never `blocked` (`docs/reference/fleet-runs.md`).
-- **A `peer-` run id never reaches a local handler**: `findRun` and `buildWorkspace` see only `Host == ""` runs, and every run-addressed route is `peerOr(forward, local)` (`docs/reference/federation.md`).
+- **A `peer-` run id never reaches a local handler**: `findRun` and `buildWorkspace` see only `Host == ""` runs, and every run-addressed route is `peerOr(forward, local)`, or `localOnlyRun(local)` for one that is never forwarded (`crew/action`) (`docs/reference/federation.md`).
 - **No user text in tmux argv**: tmux splits a command at an element ending in `;`, format-expands `-c`, and runs a single-argument command via `sh -c`; the dispatcher window command is always `houston launch-dispatcher <file>` (`docs/reference/dispatch.md`).
 - **Every send to a pane re-verifies the pane's tmux server**: `runPane` compares the recorded server pid at point of use (409 on mismatch). `/input` does not check which prompt is on screen (it types whatever it is given); answers go through `/answer` (`docs/reference/fleet-runs.md` "Point-of-use server check", `terminal-and-mobile.md`, `chat.md`).
 - **The Claude mod is read-only**: hooks pass `e` to `next` and return its result; only four `$` calls are allowed, enforced by `claudemod/modguard_test.go` and `just mod-check` (`docs/reference/hooks-and-state.md`). The pi extension is read-only too; `claudemod/piguard_test.go` is a name-based tripwire, not a proof, so review keeps the contract.
+- **Crew actions run only argv from houston's own crew view**: allowlisted shapes, never client-supplied argv, never a shell (`docs/reference/security.md` "Crew actions").
 - **Never log secrets or task text**: tokens, task bodies, peer tokens, labels and frames stay out of logs.
 - **Fail closed on drift**: answer/permission checks that no longer match Claude Code's dialogs answer 409 and type nothing; re-record fixtures and update parsers together.
 - **Both shells**: dispatcher-only tabs and routes need changes in `MobileShell` and `ConsoleShell`, and tmux mode must 404 them.
