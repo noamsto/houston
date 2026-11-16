@@ -2163,12 +2163,12 @@ func TestScanHoldsOneCrewWhoseRosterFails(t *testing.T) {
 	held.GeneratedAt = v.GeneratedAt + 300
 	held.Workers = []crewview.Worker{}
 	for _, w := range v.Workers {
-		switch {
-		case w.Branch == "feat/a":
+		switch w.Branch {
+		case "feat/a":
 			w.State = "failed" // decoy: a held crew's non-peer row from the view
-		case w.Branch == "feat/q":
+		case "feat/q":
 			w.State = "working"
-		case w.Branch == "feat/j":
+		case "feat/j":
 			w.State = "pr_open"
 		}
 		held.Workers = append(held.Workers, w)
