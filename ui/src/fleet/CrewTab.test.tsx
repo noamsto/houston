@@ -282,6 +282,14 @@ describe('CrewTab crew view', () => {
     expect(within(screen.getByRole('status')).getByText('crew is too old for houston')).toBeTruthy()
   })
 
+  it('shows a held member its own notice inside its row', () => {
+    const note = "crew could not read this crew's roster; showing its last known state"
+    const { container } = renderTab([run({ id: 'a', stale: true, crew: { name: 'c', codename: 'Mine', view_notice: note } })])
+    const member = container.querySelector('.crews-member') as HTMLElement
+    expect(within(member).getByText(note)).toBeTruthy()
+    expect(screen.queryByRole('status')).toBeNull()
+  })
+
   it('renders crew-scoped attention above the members', () => {
     const d = dispatcher({ crew: { name: 'c', attention: [holdItem] } })
     const { container } = renderTab([run({ id: 'a', crew: { name: 'c', codename: 'Mine' } })], d)

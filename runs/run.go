@@ -78,8 +78,10 @@ type Run struct {
 	//
 	// ConnectionSource sets it while a run's tmux session has no control
 	// connection, and clears it by dropping that marker layer (Apply replaces
-	// a source's layer wholesale). mergeInto ORs it across layers, so a layer
-	// that publishes no Stale opinion never blanks another's.
+	// a source's layer wholesale). CrewSource sets it on a worker read from
+	// its crew's last listed rows while crew cannot read that roster
+	// (spliceHeld). mergeInto ORs it across layers, so a layer that publishes
+	// no Stale opinion never blanks another's.
 	Stale bool `json:"stale,omitempty"`
 
 	Caps Caps `json:"caps"`
@@ -134,7 +136,7 @@ type CrewRef struct {
 	Origin     string          `json:"origin,omitempty"`      // "local", "remote_worker" or "peer" from crew's view; "" when crew did not say.
 	Host       string          `json:"host,omitempty"`        // crew's host name for a remote_worker or peer row; "" for local.
 	Attention  []CrewAttention `json:"attention,omitempty"`   // crew's attention items for this worker, or for a dispatcher run its crew-scoped items.
-	ViewNotice string          `json:"view_notice,omitempty"` // dispatcher runs only: why crew's view is unavailable or unsupported, and the errors it reports.
+	ViewNotice string          `json:"view_notice,omitempty"` // dispatcher runs: why crew's view is unavailable or unsupported, and the errors it reports; a held worker (Run.Stale): crewRosterHeldNote.
 }
 
 // CrewAttention is one item from crew's view that needs the operator.

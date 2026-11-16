@@ -46,7 +46,7 @@ export interface CrewRef {
   origin?: string // 'local' | 'remote_worker' | 'peer' from crew's view; absent when crew did not say
   host?: string // crew's host name for a remote_worker or peer row
   attention?: CrewAttention[] // crew's attention items for this worker (a dispatcher run: its crew-scoped items)
-  view_notice?: string // dispatcher runs only: why crew's view is unavailable or unsupported
+  view_notice?: string // dispatcher runs: why crew's view is unavailable or unsupported; a held worker (stale): crew could not read its roster
 }
 
 export interface CrewAttention {

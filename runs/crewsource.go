@@ -63,10 +63,10 @@ type CrewSource struct {
 	// rule as crewDirs.
 	mem blockedMemory
 
-	// lastRuns is the previous tick's worker runs per bus, by registry key: a
-	// crew whose roster the view failed to collect keeps them (heldCrews).
-	// Same single-goroutine rule as crewDirs.
-	lastRuns map[string]map[string]Run
+	// rosters is each crew's last listed view rows per bus (spliceHeld): a
+	// crew whose roster the view failed to collect is read from them. Same
+	// single-goroutine rule as crewDirs.
+	rosters map[string]map[string]rosterSnap
 
 	// feed tails every resolved bus's events.jsonl for the activity feed; nil
 	// disables it (tests, tmux mode).
@@ -159,6 +159,7 @@ func identityOnly(r Run) Run {
 	crew.Attention = nil
 	crew.ViewNotice = ""
 	r.Crew = &crew
+	r.Stale = false
 	r.State = ""
 	r.Attention = ""
 	r.AttentionNote = ""
@@ -220,7 +221,8 @@ func crewRunAbandoned(b crewBranch, windowless, dispatcherAlive bool, now time.T
 // worker the pane id where its branch joins exactly one agent pane, otherwise
 // "crew/<bus>/<branch>"; for a worker crew's view reports on another machine,
 // CrewRemoteKey. Only workers in crew's view are listed, except that a crew
-// whose roster the view reports failing keeps last tick's runs. It also
+// whose roster the view reports failing is read from its last listed rows,
+// marked stale (spliceHeld). It also
 // returns, under its pane id, a dispatcher layer for every crew that joins its
 // dispatcher pane (joinDispatchers) — Role, crew id, bus, the crew's own
 // attention items and the view's notice and errors, so the key lists only while
@@ -318,7 +320,7 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 	crewItems := map[string]map[string][]CrewAttention{} // bus -> crew id -> items
 	notices := map[string]string{}
 	viewErrs := map[string][]string{}
-	lastRuns := map[string]map[string]Run{}
+	rosters := map[string]map[string]rosterSnap{}
 	for _, bus := range buses {
 		if s.views == nil {
 			continue
@@ -329,26 +331,20 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 			notices[bus] = st.Notice
 		}
 		if !ok {
+			// No view lists no workers, but keeps the snapshots and their
+			// blocked episodes for a roster failure after it.
+			rosters[bus] = s.rosters[bus]
+			for _, snap := range s.rosters[bus] {
+				for _, w := range snap.workers {
+					inView[crewWorkerKey{w.Crew, w.Branch}] = true
+				}
+			}
 			continue
 		}
 		viewErrs[bus] = ov.Errors
 
-		// A crew whose roster the view failed to collect keeps last tick's runs
-		// and blocked episodes; the view is used for everything else it reports.
-		held := heldCrewsOf(ov.Errors)
-		busRuns := map[string]Run{}
-		for key, r := range s.lastRuns[bus] {
-			if held.has(r.Crew.Name) {
-				busRuns[key] = r
-			}
-		}
-		for k := range s.mem {
-			if held.has(k.crew) {
-				inView[k] = true
-			}
-		}
-		ov.Workers = slices.DeleteFunc(slices.Clone(ov.Workers), func(w crewview.Worker) bool { return held.has(w.Crew) })
-
+		var heldIDs map[string]bool
+		ov, rosters[bus], heldIDs = spliceHeld(ov, heldCrewsOf(ov.Errors), s.rosters[bus])
 		for _, w := range ov.Workers {
 			inView[crewWorkerKey{w.Crew, w.Branch}] = true
 		}
@@ -366,6 +362,9 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 			routed.Role = RoleWorker
 			routed.CrewBus = bus
 			routed.Worktree = worktreeFor(bus, branch, wins, s.crewDir)
+			if heldIDs[b.Crew.Name] {
+				routed.Stale, routed.Crew.ViewNotice = true, crewRosterHeldNote
+			}
 			paneID, candidates := resolvePane(bus, branch, b.State, b.UpdatedAt, b.session, b.CrewSession, paneSessions, wins, panes, s.crewDir, s.procStart)
 			activity := crewBranch{Run: routed, lastActivity: max(b.lastActivity, b.UpdatedAt*1000), workerSilent: b.workerSilent}
 			if crewRunAbandoned(activity, candidates != 1, joinedCrews[b.Crew.Name], now) {
@@ -376,7 +375,7 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 				key = "crew/" + bus + "/" + branch
 				slog.Debug("crew source: no pane join", "bus", bus, "branch", branch, "candidates", candidates)
 			}
-			busRuns[key] = routed
+			out[key] = routed
 		}
 		// CrewBus is the bus whose view reported the row, so the action route
 		// can find its items; it has no worktree, which keeps /reply off it. A
@@ -386,12 +385,13 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 			r := routeCrewQuestion(b, dispatcherLive(joins[bus], b.Crew.Name), now)
 			r.Project = project
 			r.CrewBus = bus
-			busRuns[CrewRemoteKey(r.Crew.Name, r.Branch)] = r
+			if heldIDs[b.Crew.Name] {
+				r.Stale, r.Crew.ViewNotice = true, crewRosterHeldNote
+			}
+			out[CrewRemoteKey(r.Crew.Name, r.Branch)] = r
 		}
-		lastRuns[bus] = busRuns
-		maps.Copy(out, busRuns)
 	}
-	s.lastRuns = lastRuns
+	s.rosters = rosters
 	s.ids = liveIDs
 	for k := range s.mem {
 		if !inView[k] {

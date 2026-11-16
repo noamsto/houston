@@ -2,7 +2,9 @@ package runs
 
 import (
 	"os"
+	"reflect"
 	"testing"
+	"time"
 
 	"github.com/noamsto/houston/crewview"
 )
@@ -299,5 +301,105 @@ func TestCrewRunsFromViewReplyShimClearsARemoteWorker(t *testing.T) {
 	got := crewRunsFromView(v, nil, map[string]int64{"feat/x": (g-300)*1000 + 1}, mem).remote
 	if len(got) != 1 || got[0].State != "" || got[0].Question != nil || len(mem) != 0 {
 		t.Errorf("got %+v mem %v", got, mem)
+	}
+}
+
+// A held crew's snapshot is spliced back in place of its rows with every age
+// shifted by the time since the snapshot, so UpdatedAt and Since do not move;
+// the inputs are never written through, and a snapshot past crewStaleAfter is
+// dropped so the crew reads as the view says.
+func TestSpliceHeldRebasesAges(t *testing.T) {
+	const gen = int64(10_000)
+	w := func(crew, branch string, age *int64) crewview.Worker {
+		return crewview.Worker{Crew: crew, Branch: branch, State: "working", AgeSec: age}
+	}
+	it := func(crew, branch string, age int64) crewview.Item {
+		return crewview.Item{ID: crew + ":" + branch, Crew: crew, Branch: branch, Kind: "blocked", AgeSec: age}
+	}
+	capped := gen - int64(crewStaleAfter/time.Second)
+	prevOf := func() map[string]rosterSnap {
+		return map[string]rosterSnap{
+			"c1": {at: gen - 300, workers: []crewview.Worker{w("c1", "a", ip(10)), w("c1", "n", nil)}, items: []crewview.Item{it("c1", "a", 20), it("c1", "", 30)}},
+			"c3": {at: capped - 1, workers: []crewview.Worker{w("c3", "x", ip(5))}},
+			"c4": {at: capped, workers: []crewview.Worker{w("c4", "y", ip(7))}},
+		}
+	}
+	viewOf := func() crewview.Overview {
+		return crewview.Overview{
+			GeneratedAt: gen,
+			Workers:     []crewview.Worker{w("c1", "a", ip(1)), w("c2", "b", ip(40))},
+			Attention:   []crewview.Item{it("c1", "a", 1), it("c1", "", 2), it("c2", "b", 50)},
+		}
+	}
+	c2Snap := rosterSnap{at: gen, workers: []crewview.Worker{w("c2", "b", ip(40))}, items: []crewview.Item{it("c2", "b", 50)}}
+
+	for _, tc := range []struct {
+		name        string
+		errs        []string
+		wantWorkers []crewview.Worker
+		wantItems   []crewview.Item
+		wantNext    map[string]rosterSnap
+		wantHeld    map[string]bool
+	}{
+		{
+			name:        "one crew's roster fails",
+			errs:        []string{"crew c1: workers: timeout", "crew c3: workers: timeout", "crew c4: workers: timeout"},
+			wantWorkers: []crewview.Worker{w("c2", "b", ip(40)), w("c1", "a", ip(310)), w("c1", "n", nil), w("c4", "y", ip(7+int64(crewStaleAfter/time.Second)))},
+			wantItems:   []crewview.Item{it("c1", "", 2), it("c2", "b", 50), it("c1", "a", 320)},
+			wantNext:    map[string]rosterSnap{"c1": prevOf()["c1"], "c2": c2Snap, "c4": prevOf()["c4"]},
+			wantHeld:    map[string]bool{"c1": true, "c4": true},
+		},
+		{
+			name:        "the whole roster fails",
+			errs:        []string{"roster: crew crews: exit 1"},
+			wantWorkers: []crewview.Worker{w("c2", "b", ip(40)), w("c1", "a", ip(310)), w("c1", "n", nil), w("c4", "y", ip(7+int64(crewStaleAfter/time.Second)))},
+			wantItems:   []crewview.Item{it("c2", "b", 50), it("c1", "a", 320), it("c1", "", 330)},
+			wantNext:    map[string]rosterSnap{"c1": prevOf()["c1"], "c4": prevOf()["c4"]},
+			wantHeld:    map[string]bool{"c1": true, "c4": true},
+		},
+		{
+			name:        "no roster error",
+			errs:        []string{"peer mbp: unreachable"},
+			wantWorkers: viewOf().Workers,
+			wantItems:   viewOf().Attention,
+			wantNext: map[string]rosterSnap{
+				"c1": {at: gen, workers: []crewview.Worker{w("c1", "a", ip(1))}, items: []crewview.Item{it("c1", "a", 1), it("c1", "", 2)}},
+				"c2": c2Snap,
+			},
+			wantHeld: map[string]bool{},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ov, prev := viewOf(), prevOf()
+			got, next, heldIDs := spliceHeld(ov, heldCrewsOf(tc.errs), prev)
+			if !reflect.DeepEqual(got.Workers, tc.wantWorkers) {
+				t.Errorf("workers = %+v\nwant      %+v", got.Workers, tc.wantWorkers)
+			}
+			if !reflect.DeepEqual(got.Attention, tc.wantItems) {
+				t.Errorf("items = %+v\nwant    %+v", got.Attention, tc.wantItems)
+			}
+			if !reflect.DeepEqual(next, tc.wantNext) {
+				t.Errorf("next = %+v\nwant   %+v", next, tc.wantNext)
+			}
+			if !reflect.DeepEqual(heldIDs, tc.wantHeld) {
+				t.Errorf("held = %v, want %v", heldIDs, tc.wantHeld)
+			}
+
+			for i := range got.Workers {
+				got.Workers[i].State = "scribbled"
+				if got.Workers[i].AgeSec != nil && heldIDs[got.Workers[i].Crew] {
+					*got.Workers[i].AgeSec = -1
+				}
+			}
+			for i := range got.Attention {
+				got.Attention[i].AgeSec = -1
+			}
+			if !reflect.DeepEqual(ov, viewOf()) {
+				t.Error("spliceHeld's result aliases the view")
+			}
+			if !reflect.DeepEqual(prev, prevOf()) {
+				t.Error("spliceHeld's result aliases the previous snapshots")
+			}
+		})
 	}
 }

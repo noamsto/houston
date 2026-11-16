@@ -1852,6 +1852,7 @@ func finishedJoinedWorker(now time.Time) Run {
 			ViewNotice: "n",
 		},
 		Since: now.Add(-time.Hour).Unix(), UpdatedAt: now.Add(-30 * time.Minute).Unix(),
+		Stale: true,
 	}
 }
 
@@ -1868,7 +1869,7 @@ func TestTickCrewDeltasKeepsIdentityOfAnEvictedPaneKeyedRun(t *testing.T) {
 	}
 	got := deltas[0].Run
 	if got.State != "" || got.Attention != "" || got.AttentionNote != "" || got.Question != nil ||
-		got.UpdatedAt != 0 || got.Since != 0 || got.Crew.Detail != "" {
+		got.UpdatedAt != 0 || got.Since != 0 || got.Crew.Detail != "" || got.Stale {
 		t.Errorf("identity layer kept status fields: %+v", got)
 	}
 	if got.Agent != "claude" || got.Role != RoleWorker || got.Project != "houston" || got.Branch != "fix/412" ||
@@ -2106,9 +2107,21 @@ func sortedKeys[V any](m map[string]V) []string {
 	return slices.Sorted(slices.Values(keysOf(m)))
 }
 
+// heldRun is r as a roster hold publishes it: unchanged, marked stale, with
+// the held note.
+func heldRun(r Run) Run {
+	crew := *r.Crew
+	crew.ViewNotice = crewRosterHeldNote
+	r.Crew = &crew
+	r.Stale = true
+	return r
+}
+
 // crew dash still prints a line when its roster collect fails, with no workers
-// and the failure in errors[]: that is not an empty crew, so the last tick's
-// workers stay listed (no Gone, blocked episodes kept) and the dispatcher says why.
+// and the failure in errors[]: that is not an empty crew, so the last listed
+// workers stay (no Gone, blocked episodes kept), marked stale with the held
+// note, their times unmoved though the view is newer, and the dispatcher says
+// why.
 func TestScanHoldsTheCrewLayerWhileTheRosterFails(t *testing.T) {
 	v := goldenView(t)
 	s, views, bus := joinedC1(t, v)
@@ -2119,6 +2132,7 @@ func TestScanHoldsTheCrewLayerWhileTheRosterFails(t *testing.T) {
 	}
 
 	failed := v
+	failed.GeneratedAt = v.GeneratedAt + 300
 	failed.Workers = []crewview.Worker{}
 	failed.Errors = []string{"roster: crew crews: exit 1"}
 	views.views[bus] = failed
@@ -2127,29 +2141,41 @@ func TestScanHoldsTheCrewLayerWhileTheRosterFails(t *testing.T) {
 		t.Fatalf("keys = %v, want tick 1's %v", sortedKeys(tick2), sortedKeys(tick1))
 	}
 	for k, r := range tick1 {
-		if k != "%1" && !reflect.DeepEqual(tick2[k], r) {
-			t.Errorf("%s = %+v, want tick 1's %+v", k, tick2[k], r)
+		if k == "%1" {
+			continue
+		}
+		if want := heldRun(r); !reflect.DeepEqual(tick2[k], want) {
+			t.Errorf("%s = %+v\nwant %+v", k, tick2[k], want)
 		}
 	}
 	if !maps.Equal(s.mem, mem1) {
 		t.Errorf("mem = %v, want tick 1's %v", s.mem, mem1)
 	}
-	if d := tick2["%1"]; d.Crew == nil || !strings.Contains(d.Crew.ViewNotice, "roster: crew crews: exit 1") {
-		t.Errorf("dispatcher crew = %+v, want the roster error in its notice", d.Crew)
+	d := tick2["%1"]
+	if d.Crew == nil || !strings.Contains(d.Crew.ViewNotice, "roster: crew crews: exit 1") {
+		t.Fatalf("dispatcher crew = %+v, want the roster error in its notice", d.Crew)
+	}
+	if !reflect.DeepEqual(d.Crew.Attention, tick1["%1"].Crew.Attention) {
+		t.Errorf("dispatcher items = %+v, want tick 1's %+v", d.Crew.Attention, tick1["%1"].Crew.Attention)
 	}
 
 	views.views[bus] = workingView("feat/z")
 	tick3 := mustScan(t, s)
-	if want := []string{"%1", "crew/" + bus + "/feat/z"}; !reflect.DeepEqual(sortedKeys(tick3), want) {
+	zKey := "crew/" + bus + "/feat/z"
+	if want := []string{"%1", zKey}; !reflect.DeepEqual(sortedKeys(tick3), want) {
 		t.Errorf("keys = %v, want %v — a clean view is used as is", sortedKeys(tick3), want)
+	}
+	if z := tick3[zKey]; z.Stale || z.Crew == nil || z.Crew.ViewNotice != "" {
+		t.Errorf("feat/z = %+v, want neither stale nor a notice", z)
 	}
 	if d := tick3["%1"]; d.Crew == nil || d.Crew.ViewNotice != "" {
 		t.Errorf("dispatcher crew = %+v, want the notice cleared", d.Crew)
 	}
 }
 
-// When one crew's roster fails, that crew's workers come from the last tick
-// (all of them, peer rows too) while every other crew's come from the view.
+// When one crew's roster fails, that crew's workers are its last listed rows
+// (all of them, peer rows too), held stale, while every other crew's come from
+// the view.
 func TestScanHoldsOneCrewWhoseRosterFails(t *testing.T) {
 	v := goldenView(t)
 	s, views, bus := joinedC1(t, v)
@@ -2157,6 +2183,7 @@ func TestScanHoldsOneCrewWhoseRosterFails(t *testing.T) {
 	mem1 := maps.Clone(s.mem)
 
 	held := v
+	held.GeneratedAt = v.GeneratedAt + 300
 	held.Workers = []crewview.Worker{}
 	for _, w := range v.Workers {
 		switch {
@@ -2178,18 +2205,156 @@ func TestScanHoldsOneCrewWhoseRosterFails(t *testing.T) {
 		t.Fatalf("keys = %v, want tick 1's %v", sortedKeys(tick2), sortedKeys(tick1))
 	}
 	for k, r := range tick1 {
-		if k != "%1" && k != jKey && !reflect.DeepEqual(tick2[k], r) {
-			t.Errorf("%s = %+v, want tick 1's %+v", k, tick2[k], r)
+		if k == "%1" || k == jKey {
+			continue
+		}
+		if want := heldRun(r); !reflect.DeepEqual(tick2[k], want) {
+			t.Errorf("%s = %+v\nwant %+v", k, tick2[k], want)
 		}
 	}
-	if j := tick2[jKey]; j.State != StateReview {
-		t.Errorf("feat/j = %+v, want c2's worker from the new view", j)
+	if j := tick2[jKey]; j.State != StateReview || j.UpdatedAt != held.GeneratedAt-30 || j.Stale || j.Crew == nil || j.Crew.ViewNotice != "" {
+		t.Errorf("feat/j = %+v, want c2's worker from the new view, not stale", j)
 	}
 	if !maps.Equal(s.mem, mem1) {
 		t.Errorf("mem = %v, want tick 1's %v", s.mem, mem1)
 	}
 	if d := tick2["%1"]; d.Crew == nil || d.Crew.ViewNotice != "crew c1: workers: timeout" {
 		t.Errorf("dispatcher crew = %+v, want only c1's error in c1's notice", d.Crew)
+	}
+}
+
+// rosterFailed is crew's view when its whole roster collect failed, generated
+// at gen.
+func rosterFailed(gen int64) crewview.Overview {
+	ov := overviewOf(nil)
+	ov.GeneratedAt = gen
+	ov.Errors = []string{"roster: crew crews: exit 1"}
+	return ov
+}
+
+// askingC1 is joinedC1 over one windowless c1 worker asking its dispatcher a
+// minute before testViewGen, with the clock at testViewGen.
+func askingC1(t *testing.T) (*CrewSource, *fakeViews, string, string) {
+	t.Helper()
+	w := viewWorker("feat/a", "blocked", "which db?", testViewGen-60)
+	s, views, bus := joinedC1(t, overviewOf([]crewview.Item{viewItem("blocked", "feat/a", "which db?")}, w))
+	s.now = func() time.Time { return time.Unix(testViewGen, 0) }
+	return s, views, bus, "crew/" + bus + "/feat/a"
+}
+
+// A held worker is routed every tick, not frozen: its question reaches the
+// human once its dispatcher dies or stays silent, as it would unheld.
+func TestScanRoutesAHeldWorkersQuestion(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		procs fakeProcs
+		now   int64
+	}{
+		{"dispatcher dies during the hold", fakeProcs{dead: map[int]bool{dispPID: true}}, testViewGen + 300},
+		{"dispatcher silence elapses", liveDispatcher(), testViewGen + 20*60},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, views, bus, key := askingC1(t)
+			if r := mustScan(t, s)[key]; r.State != StateRunning || r.Question != nil {
+				t.Fatalf("tick 1 = %+v, want the question routed to the live dispatcher", r)
+			}
+
+			views.views[bus] = rosterFailed(testViewGen + 300)
+			s.procs = tc.procs
+			s.now = func() time.Time { return time.Unix(tc.now, 0) }
+			r := mustScan(t, s)[key]
+			if r.State != StateBlocked || r.Question == nil || r.Question.Text != "which db?" || !r.Stale {
+				t.Errorf("held = %+v, want needs-you with the question, stale", r)
+			}
+			if r.UpdatedAt != testViewGen-60 {
+				t.Errorf("UpdatedAt = %d, want %d", r.UpdatedAt, testViewGen-60)
+			}
+		})
+	}
+}
+
+// The dispatcher's reply on the bus clears a held worker's question, as it
+// does for a worker the view lists.
+func TestScanClearsAHeldQuestionTheDispatcherAnswered(t *testing.T) {
+	s, views, bus, key := askingC1(t)
+	s.procs = fakeProcs{dead: map[int]bool{dispPID: true}}
+	if r := mustScan(t, s)[key]; r.State != StateBlocked || r.Question == nil {
+		t.Fatalf("tick 1 = %+v, want needs-you with no dispatcher", r)
+	}
+
+	reply := fmt.Sprintf(`{"ts":%d,"crew_id":"c1","from":"dispatcher:c1","to":"worker:feat/a#s1","kind":"msg","body":"postgres"}`+"\n", (testViewGen-30)*1000)
+	f, err := os.OpenFile(filepath.Join(bus, "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(reply); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	views.views[bus] = rosterFailed(testViewGen + 300)
+	r := mustScan(t, s)[key]
+	if r.State == StateBlocked || r.Question != nil || !r.Stale {
+		t.Errorf("held = %+v, want the answered question cleared, stale", r)
+	}
+	if len(s.mem) != 0 {
+		t.Errorf("mem = %v, want the answered episode forgotten", s.mem)
+	}
+}
+
+// A tick with no view for the bus publishes no workers but keeps the roster
+// snapshot and blocked episodes, so a roster failure after it still holds.
+func TestScanKeepsTheRosterSnapshotThroughAViewlessTick(t *testing.T) {
+	s, views, bus, key := askingC1(t)
+	s.procs = fakeProcs{dead: map[int]bool{dispPID: true}}
+	tick1 := mustScan(t, s)
+	mem1 := maps.Clone(s.mem)
+	if r := tick1[key]; r.State != StateBlocked || len(mem1) != 1 {
+		t.Fatalf("tick 1 = %+v mem %v, want needs-you with its episode recorded", r, mem1)
+	}
+
+	ov := views.views[bus]
+	delete(views.views, bus)
+	if got := mustScan(t, s); len(got) != 0 {
+		t.Errorf("viewless tick = %v, want no runs", sortedKeys(got))
+	}
+	if !maps.Equal(s.mem, mem1) {
+		t.Errorf("mem = %v after a viewless tick, want %v", s.mem, mem1)
+	}
+
+	views.views[bus] = rosterFailed(ov.GeneratedAt + 300)
+	if r, want := mustScan(t, s)[key], heldRun(tick1[key]); !reflect.DeepEqual(r, want) {
+		t.Errorf("held = %+v\nwant %+v", r, want)
+	}
+	if !maps.Equal(s.mem, mem1) {
+		t.Errorf("mem = %v, want %v", s.mem, mem1)
+	}
+}
+
+// A hold lasts at most crewStaleAfter of crew's own time since the rows were
+// listed; after that the crew reads as the view says and the dispatcher's
+// notice still carries the error.
+func TestScanReleasesAHoldPastCrewStaleAfter(t *testing.T) {
+	s, views, bus := joinedC1(t, overviewOf(nil, viewWorker("feat/a", "working", "", testViewGen-60)))
+	key := "crew/" + bus + "/feat/a"
+	s.now = func() time.Time { return time.Unix(testViewGen, 0) }
+	if _, ok := mustScan(t, s)[key]; !ok {
+		t.Fatal("tick 1 does not list feat/a")
+	}
+
+	views.views[bus] = rosterFailed(testViewGen + int64(crewStaleAfter/time.Second))
+	if r, ok := mustScan(t, s)[key]; !ok || !r.Stale {
+		t.Fatalf("at +%v: %+v listed=%v, want held stale", crewStaleAfter, r, ok)
+	}
+
+	views.views[bus] = rosterFailed(testViewGen + int64(crewStaleAfter/time.Second) + 1)
+	got := mustScan(t, s)
+	if r, ok := got[key]; ok {
+		t.Errorf("past crewStaleAfter: %+v still listed, want the hold released", r)
+	}
+	if d := got["%1"]; d.Crew == nil || !strings.Contains(d.Crew.ViewNotice, "roster: crew crews: exit 1") {
+		t.Errorf("dispatcher crew = %+v, want the roster error kept in its notice", d.Crew)
 	}
 }
 

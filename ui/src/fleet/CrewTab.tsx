@@ -60,6 +60,7 @@ function Member({ run, now }: { run: Run; now: number }) {
         {!(run.question && phase(run) === run.question.text) && <span className="run-sub crews-phase">{phase(run)}</span>}
         {run.question && <span className="run-question crews-question">{run.question.text}</span>}
         {attention === 'stuck' && run.attention_note && <span className="crews-note">{run.attention_note}</span>}
+        {run.crew?.view_notice && <span className="crews-note">{run.crew.view_notice}</span>}
       </button>
       <span className="run-chips crews-chips">
         {run.pr &&
