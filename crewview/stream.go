@@ -4,8 +4,11 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -33,6 +36,9 @@ const (
 	maxLine       = 4 << 20
 	maxStderrLine = 4 << 10
 	stopGrace     = 2 * time.Second
+	// unreadableAfter consecutive undecodable lines drop the view.
+	unreadableAfter    = 3
+	maxDecodeNoticeLen = 200
 )
 
 const tooOldNotice = "crew is too old for houston: crew dash --view is missing (needs dispatcher#1580)"
@@ -59,6 +65,9 @@ type Stream struct {
 	fresh time.Duration
 	// stale is how long a view outlives its last line once no process is live.
 	stale time.Duration
+	// startGrace is how long a process may run without a line before it
+	// stops counting as live and is restarted.
+	startGrace time.Duration
 
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -70,11 +79,14 @@ type Stream struct {
 	remote   bool
 	status   Status
 	lastLine time.Time
-	readRun  bool // the current process wrote a stdout line
-	lineRun  bool // the current process wrote an accepted line
-	live     bool // a process is running or a freshness restart is underway
+	started  time.Time // when the current process started
+	readRun  bool      // the current process wrote a stdout line
+	lineRun  bool      // the current process wrote an accepted line
+	warnRun  bool      // the current process's first undecodable line was logged
+	live     bool      // a process is running or a freshness restart is underway
 	exitNote string
 	skipped  int
+	badRun   int // undecodable lines since the last accepted one
 }
 
 func NewStream(crewPath, root string) *Stream {
@@ -88,6 +100,7 @@ func NewStream(crewPath, root string) *Stream {
 		backoffMax: 30 * time.Second,
 		fresh:      60 * time.Second,
 		stale:      30 * time.Second,
+		startGrace: 120 * time.Second,
 		status:     Status{State: StateStarting},
 		done:       make(chan struct{}),
 		lines:      make(chan struct{}, 1),
@@ -114,12 +127,15 @@ func (s *Stream) Root() string { return s.root }
 func (s *Stream) Latest() (Overview, Status, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.expireLocked(time.Now())
+	now := time.Now()
+	s.expireLocked(now)
 	switch {
-	case s.status.State == StateUnsupported:
+	case s.status.State == StateUnsupported || s.status.State == StateUnavailable:
 		return Overview{}, s.status, false
 	case s.has:
 		return s.latest, s.status, true
+	case s.live && !s.liveLocked(now):
+		return Overview{}, Status{State: StateUnavailable, Notice: "crew view unavailable: " + s.noViewNote()}, false
 	case s.exitNote != "":
 		return Overview{}, Status{State: StateUnavailable, Notice: "crew view unavailable: " + s.exitNote}, false
 	default:
@@ -131,9 +147,25 @@ func (s *Stream) Latest() (Overview, Status, bool) {
 // since its last line. Dropping is permanent so a restarted process that has
 // not written yet cannot bring the old view back.
 func (s *Stream) expireLocked(now time.Time) {
-	if s.has && !s.live && now.Sub(s.lastLine) >= s.stale {
+	if s.has && !s.liveLocked(now) && now.Sub(s.lastLine) >= s.stale {
 		s.latest, s.has, s.remote = Overview{}, false, false
 	}
+}
+
+// liveLocked reports whether a process counts as live for staleness: one that
+// has written no line stops counting once startGrace has passed, so a hung
+// restart cannot keep the previous process's view alive.
+func (s *Stream) liveLocked(now time.Time) bool {
+	return s.live && (s.lineRun || now.Sub(s.started) < s.startGrace)
+}
+
+func (s *Stream) noViewNote() string {
+	return fmt.Sprintf("crew dash produced no view for %ds", int(s.startGrace.Seconds()))
+}
+
+func rootGone(root string) bool {
+	_, err := os.Stat(root)
+	return errors.Is(err, fs.ErrNotExist)
 }
 
 type runResult struct {
@@ -193,16 +225,22 @@ func (s *Stream) runOnce(ctx context.Context) runResult {
 	outR, errR, err := s.startWithPipes(cmd)
 	if err != nil {
 		slog.Warn("crewview: crew dash did not start", "dir", s.root, "err", err)
+		note := err.Error()
+		// exec reports a missing Dir as the binary being missing.
+		if rootGone(s.root) {
+			note = "working directory " + s.root + " is gone"
+		}
 		s.mu.Lock()
-		s.live, s.exitNote = false, err.Error()
+		s.live, s.exitNote = false, note
 		s.mu.Unlock()
 		return runResult{}
 	}
 	pid := cmd.Process.Pid
 
 	s.mu.Lock()
-	s.expireLocked(time.Now())
-	s.live, s.readRun, s.lineRun = true, false, false
+	now := time.Now()
+	s.expireLocked(now)
+	s.live, s.started, s.readRun, s.lineRun, s.warnRun = true, now, false, false, false
 	s.mu.Unlock()
 
 	var readers sync.WaitGroup
@@ -224,7 +262,7 @@ func (s *Stream) runOnce(ctx context.Context) runResult {
 		close(exited)
 	}()
 
-	freshKill := s.supervise(ctx, pid, exited)
+	freshKill, hung := s.supervise(ctx, pid, exited)
 
 	// Grandchildren left in the group would hold the pipes open; the group id
 	// stays reserved while any member lives, so this cannot hit a stranger.
@@ -244,6 +282,10 @@ func (s *Stream) runOnce(ctx context.Context) runResult {
 	}
 	s.live = false
 	if ctx.Err() != nil {
+		return runResult{}
+	}
+	if hung {
+		slog.Warn("crewview: crew dash produced no view; restarting", "dir", s.root, "after", s.startGrace)
 		return runResult{}
 	}
 
@@ -284,29 +326,52 @@ func (s *Stream) startWithPipes(cmd *exec.Cmd) (outR, errR *os.File, err error) 
 	return outR, errR, nil
 }
 
-// supervise waits for the process to exit, stopping it on ctx or when a view
-// with remote rows has gone fresh without a new line. It reports whether it
-// stopped the process for freshness.
-func (s *Stream) supervise(ctx context.Context, pid int, exited <-chan struct{}) bool {
+// supervise waits for the process to exit, stopping it on ctx, when a view
+// with remote rows has gone fresh without a new line, or when the process has
+// written no line within startGrace. It reports whether it stopped the process
+// for freshness or for having written nothing.
+func (s *Stream) supervise(ctx context.Context, pid int, exited <-chan struct{}) (freshKill, hung bool) {
 	for {
-		var freshC <-chan time.Time
+		var freshC, hungC <-chan time.Time
 		if at, ok := s.freshDeadline(); ok {
 			freshC = time.After(time.Until(at))
 		}
+		if at, ok := s.hungDeadline(); ok {
+			hungC = time.After(time.Until(at))
+		}
 		select {
 		case <-exited:
-			return false
+			return false, false
 		case <-ctx.Done():
 			terminate(pid, exited)
-			return false
+			return false, false
 		case <-s.lines:
 		case <-freshC:
 			if at, ok := s.freshDeadline(); ok && !time.Now().Before(at) {
 				terminate(pid, exited)
-				return true
+				return true, false
+			}
+		case <-hungC:
+			if at, ok := s.hungDeadline(); ok && !time.Now().Before(at) {
+				s.mu.Lock()
+				s.exitNote = s.noViewNote()
+				s.mu.Unlock()
+				terminate(pid, exited)
+				return false, true
 			}
 		}
 	}
+}
+
+// hungDeadline is when the current process is restarted for having written
+// no line.
+func (s *Stream) hungDeadline() (time.Time, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lineRun {
+		return time.Time{}, false
+	}
+	return s.started.Add(s.startGrace), true
 }
 
 // freshDeadline is when the current process is restarted for freshness. Only
@@ -384,7 +449,7 @@ func (s *Stream) accept(line []byte) {
 	case err == nil:
 		s.latest, s.has, s.remote = ov, true, hasRemote(ov)
 		s.status = Status{State: StateOK}
-		s.lastLine, s.lineRun = time.Now(), true
+		s.lastLine, s.lineRun, s.badRun = time.Now(), true, 0
 		select {
 		case s.lines <- struct{}{}:
 		default:
@@ -394,17 +459,44 @@ func (s *Stream) accept(line []byte) {
 		s.status = Status{State: StateUnsupported, Notice: ue.Error()}
 	default:
 		s.skipped++
+		s.badRun++
+		if !s.warnRun {
+			s.warnRun = true
+			// The error's text can quote the line, so only its type and offset
+			// are logged.
+			slog.Warn("crewview: undecodable crew dash line", "dir", s.root, "err_type", fmt.Sprintf("%T", errors.Unwrap(err)), "offset", decodeOffset(err))
+		}
+		if s.badRun >= unreadableAfter {
+			msg := strings.TrimPrefix(err.Error(), "crewview: ")
+			if len(msg) > maxDecodeNoticeLen {
+				msg = msg[:maxDecodeNoticeLen]
+			}
+			s.latest, s.has, s.remote = Overview{}, false, false
+			s.status = Status{State: StateUnavailable, Notice: "crew view unreadable: " + msg}
+		}
 	}
+}
+
+func decodeOffset(err error) int64 {
+	var se *json.SyntaxError
+	if errors.As(err, &se) {
+		return se.Offset
+	}
+	var te *json.UnmarshalTypeError
+	if errors.As(err, &te) {
+		return te.Offset
+	}
+	return -1
 }
 
 func hasRemote(ov Overview) bool {
 	for _, w := range ov.Workers {
-		if w.Origin != OriginLocal {
+		if w.Origin == OriginRemote || w.Origin == OriginPeer {
 			return true
 		}
 	}
 	for _, it := range ov.Attention {
-		if it.Origin != OriginLocal {
+		if it.Origin == OriginRemote || it.Origin == OriginPeer {
 			return true
 		}
 	}
@@ -428,6 +520,9 @@ type Manager struct {
 
 	mu      sync.Mutex
 	streams map[string]*Stream
+	// retiring holds cancelled streams until their run loop ends, so Close
+	// can wait for their processes.
+	retiring []*Stream
 }
 
 func NewManager(ctx context.Context, crewPath string) *Manager {
@@ -438,13 +533,18 @@ func NewManager(ctx context.Context, crewPath string) *Manager {
 	}
 }
 
-// Ensure starts a stream for bus in root unless one is already running; the
-// first root stays.
+// Ensure starts a stream for bus in root unless one is already running. A
+// running stream keeps its root while that directory exists; once it is gone
+// (a reaped worker's worktree) the stream is replaced by one in root.
 func (m *Manager) Ensure(bus, root string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.streams[bus]; ok {
-		return
+	m.pruneLocked()
+	if old, ok := m.streams[bus]; ok {
+		if old.root == root || !rootGone(old.root) {
+			return
+		}
+		m.retireLocked(old)
 	}
 	s := m.newStream(root)
 	s.Start(m.ctx)
@@ -452,16 +552,33 @@ func (m *Manager) Ensure(bus, root string) {
 }
 
 // Retain stops the streams of buses not in keep. It does not wait for their
-// processes to exit.
+// processes to exit; Close does.
 func (m *Manager) Retain(keep map[string]bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.pruneLocked()
 	for bus, s := range m.streams {
 		if !keep[bus] {
-			s.cancel()
+			m.retireLocked(s)
 			delete(m.streams, bus)
 		}
 	}
+}
+
+func (m *Manager) retireLocked(s *Stream) {
+	s.cancel()
+	m.retiring = append(m.retiring, s)
+}
+
+func (m *Manager) pruneLocked() {
+	m.retiring = slices.DeleteFunc(m.retiring, func(s *Stream) bool {
+		select {
+		case <-s.done:
+			return true
+		default:
+			return false
+		}
+	})
 }
 
 // Root is the root bus's stream runs in; false for an unknown bus.
@@ -472,13 +589,21 @@ func (m *Manager) Root(bus string) (string, bool) {
 	return "", false
 }
 
-// Close stops every stream and waits for their processes to be gone.
+// Close stops every stream, retired ones included, and waits for their
+// processes to be gone.
 func (m *Manager) Close() {
 	m.mu.Lock()
-	streams := m.streams
-	m.streams = map[string]*Stream{}
+	all := m.retiring
+	for _, s := range m.streams {
+		all = append(all, s)
+	}
+	m.streams, m.retiring = map[string]*Stream{}, nil
 	m.mu.Unlock()
-	for _, s := range streams {
+	// Cancel all first so the processes' stop graces run concurrently.
+	for _, s := range all {
+		s.cancel()
+	}
+	for _, s := range all {
 		s.Stop()
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -21,12 +22,15 @@ const (
 	testBackoffMax = 80 * time.Millisecond
 	testFresh      = 200 * time.Millisecond
 	testStale      = 150 * time.Millisecond
+	// testStartGrace stays above TestStreamSlowFirstEmit's first-line delay.
+	testStartGrace = 5 * testFresh
 )
 
 const (
 	remoteLine = `{"schema_version":1,"view":"overview","generated_at":1,"attention":[],"workers":[{"crew":"c1","branch":"feat/r","host":"halo","origin":"remote_worker","state":"working"}],"errors":[]}`
 	localLine  = `{"schema_version":1,"view":"overview","generated_at":1,"attention":[],"workers":[{"crew":"c1","branch":"feat/l","host":"","origin":"local","state":"working"}],"errors":[]}`
 	schema2    = `{"schema_version":2,"view":"overview"}`
+	badPRLine  = `{"schema_version":1,"view":"overview","generated_at":1,"attention":[],"workers":[{"crew":"c1","branch":"feat/l","host":"","origin":"local","state":"working","pr":"12"}],"errors":[]}`
 )
 
 // TestHelperProcess is the fake `crew dash` the Stream tests launch; it does
@@ -75,6 +79,12 @@ func TestHelperProcess(t *testing.T) {
 		}
 		fmt.Fprintln(os.Stderr, "boom")
 		os.Exit(1)
+	case "once-then-hang":
+		if run == 1 {
+			fmt.Println(os.Getenv("HELPER_LINE"))
+			os.Exit(0)
+		}
+		linger()
 	case "slow":
 		d, _ := time.ParseDuration(os.Getenv("HELPER_DELAY"))
 		time.Sleep(d)
@@ -85,6 +95,32 @@ func TestHelperProcess(t *testing.T) {
 		fmt.Println(golden())
 		linger()
 	case "grandchild":
+		c := exec.Command("sleep", "60")
+		if err := c.Start(); err != nil {
+			os.Exit(3)
+		}
+		b, _ := json.Marshal(Overview{SchemaVersion: 1, View: ViewOverview, Errors: []string{strconv.Itoa(c.Process.Pid)}})
+		fmt.Println(string(b))
+		linger()
+	case "gated":
+		// A good line, three undecodable ones, then the good line again once
+		// the gate file exists.
+		fmt.Println(os.Getenv("HELPER_LINE"))
+		for range 3 {
+			fmt.Println(os.Getenv("HELPER_BAD"))
+		}
+		for {
+			if _, err := os.Stat(os.Getenv("HELPER_GATE")); err == nil {
+				break
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		fmt.Println(os.Getenv("HELPER_LINE"))
+		linger()
+	case "stubborn":
+		// Ignored signals stay ignored across exec, so the grandchild ignores
+		// SIGTERM too.
+		signal.Ignore(syscall.SIGTERM)
 		c := exec.Command("sleep", "60")
 		if err := c.Start(); err != nil {
 			os.Exit(3)
@@ -109,6 +145,7 @@ func TestHelperProcess(t *testing.T) {
 type helper struct {
 	mode, line, delay string
 	counter           string
+	bad, gate         string
 }
 
 // testStream builds a Stream that launches TestHelperProcess with short
@@ -129,11 +166,14 @@ func testStream(t *testing.T, h helper) *Stream {
 			"HELPER_LINE=" + h.line,
 			"HELPER_DELAY=" + h.delay,
 			"HELPER_COUNTER=" + h.counter,
+			"HELPER_BAD=" + h.bad,
+			"HELPER_GATE=" + h.gate,
 			"HELPER_GOLDEN=" + golden,
 		}
 		return cmd
 	}
 	s.backoffMin, s.backoffMax, s.fresh, s.stale = testBackoffMin, testBackoffMax, testFresh, testStale
+	s.startGrace = testStartGrace
 	return s
 }
 
@@ -483,5 +523,184 @@ func TestManagerCloseKillsEveryStream(t *testing.T) {
 	}
 	if _, ok := m.Root("a"); ok {
 		t.Error("bus a still known after Close")
+	}
+}
+
+func TestStreamUnreadableLines(t *testing.T) {
+	gate := filepath.Join(t.TempDir(), "gate")
+	s := startStream(t, helper{mode: "gated", line: localLine, bad: badPRLine, gate: gate})
+	waitFor(t, "unreadable notice", 5*time.Second, func() bool {
+		_, st, _ := s.Latest()
+		return st.State == StateUnavailable
+	})
+	ov, st, ok := s.Latest()
+	if ok || len(ov.Workers) != 0 || !strings.HasPrefix(st.Notice, "crew view unreadable: ") {
+		t.Errorf("ok = %v, workers = %d, notice = %q", ok, len(ov.Workers), st.Notice)
+	}
+	if len(st.Notice) > len("crew view unreadable: ")+200 {
+		t.Errorf("notice is %d bytes, want the error capped at 200", len(st.Notice))
+	}
+	if strings.Contains(st.Notice, "12") {
+		t.Errorf("notice %q carries line content", st.Notice)
+	}
+
+	if err := os.WriteFile(gate, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "a good line to clear the notice", 5*time.Second, func() bool {
+		_, st, ok := s.Latest()
+		return ok && st.State == StateOK
+	})
+}
+
+func TestStreamMissingRootNotice(t *testing.T) {
+	s := testStream(t, helper{mode: "line", line: localLine})
+	s.root = filepath.Join(t.TempDir(), "gone")
+	s.Start(context.Background())
+	t.Cleanup(s.Stop)
+	want := "crew view unavailable: working directory " + s.root + " is gone"
+	waitFor(t, "missing-root notice", 5*time.Second, func() bool {
+		_, st, _ := s.Latest()
+		return st.Notice == want
+	})
+}
+
+func TestManagerReplacesGoneRoot(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	m := NewManager(ctx, "crew-unused")
+	var made []*Stream
+	m.newStream = func(root string) *Stream {
+		s := testStream(t, helper{mode: "line", line: localLine})
+		s.root = root
+		made = append(made, s)
+		return s
+	}
+	t.Cleanup(func() {
+		cancel()
+		for _, s := range made {
+			<-s.done
+		}
+	})
+
+	rootA := filepath.Join(t.TempDir(), "a")
+	if err := os.Mkdir(rootA, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	m.Ensure("bus", rootA)
+	waitFor(t, "view in rootA", 5*time.Second, func() bool {
+		_, _, ok := m.Latest("bus")
+		return ok
+	})
+
+	m.Ensure("bus", t.TempDir())
+	if got, _ := m.Root("bus"); got != rootA || len(made) != 1 {
+		t.Fatalf("existing root replaced: Root = %q, %d streams", got, len(made))
+	}
+
+	if err := os.RemoveAll(rootA); err != nil {
+		t.Fatal(err)
+	}
+	rootB := t.TempDir()
+	m.Ensure("bus", rootB)
+	if got, ok := m.Root("bus"); !ok || got != rootB {
+		t.Fatalf("Root = %q, %v; want %q", got, ok, rootB)
+	}
+	if len(made) != 2 {
+		t.Fatalf("made %d streams, want 2", len(made))
+	}
+	select {
+	case <-made[0].done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the stream in the gone root is still running")
+	}
+	waitFor(t, "view in rootB", 5*time.Second, func() bool {
+		_, _, ok := made[1].Latest()
+		return ok
+	})
+	if _, _, ok := m.Latest("bus"); !ok {
+		t.Error("bus has no view after the root moved")
+	}
+}
+
+// gone reports whether pid has exited; a zombie awaiting its reaper counts.
+func gone(pid int) bool {
+	if errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
+		return true
+	}
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return true
+	}
+	_, rest, _ := strings.Cut(string(b), ") ")
+	return strings.HasPrefix(rest, "Z")
+}
+
+func TestManagerCloseWaitsForRetired(t *testing.T) {
+	m := NewManager(context.Background(), "crew-unused")
+	m.newStream = func(root string) *Stream {
+		return testStream(t, helper{mode: "stubborn"})
+	}
+	t.Cleanup(m.Close)
+	m.Ensure("a", t.TempDir())
+	waitFor(t, "grandchild pid", 5*time.Second, func() bool {
+		ov, _, ok := m.Latest("a")
+		return ok && len(ov.Errors) == 1
+	})
+	ov, _, _ := m.Latest("a")
+	pid, err := strconv.Atoi(ov.Errors[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+
+	m.Retain(map[string]bool{})
+	m.Close()
+	if !gone(pid) {
+		t.Errorf("grandchild %d still running after Close", pid)
+	}
+}
+
+func TestStreamHungRestart(t *testing.T) {
+	counter := newCounter(t)
+	s := startStream(t, helper{mode: "once-then-hang", line: localLine, counter: counter})
+	waitFor(t, "first view", 5*time.Second, func() bool {
+		_, _, ok := s.Latest()
+		return ok
+	})
+	want := fmt.Sprintf("crew view unavailable: crew dash produced no view for %ds", int(s.startGrace.Seconds()))
+	waitFor(t, "no-view notice", 5*time.Second, func() bool {
+		_, st, ok := s.Latest()
+		return !ok && st.State == StateUnavailable && st.Notice == want
+	})
+	waitFor(t, "the hung process to be restarted", 5*time.Second, func() bool {
+		return len(starts(t, counter)) >= 3
+	})
+	ts := starts(t, counter)
+	if len(ts) < 3 {
+		t.Fatalf("%d starts", len(ts))
+	}
+	if gap := ts[2].Sub(ts[1]); gap < s.startGrace {
+		t.Errorf("hung process restarted after %v, want >= %v", gap, s.startGrace)
+	}
+}
+
+func TestHasRemote(t *testing.T) {
+	for _, tc := range []struct {
+		origin string
+		want   bool
+	}{
+		{OriginLocal, false},
+		{"", false},
+		{OriginRemote, true},
+		{OriginPeer, true},
+	} {
+		w := Overview{Workers: []Worker{{Origin: tc.origin}}}
+		a := Overview{Attention: []Item{{Origin: tc.origin}}}
+		if got := hasRemote(w); got != tc.want {
+			t.Errorf("worker origin %q: hasRemote = %v, want %v", tc.origin, got, tc.want)
+		}
+		if got := hasRemote(a); got != tc.want {
+			t.Errorf("attention origin %q: hasRemote = %v, want %v", tc.origin, got, tc.want)
+		}
 	}
 }
