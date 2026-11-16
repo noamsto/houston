@@ -11,14 +11,6 @@ import (
 	"github.com/noamsto/houston/crewview"
 )
 
-// blockedMemory keeps each worker's blocked-episode start across views: crew
-// resets age_sec on every re-stamp (a blocked worker re-stamps every 300 s), so
-// age alone would never let routeCrewQuestion's 15-minute silence elapse.
-// Values are unix ms.
-type blockedMemory map[crewWorkerKey]int64
-
-type crewWorkerKey struct{ crew, branch string }
-
 // viewRuns is what one overview view says about the crew layer.
 type viewRuns struct {
 	local     map[string]crewBranch      // by branch
@@ -102,15 +94,21 @@ type rosterSnap struct {
 	items   []crewview.Item
 }
 
+// rowKey names one worker row of a crew.
+type rowKey struct{ crew, branch string }
+
 // spliceHeld replaces the rows of each crew whose roster failed (held) with
 // its snapshot in prev, ages shifted by the view time since, so UpdatedAt and
 // an item's Since keep their listed values and the rows are routed afresh.
-// The view's crew-scoped (branchless) items stand unless the whole roster
-// failed. A snapshot older than crewStaleAfter is dropped and its crew reads
-// as the view says. It returns the spliced view, the snapshots for the next
-// tick and the crews it spliced; ov's slices, which the stream shares, and
-// prev are never written through.
-func spliceHeld(ov crewview.Overview, held heldCrews, prev map[string]rosterSnap) (crewview.Overview, map[string]rosterSnap, map[string]bool) {
+// Unless the whole roster failed, the view's peer-origin rows and items of a
+// held crew stand, since crew still lists them through another crew's roster;
+// only snapshot peer rows the view lacks are spliced back. The view's crew-scoped (branchless) items stand
+// unless the whole roster failed. A snapshot older than crewStaleAfter is
+// dropped and its crew reads as the view says. It returns the spliced view,
+// the snapshots for the next tick, the crews it spliced and the worker rows
+// that came from a snapshot; ov's slices, which the stream shares, and prev
+// are never written through.
+func spliceHeld(ov crewview.Overview, held heldCrews, prev map[string]rosterSnap) (crewview.Overview, map[string]rosterSnap, map[string]bool, map[rowKey]bool) {
 	maxAge := int64(crewStaleAfter / time.Second)
 	next := map[string]rosterSnap{}
 	heldIDs := map[string]bool{}
@@ -121,9 +119,16 @@ func spliceHeld(ov crewview.Overview, held heldCrews, prev map[string]rosterSnap
 		}
 	}
 
+	livePeers := map[rowKey]bool{}
+	liveItems := map[string]bool{}
 	workers := make([]crewview.Worker, 0, len(ov.Workers))
 	for _, w := range ov.Workers {
 		if heldIDs[w.Crew] {
+			if w.Origin != crewview.OriginPeer || held.all {
+				continue
+			}
+			livePeers[rowKey{w.Crew, w.Branch}] = true
+			workers = append(workers, w)
 			continue
 		}
 		workers = append(workers, w)
@@ -136,6 +141,11 @@ func spliceHeld(ov crewview.Overview, held heldCrews, prev map[string]rosterSnap
 	items := make([]crewview.Item, 0, len(ov.Attention))
 	for _, it := range ov.Attention {
 		if heldIDs[it.Crew] && (it.Branch != "" || held.all) {
+			if it.Origin != crewview.OriginPeer || held.all {
+				continue
+			}
+			liveItems[it.ID] = true
+			items = append(items, it)
 			continue
 		}
 		items = append(items, it)
@@ -146,10 +156,16 @@ func spliceHeld(ov crewview.Overview, held heldCrews, prev map[string]rosterSnap
 		}
 	}
 
+	spliced := map[rowKey]bool{}
 	for _, c := range slices.Sorted(maps.Keys(heldIDs)) {
 		snap := next[c]
 		shift := ov.GeneratedAt - snap.at
 		for _, w := range snap.workers {
+			k := rowKey{w.Crew, w.Branch}
+			if w.Origin == crewview.OriginPeer && livePeers[k] {
+				continue
+			}
+			spliced[k] = true
 			if w.AgeSec != nil {
 				age := *w.AgeSec + shift
 				w.AgeSec = &age
@@ -157,7 +173,7 @@ func spliceHeld(ov crewview.Overview, held heldCrews, prev map[string]rosterSnap
 			workers = append(workers, w)
 		}
 		for _, it := range snap.items {
-			if it.Branch == "" && !held.all {
+			if (it.Branch == "" && !held.all) || (it.Origin == crewview.OriginPeer && (liveItems[it.ID] || livePeers[rowKey{it.Crew, it.Branch}])) {
 				continue
 			}
 			it.AgeSec += shift
@@ -165,7 +181,7 @@ func spliceHeld(ov crewview.Overview, held heldCrews, prev map[string]rosterSnap
 		}
 	}
 	ov.Workers, ov.Attention = workers, items
-	return ov, next, heldIDs
+	return ov, next, heldIDs, spliced
 }
 
 // maxViewNotice caps a dispatcher's notice so a long error list stays a line.
@@ -205,8 +221,8 @@ func deref(s *string) string {
 }
 
 // crewRunsFromView turns crew's overview into crew-layer runs. State comes from
-// the view; ids supplies only identity and pane-join evidence. mem is mutated.
-func crewRunsFromView(v crewview.Overview, ids map[string]crewIdentity, replies map[string]int64, mem blockedMemory) viewRuns {
+// the view; ids supplies only identity and pane-join evidence.
+func crewRunsFromView(v crewview.Overview, ids map[string]crewIdentity) viewRuns {
 	out := viewRuns{local: map[string]crewBranch{}, crewItems: map[string][]CrewAttention{}}
 
 	type itemKey struct{ crew, branch string }
@@ -225,7 +241,6 @@ func crewRunsFromView(v crewview.Overview, ids map[string]crewIdentity, replies 
 			continue
 		}
 		items := byWorker[itemKey{w.Crew, w.Branch}]
-		key := crewWorkerKey{w.Crew, w.Branch}
 		local := w.Origin == crewview.OriginLocal || w.Origin == ""
 		peer := w.Origin == crewview.OriginPeer
 
@@ -289,22 +304,13 @@ func crewRunsFromView(v crewview.Overview, ids map[string]crewIdentity, replies 
 		// A remote worker belongs to a crew on this bus: its dispatcher's reply
 		// is written here, and its question is routed like a local one.
 		if !peer {
-			asks := b.State == StateBlocked && b.Question != nil && b.Question.Via == "crew"
-			// An unknown status time (no age_sec) cannot be compared to a reply.
-			if asks && b.UpdatedAt > 0 && answeredByDispatcher(replies[w.Branch], b.UpdatedAt) {
-				b.State, b.Question, b.Crew.Detail = "", nil, ""
-				asks = false
-			}
-			if asks {
-				if _, ok := mem[key]; !ok {
-					mem[key] = v.GeneratedAt * 1000
-					if b.UpdatedAt > 0 {
-						mem[key] = b.UpdatedAt * 1000
-					}
+			if b.State == StateBlocked && b.Question != nil && b.Question.Via == "crew" {
+				b.blockedSince = v.GeneratedAt * 1000
+				if w.BlockedSince != nil {
+					b.blockedSince = *w.BlockedSince
+				} else if b.UpdatedAt > 0 {
+					b.blockedSince = b.UpdatedAt * 1000
 				}
-				b.blockedSince = mem[key]
-			} else {
-				delete(mem, key)
 			}
 		}
 		if local {

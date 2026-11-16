@@ -1306,7 +1306,7 @@ func TestComposeAttentionFromCrewView(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			b, ok := crewRunsFromView(tc.view, nil, nil, blockedMemory{}).local[branch]
+			b, ok := crewRunsFromView(tc.view, nil).local[branch]
 			if !ok {
 				t.Fatalf("no view run for %q", branch)
 			}
