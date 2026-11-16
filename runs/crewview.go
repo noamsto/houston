@@ -101,8 +101,8 @@ type rowKey struct{ crew, branch string }
 // its snapshot in prev, ages shifted by the view time since, so UpdatedAt and
 // an item's Since keep their listed values and the rows are routed afresh.
 // Unless the whole roster failed, the view's peer-origin rows and items of a
-// held crew stand, since crew still lists them through another crew's roster; only snapshot peer rows the view
-// lacks are spliced back. The view's crew-scoped (branchless) items stand
+// held crew stand, since crew still lists them through another crew's roster;
+// only snapshot peer rows the view lacks are spliced back. The view's crew-scoped (branchless) items stand
 // unless the whole roster failed. A snapshot older than crewStaleAfter is
 // dropped and its crew reads as the view says. It returns the spliced view,
 // the snapshots for the next tick, the crews it spliced and the worker rows
