@@ -385,38 +385,41 @@ func TestSpliceHeldKeepsLivePeerRows(t *testing.T) {
 	item := func(branch string, age int64) crewview.Item {
 		return crewview.Item{ID: "blocked:c1:" + branch, Crew: "c1", Branch: branch, Origin: crewview.OriginPeer, Kind: "blocked", AgeSec: age}
 	}
+	local := crewview.Worker{Crew: "c1", Branch: "loc", Origin: crewview.OriginLocal, State: "working", AgeSec: ip(1)}
+	localItem := crewview.Item{ID: "blocked:c1:loc", Crew: "c1", Branch: "loc", Origin: crewview.OriginLocal, Kind: "blocked", AgeSec: 5}
 	prev := map[string]rosterSnap{"c1": {
 		at:      gen - 300,
-		workers: []crewview.Worker{peer("same", "blocked", 1), peer("fixed", "blocked", 1), peer("gone", "working", 1)},
-		items:   []crewview.Item{item("same", 5), item("fixed", 5), item("gone", 5)},
+		workers: []crewview.Worker{peer("same", "blocked", 1), peer("fixed", "blocked", 1), peer("gone", "working", 1), local},
+		items:   []crewview.Item{item("same", 5), item("fixed", 5), item("gone", 5), localItem},
 	}}
 	view := crewview.Overview{
 		GeneratedAt: gen,
 		Workers:     []crewview.Worker{peer("same", "blocked", 2), peer("fixed", "working", 2), peer("new", "working", 2)},
-		Attention:   []crewview.Item{item("same", 6)},
+		Attention:   []crewview.Item{item("same", 6), item("gone", 6)},
 	}
 
 	got, _, held, spliced := spliceHeld(view, heldCrewsOf([]string{"crew c1: workers: timeout"}), prev)
 	if !held["c1"] {
 		t.Fatalf("held = %v, want c1", held)
 	}
-	if want := map[rowKey]bool{{"c1", "gone"}: true}; !reflect.DeepEqual(spliced, want) {
+	if want := map[rowKey]bool{{"c1", "gone"}: true, {"c1", "loc"}: true}; !reflect.DeepEqual(spliced, want) {
 		t.Errorf("spliced = %v, want %v", spliced, want)
 	}
 	states := map[string]string{}
 	for _, w := range got.Workers {
 		states[w.Branch] = w.State
 	}
-	if want := map[string]string{"same": "blocked", "fixed": "working", "new": "working", "gone": "working"}; !reflect.DeepEqual(states, want) {
+	if want := map[string]string{"same": "blocked", "fixed": "working", "new": "working", "gone": "working", "loc": "working"}; !reflect.DeepEqual(states, want) {
 		t.Errorf("workers = %v, want %v", states, want)
 	}
-	want := []crewview.Item{item("same", 6), item("gone", 305)}
+	localItem.AgeSec = 305
+	want := []crewview.Item{item("same", 6), item("gone", 6), localItem}
 	if !reflect.DeepEqual(got.Attention, want) {
 		t.Errorf("items = %+v, want %+v", got.Attention, want)
 	}
 
 	_, _, _, spliced = spliceHeld(view, heldCrewsOf([]string{"roster: crew crews: exit 1"}), prev)
-	if len(spliced) != 3 {
-		t.Errorf("whole-roster spliced = %v, want all 3 snapshot rows", spliced)
+	if len(spliced) != 4 {
+		t.Errorf("whole-roster spliced = %v, want all 4 snapshot rows", spliced)
 	}
 }
