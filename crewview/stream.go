@@ -273,7 +273,9 @@ func (s *Stream) runOnce(ctx context.Context) runResult {
 	readers.Wait()
 	_ = outR.Close()
 	_ = errR.Close()
-	waitGroupGone(pid)
+	if !waitGroupGone(pid) {
+		slog.Warn("crewview: crew dash process group outlived its stop", "dir", s.root, "pgid", pid)
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -401,14 +403,18 @@ func terminate(pid int, exited <-chan struct{}) {
 	}
 }
 
-// waitGroupGone returns once no process is left in group pgid, or after
+// waitGroupGone reports whether no process is left in group pgid within
 // stopGrace. SIGKILL is asynchronous and a dying member closes its pipes before
 // it is gone, so EOF on them does not mean the group has exited.
-func waitGroupGone(pgid int) {
+func waitGroupGone(pgid int) bool {
 	deadline := time.Now().Add(stopGrace)
-	for syscall.Kill(-pgid, 0) != syscall.ESRCH && time.Now().Before(deadline) {
+	for syscall.Kill(-pgid, 0) != syscall.ESRCH {
+		if !time.Now().Before(deadline) {
+			return false
+		}
 		time.Sleep(time.Millisecond)
 	}
+	return true
 }
 
 // readStdout feeds each line to accept. A line over maxLine is discarded
