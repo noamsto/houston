@@ -19,6 +19,7 @@ export const WorkerRow = memo(function WorkerRow({ run, now, onOpen, selected }:
   // The server flags every blocked run needs-you; deriving it keeps the row
   // in step with the group's count when a run carries only the state.
   const attention = run.attention ?? (run.state === 'blocked' ? 'needs-you' : undefined)
+  const remote = run.crew?.origin === 'remote_worker' || run.crew?.origin === 'peer'
   const meta = [run.crew?.tier, run.agent, run.crew?.model].filter(Boolean).join(' · ')
   return (
     <div className={`worker-row${attention ? ` ${attention}` : ''}${attention && stale ? ' muted' : ''}${selected ? ' selected' : ''}`}>
@@ -31,6 +32,11 @@ export const WorkerRow = memo(function WorkerRow({ run, now, onOpen, selected }:
         <span className="worker-row-head">
           <span className="worker-row-swatch" style={{ background: run.crew?.color || 'var(--text-faint)' }} />
           <span className="worker-row-codename">{run.crew?.codename || 'worker'}</span>
+          {remote && (
+            <span className="crew-host-chip" title="runs on another machine">
+              {run.crew?.host}
+            </span>
+          )}
           <span className="worker-row-title">{run.crew?.title || run.issue?.title || run.branch}</span>
           <span className={`run-age${stale ? ' stale' : ''}`}>{agoLabel(run.updated_at, now)}</span>
         </span>

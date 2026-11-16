@@ -1171,3 +1171,21 @@ button.chat-divider::after { content: ''; position: absolute; left: -6px; right:
   max-width: 100%; margin: 0; overflow-x: auto; font-family: var(--font-mono); font-size: 12px; color: var(--text-dim);
 }
 .crew-attention-error { color: var(--state-failed); font-size: 12px; overflow-wrap: anywhere; }
+
+.crew-view-notice {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  background: color-mix(in srgb, var(--state-blocked) 14%, transparent);
+  color: var(--state-blocked);
+}
+.crew-host-chip {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  background: var(--bg-sunken);
+  color: var(--text-dim);
+  border: 1px solid var(--line);
+}

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { CrewTab } from './CrewTab'
-import type { Run } from '../api/runs'
+import type { CrewAttention, Run } from '../api/runs'
 import { fetchDispatchOptions } from '../api/dispatch'
 import { replyRun } from '../api/runs'
 import { resetCrewReposCache } from './useCrewRepos'
@@ -15,6 +15,8 @@ vi.mock('../api/runs', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/runs')>()),
   replyRun: vi.fn(),
 }))
+
+vi.mock('../api/crewAction', () => ({ runCrewAction: vi.fn() }))
 
 vi.mock('../hooks/useCrewFeed', () => ({
   useCrewFeed: () => ({ status: 'ready', entries: [], more: false, loadOlder: vi.fn(), retry: vi.fn() }),
@@ -266,5 +268,46 @@ describe('CrewTab member row', () => {
     const { container } = renderTab([run({ crew: { name: 'c' }, pr: { number: '7' } })])
     expect(container.querySelector('a.run-chip.pr')).toBeNull()
     expect(container.querySelector('span.run-chip.pr')?.textContent).toBe('#7')
+  })
+})
+
+describe('CrewTab crew view', () => {
+  const holdItem = {
+    id: 'hold_matured:c1:h1', kind: 'hold_matured', severity: 'warning', message: 'hold h1 matured',
+    since: 0, command: 'crew hold due --crew c1',
+  } as unknown as CrewAttention
+
+  it('shows the dispatcher crew view notice as a status', () => {
+    renderTab([], dispatcher({ crew: { name: 'c', view_notice: 'crew is too old for houston' } }))
+    expect(within(screen.getByRole('status')).getByText('crew is too old for houston')).toBeTruthy()
+  })
+
+  it('renders crew-scoped attention above the members', () => {
+    const d = dispatcher({ crew: { name: 'c', attention: [holdItem] } })
+    const { container } = renderTab([run({ id: 'a', crew: { name: 'c', codename: 'Mine' } })], d)
+    const msg = screen.getByText('hold h1 matured')
+    const member = container.querySelector('.crews-member') as Element
+    expect(msg.compareDocumentPosition(member) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('renders a member attention action button', () => {
+    const item = {
+      id: 'stall:c1:feat/e', kind: 'stalled_worker', severity: 'warning', message: 'quiet', since: 0,
+      action: { verb: 'nudge', label: 'nudge', command: 'crew nudge --crew c1 -- feat/e', needs_input: false },
+    } as unknown as CrewAttention
+    renderTab([run({ id: 'a', crew: { name: 'c', attention: [item] } })])
+    expect(screen.getByRole('button', { name: 'nudge' })).toBeTruthy()
+  })
+
+  it('marks a remote worker with its host and offers no reply composer', () => {
+    const { container } = renderTab([
+      run({
+        id: 'a',
+        crew: { name: 'c', origin: 'remote_worker', host: 'halo' },
+        question: { text: 'which?', via: 'crew' },
+      } as Partial<Run>),
+    ])
+    expect(within(container.querySelector('.crew-host-chip') as HTMLElement).getByText('halo')).toBeTruthy()
+    expect(container.querySelector('textarea, input')).toBeNull()
   })
 })
