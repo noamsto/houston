@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -2345,7 +2346,7 @@ func TestTickCrewDeltasKeepsIdentityOfAnEvictedPaneKeyedRun(t *testing.T) {
 	}
 	want := *in.Crew
 	want.Detail = ""
-	if *got.Crew != want {
+	if !reflect.DeepEqual(*got.Crew, want) {
 		t.Errorf("Crew = %+v, want %+v", *got.Crew, want)
 	}
 	if in.Crew.Detail != "all done" {

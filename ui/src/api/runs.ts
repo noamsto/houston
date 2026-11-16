@@ -43,6 +43,28 @@ export interface CrewRef {
   detail?: string // latest status detail — the live phase
   sessions?: number // dispatch + resume rows seen for this worker
   home?: string // project of the repo whose bus holds this crew's dir; absent when none or several do
+  origin?: string // 'local' | 'remote_worker' | 'peer' from crew's view; absent when crew did not say
+  host?: string // crew's host name for a remote_worker or peer row
+  attention?: CrewAttention[] // crew's attention items for this worker (a dispatcher run: its crew-scoped items)
+  view_notice?: string // dispatcher runs only: why crew's view is unavailable or unsupported
+}
+
+export interface CrewAttention {
+  id: string
+  kind: string
+  severity: string
+  message: string
+  age_sec: number
+  command?: string // display-only text for an item houston will not run
+  action?: CrewAction
+}
+
+export interface CrewAction {
+  verb: string
+  label: string
+  command: string
+  needs_input: boolean
+  pr?: number
 }
 
 export interface TrailChip {

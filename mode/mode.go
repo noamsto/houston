@@ -74,18 +74,26 @@ func Resolve(ctx context.Context, requested Mode, p Probe) (m Mode, reason strin
 	return m, reason
 }
 
-// OnPath reports whether name is an executable regular file in some absolute
-// element of path. An empty or relative element never matches: exec.LookPath
-// refuses a match it finds there (exec.ErrDot), so dispatch could not run it.
-func OnPath(name, path string) bool {
+// Find returns the first executable regular file named name in an absolute
+// element of path. Relative and empty elements never match, as in OnPath.
+func Find(name, path string) (string, bool) {
 	for _, dir := range filepath.SplitList(path) {
 		if !filepath.IsAbs(dir) {
 			continue
 		}
-		info, err := os.Stat(filepath.Join(dir, name))
+		file := filepath.Join(dir, name)
+		info, err := os.Stat(file)
 		if err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0 {
-			return true
+			return file, true
 		}
 	}
-	return false
+	return "", false
+}
+
+// OnPath reports whether name is an executable regular file in some absolute
+// element of path. An empty or relative element never matches: exec.LookPath
+// refuses a match it finds there (exec.ErrDot), so dispatch could not run it.
+func OnPath(name, path string) bool {
+	_, ok := Find(name, path)
+	return ok
 }

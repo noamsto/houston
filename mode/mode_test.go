@@ -176,6 +176,32 @@ func writeFile(t *testing.T, dir, name string, perm os.FileMode) {
 	}
 }
 
+func TestFind(t *testing.T) {
+	exec, plain := t.TempDir(), t.TempDir()
+	writeFile(t, exec, "crew", 0o755)
+	writeFile(t, plain, "crew", 0o644)
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rel, err := filepath.Rel(cwd, exec)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, ok := Find("crew", plain+sep+exec)
+	if want := filepath.Join(exec, "crew"); !ok || got != want {
+		t.Errorf("Find(crew, nonexec:exec) = %q, %v; want %q, true", got, ok, want)
+	}
+	if got, ok := Find("crew", rel); ok {
+		t.Errorf("Find(crew, %q) = %q, true; relative element must be skipped", rel, got)
+	}
+	if got, ok := Find("crew", ""); ok || got != "" {
+		t.Errorf("Find(crew, \"\") = %q, %v; want \"\", false", got, ok)
+	}
+}
+
 func TestOnPath(t *testing.T) {
 	exec, plain, other := t.TempDir(), t.TempDir(), t.TempDir()
 	writeFile(t, exec, "crew", 0o755)

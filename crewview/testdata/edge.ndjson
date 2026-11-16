@@ -1,0 +1,4 @@
+{"schema_version":2,"view":"overview"}
+{"schema_version":1,"view":"fleet"}
+{not json
+{"schema_version":1,"view":"overview","generated_at":100,"workers":[],"attention":[],"errors":[]}
