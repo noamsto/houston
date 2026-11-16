@@ -372,3 +372,51 @@ func TestSpliceHeldRebasesAges(t *testing.T) {
 		})
 	}
 }
+
+// On a per-crew hold the view's peer rows and items stand: a snapshot peer item
+// never returns on a live peer row (resolved) or twice (same item), and a
+// snapshot peer row the view lacks is spliced back and reported. A whole-roster
+// failure still takes every row from the snapshot.
+func TestSpliceHeldKeepsLivePeerRows(t *testing.T) {
+	const gen = int64(10_000)
+	peer := func(branch, state string, age int64) crewview.Worker {
+		return crewview.Worker{Crew: "c1", Branch: branch, Origin: crewview.OriginPeer, State: state, AgeSec: ip(age)}
+	}
+	item := func(branch string, age int64) crewview.Item {
+		return crewview.Item{ID: "blocked:c1:" + branch, Crew: "c1", Branch: branch, Origin: crewview.OriginPeer, Kind: "blocked", AgeSec: age}
+	}
+	prev := map[string]rosterSnap{"c1": {
+		at:      gen - 300,
+		workers: []crewview.Worker{peer("same", "blocked", 1), peer("fixed", "blocked", 1), peer("gone", "working", 1)},
+		items:   []crewview.Item{item("same", 5), item("fixed", 5), item("gone", 5)},
+	}}
+	view := crewview.Overview{
+		GeneratedAt: gen,
+		Workers:     []crewview.Worker{peer("same", "blocked", 2), peer("fixed", "working", 2), peer("new", "working", 2)},
+		Attention:   []crewview.Item{item("same", 6)},
+	}
+
+	got, _, held, spliced := spliceHeld(view, heldCrewsOf([]string{"crew c1: workers: timeout"}), prev)
+	if !held["c1"] {
+		t.Fatalf("held = %v, want c1", held)
+	}
+	if want := map[rowKey]bool{{"c1", "gone"}: true}; !reflect.DeepEqual(spliced, want) {
+		t.Errorf("spliced = %v, want %v", spliced, want)
+	}
+	states := map[string]string{}
+	for _, w := range got.Workers {
+		states[w.Branch] = w.State
+	}
+	if want := map[string]string{"same": "blocked", "fixed": "working", "new": "working", "gone": "working"}; !reflect.DeepEqual(states, want) {
+		t.Errorf("workers = %v, want %v", states, want)
+	}
+	want := []crewview.Item{item("same", 6), item("gone", 305)}
+	if !reflect.DeepEqual(got.Attention, want) {
+		t.Errorf("items = %+v, want %+v", got.Attention, want)
+	}
+
+	_, _, _, spliced = spliceHeld(view, heldCrewsOf([]string{"roster: crew crews: exit 1"}), prev)
+	if len(spliced) != 3 {
+		t.Errorf("whole-roster spliced = %v, want all 3 snapshot rows", spliced)
+	}
+}

@@ -124,7 +124,7 @@ func spliceHeld(ov crewview.Overview, held heldCrews, prev map[string]rosterSnap
 	workers := make([]crewview.Worker, 0, len(ov.Workers))
 	for _, w := range ov.Workers {
 		if heldIDs[w.Crew] {
-			if w.Origin != crewview.OriginPeer {
+			if w.Origin != crewview.OriginPeer || held.all {
 				continue
 			}
 			livePeers[rowKey{w.Crew, w.Branch}] = true
@@ -173,7 +173,7 @@ func spliceHeld(ov crewview.Overview, held heldCrews, prev map[string]rosterSnap
 			workers = append(workers, w)
 		}
 		for _, it := range snap.items {
-			if (it.Branch == "" && !held.all) || (it.Origin == crewview.OriginPeer && liveItems[it.ID]) {
+			if (it.Branch == "" && !held.all) || (it.Origin == crewview.OriginPeer && (liveItems[it.ID] || livePeers[rowKey{it.Crew, it.Branch}])) {
 				continue
 			}
 			it.AgeSec += shift
