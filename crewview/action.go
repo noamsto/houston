@@ -39,11 +39,15 @@ func Executable(it Item) bool { return Check(it) == nil }
 // Args returns the argv after the crew binary, with text substituted for a
 // reply's placeholder.
 func Args(it Item, text string) ([]string, error) {
+	a := it.Action
+	if a == nil || len(a.Argv) == 0 {
+		return nil, ErrNotExecutable
+	}
 	if err := Check(it); err != nil {
 		return nil, err
 	}
-	args := slices.Clone(it.Action.Argv[1:])
-	if it.Action.Verb != "reply" {
+	args := slices.Clone(a.Argv[1:])
+	if a.Verb != "reply" {
 		return args, nil
 	}
 	if strings.TrimSpace(text) == "" || len(text) > MaxReplyText {
@@ -57,6 +61,9 @@ func Args(it Item, text string) ([]string, error) {
 // or nil when the verb is not runnable from houston.
 func shape(it Item) []string {
 	a := it.Action
+	if a == nil {
+		return nil
+	}
 	switch a.Verb {
 	case "peek":
 		if it.Branch == "" {

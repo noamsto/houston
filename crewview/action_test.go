@@ -9,7 +9,11 @@ import (
 
 func goldenItems(t *testing.T) map[string]Item {
 	t.Helper()
-	ov, err := Decode(readLines(t, "overview.ndjson")[0])
+	lines := readLines(t, "overview.ndjson")
+	if len(lines) == 0 {
+		t.Fatal("golden overview.ndjson is empty")
+	}
+	ov, err := Decode(lines[0])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,14 +36,20 @@ func golden(t *testing.T, id string) Item {
 // withArgv returns a copy of it whose action carries argv, leaving the golden
 // item's slices untouched.
 func withArgv(it Item, argv ...string) Item {
-	a := *it.Action
+	var a Action
+	if it.Action != nil {
+		a = *it.Action
+	}
 	a.Argv = argv
 	it.Action = &a
 	return it
 }
 
 func withPR(it Item, pr *int) Item {
-	a := *it.Action
+	var a Action
+	if it.Action != nil {
+		a = *it.Action
+	}
 	a.PR = pr
 	it.Action = &a
 	return it
@@ -90,8 +100,12 @@ func TestActionArgsFreshSlice(t *testing.T) {
 		t.Fatal(err)
 	}
 	got[0] = "nudge"
-	if it.Action.Argv[1] != "where" {
-		t.Errorf("Args aliases the action argv: argv[1] = %q", it.Action.Argv[1])
+	a := it.Action
+	if a == nil || len(a.Argv) < 2 {
+		t.Fatal("golden item has no action argv")
+	}
+	if a.Argv[1] != "where" {
+		t.Errorf("Args aliases the action argv: argv[1] = %q", a.Argv[1])
 	}
 }
 
@@ -139,6 +153,9 @@ func TestActionNotExecutable(t *testing.T) {
 	noAction.Action = nil
 	peekVerbNudgeSub := withArgv(peek, "crew", "nudge", "--crew", "c1", "--", "feat/h")
 	replyVerbWrongPlaceholder := withArgv(reply, "crew", "reply", "--crew", "c1", "--", "worker:feat/c", "hi")
+	if nudge.Action == nil {
+		t.Fatal("golden nudge item has no action")
+	}
 	nudgeAsMergeVerb := nudge
 	nudgeAsMergeVerb.Action = &Action{Verb: "merge", Argv: nudge.Action.Argv, PR: intp(12)}
 	codename := withWorker(nudge, "otter")

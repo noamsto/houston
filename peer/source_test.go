@@ -667,6 +667,9 @@ func TestSanitiseDropsCrewAttentionActions(t *testing.T) {
 			t.Errorf("item %s kept its action", a.ID)
 		}
 	}
+	if len(in.Crew.Attention) == 0 {
+		t.Fatal("sanitise emptied the input's attention")
+	}
 	if in.Crew.Attention[0].Action == nil {
 		t.Error("sanitise mutated the input's attention")
 	}
