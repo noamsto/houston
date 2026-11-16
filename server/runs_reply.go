@@ -52,12 +52,6 @@ func crewReplyRunner(crewPath string) replyRunner {
 	}
 }
 
-// execCrewReply runs Argv[0] as given, for tests that exercise the runner
-// without a crew binary.
-func execCrewReply(ctx context.Context, x replyExec) replyResult {
-	return crewReplyRunner(x.Argv[0])(ctx, x)
-}
-
 // handleRunReply delivers a crew answer to a blocked worker.
 //
 //	POST /api/runs/{id}/reply  {"text": "<answer>"} → 204

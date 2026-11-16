@@ -222,11 +222,10 @@ func crewRunAbandoned(b crewBranch, windowless, dispatcherAlive bool, now time.T
 // "crew/<bus>/<branch>"; for a worker crew's view reports on another machine,
 // CrewRemoteKey. Only workers in crew's view are listed, except that a crew
 // whose roster the view reports failing is read from its last listed rows,
-// marked stale (spliceHeld). It also
-// returns, under its pane id, a dispatcher layer for every crew that joins its
-// dispatcher pane (joinDispatchers) — Role, crew id, bus, the crew's own
-// attention items and the view's notice and errors, so the key lists only while
-// another layer supplies an agent.
+// marked stale (spliceHeld). It also returns, under its pane id, a dispatcher
+// layer for every crew that joins its dispatcher pane (joinDispatchers) — Role,
+// crew id, bus, the crew's own attention items and the view's notice and
+// errors, so the key lists only while another layer supplies an agent.
 //
 // ok=false means a tmux query failed — a transient error, not evidence every
 // crew-sourced branch vanished. The caller must skip the tick entirely rather

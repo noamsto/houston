@@ -25,6 +25,12 @@ const (
 	replyDir    = "/tmp/houston-reply-worktree"
 )
 
+// execCrewReply runs Argv[0] as given, so the real runner runs without a crew
+// binary.
+func execCrewReply(ctx context.Context, x replyExec) replyResult {
+	return crewReplyRunner(x.Argv[0])(ctx, x)
+}
+
 // stubRunner stands in for the real crew invocation. Its call count is the
 // only way to prove a refusal happened before anything ran.
 type stubRunner struct {

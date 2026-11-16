@@ -864,9 +864,8 @@ const busFixtureNow = 2000
 
 // crewScanner builds a CrewSource whose bus lookup is pre-seeded, so scan()
 // exercises the join without shelling out to git. views is crew's view per bus
-// (nil lists no worker). procStart defaults to
-// startAt(0) — unknown, so a terminal join fails closed unless a test
-// overrides s.procStart. procs likewise knows no start time, so a crew with a
+// (nil lists no worker). procStart defaults to startAt(0) — unknown, so a
+// terminal join fails closed unless a test overrides s.procStart. procs likewise knows no start time, so a crew with a
 // pid file does not join its dispatcher pane unless a test overrides s.procs.
 func crewScanner(dirs map[string]string, views crewViews, wins []tmux.WindowOptions, panes []tmux.PaneOptions, sessions ...hookSessions) *CrewSource {
 	s := &CrewSource{

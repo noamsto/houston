@@ -33,7 +33,6 @@ func TestCrewRunsFromViewGolden(t *testing.T) {
 	}
 	l := got.local
 
-	// replaces: bus fold working-status case
 	a := l["feat/a"]
 	if a.State != StateRunning || a.Crew.Detail != "execute" || a.Crew.Codename != "otter" ||
 		a.Crew.Tier != "standard" || a.Crew.Model != "sonnet" || a.Crew.Title != "Task feat/a" ||
@@ -44,24 +43,20 @@ func TestCrewRunsFromViewGolden(t *testing.T) {
 		t.Errorf("UpdatedAt = %d, want %d", a.UpdatedAt, want)
 	}
 
-	// replaces: pr_open / PR number case
 	if b := l["feat/b"]; b.State != StateReview || b.PR == nil || b.PR.Number != "12" || b.PR.URL != "https://github.com/o/r/pull/12" {
 		t.Errorf("feat/b = %+v", b.Run)
 	}
 
-	// replaces: blocked-with-detail question case
 	c := l["feat/c"]
 	if c.State != StateBlocked || c.Question == nil || *c.Question != (Question{Text: "which schema should the migration target?", Via: "crew", Kind: QuestionCrew}) {
 		t.Errorf("feat/c = %+v q %+v", c.Run, c.Question)
 	}
 
-	// replaces: watchdog prompt case
 	d := l["feat/d"]
 	if d.State != StateBlocked || d.Question == nil || *d.Question != (Question{Text: crewWatchdogPromptNote, Via: "pane", Kind: QuestionDialog}) || d.Crew.Detail != "" {
 		t.Errorf("feat/d = %+v q %+v", d.Run, d.Question)
 	}
 
-	// replaces: watchdog quiet / runaway stuck cases
 	e := l["feat/e"]
 	if e.State != StateRunning || e.Attention != AttentionStuck || e.AttentionNote != crewWatchdogQuietNote || e.Crew.Detail != "" || e.Question != nil {
 		t.Errorf("feat/e = %+v", e.Run)
@@ -73,7 +68,6 @@ func TestCrewRunsFromViewGolden(t *testing.T) {
 		t.Errorf("feat/f = %+v", f.Run)
 	}
 
-	// replaces: watchdog dead case
 	if g := l["feat/g"]; g.State != StateFailed || g.AttentionNote != crewWatchdogDeadNote || g.Crew.Detail != "" {
 		t.Errorf("feat/g = %+v", g.Run)
 	}
@@ -123,7 +117,6 @@ func oneWorker(state string, detail *string, age int64) crewview.Overview {
 }
 
 func TestCrewRunsFromViewBlockedNoDetail(t *testing.T) {
-	// replaces: blocked status without detail
 	v := oneWorker("blocked", nil, 0)
 	v.Attention = []crewview.Item{{ID: "blocked:c1:feat/x", Crew: "c1", Branch: "feat/x", Origin: "local", Kind: "blocked"}}
 	r := crewRunsFromView(v, nil, nil, blockedMemory{}).local["feat/x"]
@@ -133,7 +126,6 @@ func TestCrewRunsFromViewBlockedNoDetail(t *testing.T) {
 }
 
 func TestCrewRunsFromViewUnlistedWatchdogPrefix(t *testing.T) {
-	// replaces: watchdog load: prefix claims nothing
 	v := oneWorker("blocked", sp("load: host busy"), 0)
 	v.Attention = []crewview.Item{{ID: "w", Crew: "c1", Branch: "feat/x", Origin: "local", Kind: "watchdog", Message: "load: host busy"}}
 	r := crewRunsFromView(v, nil, nil, blockedMemory{}).local["feat/x"]
@@ -184,7 +176,6 @@ func TestCrewRunsFromViewBlockedSince(t *testing.T) {
 }
 
 func TestCrewRunsFromViewReplyShim(t *testing.T) {
-	// replaces: dispatcher reply clears a blocked question
 	const g = 1000000
 	v := oneWorker("blocked", sp("q?"), 300)
 	v.GeneratedAt = g
@@ -197,7 +188,6 @@ func TestCrewRunsFromViewReplyShim(t *testing.T) {
 }
 
 func TestCrewRunsFromViewWatchdogPrefixes(t *testing.T) {
-	// replaces: bus fold watchdog prefix table
 	cases := []struct {
 		msg  string
 		att  Attention
@@ -230,7 +220,6 @@ func TestCrewRunsFromViewWatchdogPrefixes(t *testing.T) {
 }
 
 func TestCrewRunsFromViewStates(t *testing.T) {
-	// replaces: bus fold done/pr_open and worker-failed/exited cases
 	for state, want := range map[string]State{"done": StateDone, "pr_open": StateReview, "failed": StateFailed, "exited": StateFailed} {
 		r := crewRunsFromView(oneWorker(state, sp("gate won't pass"), 0), nil, nil, blockedMemory{}).local["feat/x"]
 		if r.State != want || r.Attention != "" || r.AttentionNote != "" || r.Question != nil || r.Crew.Detail != "gate won't pass" {

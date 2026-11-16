@@ -73,7 +73,6 @@ func runCrew(ctx context.Context, crewPath string, x crewExec) crewResult {
 	return res
 }
 
-// crewEnv is base without strippedCrewEnv, plus CREW_ID when crewID is set.
 func crewEnv(base []string, crewID string) []string {
 	env := make([]string, 0, len(base)+1)
 	for _, kv := range base {

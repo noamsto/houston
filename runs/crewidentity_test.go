@@ -101,7 +101,6 @@ func TestReadIdentityLogCachesOnSizeAndMtime(t *testing.T) {
 }
 
 func TestIdentitySurvivesGarbageLines(t *testing.T) {
-	// replaces: bus fold garbage-line case
 	ids, _ := identityFromCrewLog(strings.NewReader("not json at all\n" + idDispatch + "\n"))
 	if ids["feat/a"].codename != "otter" {
 		t.Fatalf("a torn line stopped later rows being read: %+v", ids)
@@ -109,7 +108,6 @@ func TestIdentitySurvivesGarbageLines(t *testing.T) {
 }
 
 func TestIdentityLastWellFormedDispatchStands(t *testing.T) {
-	// replaces: bus fold codename and colour cases
 	log := `{"ts":1,"crew_id":"c1","kind":"dispatch","branch":"c","name":"ok","tmux":"#ff0000"}
 {"ts":4,"crew_id":"c1","kind":"dispatch","branch":"d","name":"old","tmux":"colour25"}
 {"ts":5,"crew_id":"c1","kind":"dispatch","branch":"d","name":"Bad name","tmux":"colour131"}
@@ -124,7 +122,6 @@ func TestIdentityLastWellFormedDispatchStands(t *testing.T) {
 }
 
 func TestIdentityWorkerSilent(t *testing.T) {
-	// replaces: bus fold workerSilent table
 	const b = "feat/303"
 	release := `{"kind":"release","branch":"feat/303","ts":1300}` + "\n"
 	claim := `{"kind":"claim","branch":"feat/303","ts":1400}` + "\n"
@@ -153,7 +150,6 @@ func TestIdentityWorkerSilent(t *testing.T) {
 }
 
 func TestIdentityRepliesOnlyFromTheDispatcherToTheirBranch(t *testing.T) {
-	// replaces: bus fold answered-question cases for another branch and a non-dispatcher sender
 	log := `{"ts":3000,"crew_id":"c1","from":"dispatcher:c1","to":"worker:other/branch#s1","kind":"msg","body":"unrelated"}
 {"ts":3100,"crew_id":"c1","from":"worker:other#s1","to":"worker:fix/9#s1","kind":"msg","body":"not the dispatcher"}
 `
