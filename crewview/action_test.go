@@ -202,6 +202,8 @@ func TestActionNotExecutable(t *testing.T) {
 		{"merge N leading zero", withArgv(merge, "crew", "merge", "012", "--crew", "c1")},
 		{"merge N not pr", withArgv(merge, "crew", "merge", "13", "--crew", "c1")},
 		{"merge pr nil", withPR(merge, nil)},
+		{"merge pr zero", withArgv(withPR(merge, intp(0)), "crew", "merge", "0", "--crew", "c1")},
+		{"merge pr negative", withArgv(withPR(merge, intp(-1)), "crew", "merge", "-1", "--crew", "c1")},
 		{"peek extra trailing element", withArgv(peek, "crew", "where", "--crew", "c1", "--", "feat/h", "extra")},
 		{"nudge extra trailing element", withArgv(nudge, "crew", "nudge", "--crew", "c1", "--", "feat/e", "extra")},
 		{"reply extra trailing element", withArgv(reply, "crew", "reply", "--crew", "c1", "--", "worker:feat/c", "<text>", "extra")},

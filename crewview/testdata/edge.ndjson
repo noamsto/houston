@@ -2,3 +2,4 @@
 {"schema_version":1,"view":"fleet"}
 {not json
 {"schema_version":1,"view":"overview","generated_at":100,"workers":[],"attention":[],"errors":[]}
+{"view":"overview","generated_at":1,"workers":[],"attention":[],"errors":[]}

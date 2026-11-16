@@ -29,11 +29,13 @@ type crewViewer interface {
 
 // handleRunCrewAction runs one attention item's action from crew's view.
 //
-//	POST /api/runs/{id}/crew/action {"item":"<id>","text"?,"confirm"?} → 200 {"output"}
+//	POST /api/runs/{id}/crew/action {"item":"<id>","text"?,"confirm"?,"pr"?} → 200 {"output"}
 //
 // The client names a run and an item, never a command: the argv is the one
 // crew's current view carries for that item, checked against the allowlisted
-// shapes, and argv[0] is replaced by houston's own resolved crew.
+// shapes, and argv[0] is replaced by houston's own resolved crew. A merge runs
+// only on confirm with the pr the view holds now: without confirm it answers
+// 428, with another pr 409, both {"confirm","pr"} naming the current PR.
 func (s *Server) handleRunCrewAction(w http.ResponseWriter, r *http.Request) {
 	out := &crewActionLog{id: r.PathValue("id")}
 	defer out.emit()
@@ -70,6 +72,7 @@ func (s *Server) handleRunCrewAction(w http.ResponseWriter, r *http.Request) {
 		Item    string `json:"item"`
 		Text    string `json:"text"`
 		Confirm bool   `json:"confirm"`
+		PR      int    `json:"pr"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		var tooBig *http.MaxBytesError
@@ -93,9 +96,13 @@ func (s *Server) handleRunCrewAction(w http.ResponseWriter, r *http.Request) {
 	}
 	out.verb = item.Action.Verb
 	merge := item.Action.Verb == "merge"
-	if merge && !body.Confirm {
+	if merge && (!body.Confirm || body.PR != *item.Action.PR) {
+		pr := *item.Action.PR
 		out.status = http.StatusPreconditionRequired
-		writeDispatchJSON(w, out.status, map[string]string{"confirm": "Squash-merge PR #" + strconv.Itoa(*item.Action.PR) + "?"})
+		if body.Confirm {
+			out.status = http.StatusConflict
+		}
+		writeDispatchJSON(w, out.status, crewConfirm{Confirm: "Squash-merge PR #" + strconv.Itoa(pr) + "?", PR: pr})
 		return
 	}
 	args, err := crewview.Args(item, body.Text)
@@ -113,7 +120,9 @@ func (s *Server) handleRunCrewAction(w http.ResponseWriter, r *http.Request) {
 	if merge {
 		timeout = crewMergeTimeout
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), timeout)
+	// Detached from the request: a phone dropping its connection mid-merge must
+	// not kill crew while gh finishes the merge, leaving the worker unreleased.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), timeout)
 	defer cancel()
 	res := s.crewRunner(ctx, s.crewPath, crewExec{Dir: root, CrewID: item.Crew, Args: args})
 
@@ -133,6 +142,11 @@ func (s *Server) handleRunCrewAction(w http.ResponseWriter, r *http.Request) {
 		out.status = http.StatusOK
 		writeDispatchJSON(w, out.status, map[string]string{"output": res.Stdout})
 	}
+}
+
+type crewConfirm struct {
+	Confirm string `json:"confirm"`
+	PR      int    `json:"pr"`
 }
 
 // ownedItem finds id in view among the items run may act on: a worker's own

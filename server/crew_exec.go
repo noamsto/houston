@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/noamsto/houston/mode"
@@ -39,8 +40,12 @@ func runCrew(ctx context.Context, crewPath string, x crewExec) crewResult {
 	cmd := exec.CommandContext(ctx, crewPath, x.Args...) //nolint:gosec // callers build Args from validated run ids and enums; the binary is resolved once at startup
 	cmd.Dir = x.Dir
 	cmd.Env = crewEnv(os.Environ(), x.CrewID)
-	// A grandchild such as gh under `crew merge` can hold the captured pipes
-	// open past the deadline.
+	// A timeout signals crew's whole process group: a gh left running under
+	// `crew merge` would finish the merge with nobody to release the worker.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM) }
+	// A grandchild that ignores SIGTERM can hold the captured pipes open past
+	// the deadline.
 	cmd.WaitDelay = 2 * time.Second
 	stdout := &cappedBuffer{max: crewStdoutCap}
 	stderr := &cappedBuffer{max: crewStderrCap}
@@ -56,8 +61,8 @@ func runCrew(ctx context.Context, crewPath string, x crewExec) crewResult {
 	switch {
 	case err == nil:
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
-		// A timeout kills the child, so Run reports "signal: killed" — an
-		// ExitError. Checking the context first keeps a timeout from being
+		// A timeout signals the child, so Run reports "signal: terminated" —
+		// an ExitError. Checking the context first keeps a timeout from being
 		// misread as crew's own refusal.
 		res.Err = context.DeadlineExceeded
 	case errors.As(err, &exitErr):

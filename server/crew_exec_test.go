@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -117,5 +119,42 @@ func TestRunCrewExecTimeoutWithGrandchildHoldingPipes(t *testing.T) {
 	}
 	if d := time.Since(start); d > 3*time.Second {
 		t.Errorf("took %v, want under 3s", d)
+	}
+}
+
+// A timeout reaches crew's children too: a gh left running would finish the
+// merge with nobody to release the worker.
+func TestRunCrewExecTimeoutKillsGrandchild(t *testing.T) {
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "pids")
+	script := writeCrewScript(t, dir, "sleep 30 &\necho \"$$ $!\" > "+pidFile+"\nwait")
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	res := runCrew(ctx, script, crewExec{Dir: dir})
+	if !errors.Is(res.Err, context.DeadlineExceeded) {
+		t.Errorf("res = %+v, want DeadlineExceeded", res)
+	}
+	b, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := strings.Fields(string(b))
+	if len(fields) != 2 {
+		t.Fatalf("pid file %q, want script and grandchild pids", b)
+	}
+	for _, f := range fields {
+		pid, err := strconv.Atoi(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.Now().Add(3 * time.Second)
+		for syscall.Kill(pid, 0) != syscall.ESRCH {
+			if time.Now().After(deadline) {
+				_ = syscall.Kill(pid, syscall.SIGKILL)
+				t.Fatalf("pid %d still alive 3s after the timeout", pid)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
 	}
 }

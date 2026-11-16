@@ -243,31 +243,87 @@ func TestCrewActionReply(t *testing.T) {
 	}
 }
 
+type confirmBody struct {
+	Confirm string `json:"confirm"`
+	PR      int    `json:"pr"`
+}
+
+func wantConfirm(t *testing.T, rec *httptest.ResponseRecorder, code int) {
+	t.Helper()
+	var got confirmBody
+	if rec.Code != code {
+		t.Fatalf("status %d %q, want %d", rec.Code, rec.Body.String(), code)
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || got != (confirmBody{Confirm: "Squash-merge PR #12?", PR: 12}) {
+		t.Fatalf("body %q (%v), want the current PR's confirm prompt", rec.Body.String(), err)
+	}
+}
+
 func TestCrewActionMergeNeedsConfirm(t *testing.T) {
 	f := newActionServer(t)
 	id := f.runID(t, runs.RoleWorker, "feat/b")
 
-	rec := f.post(t, id, `{"item":"merge_ready:c1:feat/b"}`)
-	if rec.Code != http.StatusPreconditionRequired {
-		t.Fatalf("status %d %q, want 428", rec.Code, rec.Body.String())
-	}
-	var got struct {
-		Confirm string `json:"confirm"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || got.Confirm != "Squash-merge PR #12?" {
-		t.Fatalf("body %q (%v), want confirm prompt", rec.Body.String(), err)
-	}
+	wantConfirm(t, f.post(t, id, `{"item":"merge_ready:c1:feat/b"}`), http.StatusPreconditionRequired)
+	wantConfirm(t, f.post(t, id, `{"item":"merge_ready:c1:feat/b","pr":12}`), http.StatusPreconditionRequired)
 	if f.runner.count() != 0 {
 		t.Fatal("merge ran without confirmation")
 	}
 
-	wantAction(t, f.post(t, id, `{"item":"merge_ready:c1:feat/b","confirm":true}`), http.StatusOK, "output")
+	wantAction(t, f.post(t, id, `{"item":"merge_ready:c1:feat/b","confirm":true,"pr":12}`), http.StatusOK, "output")
 	call := f.runner.last(t)
 	if want := []string{"merge", "12", "--crew", "c1"}; !slices.Equal(call.x.Args, want) {
 		t.Fatalf("args %q, want %q", call.x.Args, want)
 	}
 	if !call.hasDL || call.deadline < 100*time.Second {
 		t.Fatalf("merge deadline %v (set %v), want ≥ 100s", call.deadline, call.hasDL)
+	}
+}
+
+// A confirmation names the PR the operator saw; the view may hold another by
+// the time it arrives, and then nothing merges.
+func TestCrewActionMergeConfirmBoundToPR(t *testing.T) {
+	for _, body := range []string{
+		`{"item":"merge_ready:c1:feat/b","confirm":true}`,
+		`{"item":"merge_ready:c1:feat/b","confirm":true,"pr":11}`,
+		`{"item":"merge_ready:c1:feat/b","confirm":true,"pr":0}`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			f := newActionServer(t)
+			wantConfirm(t, f.post(t, f.runID(t, runs.RoleWorker, "feat/b"), body), http.StatusConflict)
+			if f.runner.count() != 0 {
+				t.Fatal("merge ran on a confirmation for another PR")
+			}
+		})
+	}
+}
+
+// A phone dropping its connection must not cancel crew mid-action: crew merge
+// releases its worker only after gh returns.
+func TestCrewActionOutlivesClient(t *testing.T) {
+	f := newActionServer(t)
+	clientCtx, cancelClient := context.WithCancel(context.Background())
+	defer cancelClient()
+	var errAfterCancel error
+	var hasDL bool
+	f.s.crewRunner = func(ctx context.Context, _ string, _ crewExec) crewResult {
+		_, hasDL = ctx.Deadline()
+		cancelClient()
+		select {
+		case <-ctx.Done():
+		case <-time.After(100 * time.Millisecond):
+		}
+		errAfterCancel = ctx.Err()
+		return crewResult{Stdout: "done\n"}
+	}
+
+	req := replyRequest("POST", "/api/runs/"+f.runID(t, runs.RoleWorker, "feat/b")+"/crew/action",
+		`{"item":"merge_ready:c1:feat/b","confirm":true,"pr":12}`).WithContext(clientCtx)
+	doReply(t, f.s, req)
+	if errAfterCancel != nil {
+		t.Fatalf("runner ctx err after client cancel = %v, want nil", errAfterCancel)
+	}
+	if !hasDL {
+		t.Fatal("runner ctx has no deadline")
 	}
 }
 

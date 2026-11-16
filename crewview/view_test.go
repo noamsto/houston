@@ -67,8 +67,8 @@ func TestDecodeGolden(t *testing.T) {
 
 func TestDecodeEdge(t *testing.T) {
 	lines := readLines(t, "edge.ndjson")
-	if len(lines) != 4 {
-		t.Fatalf("edge has %d lines, want 4", len(lines))
+	if len(lines) != 5 {
+		t.Fatalf("edge has %d lines, want 5", len(lines))
 	}
 
 	var ue *UnsupportedError
@@ -89,5 +89,9 @@ func TestDecodeEdge(t *testing.T) {
 	}
 	if len(ov.Workers) != 0 || len(ov.Attention) != 0 || len(ov.Errors) != 0 || ov.GeneratedAt != 100 {
 		t.Errorf("line 4: got %+v", ov)
+	}
+	ue = nil
+	if _, err := Decode(lines[4]); !errors.As(err, &ue) || ue.Version != 0 {
+		t.Errorf("line 5: err = %v, want UnsupportedError version 0", err)
 	}
 }

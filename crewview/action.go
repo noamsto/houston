@@ -82,7 +82,7 @@ func shape(it Item) []string {
 		}
 		return []string{"reply", "--crew", it.Crew, "--", "worker:" + it.Branch, replyPlaceholder}
 	case "merge":
-		if a.PR == nil {
+		if a.PR == nil || *a.PR <= 0 {
 			return nil
 		}
 		return []string{"merge", strconv.Itoa(*a.PR), "--crew", it.Crew}
