@@ -106,6 +106,19 @@ func (s *Server) peerOr(rt peerRoute, local http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// localOnlyRun refuses a peer run id before anything else and hands every
+// other id to local. Its route is never forwarded: a peer's actions run on the
+// peer.
+func localOnlyRun(local http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.PathValue("id"), "peer-") {
+			http.Error(w, "peer actions are not available", http.StatusForbidden)
+			return
+		}
+		local(w, r)
+	}
+}
+
 // peerTarget resolves peer-NAME.<peer id> to its source, refusing before any
 // dial unless the registry lists that run from that peer, so only ids the
 // peer itself published ever reach it.

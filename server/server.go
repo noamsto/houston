@@ -130,6 +130,12 @@ type Server struct {
 	// never logged.
 	crewPath string
 
+	// crewViews holds crew's current view per bus, the only source of a crew
+	// action's argv; nil until wired, which the action route answers 503.
+	// crewRunner runs one crew action, a field so a test can observe what ran.
+	crewViews  crewViewer
+	crewRunner func(ctx context.Context, crewPath string, x crewExec) crewResult
+
 	// wsRepos classifies a @git_root as a main checkout or a linked
 	// worktree for the Workspace tab's bucketing.
 	wsRepos mainCheckoutChecker
@@ -335,6 +341,7 @@ func New(cfg Config) (*Server, error) {
 		hub:            hub.NewWithOptions(cfg.StatusDir, hub.Options{Mod: modStore}, slog.Default()),
 		replyRunner:    crewReplyRunner(crewPath),
 		crewPath:       crewPath,
+		crewRunner:     runCrew,
 		wsRepos:        newRepoClassifier(),
 		wsTmux:         tmuxClient,
 		runPanes:       tmuxClient,
@@ -547,6 +554,7 @@ func (s *Server) Handler() http.Handler {
 	// launch, repo registry) unregistered, so they 404.
 	if s.mode != mode.Tmux {
 		apiMux.HandleFunc("POST /api/runs/{id}/reply", s.peerOr(fwdReply, s.handleRunReply))
+		apiMux.HandleFunc("POST /api/runs/{id}/crew/action", localOnlyRun(s.handleRunCrewAction))
 		apiMux.HandleFunc("POST /api/runs/{id}/restart", s.peerOr(fwdRestart, s.handleRunRestart))
 		apiMux.HandleFunc("GET /api/runs/{id}/crew/feed", s.peerOr(fwdCrewFeed, s.handleRunCrewFeed))
 		apiMux.HandleFunc("GET /api/runs/{id}/crew/feed/stream", s.peerOr(fwdCrewFeedStream, s.handleRunCrewFeedStream))
