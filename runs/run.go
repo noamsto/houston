@@ -78,8 +78,10 @@ type Run struct {
 	//
 	// ConnectionSource sets it while a run's tmux session has no control
 	// connection, and clears it by dropping that marker layer (Apply replaces
-	// a source's layer wholesale). mergeInto ORs it across layers, so a layer
-	// that publishes no Stale opinion never blanks another's.
+	// a source's layer wholesale). CrewSource sets it on a worker read from
+	// its crew's last listed rows while crew cannot read that roster
+	// (spliceHeld). mergeInto ORs it across layers, so a layer that publishes
+	// no Stale opinion never blanks another's.
 	Stale bool `json:"stale,omitempty"`
 
 	Caps Caps `json:"caps"`
@@ -122,15 +124,43 @@ type PRRef struct {
 }
 
 type CrewRef struct {
-	Name     string `json:"name"`               // crew id — the grouping key. Crew bus only. "" when only tmux knows this run.
-	Codename string `json:"codename,omitempty"` // This worker's codename: lazytmux @crew_name, else the crew bus's recorded dispatch identity.
-	Color    string `json:"color,omitempty"`    // "#rrggbb" or "". Same sources as Codename.
-	Tier     string `json:"tier,omitempty"`     // Crew bus only.
-	Title    string `json:"title,omitempty"`    // Task title from the dispatch record. Crew bus only.
-	Model    string `json:"model,omitempty"`    // Model the worker was dispatched on. Crew bus only.
-	Detail   string `json:"detail,omitempty"`   // Latest status detail — the live phase. Crew bus only.
-	Sessions int    `json:"sessions,omitempty"` // Dispatch and resume rows seen for this worker. Crew bus only.
-	Home     string `json:"home,omitempty"`     // Project of the one bus holding crews/<Name>; unset when none or several do. Crew bus only.
+	Name       string          `json:"name"`                  // crew id — the grouping key. Crew bus only. "" when only tmux knows this run.
+	Codename   string          `json:"codename,omitempty"`    // This worker's codename: lazytmux @crew_name, else the crew bus's recorded dispatch identity.
+	Color      string          `json:"color,omitempty"`       // "#rrggbb" or "". Same sources as Codename.
+	Tier       string          `json:"tier,omitempty"`        // Crew bus only.
+	Title      string          `json:"title,omitempty"`       // Task title from the dispatch record. Crew bus only.
+	Model      string          `json:"model,omitempty"`       // Model the worker was dispatched on. Crew bus only.
+	Detail     string          `json:"detail,omitempty"`      // Latest status detail — the live phase. Crew bus only.
+	Sessions   int             `json:"sessions,omitempty"`    // Dispatch and resume rows seen for this worker. Crew bus only.
+	Home       string          `json:"home,omitempty"`        // Project of the one bus holding crews/<Name>; unset when none or several do. Crew bus only.
+	Origin     string          `json:"origin,omitempty"`      // "local", "remote_worker" or "peer" from crew's view; "" when crew did not say.
+	Host       string          `json:"host,omitempty"`        // crew's host name for a remote_worker or peer row; "" for local.
+	Attention  []CrewAttention `json:"attention,omitempty"`   // crew's attention items for this worker, or for a dispatcher run its crew-scoped items.
+	ViewNotice string          `json:"view_notice,omitempty"` // dispatcher runs: why crew's view is unavailable or unsupported, and the errors it reports; a held worker (Run.Stale): crewRosterHeldNote.
+}
+
+// CrewAttention is one item from crew's view that needs the operator.
+type CrewAttention struct {
+	ID       string `json:"id"`
+	Kind     string `json:"kind"`
+	Severity string `json:"severity"`
+	Message  string `json:"message"`
+	Since    int64  `json:"since"` // unix seconds: view generated_at minus the item's age_sec, stable across views
+	// Command is display-only text for an item whose action houston will not
+	// run (an inspect verb); it is empty whenever Action is set or the item is
+	// peer-origin.
+	Command string      `json:"command,omitempty"`
+	Action  *CrewAction `json:"action,omitempty"`
+}
+
+// CrewAction is what the UI may offer for an item. The argv it runs never
+// leaves the server: the action route reads it from crew's view by item id.
+type CrewAction struct {
+	Verb       string `json:"verb"`
+	Label      string `json:"label"`
+	Command    string `json:"command"`
+	NeedsInput bool   `json:"needs_input"`
+	PR         *int   `json:"pr,omitempty"`
 }
 
 // Activity is what the run is doing right now.

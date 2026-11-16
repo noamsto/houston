@@ -5,6 +5,8 @@ import { crewShortId } from './fleetList'
 import { bucket, countsLabel, dispatchHref, type CrewCounts } from './crewsModel'
 import { CrewFeedList } from './CrewFeedList'
 import { RestartDispatcher } from './RestartDispatcher'
+import { CrewAttention } from './CrewAttention'
+import { CrewViewNotice } from './CrewViewNotice'
 import { ReplyComposer } from './ReplyComposer'
 import { openRun } from './nav'
 import { isFresh, isHistory, needsYou } from './staleness'
@@ -34,12 +36,19 @@ function Member({ run, now }: { run: Run; now: number }) {
   const attention = run.attention
   const meta = [run.crew?.tier, run.agent, run.crew?.model].filter(Boolean).join(' · ')
   const sessions = run.crew?.sessions ?? 0
+  const hasReplyAction = run.crew?.attention?.some((a) => a.action?.verb === 'reply') ?? false
+  const remote = run.crew?.origin === 'remote_worker' || run.crew?.origin === 'peer'
   return (
     <div className={`crews-member${attention ? ` ${attention}` : ''}${attention && stale ? ' muted' : ''}`}>
       <button type="button" className="crews-member-main" onClick={() => openRun(run.id)}>
         <span className="crews-member-head">
           <span className="crews-swatch" style={{ background: run.crew?.color || 'var(--text-faint)' }} />
           <span className="crews-codename">{run.crew?.codename || 'worker'}</span>
+          {remote && (
+            <span className="crew-host-chip" title="runs on another machine">
+              {run.crew?.host}
+            </span>
+          )}
           <span className="crews-when">
             {!attention && run.state === 'idle' && <span className="run-chip crews-idle">idle</span>}
             {attention && <span className={`run-chip crews-attention ${attention}`}>{ATTENTION_LABEL[attention]}</span>}
@@ -51,6 +60,7 @@ function Member({ run, now }: { run: Run; now: number }) {
         {!(run.question && phase(run) === run.question.text) && <span className="run-sub crews-phase">{phase(run)}</span>}
         {run.question && <span className="run-question crews-question">{run.question.text}</span>}
         {attention === 'stuck' && run.attention_note && <span className="crews-note">{run.attention_note}</span>}
+        {run.crew?.view_notice && <span className="crews-note">{run.crew.view_notice}</span>}
       </button>
       <span className="run-chips crews-chips">
         {run.pr &&
@@ -70,8 +80,9 @@ function Member({ run, now }: { run: Run; now: number }) {
         {sessions > 1 && <span className="run-chip crews-sessions">{sessions} sessions</span>}
         {run.stale === true && <span className="run-chip stale">stale</span>}
       </span>
-      {run.question?.via === 'crew' && <ReplyComposer runId={run.id} />}
-      {run.question?.via === 'pane' && <div className="crews-hint">Answer in the terminal — tap to open.</div>}
+      <CrewAttention runId={run.id} items={run.crew?.attention ?? []} />
+      {!remote && run.question?.via === 'crew' && !hasReplyAction && <ReplyComposer runId={run.id} />}
+      {!remote && run.question?.via === 'pane' && <div className="crews-hint">Answer in the terminal — tap to open.</div>}
     </div>
   )
 }
@@ -117,6 +128,8 @@ export function CrewTab({ run, runs, now }: CrewTabProps) {
         )}
         {run.crew?.name && <RestartDispatcher run={run} />}
       </div>
+      <CrewViewNotice notices={run.crew?.view_notice ? [run.crew.view_notice] : []} />
+      <CrewAttention runId={run.id} items={run.crew?.attention ?? []} />
       {members.map((m) => (
         <Member key={m.id} run={m} now={now} />
       ))}

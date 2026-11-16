@@ -71,6 +71,7 @@ func TestTmuxModeUnregistersDispatcherRoutes(t *testing.T) {
 		{"GET", "/api/runs/x/crew/feed"},
 		{"GET", "/api/runs/x/crew/feed/stream"},
 		{"POST", "/api/runs/x/restart"},
+		{"POST", "/api/runs/x/crew/action"},
 	} {
 		t.Run(r.method+" "+r.path, func(t *testing.T) {
 			if rec := modeRequest(t, h, r.method, r.path, "{}"); rec.Code != http.StatusNotFound {
@@ -146,7 +147,7 @@ func TestRunSourcesByMode(t *testing.T) {
 	} {
 		t.Run(string(tc.mode), func(t *testing.T) {
 			var got []string
-			for _, src := range runSources(tc.mode, h, tmux.NewClient(), cm, nil) {
+			for _, src := range runSources(tc.mode, h, tmux.NewClient(), cm, nil, nil) {
 				got = append(got, src.Name())
 			}
 			if !slices.Equal(got, tc.want) {

@@ -4,6 +4,8 @@ import type { Mode } from '../api/mode'
 import { needsYou } from './staleness'
 import { fleetEntries, groupEntriesByHost } from './fleetEntries'
 import type { Filter } from './fleetList'
+import { CrewViewNotice } from './CrewViewNotice'
+import { crewViewNotices } from './crewViewNotices'
 import { RunList } from './RunList'
 import { useGroupByProject } from '../hooks/useLayout'
 import './fleet.css'
@@ -27,6 +29,8 @@ export function FleetView({ runs, connected, now, mode, onOpen }: FleetViewProps
 
   const entries = useMemo(() => fleetEntries(runs, filter, now, mode), [runs, filter, now, mode])
 
+  const notices = useMemo(() => crewViewNotices(runs), [runs])
+
   const groups = useMemo(() => groupEntriesByHost(entries), [entries])
 
   return (
@@ -43,6 +47,8 @@ export function FleetView({ runs, connected, now, mode, onOpen }: FleetViewProps
           </button>
         </div>
       </header>
+
+      <CrewViewNotice notices={notices} />
 
       <nav className="fleet-filters" aria-label="filter runs">
         <button aria-pressed={filter === 'active'} className={filter === 'active' ? 'on' : ''} onClick={() => setFilter('active')}>Active</button>

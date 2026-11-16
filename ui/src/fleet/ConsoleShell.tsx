@@ -5,6 +5,8 @@ import { filterRuns, groupByHost, crewShortId, type Filter } from './fleetList'
 import { entryRuns } from './entryRuns'
 import { fleetEntries, groupEntriesByHost, narrowToCrew } from './fleetEntries'
 import { RunList } from './RunList'
+import { CrewViewNotice } from './CrewViewNotice'
+import { crewViewNotices } from './crewViewNotices'
 import { WorkspaceView } from './WorkspaceView'
 import { DispatchView } from './DispatchView'
 import { RunDetail } from './RunDetail'
@@ -36,6 +38,8 @@ export function ConsoleShell({ runs, connected, hasSnapshot, now, mode }: ShellD
     () => runs.filter((r) => needsYou(r, now)).length,
     [runs, now],
   )
+
+  const notices = useMemo(() => crewViewNotices(runs), [runs])
 
   const counts = useMemo<Record<Filter, number>>(
     () => ({
@@ -223,6 +227,8 @@ export function ConsoleShell({ runs, connected, hasSnapshot, now, mode }: ShellD
                 </button>
               </div>
             </header>
+
+            <CrewViewNotice notices={notices} />
 
             {visible.length === 0 && (
               <div className="fleet-empty">

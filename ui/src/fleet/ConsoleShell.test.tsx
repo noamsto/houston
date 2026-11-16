@@ -407,3 +407,12 @@ describe('ConsoleShell modes', () => {
     expect(window.location.hash).toBe('#/dispatch')
   })
 })
+
+describe('ConsoleShell crew view notice', () => {
+  it('shows a dispatcher crew view notice above the fleet list', () => {
+    const runs = [run({ id: 'd', role: 'dispatcher', branch: 'main', crew: { name: 'c', view_notice: 'crew is too old' } })]
+    render(<ConsoleShell runs={runs} connected hasSnapshot now={now} mode="dispatcher" />)
+    const list = screen.getByLabelText('fleet list')
+    expect(within(list).getByRole('status').textContent).toBe('crew is too old')
+  })
+})

@@ -70,6 +70,8 @@ export function RunCard({ run, now, onOpen, selected, crewLine }: RunCardProps) 
 
       {run.attention === 'stuck' && run.attention_note && <div className="run-stuck-note">{run.attention_note}</div>}
 
+      {run.role === 'worker' && run.crew?.view_notice && <div className="run-stuck-note">{run.crew.view_notice}</div>}
+
       <div className="run-chips">
         {run.role && <span className={`run-role ${run.role}`}>{run.role}</span>}
         {run.attention === 'stuck' && <span className="run-chip stuck">stuck</span>}

@@ -343,3 +343,20 @@ describe('FleetView All history cap', () => {
     expect(screen.queryByRole('button', { name: /Show \d+ more/ })).toBeNull()
   })
 })
+
+describe('FleetView crew view notice', () => {
+  it('shows unique dispatcher view notices', () => {
+    render(
+      <FleetView
+        runs={[
+          run({ id: 'd1', role: 'dispatcher', crew: { name: 'a', view_notice: 'crew view unavailable' } }),
+          run({ id: 'd2', role: 'dispatcher', crew: { name: 'b', view_notice: 'crew view unavailable' } }),
+        ]}
+        connected
+        now={now}
+        mode={null}
+      />,
+    )
+    expect(screen.getAllByText('crew view unavailable')).toHaveLength(1)
+  })
+})

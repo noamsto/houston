@@ -292,3 +292,17 @@ describe('RunCard background chip', () => {
     expect(container.querySelector('.run-chip.bg')).toBeNull()
   })
 })
+
+describe('RunCard crew view notice', () => {
+  const note = "crew could not read this crew's roster; showing its last known state"
+
+  it('shows a held worker its notice', () => {
+    render(<RunCard run={run({ role: 'worker', stale: true, crew: { name: 'c', view_notice: note } })} now={now} />)
+    expect(screen.getByText(note)).toBeTruthy()
+  })
+
+  it('leaves a dispatcher notice to the shells and the Crew tab', () => {
+    render(<RunCard run={run({ role: 'dispatcher', crew: { name: 'c', view_notice: 'crew is too old for houston' } })} now={now} />)
+    expect(screen.queryByText('crew is too old for houston')).toBeNull()
+  })
+})

@@ -27,6 +27,7 @@ import (
 	"github.com/noamsto/houston/agents/generic"
 	"github.com/noamsto/houston/claudemod"
 	"github.com/noamsto/houston/crewfeed"
+	"github.com/noamsto/houston/crewview"
 	"github.com/noamsto/houston/hub"
 	"github.com/noamsto/houston/mode"
 	"github.com/noamsto/houston/opencode"
@@ -124,6 +125,20 @@ type Server struct {
 	// replyRunner delivers a crew answer. It exists so a test can observe that
 	// no command ran, which no assertion about the response alone can prove.
 	replyRunner replyRunner
+
+	// crewPath is the crew binary, resolved once at startup over the tmux
+	// server's PATH ahead of houston's, the same search mode resolution used;
+	// never logged.
+	crewPath string
+
+	// crewViews holds crew's current view per bus, the only source of a crew
+	// action's argv; nil until wired, which the action route answers 503.
+	// crewRunner runs one crew action, a field so a test can observe what ran.
+	crewViews crewViewer
+	// crewViewManager is crewViews when it is the real manager (dispatcher
+	// mode); Close stops its streams.
+	crewViewManager *crewview.Manager
+	crewRunner      func(ctx context.Context, crewPath string, x crewExec) crewResult
 
 	// wsRepos classifies a @git_root as a main checkout or a linked
 	// worktree for the Workspace tab's bucketing.
@@ -306,6 +321,19 @@ func New(cfg Config) (*Server, error) {
 		}
 	}
 
+	crewPath := "crew"
+	var views *crewview.Manager
+	if cfg.Mode == mode.Dispatcher {
+		pathCtx, pathCancel := context.WithTimeout(ctx, 5*time.Second)
+		sp, err := serverGlobalPath(pathCtx, execTmux)
+		pathCancel()
+		if err != nil {
+			sp = ""
+		}
+		crewPath = resolveCrew(sp)
+		views = crewview.NewManager(ctx, crewPath)
+	}
+
 	s := &Server{
 		instance:       hex.EncodeToString(instance[:]),
 		mode:           cfg.Mode,
@@ -317,7 +345,9 @@ func New(cfg Config) (*Server, error) {
 		font:           cfg.FontController,
 		uiFS:           cfg.UIFS,
 		hub:            hub.NewWithOptions(cfg.StatusDir, hub.Options{Mod: modStore}, slog.Default()),
-		replyRunner:    execCrewReply,
+		replyRunner:    crewReplyRunner(crewPath),
+		crewPath:       crewPath,
+		crewRunner:     runCrew,
 		wsRepos:        newRepoClassifier(),
 		wsTmux:         tmuxClient,
 		runPanes:       tmuxClient,
@@ -376,7 +406,11 @@ func New(cfg Config) (*Server, error) {
 		}
 	}()
 
-	for _, src := range runSources(cfg.Mode, s.hub, tmuxClient, s.controlMgr, s.crewFeed) {
+	if views != nil {
+		s.crewViews = views
+		s.crewViewManager = views
+	}
+	for _, src := range runSources(cfg.Mode, s.hub, tmuxClient, s.controlMgr, s.crewFeed, views) {
 		s.sourcesWG.Add(1)
 		go func(src runs.Source) {
 			defer s.sourcesWG.Done()
@@ -446,13 +480,13 @@ func New(cfg Config) (*Server, error) {
 
 // runSources lists the run sources for m in the registry's layer order; tmux
 // mode has no crew bus. The crew source advances feed on every tick.
-func runSources(m mode.Mode, h *hub.Hub, c *tmux.Client, cm *tmux.ControlManager, feed *crewfeed.Store) []runs.Source {
+func runSources(m mode.Mode, h *hub.Hub, c *tmux.Client, cm *tmux.ControlManager, feed *crewfeed.Store, views *crewview.Manager) []runs.Source {
 	srcs := []runs.Source{
 		runs.NewHookSource(h, c),
 		runs.NewTmuxSource(c, 2*time.Second, m),
 	}
 	if m != mode.Tmux {
-		srcs = append(srcs, runs.NewCrewSource(c, h, feed, 3*time.Second))
+		srcs = append(srcs, runs.NewCrewSource(c, h, feed, views, 3*time.Second))
 	}
 	return append(srcs, runs.NewConnectionSource(cm, c, 2*time.Second))
 }
@@ -475,6 +509,11 @@ func (s *Server) Close() error {
 			// Every producer has returned, so nothing can send on deltas.
 			close(s.deltas)
 			<-s.pumpDone
+
+			// No source can Ensure a stream any more.
+			if s.crewViewManager != nil {
+				s.crewViewManager.Close()
+			}
 
 			if s.ocScanDone != nil {
 				<-s.ocScanDone
@@ -530,6 +569,7 @@ func (s *Server) Handler() http.Handler {
 	// launch, repo registry) unregistered, so they 404.
 	if s.mode != mode.Tmux {
 		apiMux.HandleFunc("POST /api/runs/{id}/reply", s.peerOr(fwdReply, s.handleRunReply))
+		apiMux.HandleFunc("POST /api/runs/{id}/crew/action", localOnlyRun(s.handleRunCrewAction))
 		apiMux.HandleFunc("POST /api/runs/{id}/restart", s.peerOr(fwdRestart, s.handleRunRestart))
 		apiMux.HandleFunc("GET /api/runs/{id}/crew/feed", s.peerOr(fwdCrewFeed, s.handleRunCrewFeed))
 		apiMux.HandleFunc("GET /api/runs/{id}/crew/feed/stream", s.peerOr(fwdCrewFeedStream, s.handleRunCrewFeedStream))
