@@ -60,7 +60,7 @@ describe('CrewAttention', () => {
     expect(screen.queryByText('Squash-merge PR #12?')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'squash-merge' }))
     fireEvent.click(screen.getByRole('button', { name: 'Confirm' }))
-    await waitFor(() => expect(run).toHaveBeenCalledWith('run-1', 'stall:c1:feat/e', { confirm: true }))
+    await waitFor(() => expect(run).toHaveBeenCalledWith('run-1', 'stall:c1:feat/e', { confirm: true, pr: 12 }))
   })
 
   it('shows server confirm text on 428', async () => {
@@ -104,5 +104,39 @@ describe('CrewAttention', () => {
     render(<CrewAttention runId="run-1" items={[item({ action })]} />)
     fireEvent.click(screen.getByRole('button', { name: 'nudge' }))
     expect((await screen.findByRole('alert')).textContent).toBe('boom')
+  })
+
+  it('a 409 re-confirm shows the new prompt and the next Confirm sends its pr', async () => {
+    const action = { verb: 'merge', label: 'squash-merge', command: 'crew merge', needs_input: false, pr: 12 }
+    run.mockResolvedValueOnce({ ok: false, status: 409, message: 'Squash-merge PR #13?', confirm: 'Squash-merge PR #13?', pr: 13 })
+    render(<CrewAttention runId="run-1" items={[item({ action })]} />)
+    fireEvent.click(screen.getByRole('button', { name: 'squash-merge' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }))
+    await screen.findByText('Squash-merge PR #13?')
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }))
+    await waitFor(() => expect(run).toHaveBeenLastCalledWith('run-1', 'stall:c1:feat/e', { confirm: true, pr: 13 }))
+  })
+
+  it('ignores a second click while an action is in flight', () => {
+    const action = { verb: 'nudge', label: 'nudge', command: 'c', needs_input: false }
+    run.mockReturnValue(new Promise(() => {}))
+    render(<CrewAttention runId="run-1" items={[item({ action })]} />)
+    const btn = screen.getByRole('button', { name: 'nudge' }) as HTMLButtonElement
+    fireEvent.click(btn)
+    expect(btn.disabled).toBe(true)
+    fireEvent.click(btn)
+    expect(run).toHaveBeenCalledTimes(1)
+  })
+
+  it('ignores a second merge Confirm while in flight', () => {
+    const action = { verb: 'merge', label: 'squash-merge', command: 'crew merge', needs_input: false, pr: 12 }
+    run.mockReturnValue(new Promise(() => {}))
+    render(<CrewAttention runId="run-1" items={[item({ action })]} />)
+    fireEvent.click(screen.getByRole('button', { name: 'squash-merge' }))
+    const confirm = screen.getByRole('button', { name: 'Confirm' }) as HTMLButtonElement
+    fireEvent.click(confirm)
+    expect(confirm.disabled).toBe(true)
+    fireEvent.click(confirm)
+    expect(run).toHaveBeenCalledTimes(1)
   })
 })

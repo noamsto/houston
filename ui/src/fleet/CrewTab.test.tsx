@@ -275,7 +275,7 @@ describe('CrewTab crew view', () => {
   const holdItem = {
     id: 'hold_matured:c1:h1', kind: 'hold_matured', severity: 'warning', message: 'hold h1 matured',
     since: 0, command: 'crew hold due --crew c1',
-  } as unknown as CrewAttention
+  } satisfies CrewAttention
 
   it('shows the dispatcher crew view notice as a status', () => {
     renderTab([], dispatcher({ crew: { name: 'c', view_notice: 'crew is too old for houston' } }))
@@ -294,7 +294,7 @@ describe('CrewTab crew view', () => {
     const item = {
       id: 'stall:c1:feat/e', kind: 'stalled_worker', severity: 'warning', message: 'quiet', since: 0,
       action: { verb: 'nudge', label: 'nudge', command: 'crew nudge --crew c1 -- feat/e', needs_input: false },
-    } as unknown as CrewAttention
+    } satisfies CrewAttention
     renderTab([run({ id: 'a', crew: { name: 'c', attention: [item] } })])
     expect(screen.getByRole('button', { name: 'nudge' })).toBeTruthy()
   })
@@ -309,5 +309,24 @@ describe('CrewTab crew view', () => {
     ])
     expect(within(container.querySelector('.crew-host-chip') as HTMLElement).getByText('halo')).toBeTruthy()
     expect(container.querySelector('textarea, input')).toBeNull()
+  })
+})
+
+describe('CrewTab reply surfaces', () => {
+  const replyItem = {
+    id: 'blocked:c1:feat/e', kind: 'blocked', severity: 'warning', message: 'asks', since: 0,
+    action: { verb: 'reply', label: 'reply', command: 'crew reply', needs_input: true },
+  } satisfies CrewAttention
+
+  it('shows no ReplyComposer when the attention item already offers reply', () => {
+    renderTab([run({ id: 'a', crew: { name: 'c', attention: [replyItem] }, question: { text: 'which?', via: 'crew' } } as Partial<Run>)])
+    expect(screen.getByRole('button', { name: 'reply' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /send/i })).toBeNull()
+    expect(screen.queryByRole('textbox')).toBeNull()
+  })
+
+  it('shows the ReplyComposer for a crew question with no reply action', () => {
+    renderTab([run({ id: 'a', crew: { name: 'c' }, question: { text: 'which?', via: 'crew' } } as Partial<Run>)])
+    expect(screen.getByRole('button', { name: /send/i })).toBeTruthy()
   })
 })

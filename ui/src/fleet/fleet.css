@@ -1181,6 +1181,11 @@ button.chat-divider::after { content: ''; position: absolute; left: -6px; right:
   color: var(--state-blocked);
 }
 .crew-host-chip {
+  flex: none;
+  max-width: 30%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   display: inline-block;
   padding: 1px 6px;
   border-radius: 999px;

@@ -5,6 +5,7 @@ import { needsYou } from './staleness'
 import { fleetEntries, groupEntriesByHost } from './fleetEntries'
 import type { Filter } from './fleetList'
 import { CrewViewNotice } from './CrewViewNotice'
+import { crewViewNotices } from './crewViewNotices'
 import { RunList } from './RunList'
 import { useGroupByProject } from '../hooks/useLayout'
 import './fleet.css'
@@ -28,10 +29,7 @@ export function FleetView({ runs, connected, now, mode, onOpen }: FleetViewProps
 
   const entries = useMemo(() => fleetEntries(runs, filter, now, mode), [runs, filter, now, mode])
 
-  const notices = useMemo(
-    () => runs.flatMap((r) => (r.role === 'dispatcher' && r.crew?.view_notice ? [r.crew.view_notice] : [])),
-    [runs],
-  )
+  const notices = useMemo(() => crewViewNotices(runs), [runs])
 
   const groups = useMemo(() => groupEntriesByHost(entries), [entries])
 

@@ -36,6 +36,7 @@ function Member({ run, now }: { run: Run; now: number }) {
   const attention = run.attention
   const meta = [run.crew?.tier, run.agent, run.crew?.model].filter(Boolean).join(' · ')
   const sessions = run.crew?.sessions ?? 0
+  const hasReplyAction = run.crew?.attention?.some((a) => a.action?.verb === 'reply') ?? false
   const remote = run.crew?.origin === 'remote_worker' || run.crew?.origin === 'peer'
   return (
     <div className={`crews-member${attention ? ` ${attention}` : ''}${attention && stale ? ' muted' : ''}`}>
@@ -79,7 +80,7 @@ function Member({ run, now }: { run: Run; now: number }) {
         {run.stale === true && <span className="run-chip stale">stale</span>}
       </span>
       <CrewAttention runId={run.id} items={run.crew?.attention ?? []} />
-      {!remote && run.question?.via === 'crew' && <ReplyComposer runId={run.id} />}
+      {!remote && run.question?.via === 'crew' && !hasReplyAction && <ReplyComposer runId={run.id} />}
       {!remote && run.question?.via === 'pane' && <div className="crews-hint">Answer in the terminal — tap to open.</div>}
     </div>
   )

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { CrewAttention as Item } from '../api/runs'
 import { runCrewAction, type CrewActionOutcome } from '../api/crewAction'
 
-type Mode = { kind: 'idle' } | { kind: 'input' } | { kind: 'confirm'; prompt: string }
+type Mode = { kind: 'idle' } | { kind: 'input' } | { kind: 'confirm'; prompt: string; pr?: number }
 
 export function CrewAttention({ runId, items }: { runId: string; items: Item[] }) {
   if (items.length === 0) return null
@@ -22,24 +22,27 @@ function AttentionRow({ runId, item }: { runId: string; item: Item }) {
   const [pending, setPending] = useState(false)
   const [outcome, setOutcome] = useState<CrewActionOutcome | null>(null)
 
-  async function run(opts?: { text?: string; confirm?: boolean }) {
+  async function run(opts?: { text?: string; confirm?: boolean; pr?: number }) {
     setPending(true)
-    const res = opts ? await runCrewAction(runId, item.id, opts) : await runCrewAction(runId, item.id)
-    setPending(false)
-    if (!res.ok && res.status === 428 && res.confirm) {
-      setMode({ kind: 'confirm', prompt: res.confirm })
-      setOutcome(null)
-      return
+    try {
+      const res = opts ? await runCrewAction(runId, item.id, opts) : await runCrewAction(runId, item.id)
+      if (!res.ok && (res.status === 428 || res.status === 409) && res.confirm) {
+        setMode({ kind: 'confirm', prompt: res.confirm, pr: res.pr })
+        setOutcome(null)
+        return
+      }
+      setMode({ kind: 'idle' })
+      setText('')
+      setOutcome(res)
+    } finally {
+      setPending(false)
     }
-    setMode({ kind: 'idle' })
-    setText('')
-    setOutcome(res)
   }
 
   function start() {
     if (!action) return
     if (action.needs_input) setMode({ kind: 'input' })
-    else if (action.verb === 'merge') setMode({ kind: 'confirm', prompt: `Squash-merge PR #${action.pr}?` })
+    else if (action.verb === 'merge') setMode({ kind: 'confirm', prompt: `Squash-merge PR #${action.pr}?`, pr: action.pr })
     else void run()
   }
 
@@ -70,7 +73,7 @@ function AttentionRow({ runId, item }: { runId: string; item: Item }) {
       {mode.kind === 'confirm' && (
         <div className="crew-attention-form">
           <span>{mode.prompt}</span>
-          <button type="button" className="crew-attention-btn" disabled={pending} onClick={() => void run({ confirm: true })}>Confirm</button>
+          <button type="button" className="crew-attention-btn" disabled={pending} onClick={() => void run(mode.pr === undefined ? { confirm: true } : { confirm: true, pr: mode.pr })}>Confirm</button>
           <button type="button" className="crew-attention-btn" disabled={pending} onClick={() => setMode({ kind: 'idle' })}>Cancel</button>
         </div>
       )}
