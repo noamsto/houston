@@ -50,6 +50,22 @@ describe('CrewAttention', () => {
     await waitFor(() => expect(run).toHaveBeenCalledWith('run-1', 'stall:c1:feat/e', { text: 'yes' }))
   })
 
+  it('keeps the reply input and text on failure, retries, and clears on success', async () => {
+    const action = { verb: 'reply', label: 'reply', command: 'crew reply x', needs_input: true }
+    run.mockResolvedValueOnce({ ok: false, status: 0, message: 'network error' })
+    render(<CrewAttention runId="run-1" items={[item({ action })]} />)
+    fireEvent.click(screen.getByRole('button', { name: 'reply' }))
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'my answer' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    expect((await screen.findByRole('alert')).textContent).toBe('network error')
+    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('my answer')
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(run).toHaveBeenCalledTimes(2))
+    expect(run).toHaveBeenLastCalledWith('run-1', 'stall:c1:feat/e', { text: 'my answer' })
+    await waitFor(() => expect(screen.queryByRole('textbox')).toBeNull())
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
   it('merge asks for confirmation', async () => {
     const action = { verb: 'merge', label: 'squash-merge', command: 'crew merge', needs_input: false, pr: 12 }
     render(<CrewAttention runId="run-1" items={[item({ action })]} />)

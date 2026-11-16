@@ -31,8 +31,8 @@ function AttentionRow({ runId, item }: { runId: string; item: Item }) {
         setOutcome(null)
         return
       }
-      setMode({ kind: 'idle' })
-      setText('')
+      if (res.ok || !opts?.text) setMode({ kind: 'idle' })
+      if (res.ok) setText('')
       setOutcome(res)
     } finally {
       setPending(false)
