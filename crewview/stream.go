@@ -273,6 +273,7 @@ func (s *Stream) runOnce(ctx context.Context) runResult {
 	readers.Wait()
 	_ = outR.Close()
 	_ = errR.Close()
+	waitGroupGone(pid)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -397,6 +398,16 @@ func terminate(pid int, exited <-chan struct{}) {
 	case <-t.C:
 		_ = syscall.Kill(-pid, syscall.SIGKILL)
 		<-exited
+	}
+}
+
+// waitGroupGone returns once no process is left in group pgid, or after
+// stopGrace. SIGKILL is asynchronous and a dying member closes its pipes before
+// it is gone, so EOF on them does not mean the group has exited.
+func waitGroupGone(pgid int) {
+	deadline := time.Now().Add(stopGrace)
+	for syscall.Kill(-pgid, 0) != syscall.ESRCH && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
 	}
 }
 
