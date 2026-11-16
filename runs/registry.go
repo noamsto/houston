@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -79,11 +80,19 @@ func (r *Registry) Apply(d Delta) {
 	keys := []string{d.Key}
 	// A layer that names a session can shadow that session's history card, so
 	// its old and new Session/CrewSession both need re-settling.
+	// A peer crew worker likewise shadows the crewremote row crew's view
+	// reports for it.
 	named := func(l Run) {
 		for _, sid := range []string{l.CrewSession, l.Session} {
 			if sid != "" {
 				keys = append(keys, sessionKeyFor(sid))
 			}
+		}
+		if d.Source != PeerLayer {
+			return
+		}
+		if k, ok := crewRemoteKeyOf(l); ok {
+			keys = append(keys, k)
 		}
 	}
 	if old, ok := r.layers[d.Key][d.Source]; ok {
@@ -171,12 +180,41 @@ func (r *Registry) settleLocked(key string) (Run, bool) {
 // no pane to trust (see sessionKey in hooksource.go).
 func sessionKeyFor(sid string) string { return "claude/" + sid }
 
+const crewRemotePrefix = "crewremote/"
+
+// CrewRemoteKey is the key of a worker crew's view reports on another machine.
+// It names no bus because crew ids are globally unique, and the registry must
+// compute it from a peer layer that knows no bus.
+func CrewRemoteKey(crew, branch string) string { return crewRemotePrefix + crew + "/" + branch }
+
+// crewRemoteKeyOf is the crewremote key a peer layer's crew worker would
+// duplicate, if it is one.
+func crewRemoteKeyOf(peer Run) (string, bool) {
+	if peer.Role != RoleWorker || peer.Crew == nil || peer.Crew.Name == "" || peer.Branch == "" {
+		return "", false
+	}
+	return CrewRemoteKey(peer.Crew.Name, peer.Branch), true
+}
+
 // shadowedLocked reports whether key is a session-keyed history card whose
 // session another key's worker card already carries: that key's crew layer
 // names it, the bus engine has a chat reader, and the card's hooks layer (if
-// any) shows the same session rather than a newer one after /clear. Caller
-// holds mu.
+// any) shows the same session rather than a newer one after /clear. A
+// crewremote key is shadowed while a peer layer publishes the same crew worker,
+// which carries more than crew's view does. Caller holds mu.
 func (r *Registry) shadowedLocked(key string) bool {
+	if strings.HasPrefix(key, crewRemotePrefix) {
+		for _, bySource := range r.layers {
+			peer, ok := bySource[PeerLayer]
+			if !ok {
+				continue
+			}
+			if k, ok := crewRemoteKeyOf(peer); ok && k == key {
+				return true
+			}
+		}
+		return false
+	}
 	sid, ok := strings.CutPrefix(key, "claude/")
 	if !ok || sid == "" {
 		return false
@@ -277,8 +315,10 @@ func attentionOf(out Run, bySource map[string]Run) (Attention, string) {
 // derived from the hooks layer's own Session and Agent, not the composed
 // run's — a lower layer's Agent must never grant it. The one other grant is a
 // crew-named session (the bus's engine_session) whose engine, from that same
-// bus record, has a reader. A peer key's caps are its peer layer's own, already
-// intersected with what this host can forward.
+// bus record, has a reader. A crew layer grants Reply only for a local worker:
+// crew's view reports remote and peer workers this host has no bus for. A peer
+// key's caps are its peer layer's own, already intersected with what this host
+// can forward.
 func deriveCaps(bySource map[string]Run) Caps {
 	if p, ok := bySource[PeerLayer]; ok {
 		return p.Caps
@@ -289,7 +329,7 @@ func deriveCaps(bySource map[string]Run) Caps {
 	return Caps{
 		Terminal: hasTmux,
 		Kill:     hasTmux,
-		Reply:    hasTmux || hasCrew,
+		Reply:    hasTmux || hasCrew && (crew.Crew == nil || crew.Crew.Origin == "" || crew.Crew.Origin == "local"),
 		Chat: hasHooks && hooks.Session != "" && chat.For(hooks.Agent) != nil ||
 			hasCrew && crew.CrewSession != "" && chat.For(crew.Agent) != nil,
 	}
@@ -337,6 +377,9 @@ type signature struct {
 	crewModel, crewDetail                                  string
 	crewSessions                                           int
 	crewHome                                               string
+	crewOrigin, crewHost, crewViewNotice                   string
+	// crewAttention encodes the items as a string; the struct must stay comparable.
+	crewAttention string
 
 	hasQuestion        bool
 	qText, qVia, qKind string
@@ -420,12 +463,31 @@ func runSignature(r Run) signature {
 		s.crewTitle, s.crewModel, s.crewDetail = r.Crew.Title, r.Crew.Model, r.Crew.Detail
 		s.crewSessions = r.Crew.Sessions
 		s.crewHome = r.Crew.Home
+		s.crewOrigin, s.crewHost, s.crewViewNotice = r.Crew.Origin, r.Crew.Host, r.Crew.ViewNotice
+		s.crewAttention = attentionDigest(r.Crew.Attention)
 	}
 	if r.Question != nil {
 		s.hasQuestion = true
 		s.qText, s.qVia, s.qKind = r.Question.Text, r.Question.Via, r.Question.Kind
 	}
 	return s
+}
+
+func attentionDigest(items []CrewAttention) string {
+	var b strings.Builder
+	for _, a := range items {
+		b.WriteString(a.ID + "\x00" + a.Kind + "\x00" + a.Severity + "\x00" + a.Message + "\x00")
+		b.WriteString(strconv.FormatInt(a.AgeSec, 10) + "\x00" + a.Command + "\x00")
+		if act := a.Action; act != nil {
+			b.WriteString(act.Verb + "\x00" + act.Label + "\x00" + act.Command + "\x00")
+			b.WriteString(flagDigit(act.NeedsInput))
+			if act.PR != nil {
+				b.WriteString(strconv.Itoa(*act.PR))
+			}
+		}
+		b.WriteByte(1)
+	}
+	return b.String()
 }
 
 func flagDigit(b bool) string {
@@ -574,6 +636,18 @@ func mergeInto(dst *Run, src Run) {
 		}
 		if src.Crew.Sessions != 0 {
 			dst.Crew.Sessions = src.Crew.Sessions
+		}
+		if src.Crew.Origin != "" {
+			dst.Crew.Origin = src.Crew.Origin
+		}
+		if src.Crew.Host != "" {
+			dst.Crew.Host = src.Crew.Host
+		}
+		if src.Crew.ViewNotice != "" {
+			dst.Crew.ViewNotice = src.Crew.ViewNotice
+		}
+		if src.Crew.Attention != nil {
+			dst.Crew.Attention = src.Crew.Attention
 		}
 	}
 	if src.Question != nil {
