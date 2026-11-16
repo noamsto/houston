@@ -43,6 +43,11 @@ type Worker struct {
 	PRURL  *string `json:"pr_url"`
 	PR     *int    `json:"pr"`
 	AgeSec *int64  `json:"age_sec"`
+
+	// Unix ms: the start of the current blocked episode, and the dispatcher
+	// reply that moved it to state "answered".
+	BlockedSince *int64 `json:"blocked_since"`
+	AnsweredAt   *int64 `json:"answered_at"`
 }
 
 // Item is one attention entry; Action is nil when the item has no runnable

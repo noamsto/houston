@@ -59,10 +59,6 @@ type CrewSource struct {
 	// dispatcher joins (tests that do not care).
 	views crewViews
 
-	// mem keeps blocked-episode starts across views. Same single-goroutine
-	// rule as crewDirs.
-	mem blockedMemory
-
 	// rosters is each crew's last listed view rows per bus (spliceHeld): a
 	// crew whose roster the view failed to collect is read from them. Same
 	// single-goroutine rule as crewDirs.
@@ -87,7 +83,7 @@ func NewCrewSource(c lister, sessions hookSessions, feed *crewfeed.Store, views 
 	if every <= 0 {
 		every = 3 * time.Second
 	}
-	return &CrewSource{client: c, sessions: sessions, feed: feed, views: views, every: every, crewDirs: map[string]string{}, ids: map[string]identityLog{}, mem: blockedMemory{}, procStart: foregroundStart, procs: hostProcs{}}
+	return &CrewSource{client: c, sessions: sessions, feed: feed, views: views, every: every, crewDirs: map[string]string{}, ids: map[string]identityLog{}, procStart: foregroundStart, procs: hostProcs{}}
 }
 
 func (s *CrewSource) Name() string { return "crew" }
@@ -315,7 +311,6 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 
 	out := map[string]Run{}
 	liveIDs := map[string]identityLog{}
-	inView := map[crewWorkerKey]bool{}
 	crewItems := map[string]map[string][]CrewAttention{} // bus -> crew id -> items
 	notices := map[string]string{}
 	viewErrs := map[string][]string{}
@@ -324,30 +319,22 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 		if s.views == nil {
 			continue
 		}
-		ids, replies := s.busIdentity(bus, liveIDs)
+		ids := s.busIdentity(bus, liveIDs)
 		ov, st, ok := s.views.Latest(bus)
 		if st.State == crewview.StateUnsupported || st.State == crewview.StateUnavailable {
 			notices[bus] = st.Notice
 		}
 		if !ok {
-			// No view lists no workers, but keeps the snapshots and their
-			// blocked episodes for a roster failure after it.
+			// No view lists no workers, but keeps the snapshots for a roster
+			// failure after it.
 			rosters[bus] = s.rosters[bus]
-			for _, snap := range s.rosters[bus] {
-				for _, w := range snap.workers {
-					inView[crewWorkerKey{w.Crew, w.Branch}] = true
-				}
-			}
 			continue
 		}
 		viewErrs[bus] = ov.Errors
 
-		var heldIDs map[string]bool
-		ov, rosters[bus], heldIDs = spliceHeld(ov, heldCrewsOf(ov.Errors), s.rosters[bus])
-		for _, w := range ov.Workers {
-			inView[crewWorkerKey{w.Crew, w.Branch}] = true
-		}
-		vr := crewRunsFromView(ov, ids, replies, s.mem)
+		var spliced map[rowKey]bool
+		ov, rosters[bus], _, spliced = spliceHeld(ov, heldCrewsOf(ov.Errors), s.rosters[bus])
+		vr := crewRunsFromView(ov, ids)
 		crewItems[bus] = vr.crewItems
 
 		project := ProjectFromCommonDir(filepath.Dir(bus))
@@ -361,7 +348,7 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 			routed.Role = RoleWorker
 			routed.CrewBus = bus
 			routed.Worktree = worktreeFor(bus, branch, wins, s.crewDir)
-			if heldIDs[b.Crew.Name] {
+			if spliced[rowKey{b.Crew.Name, b.Branch}] {
 				routed.Stale, routed.Crew.ViewNotice = true, crewRosterHeldNote
 			}
 			paneID, candidates := resolvePane(bus, branch, b.State, b.UpdatedAt, b.session, b.CrewSession, paneSessions, wins, panes, s.crewDir, s.procStart)
@@ -384,7 +371,7 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 			r := routeCrewQuestion(b, dispatcherLive(joins[bus], b.Crew.Name), now)
 			r.Project = project
 			r.CrewBus = bus
-			if heldIDs[b.Crew.Name] {
+			if spliced[rowKey{b.Crew.Name, b.Branch}] {
 				r.Stale, r.Crew.ViewNotice = true, crewRosterHeldNote
 			}
 			out[CrewRemoteKey(r.Crew.Name, r.Branch)] = r
@@ -392,11 +379,6 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 	}
 	s.rosters = rosters
 	s.ids = liveIDs
-	for k := range s.mem {
-		if !inView[k] {
-			delete(s.mem, k)
-		}
-	}
 
 	// Sorted so that two buses naming one pane resolve the same way every tick.
 	for _, bus := range buses {
@@ -411,14 +393,13 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 	return out, true
 }
 
-// busIdentity folds every log in bus into the identity and newest dispatcher
-// reply per branch, recording each log it read in live (the next tick's cache).
-func (s *CrewSource) busIdentity(bus string, live map[string]identityLog) (map[string]crewIdentity, map[string]int64) {
+// busIdentity folds every log in bus into the identity per branch, recording
+// each log it read in live (the next tick's cache).
+func (s *CrewSource) busIdentity(bus string, live map[string]identityLog) map[string]crewIdentity {
 	ids := map[string]crewIdentity{}
-	replies := map[string]int64{}
 	logs, err := filepath.Glob(filepath.Join(bus, "*.jsonl"))
 	if err != nil {
-		return ids, replies
+		return ids
 	}
 	for _, path := range logs {
 		il, ok := readIdentityLog(path, s.ids)
@@ -427,11 +408,8 @@ func (s *CrewSource) busIdentity(bus string, live map[string]identityLog) (map[s
 		}
 		live[path] = il
 		maps.Copy(ids, il.ids)
-		for branch, ts := range il.replies {
-			replies[branch] = max(replies[branch], ts)
-		}
 	}
-	return ids, replies
+	return ids
 }
 
 // crewHomes maps each crew id to the project name of the one bus holding
@@ -605,7 +583,7 @@ type crewBranch struct {
 	Run
 	session int64
 	// blockedSince is when (unix ms) the current episode of asking its
-	// dispatcher began (blockedMemory), 0 when the worker is not asking.
+	// dispatcher began (blocked_since), 0 when the worker is not asking.
 	blockedSince int64
 	// lastActivity is the newest bus ts (ms) of a dispatch, resume or status row.
 	lastActivity int64

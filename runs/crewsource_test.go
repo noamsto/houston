@@ -3,7 +3,6 @@ package runs
 import (
 	"errors"
 	"fmt"
-	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -81,7 +80,7 @@ func TestBusIdentitySeesAppendAfterCachedRead(t *testing.T) {
 	writeEvents(t, bus, `{"ts":1000,"crew_id":"c1","kind":"dispatch","branch":"feat/x","engine_session":"s-1"}`+"\n")
 	s := &CrewSource{}
 	live := map[string]identityLog{}
-	if ids, _ := s.busIdentity(bus, live); ids["feat/x"].engineSession != "s-1" {
+	if ids := s.busIdentity(bus, live); ids["feat/x"].engineSession != "s-1" {
 		t.Fatalf("first read engineSession = %q, want s-1", ids["feat/x"].engineSession)
 	}
 	s.ids = live
@@ -95,7 +94,7 @@ func TestBusIdentitySeesAppendAfterCachedRead(t *testing.T) {
 	}
 	_ = f.Close()
 
-	if ids, _ := s.busIdentity(bus, map[string]identityLog{}); ids["feat/x"].engineSession != "s-2" {
+	if ids := s.busIdentity(bus, map[string]identityLog{}); ids["feat/x"].engineSession != "s-2" {
 		t.Fatalf("after append engineSession = %q, want s-2 — the cached read went stale", ids["feat/x"].engineSession)
 	}
 }
@@ -869,10 +868,10 @@ const busFixtureNow = 2000
 // pid file does not join its dispatcher pane unless a test overrides s.procs.
 func crewScanner(dirs map[string]string, views crewViews, wins []tmux.WindowOptions, panes []tmux.PaneOptions, sessions ...hookSessions) *CrewSource {
 	s := &CrewSource{
-		client:    &fakeLister{steps: []fakeStep{{wins: wins, panes: panes}}},
-		crewDirs:  dirs,
-		views:     views,
-		mem:       blockedMemory{},
+		client:   &fakeLister{steps: []fakeStep{{wins: wins, panes: panes}}},
+		crewDirs: dirs,
+		views:    views,
+
 		procStart: startAt(0),
 		procs:     fakeProcs{},
 		now:       func() time.Time { return time.UnixMilli(busFixtureNow) },
@@ -1184,7 +1183,7 @@ func (errPaneLister) ListPaneOptions() ([]tmux.PaneOptions, error) {
 func TestScanSkipsTheTickOnAPaneQueryError(t *testing.T) {
 	bus := writeBus(t, "fix/412")
 	views := workingOn(bus, "fix/412")
-	s := &CrewSource{client: errPaneLister{}, crewDirs: map[string]string{"/wt/a": bus}, views: views, mem: blockedMemory{}}
+	s := &CrewSource{client: errPaneLister{}, crewDirs: map[string]string{"/wt/a": bus}, views: views}
 	if got, ok := s.scan(); ok {
 		t.Fatalf("scan reported success with %v — a tmux error must skip the tick, not retire every branch", keysOf(got))
 	}
@@ -2065,21 +2064,6 @@ func TestScanEnsuresOneStreamPerBus(t *testing.T) {
 	}
 }
 
-func TestScanForgetsABlockedEpisodeOnceTheWorkerLeavesTheView(t *testing.T) {
-	bus := writeBus(t, "fix/412")
-	views := blockedOn(bus, "fix/412", "q?", 1)
-	wins := []tmux.WindowOptions{{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"}}
-	s := crewScanner(map[string]string{"/wt/a": bus}, views, wins, nil)
-
-	if _, ok := s.scan(); !ok || len(s.mem) != 1 {
-		t.Fatalf("mem = %v after a blocked view, want the episode recorded", s.mem)
-	}
-	views.views[bus] = workingView()
-	if _, ok := s.scan(); !ok || len(s.mem) != 0 {
-		t.Errorf("mem = %v after the worker left the view, want it forgotten", s.mem)
-	}
-}
-
 // joinedC1 is a scan over one bus whose c1 dispatcher is live at %1, with ov as
 // crew's view; the returned fakeViews lets a test swap the view between ticks.
 func joinedC1(t *testing.T, ov crewview.Overview) (*CrewSource, *fakeViews, string) {
@@ -2125,10 +2109,6 @@ func TestScanHoldsTheCrewLayerWhileTheRosterFails(t *testing.T) {
 	v := goldenView(t)
 	s, views, bus := joinedC1(t, v)
 	tick1 := mustScan(t, s)
-	mem1 := maps.Clone(s.mem)
-	if len(mem1) == 0 {
-		t.Fatal("the golden view recorded no blocked episode")
-	}
 
 	failed := v
 	failed.GeneratedAt = v.GeneratedAt + 300
@@ -2146,9 +2126,6 @@ func TestScanHoldsTheCrewLayerWhileTheRosterFails(t *testing.T) {
 		if want := heldRun(r); !reflect.DeepEqual(tick2[k], want) {
 			t.Errorf("%s = %+v\nwant %+v", k, tick2[k], want)
 		}
-	}
-	if !maps.Equal(s.mem, mem1) {
-		t.Errorf("mem = %v, want tick 1's %v", s.mem, mem1)
 	}
 	d := tick2["%1"]
 	if d.Crew == nil || !strings.Contains(d.Crew.ViewNotice, "roster: crew crews: exit 1") {
@@ -2172,22 +2149,23 @@ func TestScanHoldsTheCrewLayerWhileTheRosterFails(t *testing.T) {
 	}
 }
 
-// When one crew's roster fails, that crew's workers are its last listed rows
-// (all of them, peer rows too), held stale, while every other crew's come from
-// the view.
+// When one crew's roster fails, that crew's non-peer workers are its last
+// listed rows, held stale, while its peer rows (which crew still lists through
+// another crew's roster) and every other crew's rows come from the view. The
+// view carries a decoy for a held non-peer row, so a view row and a snapshot
+// row tell apart.
 func TestScanHoldsOneCrewWhoseRosterFails(t *testing.T) {
 	v := goldenView(t)
 	s, views, bus := joinedC1(t, v)
 	tick1 := mustScan(t, s)
-	mem1 := maps.Clone(s.mem)
 
 	held := v
 	held.GeneratedAt = v.GeneratedAt + 300
 	held.Workers = []crewview.Worker{}
 	for _, w := range v.Workers {
 		switch {
-		case w.Crew == "c1" && w.Origin != crewview.OriginPeer:
-			continue
+		case w.Branch == "feat/a":
+			w.State = "failed" // decoy: a held crew's non-peer row from the view
 		case w.Branch == "feat/q":
 			w.State = "working"
 		case w.Branch == "feat/j":
@@ -2195,16 +2173,20 @@ func TestScanHoldsOneCrewWhoseRosterFails(t *testing.T) {
 		}
 		held.Workers = append(held.Workers, w)
 	}
+	held.Workers = append(held.Workers, crewview.Worker{Crew: "c1", Branch: "feat/n", Origin: crewview.OriginPeer, Host: "nuc", State: "working", AgeSec: ip(10)})
 	held.Errors = []string{"crew c1: workers: timeout", "crew c2: holds: lock busy"}
 	views.views[bus] = held
 	tick2 := mustScan(t, s)
 
 	jKey := "crew/" + bus + "/feat/j"
-	if !reflect.DeepEqual(sortedKeys(tick2), sortedKeys(tick1)) {
-		t.Fatalf("keys = %v, want tick 1's %v", sortedKeys(tick2), sortedKeys(tick1))
+	qKey, nKey := CrewRemoteKey("c1", "feat/q"), CrewRemoteKey("c1", "feat/n")
+	wantKeys := append(sortedKeys(tick1), nKey)
+	slices.Sort(wantKeys)
+	if !reflect.DeepEqual(sortedKeys(tick2), wantKeys) {
+		t.Fatalf("keys = %v, want %v", sortedKeys(tick2), wantKeys)
 	}
 	for k, r := range tick1 {
-		if k == "%1" || k == jKey {
+		if k == "%1" || k == jKey || k == qKey || (r.Crew != nil && r.Crew.Origin == crewview.OriginPeer) {
 			continue
 		}
 		if want := heldRun(r); !reflect.DeepEqual(tick2[k], want) {
@@ -2214,8 +2196,14 @@ func TestScanHoldsOneCrewWhoseRosterFails(t *testing.T) {
 	if j := tick2[jKey]; j.State != StateReview || j.UpdatedAt != held.GeneratedAt-30 || j.Stale || j.Crew == nil || j.Crew.ViewNotice != "" {
 		t.Errorf("feat/j = %+v, want c2's worker from the new view, not stale", j)
 	}
-	if !maps.Equal(s.mem, mem1) {
-		t.Errorf("mem = %v, want tick 1's %v", s.mem, mem1)
+	if q := tick2[qKey]; q.State != StateRunning || q.Stale || q.Crew == nil || q.Crew.ViewNotice != "" {
+		t.Errorf("feat/q = %+v, want the peer row's live state, not stale", q)
+	}
+	if p := tick2[CrewRemoteKey("c1", "feat/p")]; p.Stale || p.Crew == nil || p.Crew.ViewNotice != "" {
+		t.Errorf("feat/p = %+v, want the peer row from the view, not stale", p)
+	}
+	if n := tick2[nKey]; n.Branch != "feat/n" || n.Stale || n.Crew == nil || n.Crew.ViewNotice != "" {
+		t.Errorf("feat/n = %+v, want the new peer row, not stale", n)
 	}
 	if d := tick2["%1"]; d.Crew == nil || d.Crew.ViewNotice != "crew c1: workers: timeout" {
 		t.Errorf("dispatcher crew = %+v, want only c1's error in c1's notice", d.Crew)
@@ -2272,45 +2260,14 @@ func TestScanRoutesAHeldWorkersQuestion(t *testing.T) {
 	}
 }
 
-// The dispatcher's reply on the bus clears a held worker's question, as it
-// does for a worker the view lists.
-func TestScanClearsAHeldQuestionTheDispatcherAnswered(t *testing.T) {
-	s, views, bus, key := askingC1(t)
-	s.procs = fakeProcs{dead: map[int]bool{dispPID: true}}
-	if r := mustScan(t, s)[key]; r.State != StateBlocked || r.Question == nil {
-		t.Fatalf("tick 1 = %+v, want needs-you with no dispatcher", r)
-	}
-
-	reply := fmt.Sprintf(`{"ts":%d,"crew_id":"c1","from":"dispatcher:c1","to":"worker:feat/a#s1","kind":"msg","body":"postgres"}`+"\n", (testViewGen-30)*1000)
-	f, err := os.OpenFile(filepath.Join(bus, "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.WriteString(reply); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.Close(); err != nil {
-		t.Fatal(err)
-	}
-	views.views[bus] = rosterFailed(testViewGen + 300)
-	r := mustScan(t, s)[key]
-	if r.State == StateBlocked || r.Question != nil || !r.Stale {
-		t.Errorf("held = %+v, want the answered question cleared, stale", r)
-	}
-	if len(s.mem) != 0 {
-		t.Errorf("mem = %v, want the answered episode forgotten", s.mem)
-	}
-}
-
 // A tick with no view for the bus publishes no workers but keeps the roster
-// snapshot and blocked episodes, so a roster failure after it still holds.
+// snapshot, so a roster failure after it still holds.
 func TestScanKeepsTheRosterSnapshotThroughAViewlessTick(t *testing.T) {
 	s, views, bus, key := askingC1(t)
 	s.procs = fakeProcs{dead: map[int]bool{dispPID: true}}
 	tick1 := mustScan(t, s)
-	mem1 := maps.Clone(s.mem)
-	if r := tick1[key]; r.State != StateBlocked || len(mem1) != 1 {
-		t.Fatalf("tick 1 = %+v mem %v, want needs-you with its episode recorded", r, mem1)
+	if r := tick1[key]; r.State != StateBlocked {
+		t.Fatalf("tick 1 = %+v, want needs-you", r)
 	}
 
 	ov := views.views[bus]
@@ -2318,16 +2275,10 @@ func TestScanKeepsTheRosterSnapshotThroughAViewlessTick(t *testing.T) {
 	if got := mustScan(t, s); len(got) != 0 {
 		t.Errorf("viewless tick = %v, want no runs", sortedKeys(got))
 	}
-	if !maps.Equal(s.mem, mem1) {
-		t.Errorf("mem = %v after a viewless tick, want %v", s.mem, mem1)
-	}
 
 	views.views[bus] = rosterFailed(ov.GeneratedAt + 300)
 	if r, want := mustScan(t, s)[key], heldRun(tick1[key]); !reflect.DeepEqual(r, want) {
 		t.Errorf("held = %+v\nwant %+v", r, want)
-	}
-	if !maps.Equal(s.mem, mem1) {
-		t.Errorf("mem = %v, want %v", s.mem, mem1)
 	}
 }
 

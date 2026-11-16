@@ -73,7 +73,7 @@ func FromHookState(s hook.State) State {
 
 func FromCrewState(s string) State {
 	switch s {
-	case "working":
+	case "working", "answered":
 		return StateRunning
 	case "blocked":
 		return StateBlocked
