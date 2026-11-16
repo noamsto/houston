@@ -647,3 +647,31 @@ func TestSourceCapsKeepOnlyBothSidesHave(t *testing.T) {
 		t.Errorf("chat-only run caps = %+v, want chat only", c)
 	}
 }
+
+func TestSanitiseDropsCrewAttentionActions(t *testing.T) {
+	src := newSource("http://127.0.0.1:1", tokenFile(t, testToken), fastOpts())
+	in := runs.Run{ID: "r1", Crew: &runs.CrewRef{Name: "c1", Attention: []runs.CrewAttention{
+		{ID: "a", Message: "m", Action: &runs.CrewAction{Verb: "nudge"}},
+		{ID: "b", Command: "crew hold due --crew c1"},
+	}}}
+	_, out, ok := src.sanitise(in)
+	if !ok {
+		t.Fatal("sanitise dropped the run")
+	}
+	got := out.Crew.Attention
+	if len(got) != 2 || got[0].Message != "m" || got[1].Command != "crew hold due --crew c1" {
+		t.Fatalf("attention lost fields: %+v", got)
+	}
+	for _, a := range got {
+		if a.Action != nil {
+			t.Errorf("item %s kept its action", a.ID)
+		}
+	}
+	if in.Crew.Attention[0].Action == nil {
+		t.Error("sanitise mutated the input's attention")
+	}
+
+	if _, _, ok := src.sanitise(runs.Run{ID: "r2"}); !ok {
+		t.Error("run without crew dropped")
+	}
+}

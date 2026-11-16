@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -406,6 +407,16 @@ func (s *Source) sanitise(r runs.Run) (string, runs.Run, bool) {
 	r.Stale = false
 	r.DraftKey = ""
 	r.Removed = false
+	if r.Crew != nil {
+		// Actions run on the host that owns the worker, never via a mirror;
+		// the copy keeps the decoded input untouched.
+		crew := *r.Crew
+		crew.Attention = slices.Clone(crew.Attention)
+		for i := range crew.Attention {
+			crew.Attention[i].Action = nil
+		}
+		r.Crew = &crew
+	}
 	return id, r, true
 }
 
