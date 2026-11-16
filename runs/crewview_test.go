@@ -77,7 +77,7 @@ func TestCrewRunsFromViewGolden(t *testing.T) {
 	}
 
 	// state "" reads idle
-	var q, r, p *Run
+	var q, r, p *crewBranch
 	for i := range got.remote {
 		switch got.remote[i].Branch {
 		case "feat/q":
@@ -91,11 +91,15 @@ func TestCrewRunsFromViewGolden(t *testing.T) {
 	if q == nil || q.State != StateIdle {
 		t.Errorf("feat/q = %+v", q)
 	}
+	// A remote worker's question is addressed to its local dispatcher: it is
+	// routed in scan, so here it keeps its question and its episode start.
 	if r == nil || r.Crew.Origin != "remote_worker" || r.Crew.Host != "halo" || r.CrewSession != "" || r.State != StateBlocked || r.Question == nil || r.Question.Via != "crew" || r.Question.Kind != QuestionCrew ||
+		r.UpdatedAt == 0 || r.blockedSince != r.UpdatedAt*1000 ||
 		len(r.Crew.Attention) != 1 || r.Crew.Attention[0].Action == nil || r.Crew.Attention[0].Action.Verb != "reply" {
 		t.Errorf("feat/r = %+v", r)
 	}
-	if p == nil || p.Crew.Origin != "peer" || p.Crew.Host != "mbp" || p.Question != nil || p.Crew.Detail != "" ||
+	// A peer's question belongs to the owning host's dispatcher: never blocked here.
+	if p == nil || p.Crew.Origin != "peer" || p.Crew.Host != "mbp" || p.State != StateRunning || p.Question != nil || p.Crew.Detail != "" || p.blockedSince != 0 ||
 		len(p.Crew.Attention) != 1 || p.Crew.Attention[0].Action != nil || p.Crew.Attention[0].Command != "" {
 		t.Errorf("feat/p = %+v", p)
 	}
@@ -230,5 +234,70 @@ func TestCrewRunsFromViewStates(t *testing.T) {
 		if r.State != want || r.Attention != "" || r.AttentionNote != "" || r.Question != nil || r.Crew.Detail != "gate won't pass" {
 			t.Errorf("%s: got %+v detail %q, want %q with the detail kept", state, r.Run, r.Crew.Detail, want)
 		}
+	}
+}
+
+// A watchdog's raw text never reaches the Crew tab: its items carry houston's
+// wording, the same the activity feed uses. Other kinds keep crew's message.
+func TestProjectItemWordsWatchdogItems(t *testing.T) {
+	v := goldenView(t)
+	byID := map[string]crewview.Item{}
+	for _, it := range v.Attention {
+		byID[it.ID] = it
+	}
+	cases := []struct {
+		item crewview.Item
+		want string
+	}{
+		{byID["prompt:c1:feat/d"], crewWatchdogPromptNote},
+		{byID["stall:c1:feat/e"], crewWatchdogQuietNote},
+		{byID["watchdog:c1:feat/f"], crewWatchdogRunawayNote},
+		{byID["dead:c1:feat/g"], crewWatchdogDeadNote},
+		{viewItem("watchdog", "feat/x", "load: host busy"), "watchdog: load"},
+		{viewItem("stall", "feat/x", "no output for a long while"), "watchdog"},
+		{viewItem("watchdog", "feat/x", "Weird Prefix: x"), "watchdog"},
+		{byID["blocked:c1:feat/c"], "which schema should the migration target?"},
+		{byID["failed:c1:feat/h"], "exit 1 after test failure"},
+	}
+	for _, c := range cases {
+		t.Run(c.item.ID, func(t *testing.T) {
+			if c.item.ID == "" {
+				t.Fatal("golden item missing")
+			}
+			if got := projectItem(c.item, v.GeneratedAt).Message; got != c.want {
+				t.Errorf("Message = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// A row with no age_sec has no known status time: an old dispatcher reply
+// cannot be said to answer it, and its episode is at least as old as the view.
+func TestCrewRunsFromViewBlockedWithUnknownAge(t *testing.T) {
+	v := oneWorker("blocked", sp("q?"), 0)
+	v.Workers[0].AgeSec = nil
+	v.Attention = []crewview.Item{{ID: "b", Crew: "c1", Branch: "feat/x", Origin: "local", Kind: "blocked", Message: "q?"}}
+	mem := blockedMemory{}
+	r := crewRunsFromView(v, nil, map[string]int64{"feat/x": 5_000}, mem).local["feat/x"]
+	if r.State != StateBlocked || r.Question == nil || r.Question.Text != "q?" {
+		t.Errorf("got %+v q %+v, want still blocked with its question", r.Run, r.Question)
+	}
+	if want := v.GeneratedAt * 1000; r.blockedSince != want || mem[crewWorkerKey{"c1", "feat/x"}] != want {
+		t.Errorf("blockedSince = %d mem %v, want %d (generated_at)", r.blockedSince, mem, want)
+	}
+}
+
+// The dispatcher answering a remote worker writes its reply on this bus: the
+// reply clears the question as it does for a local worker.
+func TestCrewRunsFromViewReplyShimClearsARemoteWorker(t *testing.T) {
+	const g = 1000000
+	v := oneWorker("blocked", sp("q?"), 300)
+	v.GeneratedAt = g
+	v.Workers[0].Origin, v.Workers[0].Host = crewview.OriginRemote, "halo"
+	v.Attention = []crewview.Item{{ID: "b", Crew: "c1", Branch: "feat/x", Origin: crewview.OriginRemote, Kind: "blocked"}}
+	mem := blockedMemory{}
+	got := crewRunsFromView(v, nil, map[string]int64{"feat/x": (g-300)*1000 + 1}, mem).remote
+	if len(got) != 1 || got[0].State != "" || got[0].Question != nil || len(mem) != 0 {
+		t.Errorf("got %+v mem %v", got, mem)
 	}
 }

@@ -63,6 +63,11 @@ type CrewSource struct {
 	// rule as crewDirs.
 	mem blockedMemory
 
+	// lastRuns is the previous tick's worker runs per bus, by registry key: a
+	// crew whose roster the view failed to collect keeps them (heldCrews).
+	// Same single-goroutine rule as crewDirs.
+	lastRuns map[string]map[string]Run
+
 	// feed tails every resolved bus's events.jsonl for the activity feed; nil
 	// disables it (tests, tmux mode).
 	feed *crewfeed.Store
@@ -214,11 +219,12 @@ func crewRunAbandoned(b crewBranch, windowless, dispatcherAlive bool, now time.T
 // scan returns this tick's runs under their final registry keys: for a local
 // worker the pane id where its branch joins exactly one agent pane, otherwise
 // "crew/<bus>/<branch>"; for a worker crew's view reports on another machine,
-// CrewRemoteKey. Only workers in crew's view are listed. It also returns, under
-// its pane id, a dispatcher layer for every crew that joins its dispatcher pane
-// (joinDispatchers) — Role, crew id, bus, the crew's own attention items and
-// the view's notice, so the key lists only while another layer supplies an
-// agent.
+// CrewRemoteKey. Only workers in crew's view are listed, except that a crew
+// whose roster the view reports failing keeps last tick's runs. It also
+// returns, under its pane id, a dispatcher layer for every crew that joins its
+// dispatcher pane (joinDispatchers) — Role, crew id, bus, the crew's own
+// attention items and the view's notice and errors, so the key lists only while
+// another layer supplies an agent.
 //
 // ok=false means a tmux query failed — a transient error, not evidence every
 // crew-sourced branch vanished. The caller must skip the tick entirely rather
@@ -311,6 +317,8 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 	inView := map[crewWorkerKey]bool{}
 	crewItems := map[string]map[string][]CrewAttention{} // bus -> crew id -> items
 	notices := map[string]string{}
+	viewErrs := map[string][]string{}
+	lastRuns := map[string]map[string]Run{}
 	for _, bus := range buses {
 		if s.views == nil {
 			continue
@@ -323,6 +331,24 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 		if !ok {
 			continue
 		}
+		viewErrs[bus] = ov.Errors
+
+		// A crew whose roster the view failed to collect keeps last tick's runs
+		// and blocked episodes; the view is used for everything else it reports.
+		held := heldCrewsOf(ov.Errors)
+		busRuns := map[string]Run{}
+		for key, r := range s.lastRuns[bus] {
+			if held.has(r.Crew.Name) {
+				busRuns[key] = r
+			}
+		}
+		for k := range s.mem {
+			if held.has(k.crew) {
+				inView[k] = true
+			}
+		}
+		ov.Workers = slices.DeleteFunc(slices.Clone(ov.Workers), func(w crewview.Worker) bool { return held.has(w.Crew) })
+
 		for _, w := range ov.Workers {
 			inView[crewWorkerKey{w.Crew, w.Branch}] = true
 		}
@@ -350,16 +376,22 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 				key = "crew/" + bus + "/" + branch
 				slog.Debug("crew source: no pane join", "bus", bus, "branch", branch, "candidates", candidates)
 			}
-			out[key] = routed
+			busRuns[key] = routed
 		}
 		// CrewBus is the bus whose view reported the row, so the action route
-		// can find its items; it has no worktree, which keeps /reply off it.
-		for _, r := range vr.remote {
+		// can find its items; it has no worktree, which keeps /reply off it. A
+		// remote worker's question goes to its dispatcher on this bus; a peer
+		// row carries no question to route.
+		for _, b := range vr.remote {
+			r := routeCrewQuestion(b, dispatcherLive(joins[bus], b.Crew.Name), now)
 			r.Project = project
 			r.CrewBus = bus
-			out[CrewRemoteKey(r.Crew.Name, r.Branch)] = r
+			busRuns[CrewRemoteKey(r.Crew.Name, r.Branch)] = r
 		}
+		lastRuns[bus] = busRuns
+		maps.Copy(out, busRuns)
 	}
+	s.lastRuns = lastRuns
 	s.ids = liveIDs
 	for k := range s.mem {
 		if !inView[k] {
@@ -374,7 +406,7 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 				slog.Debug("crew source: dispatcher pane already keyed", "bus", bus, "crew", crewID, "pane", paneID, "branch", held.Branch)
 				continue
 			}
-			out[paneID] = Run{Role: RoleDispatcher, Crew: &CrewRef{Name: crewID, Attention: crewItems[bus][crewID], ViewNotice: notices[bus]}, CrewBus: bus}
+			out[paneID] = Run{Role: RoleDispatcher, Crew: &CrewRef{Name: crewID, Attention: crewItems[bus][crewID], ViewNotice: viewNotice(notices[bus], viewErrs[bus], crewID)}, CrewBus: bus}
 		}
 	}
 	return out, true

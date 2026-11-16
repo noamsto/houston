@@ -3,6 +3,7 @@ package runs
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/noamsto/houston/crewfeed"
 	"github.com/noamsto/houston/crewview"
@@ -2023,8 +2025,8 @@ func TestScanCarriesTheViewOnTheDispatcherRun(t *testing.T) {
 		v := goldenView(t)
 		got := scan(t, func(bus string) *fakeViews { return viewsOn(bus, v) })
 		d := got["%1"]
-		if d.Role != RoleDispatcher || d.Crew == nil || d.Crew.ViewNotice != "" {
-			t.Fatalf("dispatcher = %+v crew %+v", d, d.Crew)
+		if d.Role != RoleDispatcher || d.Crew == nil || d.Crew.ViewNotice != "peer nuc: sync stale: last ok 900s ago; peer halo: no snapshot yet" {
+			t.Fatalf("dispatcher = %+v crew %+v, want the view's errors as its notice", d, d.Crew)
 		}
 		if it := d.Crew.Attention; len(it) != 1 || it[0].Kind != "hold_matured" || it[0].Since != v.GeneratedAt-120 {
 			t.Errorf("dispatcher attention = %+v, want c1's hold_matured item since generated_at-120", it)
@@ -2075,5 +2077,197 @@ func TestScanForgetsABlockedEpisodeOnceTheWorkerLeavesTheView(t *testing.T) {
 	views.views[bus] = workingView()
 	if _, ok := s.scan(); !ok || len(s.mem) != 0 {
 		t.Errorf("mem = %v after the worker left the view, want it forgotten", s.mem)
+	}
+}
+
+// joinedC1 is a scan over one bus whose c1 dispatcher is live at %1, with ov as
+// crew's view; the returned fakeViews lets a test swap the view between ticks.
+func joinedC1(t *testing.T, ov crewview.Overview) (*CrewSource, *fakeViews, string) {
+	t.Helper()
+	bus := writeBus(t, "feat/a")
+	writeCrew(t, bus, crewFiles{id: "c1", pane: ptr("%1"), paneMod: regT, pid: ptr("200"), pidMod: regT})
+	views := viewsOn(bus, ov)
+	wins := []tmux.WindowOptions{{Session: "h", Window: 2, CrewName: "dispatcher", GitRoot: "/wt/a"}}
+	s := crewScanner(map[string]string{"/wt/a": bus}, views, wins, []tmux.PaneOptions{dispatcherPane("%1", "h:2")})
+	s.procs = liveDispatcher()
+	return s, views, bus
+}
+
+func mustScan(t *testing.T, s *CrewSource) map[string]Run {
+	t.Helper()
+	got, ok := s.scan()
+	if !ok {
+		t.Fatal("scan reported failure")
+	}
+	return got
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	return slices.Sorted(slices.Values(keysOf(m)))
+}
+
+// crew dash still prints a line when its roster collect fails, with no workers
+// and the failure in errors[]: that is not an empty crew, so the last tick's
+// workers stay listed (no Gone, blocked episodes kept) and the dispatcher says why.
+func TestScanHoldsTheCrewLayerWhileTheRosterFails(t *testing.T) {
+	v := goldenView(t)
+	s, views, bus := joinedC1(t, v)
+	tick1 := mustScan(t, s)
+	mem1 := maps.Clone(s.mem)
+	if len(mem1) == 0 {
+		t.Fatal("the golden view recorded no blocked episode")
+	}
+
+	failed := v
+	failed.Workers = []crewview.Worker{}
+	failed.Errors = []string{"roster: crew crews: exit 1"}
+	views.views[bus] = failed
+	tick2 := mustScan(t, s)
+	if !reflect.DeepEqual(sortedKeys(tick2), sortedKeys(tick1)) {
+		t.Fatalf("keys = %v, want tick 1's %v", sortedKeys(tick2), sortedKeys(tick1))
+	}
+	for k, r := range tick1 {
+		if k != "%1" && !reflect.DeepEqual(tick2[k], r) {
+			t.Errorf("%s = %+v, want tick 1's %+v", k, tick2[k], r)
+		}
+	}
+	if !maps.Equal(s.mem, mem1) {
+		t.Errorf("mem = %v, want tick 1's %v", s.mem, mem1)
+	}
+	if d := tick2["%1"]; d.Crew == nil || !strings.Contains(d.Crew.ViewNotice, "roster: crew crews: exit 1") {
+		t.Errorf("dispatcher crew = %+v, want the roster error in its notice", d.Crew)
+	}
+
+	views.views[bus] = workingView("feat/z")
+	tick3 := mustScan(t, s)
+	if want := []string{"%1", "crew/" + bus + "/feat/z"}; !reflect.DeepEqual(sortedKeys(tick3), want) {
+		t.Errorf("keys = %v, want %v — a clean view is used as is", sortedKeys(tick3), want)
+	}
+	if d := tick3["%1"]; d.Crew == nil || d.Crew.ViewNotice != "" {
+		t.Errorf("dispatcher crew = %+v, want the notice cleared", d.Crew)
+	}
+}
+
+// When one crew's roster fails, that crew's workers come from the last tick
+// (all of them, peer rows too) while every other crew's come from the view.
+func TestScanHoldsOneCrewWhoseRosterFails(t *testing.T) {
+	v := goldenView(t)
+	s, views, bus := joinedC1(t, v)
+	tick1 := mustScan(t, s)
+	mem1 := maps.Clone(s.mem)
+
+	held := v
+	held.Workers = []crewview.Worker{}
+	for _, w := range v.Workers {
+		switch {
+		case w.Crew == "c1" && w.Origin != crewview.OriginPeer:
+			continue
+		case w.Branch == "feat/q":
+			w.State = "working"
+		case w.Branch == "feat/j":
+			w.State = "pr_open"
+		}
+		held.Workers = append(held.Workers, w)
+	}
+	held.Errors = []string{"crew c1: workers: timeout", "crew c2: holds: lock busy"}
+	views.views[bus] = held
+	tick2 := mustScan(t, s)
+
+	jKey := "crew/" + bus + "/feat/j"
+	if !reflect.DeepEqual(sortedKeys(tick2), sortedKeys(tick1)) {
+		t.Fatalf("keys = %v, want tick 1's %v", sortedKeys(tick2), sortedKeys(tick1))
+	}
+	for k, r := range tick1 {
+		if k != "%1" && k != jKey && !reflect.DeepEqual(tick2[k], r) {
+			t.Errorf("%s = %+v, want tick 1's %+v", k, tick2[k], r)
+		}
+	}
+	if j := tick2[jKey]; j.State != StateReview {
+		t.Errorf("feat/j = %+v, want c2's worker from the new view", j)
+	}
+	if !maps.Equal(s.mem, mem1) {
+		t.Errorf("mem = %v, want tick 1's %v", s.mem, mem1)
+	}
+	if d := tick2["%1"]; d.Crew == nil || d.Crew.ViewNotice != "crew c1: workers: timeout" {
+		t.Errorf("dispatcher crew = %+v, want only c1's error in c1's notice", d.Crew)
+	}
+}
+
+// An error about something else (a peer) leaves the view's workers in use.
+func TestScanUsesAViewReportingOnlyAPeerError(t *testing.T) {
+	v := goldenView(t)
+	v.Errors = []string{"peer mbp: unreachable"}
+	s, _, bus := joinedC1(t, v)
+	got := mustScan(t, s)
+	if len(got) != 13 {
+		t.Errorf("keys = %v, want the 12 workers and the dispatcher", sortedKeys(got))
+	}
+	if j := got["crew/"+bus+"/feat/j"]; j.State != StateRunning {
+		t.Errorf("feat/j = %+v", j)
+	}
+	if d := got["%1"]; d.Crew == nil || d.Crew.ViewNotice != "peer mbp: unreachable" {
+		t.Errorf("dispatcher crew = %+v, want the peer error as its notice", d.Crew)
+	}
+}
+
+func TestViewNotice(t *testing.T) {
+	long := strings.Repeat("é", 400)
+	for _, tc := range []struct {
+		name, status string
+		errs         []string
+		crew, want   string
+	}{
+		{"none", "", nil, "c1", ""},
+		{"status only", "crew view unavailable: exit 1", nil, "c1", "crew view unavailable: exit 1"},
+		{"bus-wide and own crew", "", []string{"roster: x", "crew c1: workers: t", "bus: y"}, "c1", "roster: x; crew c1: workers: t; bus: y"},
+		{"another crew's error left out", "", []string{"crew c2: workers: t", "peer mbp: down", "host halo: gone"}, "c1", "peer mbp: down; host halo: gone"},
+		{"status and errors", "s", []string{"roster: x"}, "c1", "s; roster: x"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := viewNotice(tc.status, tc.errs, tc.crew); got != tc.want {
+				t.Errorf("viewNotice = %q, want %q", got, tc.want)
+			}
+		})
+	}
+	got := viewNotice("", []string{"roster: " + long}, "c1")
+	if len(got) > 300 || !utf8.ValidString(got) || !strings.HasPrefix(got, "roster: é") {
+		t.Errorf("long notice = %d bytes valid=%v, want at most 300 valid UTF-8 bytes", len(got), utf8.ValidString(got))
+	}
+}
+
+// A remote worker's question is addressed to its local dispatcher, so it is
+// routed like a local worker's: hidden while the dispatcher is live and has had
+// less than crewDispatcherSilence, then the human's.
+func TestScanRoutesARemoteWorkersQuestion(t *testing.T) {
+	w := viewWorker("feat/r", "blocked", "need the db password", testViewGen-60)
+	w.Origin, w.Host = crewview.OriginRemote, "halo"
+	it := viewItem("blocked", "feat/r", "need the db password")
+	it.Origin = crewview.OriginRemote
+	s, _, _ := joinedC1(t, overviewOf([]crewview.Item{it}, w))
+	key := CrewRemoteKey("c1", "feat/r")
+
+	s.now = func() time.Time { return time.Unix(testViewGen, 0) }
+	if r := mustScan(t, s)[key]; r.State != StateRunning || r.Question != nil || r.Crew == nil || r.Crew.Detail != "need the db password" {
+		t.Errorf("after 1 min: %+v, want running with the question kept in the detail", r)
+	}
+	s.now = func() time.Time { return time.Unix(testViewGen+20*60, 0) }
+	if r := mustScan(t, s)[key]; r.State != StateBlocked || r.Question == nil {
+		t.Errorf("after 21 min: %+v, want needs-you", r)
+	}
+}
+
+// A peer worker's question is the owning host's to surface: here it reads
+// running even with no dispatcher to answer it.
+func TestScanNeverAsksAboutAPeerWorker(t *testing.T) {
+	w := viewWorker("feat/p", "blocked", "", testViewGen-3600)
+	w.Origin, w.Host = crewview.OriginPeer, "mbp"
+	it := viewItem("blocked", "feat/p", "blocked")
+	it.Origin = crewview.OriginPeer
+	s, _, _ := joinedC1(t, overviewOf([]crewview.Item{it}, w))
+	s.procs = fakeProcs{}
+	s.now = func() time.Time { return time.Unix(testViewGen, 0) }
+	r := mustScan(t, s)[CrewRemoteKey("c1", "feat/p")]
+	if r.State != StateRunning || r.Question != nil || r.Crew == nil || r.Crew.Detail != "" {
+		t.Errorf("peer row = %+v, want running, no question, no detail", r)
 	}
 }

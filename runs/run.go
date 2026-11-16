@@ -134,7 +134,7 @@ type CrewRef struct {
 	Origin     string          `json:"origin,omitempty"`      // "local", "remote_worker" or "peer" from crew's view; "" when crew did not say.
 	Host       string          `json:"host,omitempty"`        // crew's host name for a remote_worker or peer row; "" for local.
 	Attention  []CrewAttention `json:"attention,omitempty"`   // crew's attention items for this worker, or for a dispatcher run its crew-scoped items.
-	ViewNotice string          `json:"view_notice,omitempty"` // dispatcher runs only: why crew's view is unavailable or unsupported.
+	ViewNotice string          `json:"view_notice,omitempty"` // dispatcher runs only: why crew's view is unavailable or unsupported, and the errors it reports.
 }
 
 // CrewAttention is one item from crew's view that needs the operator.
