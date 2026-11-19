@@ -101,12 +101,4 @@ describe('buildDispatcherRequest', () => {
     expect('model' in req).toBe(false)
     expect('effort' in req).toBe(false)
   })
-
-  it('carries images only when there are some', () => {
-    const base = { repo: '/r', rows: ['x'], engine: 'pi', model: '', effort: '' }
-    const img = { name: 'a.png', type: 'image/png', data: 'AAAA' }
-    expect(buildDispatcherRequest({ ...base, images: [img] }).images).toEqual([img])
-    expect('images' in buildDispatcherRequest({ ...base, images: [] })).toBe(false)
-    expect('images' in buildDispatcherRequest(base)).toBe(false)
-  })
 })

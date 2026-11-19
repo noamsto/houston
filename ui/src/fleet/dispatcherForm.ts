@@ -1,4 +1,4 @@
-import type { DispatcherRequest, ImageUpload } from '../api/dispatch'
+import type { DispatcherRequest } from '../api/dispatch'
 
 export const MAX_TASKS = 20
 const MAX_TASK_CHARS = 2000
@@ -52,12 +52,10 @@ export function buildDispatcherRequest(f: {
   engine: string
   model: string
   effort: string
-  images?: ImageUpload[]
 }): DispatcherRequest {
   const tasks = f.rows.map(normalizeTask).filter((r) => r !== '')
   const req: DispatcherRequest = { repo: f.repo, tasks, engine: f.engine }
   if (f.model) req.model = f.model
   if (f.effort) req.effort = f.effort
-  if (f.images?.length) req.images = f.images
   return req
 }

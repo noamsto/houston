@@ -1269,6 +1269,58 @@ describe('DispatchView worker images', () => {
     expect((screen.getByRole('button', { name: 'Dispatch' }) as HTMLButtonElement).disabled).toBe(false)
   })
 
+  it('holds the one-at-a-time slot while a dispatcher image is still being read', async () => {
+    const o = structuredClone(optionsFixture)
+    o.dispatcher_attach = true
+    o.dispatch_attach = true
+    fetchDispatchOptionsMock.mockResolvedValue(o)
+    const { container } = render(<DispatchView runs={[]} />)
+    await screen.findByLabelText('Repo')
+    fireEvent.click(screen.getByRole('button', { name: 'New dispatcher' }))
+    change('Task 1', 'do it')
+    fireEvent.change(container.querySelector('#dispatcher-attach')!, { target: { files: [shot()] } })
+    await screen.findByText('shot.png')
+    const read = vi.spyOn(FileReader.prototype, 'readAsDataURL').mockImplementation(() => {})
+    try {
+      fireEvent.click(screen.getByRole('button', { name: 'Start dispatcher' }))
+      await screen.findByRole('button', { name: 'Starting…' })
+
+      fireEvent.click(screen.getByRole('button', { name: 'Add worker' }))
+      change('Title', 'go')
+      const dispatchButton = screen.getByRole('button', { name: 'Dispatch' }) as HTMLButtonElement
+      expect(dispatchButton.disabled).toBe(true)
+      fireEvent.click(dispatchButton)
+      expect(submitDispatchMock).not.toHaveBeenCalled()
+    } finally {
+      read.mockRestore()
+    }
+  })
+
+  it('an unreadable dispatcher image shows an error, keeps the chip and re-enables submit', async () => {
+    const o = structuredClone(optionsFixture)
+    o.dispatcher_attach = true
+    fetchDispatchOptionsMock.mockResolvedValue(o)
+    const { container } = render(<DispatchView runs={[]} />)
+    await screen.findByLabelText('Repo')
+    fireEvent.click(screen.getByRole('button', { name: 'New dispatcher' }))
+    change('Task 1', 'do it')
+    fireEvent.change(container.querySelector('#dispatcher-attach')!, { target: { files: [shot()] } })
+    await screen.findByText('shot.png')
+    const read = vi.spyOn(FileReader.prototype, 'readAsDataURL').mockImplementation(function (this: FileReader) {
+      queueMicrotask(() => this.onerror?.(new ProgressEvent('error') as ProgressEvent<FileReader>))
+    })
+    try {
+      fireEvent.click(screen.getByRole('button', { name: 'Start dispatcher' }))
+      await screen.findByText('could not read an image')
+    } finally {
+      read.mockRestore()
+    }
+
+    expect(submitDispatcherMock).not.toHaveBeenCalled()
+    expect(screen.getByText('shot.png')).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Start dispatcher' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
   it('names the probe error instead of "too old" when the host could not be checked', async () => {
     const o = structuredClone(optionsFixture)
     o.dispatch_attach = false

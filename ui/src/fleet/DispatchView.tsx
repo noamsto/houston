@@ -28,6 +28,7 @@ import {
   type DispatchPrefs,
 } from './dispatchForm'
 import { useStagedImage } from '../components/useStagedImage'
+import type { StagedImage } from '../components/useStagedImage'
 import { StagedImageChip } from '../components/StagedImageChip'
 import { DispatchAttachments } from './DispatchAttachments'
 import { DISPATCH_IMAGE_LIMITS, toImageUploads } from './dispatchAttachments'
@@ -127,9 +128,18 @@ export function DispatchView({ runs }: { runs: Run[] }) {
     }
   }
 
-  async function launchDispatcher(req: DispatcherRequest): Promise<DispatcherOutcome> {
+  async function launchDispatcher(req: DispatcherRequest, staged: StagedImage[]): Promise<DispatcherOutcome> {
     const h = host
-    const r = await submit('dispatcher', h, async () => ({ host: h, outcome: await submitDispatcher(req, peerArg(h)) }))
+    const r = await submit('dispatcher', h, async () => {
+      if (staged.length > 0) {
+        try {
+          req.images = await toImageUploads(staged)
+        } catch {
+          return { host: h, outcome: { kind: 'failed', status: 0, error: 'could not read an image' } }
+        }
+      }
+      return { host: h, outcome: await submitDispatcher(req, peerArg(h)) }
+    })
     return r.outcome
   }
 

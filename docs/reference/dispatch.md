@@ -188,7 +188,9 @@ validation, naming and statuses under "Images" in "Dispatch".
   on both forms, using `useStagedImage(limits)`. The worker form's images live in
   `DispatchView` (they survive a mode toggle and a failed dispatch, and clear with
   title and spec on success); the dispatcher form's in `DispatcherForm`. They are
-  read with `readBase64` at submit time and omitted when none. Without
+  read with `readBase64` at submit time, inside `DispatchView`'s one-at-a-time
+  slot (so neither form can submit while the other's images are still being
+  read), and omitted when none. Without
   `dispatch_attach` the worker form has no attach button, and images staged for
   another host disable submit (`Remove the images — this host can't attach them.`);
   without `dispatcher_attach` the dispatcher form hides the control.

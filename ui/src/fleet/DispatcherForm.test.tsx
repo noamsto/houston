@@ -4,6 +4,8 @@ import { useState } from 'react'
 import { DispatcherForm, DispatcherResult } from './DispatcherForm'
 import type { DispatchOptions, DispatcherOutcome, DispatcherRequest } from '../api/dispatch'
 import type { Run } from '../api/runs'
+import type { StagedImage } from '../components/useStagedImage'
+import { toImageUploads } from './dispatchAttachments'
 
 const submitDispatcherMock = vi.fn<(req: DispatcherRequest) => Promise<DispatcherOutcome>>()
 
@@ -44,9 +46,10 @@ function Harness({
 }) {
   const [outcome, setOutcome] = useState<DispatcherOutcome | null>(null)
   const [busy, setBusy] = useState(false)
-  async function onSubmit(req: DispatcherRequest): Promise<DispatcherOutcome> {
+  async function onSubmit(req: DispatcherRequest, staged: StagedImage[]): Promise<DispatcherOutcome> {
     setBusy(true)
     try {
+      if (staged.length > 0) req.images = await toImageUploads(staged)
       const result = await submitDispatcherMock(req)
       setOutcome(result)
       return result
@@ -316,7 +319,7 @@ describe('DispatcherForm result', () => {
   })
 
   it('disables its inputs and submit while busy, without claiming the launch', () => {
-    const onSubmit = vi.fn<(req: DispatcherRequest) => Promise<DispatcherOutcome>>()
+    const onSubmit = vi.fn<(req: DispatcherRequest, staged: StagedImage[]) => Promise<DispatcherOutcome>>()
     render(<DispatcherForm host="local" options={options} repo="/repo/a" busy onSubmit={onSubmit} onStarted={() => {}} />)
 
     expect(startButton().disabled).toBe(true)
@@ -457,26 +460,6 @@ describe('DispatcherForm images', () => {
     await screen.findByText('proj')
 
     expect(submitDispatcherMock).toHaveBeenCalledTimes(1)
-  })
-
-  it('an unreadable image shows an error, keeps the chip and re-enables submit', async () => {
-    const { container } = setup(withAttach)
-    change('Task 1', 'do it')
-    attach(container)
-    await screen.findByText('shot.png')
-    const read = vi.spyOn(FileReader.prototype, 'readAsDataURL').mockImplementation(function (this: FileReader) {
-      queueMicrotask(() => this.onerror?.(new ProgressEvent('error') as ProgressEvent<FileReader>))
-    })
-    try {
-      start()
-      await screen.findByText('could not read an image')
-    } finally {
-      read.mockRestore()
-    }
-
-    expect(submitDispatcherMock).not.toHaveBeenCalled()
-    expect(screen.getByText('shot.png')).toBeTruthy()
-    expect(startButton().disabled).toBe(false)
   })
 
   it('without dispatcher_attach there is no attach button and the hint says so', () => {
