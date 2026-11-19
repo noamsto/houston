@@ -431,7 +431,7 @@ export function ChatTab({ run, now }: { run: Run; now: number }) {
   }
   const provisional = toolShown ? provisionalTool(run, updates, toolShown.since) : null
 
-  const { ref: scroller, stuck, onScroll, preserveAnchor, scrollToLatest, unstick } = useStickyScroll<HTMLDivElement>(
+  const { ref: scroller, stuck, onScroll, preserveAnchor, scrollToLatest } = useStickyScroll<HTMLDivElement>(
     [items, provisional, reconciled.remaining, revealVersion],
     items[0]?.seq,
   )
@@ -449,10 +449,10 @@ export function ChatTab({ run, now }: { run: Run; now: number }) {
     return err
   }
 
-  const pendingQuestion = answerable
-    ? items.find((i): i is QuestionItem => i.kind === 'question' && i.call.status !== 'completed' && i.call.status !== 'failed')
-    : undefined
-  const questionPending = !!pendingQuestion
+  const pendingQuestions = answerable
+    ? items.filter((i): i is QuestionItem => i.kind === 'question' && i.call.status !== 'completed' && i.call.status !== 'failed')
+    : []
+  const questionPending = pendingQuestions.length > 0
   // The wizard reports whether its picker is really on screen, so the banner
   // and composer only switch to "answer below" when that is true.
   const [interactiveIds, setInteractiveIds] = useState<Set<string>>(new Set())
@@ -465,8 +465,9 @@ export function ChatTab({ run, now }: { run: Run; now: number }) {
       return next
     })
   }, [])
-  const questionMode = questionPending && interactiveIds.size > 0
-  const modeQuestionId = questionMode ? pendingQuestion.call.toolCallId : undefined
+  const modeQuestion = pendingQuestions.find((i) => interactiveIds.has(i.call.toolCallId))
+  const questionMode = !!modeQuestion
+  const modeQuestionId = modeQuestion?.id
 
   // Put the card's top at the top of the timeline so the wizard's step label
   // is visible, again after the wizard's first layout change.
@@ -475,12 +476,12 @@ export function ChatTab({ run, now }: { run: Run; now: number }) {
     if (align.current.id !== modeQuestionId) align.current = { id: modeQuestionId, left: modeQuestionId ? 2 : 0 }
     const el = scroller.current
     if (!el || align.current.left <= 0) return
-    const card = el.querySelector('.chat-question:not([data-status="completed"]):not([data-status="failed"])')
+    const card = Array.from(el.querySelectorAll<HTMLElement>('.chat-question')).find((c) => c.dataset.id === modeQuestionId)
     if (!card) return
     align.current.left--
     el.scrollTop += card.getBoundingClientRect().top - el.getBoundingClientRect().top
-    unstick()
-    // unstick is recreated each render; only a new question or layout bump should re-align.
+    onScroll()
+    // onScroll is recreated each render; only a new question or layout bump should re-align.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modeQuestionId, revealVersion])
 
