@@ -51,7 +51,7 @@ func TestIdentityWorkerStatusOnlyTouchesLiveness(t *testing.T) {
 		t.Fatalf("got %+v", a)
 	}
 	b.session, b.lastActivity, b.workerSilent = a.session, a.lastActivity, a.workerSilent
-	b.state, b.detail, b.prURL, b.statusTS, b.blockedSince = a.state, a.detail, a.prURL, a.statusTS, a.blockedSince
+	b.state, b.detail, b.prURL, b.statusTS, b.blockedSince, b.hasStatus = a.state, a.detail, a.prURL, a.statusTS, a.blockedSince, a.hasStatus
 	if a.state != "blocked" || a.detail != "q" || a.prURL != "https://github.com/o/r/pull/9" || a.statusTS != 3000 || a.blockedSince != 3000 {
 		t.Fatalf("status fields = %+v", a)
 	}
@@ -276,6 +276,42 @@ func TestIdentityStatusFold(t *testing.T) {
 		}},
 		{"watchdog unlisted prefix claims nothing", dispatch + wd(1200, "blocked", "load: high"), func(i crewIdentity) string {
 			if i.watchdog != (watchdogItem{}) || i.state != "working" {
+				return fmt.Sprintf("%+v", i)
+			}
+			return ""
+		}},
+		{"watchdog working clears a prompt item", dispatch + row(1100, "working", "") + wd(1200, "blocked", "prompt: x") + wd(1300, "working", "prompt: cleared"), func(i crewIdentity) string {
+			if i.watchdog != (watchdogItem{}) || i.state != "working" {
+				return fmt.Sprintf("%+v", i)
+			}
+			return ""
+		}},
+		{"watchdog working clears a quiet item", dispatch + row(1100, "working", "") + wd(1200, "blocked", "quiet: x") + wd(1300, "working", "quiet: cleared"), func(i crewIdentity) string {
+			if i.watchdog != (watchdogItem{}) {
+				return fmt.Sprintf("%+v", i)
+			}
+			return ""
+		}},
+		{"watchdog row counts as a status", dispatch + wd(1200, "blocked", "prompt: trust"), func(i crewIdentity) string {
+			if !i.hasStatus || i.statusTS != 0 || i.watchdog != (watchdogItem{"prompt", "prompt: trust"}) || i.watchdogTS != 1200 {
+				return fmt.Sprintf("%+v", i)
+			}
+			return ""
+		}},
+		{"dispatch alone has no status", dispatch, func(i crewIdentity) string {
+			if i.hasStatus {
+				return fmt.Sprintf("%+v", i)
+			}
+			return ""
+		}},
+		{"resume resets hasStatus", dispatch + wd(1200, "blocked", "prompt: trust") + `{"ts":1300,"crew_id":"c1","kind":"resume","branch":"feat/a"}` + "\n", func(i crewIdentity) string {
+			if i.hasStatus || i.watchdog != (watchdogItem{}) {
+				return fmt.Sprintf("%+v", i)
+			}
+			return ""
+		}},
+		{"pr_url survives a later status without one", dispatch + `{"ts":1100,"crew_id":"c1","from":"worker:feat/a#s1","kind":"status","body":{"state":"pr_open","pr_url":"https://github.com/o/r/pull/9"}}` + "\n" + row(1200, "done", ""), func(i crewIdentity) string {
+			if i.prURL != "https://github.com/o/r/pull/9" || i.state != "done" {
 				return fmt.Sprintf("%+v", i)
 			}
 			return ""

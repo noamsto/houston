@@ -19,8 +19,9 @@ func logWorkers(ids map[string]crewIdentity, generatedAt int64, include func(cre
 
 	for _, branch := range slices.Sorted(maps.Keys(ids)) {
 		id := ids[branch]
-		// crew lists a worker from its first status and drops a reaped one.
-		if id.crew == "" || id.statusTS == 0 || id.state == "reaped" || !include(id.crew) {
+		// crew lists a worker from its first status row, the watchdog's
+		// included, and drops a reaped one.
+		if id.crew == "" || !id.hasStatus || id.state == "reaped" || !include(id.crew) {
 			continue
 		}
 		w := crewview.Worker{
@@ -49,7 +50,7 @@ func logWorkers(ids map[string]crewIdentity, generatedAt int64, include func(cre
 			items = append(items, item("blocked", id.detail, id.blockedSince))
 		}
 		if id.watchdog != (watchdogItem{}) {
-			items = append(items, item(id.watchdog.kind, id.watchdog.message, id.statusTS))
+			items = append(items, item(id.watchdog.kind, id.watchdog.message, id.watchdogTS))
 		}
 	}
 	return workers, items

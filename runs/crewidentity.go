@@ -22,9 +22,11 @@ type crewIdentity struct {
 
 	title, tier, engine, model string // newest dispatch row
 	state, detail, prURL       string // crew state of the newest dispatch/status/reply/reap row
-	statusTS                   int64  // ts (ms) of the row that last set state; 0 before any
+	statusTS                   int64  // ts (ms) of the row that last set state; 0 before any worker status
 	blockedSince               int64  // ts (ms) the current blocked episode began; 0 when not blocked
+	hasStatus                  bool   // any status row, the worker's or the watchdog's, since the last dispatch/resume
 	watchdog                   watchdogItem
+	watchdogTS                 int64 // ts (ms) of the row that set watchdog
 }
 
 // watchdogItem is the attention item the newest classified watchdog status
@@ -66,7 +68,7 @@ func identityFromCrewLog(rd io.Reader) map[string]crewIdentity {
 			id.workerSilent = true
 			id.lastActivity = max(id.lastActivity, rec.TS)
 			id.state, id.detail, id.prURL = "working", "", ""
-			id.statusTS, id.blockedSince, id.watchdog = 0, 0, watchdogItem{}
+			id.statusTS, id.blockedSince, id.watchdog, id.watchdogTS, id.hasStatus = 0, 0, watchdogItem{}, 0, false
 			if rec.Kind == "dispatch" {
 				id.title, id.tier, id.engine, id.model = rec.Title, rec.Tier, rec.Engine, rec.Model
 			}
@@ -89,6 +91,7 @@ func identityFromCrewLog(rd io.Reader) map[string]crewIdentity {
 				id.session = s
 			}
 			id.workerSilent = body.Source == "watchdog"
+			id.hasStatus = true
 			id.lastActivity = max(id.lastActivity, rec.TS)
 			if body.Source == "watchdog" {
 				id.foldWatchdog(body.State, body.Detail, rec.TS)
@@ -101,7 +104,10 @@ func identityFromCrewLog(rd io.Reader) map[string]crewIdentity {
 			case id.state != "blocked" || (!body.Restamp && body.Detail != id.detail):
 				id.blockedSince = rec.TS
 			}
-			id.state, id.detail, id.prURL, id.statusTS = body.State, body.Detail, body.PRURL, rec.TS
+			id.state, id.detail, id.statusTS = body.State, body.Detail, rec.TS
+			if body.PRURL != "" { // the terminal done row drops the URL; crew keeps the last one
+				id.prURL = body.PRURL
+			}
 			id.watchdog = watchdogItem{}
 		case "msg":
 			if id.state == "blocked" && strings.HasPrefix(rec.From, "dispatcher:") {
@@ -119,18 +125,21 @@ func identityFromCrewLog(rd io.Reader) map[string]crewIdentity {
 }
 
 // foldWatchdog records a watchdog status: it leaves the state alone except for
-// a `failed` (dead:) row, and records the item the detail's prefix names.
-// A prefix watchdogPrefixes does not list claims nothing.
+// a `failed` (dead:) row. Only a `blocked` row records the item the detail's
+// prefix names, a prefix watchdogPrefixes does not list claims nothing; any
+// other state (a `working` clearance) clears the item.
 func (id *crewIdentity) foldWatchdog(state, detail string, ts int64) {
 	switch {
 	case state == "failed":
 		id.state, id.statusTS = "failed", ts
-		id.watchdog = watchdogItem{kind: "dead", message: detail}
+		id.watchdog, id.watchdogTS = watchdogItem{kind: "dead", message: detail}, ts
+	case state != "blocked":
+		id.watchdog, id.watchdogTS = watchdogItem{}, 0
 	case strings.HasPrefix(detail, "prompt:"):
-		id.watchdog = watchdogItem{kind: "prompt", message: detail}
+		id.watchdog, id.watchdogTS = watchdogItem{kind: "prompt", message: detail}, ts
 	default:
 		if _, listed := watchdogClassOf(detail); listed {
-			id.watchdog = watchdogItem{kind: "watchdog", message: detail}
+			id.watchdog, id.watchdogTS = watchdogItem{kind: "watchdog", message: detail}, ts
 		}
 	}
 }
