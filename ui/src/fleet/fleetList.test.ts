@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Run } from '../api/runs'
-import { crewShortId, filterRuns, groupByHost, groupByProject, projectOf } from './fleetList'
+import { crewShortId, filterRuns, groupByHost, groupByProject, projectOf, rank } from './fleetList'
+import { needsYou } from './staleness'
 
 const now = 1_800_000_000_000 // fixed ms
 const nowSec = Math.floor(now / 1000)
@@ -15,6 +16,34 @@ function run(p: Partial<Run> = {}): Run {
     ...p,
   } as Run
 }
+
+describe('standby attention', () => {
+  const standby = () => run({ id: 'standby', role: 'dispatcher', state: 'idle', attention: 'standby' })
+
+  it('ranks as rest, below stuck, and is never needs-you', () => {
+    expect(rank(standby(), now)).toBe(0)
+    expect(rank(standby(), now)).toBeLessThan(rank(run({ attention: 'stuck' }), now))
+    expect(needsYou(standby(), now)).toBe(false)
+  })
+
+  it('stays in Active and out of the needs-you, stuck and done filters', () => {
+    const runs = [standby()]
+    expect(filterRuns(runs, 'active', now).map((r) => r.id)).toEqual(['standby'])
+    expect(filterRuns(runs, 'needs-you', now)).toEqual([])
+    expect(filterRuns(runs, 'stuck', now)).toEqual([])
+    expect(filterRuns(runs, 'done', now)).toEqual([])
+  })
+
+  it('sorts below needs-you, stuck and done', () => {
+    const runs = [
+      standby(),
+      run({ id: 'done', state: 'done', attention: 'done', since: 1 }),
+      run({ id: 'stuck', attention: 'stuck', since: 1 }),
+      run({ id: 'blocked', state: 'blocked', since: 1 }),
+    ]
+    expect(filterRuns(runs, 'active', now).map((r) => r.id)).toEqual(['blocked', 'stuck', 'done', 'standby'])
+  })
+})
 
 describe('filterRuns', () => {
   it('active hides stale done/failed but keeps a stale blocked run', () => {

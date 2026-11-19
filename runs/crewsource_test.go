@@ -2386,3 +2386,82 @@ func TestScanNeverAsksAboutAPeerWorker(t *testing.T) {
 		t.Errorf("peer row = %+v, want running, no question, no detail", r)
 	}
 }
+
+func TestScanDispatcherStandbyCountsUnfinishedWorkers(t *testing.T) {
+	remote := viewWorker("feat/r", "working", "", 1)
+	remote.Origin = crewview.OriginRemote
+	remote.Host = "mbp"
+	other := viewWorker("feat/o", "working", "", 1)
+	other.Crew = "c2"
+	cases := []struct {
+		name    string
+		workers []crewview.Worker
+		want    int
+	}{
+		{"one working worker", []crewview.Worker{viewWorker("feat/a", "working", "", 1)}, 1},
+		{"finished workers do not count", []crewview.Worker{
+			viewWorker("feat/a", "done", "", 1),
+			viewWorker("feat/b", "failed", "", 1),
+			viewWorker("feat/c", "pr_open", "", 1),
+		}, 0},
+		{"a blocked worker still counts", []crewview.Worker{viewWorker("feat/a", "blocked", "q", 1)}, 1},
+		{"a remote_worker row counts", []crewview.Worker{remote}, 1},
+		{"another crew's worker does not count", []crewview.Worker{other}, 0},
+		{"mixed", []crewview.Worker{
+			viewWorker("feat/a", "working", "", 1),
+			viewWorker("feat/b", "done", "", 1),
+			remote,
+			other,
+		}, 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _, _ := joinedC1(t, overviewOf(nil, tc.workers...))
+			d := mustScan(t, s)["%1"]
+			if d.Crew == nil || d.Crew.LiveWorkers != tc.want {
+				t.Fatalf("dispatcher layer = %+v, want LiveWorkers %d", d.Crew, tc.want)
+			}
+		})
+	}
+}
+
+func TestScanDispatcherStandbyComposesAttention(t *testing.T) {
+	cases := []struct {
+		name    string
+		workers []crewview.Worker
+		hooks   State
+		want    Attention
+	}{
+		{"idle with a working worker", []crewview.Worker{viewWorker("feat/a", "working", "", 1)}, StateIdle, AttentionStandby},
+		{"idle with only finished workers", []crewview.Worker{viewWorker("feat/a", "done", "", 1)}, StateIdle, AttentionNone},
+		{"blocked with a working worker", []crewview.Worker{viewWorker("feat/a", "working", "", 1)}, StateBlocked, AttentionNeedsYou},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _, _ := joinedC1(t, overviewOf(nil, tc.workers...))
+			reg := NewRegistry(DefaultOrder)
+			for key, run := range mustScan(t, s) {
+				reg.Apply(Delta{Source: "crew", Key: key, Run: run})
+			}
+			wins := []tmux.WindowOptions{{Session: "h", Window: 2, CrewName: "dispatcher", GitRoot: "/wt/a"}}
+			panes := []tmux.PaneOptions{dispatcherPane("%1", "h:2")}
+			for _, td := range deltasFromTmux(wins, panes, func(string) string { return "houston" }) {
+				reg.Apply(td)
+			}
+			reg.Apply(Delta{Source: "hooks", Key: "%1", Run: Run{Agent: "claude", State: tc.hooks}})
+
+			var got *Run
+			for _, r := range reg.Snapshot() {
+				if r.Role == RoleDispatcher {
+					got = &r
+				}
+			}
+			if got == nil {
+				t.Fatalf("no dispatcher run in %+v", reg.Snapshot())
+			}
+			if got.Attention != tc.want {
+				t.Errorf("Attention = %q, want %q", got.Attention, tc.want)
+			}
+		})
+	}
+}

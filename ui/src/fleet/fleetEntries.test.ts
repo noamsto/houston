@@ -36,6 +36,36 @@ const worker = (id: string, crew: string, p: Partial<Run> = {}) =>
 const keys = (es: FleetEntry[]) => es.map((e) => e.key)
 const ids = (rs: Run[]) => rs.map((r) => r.id)
 
+describe('fleetEntries: standby dispatcher', () => {
+  it('ranks a standby head with a fresh blocked member with needs-you', () => {
+    const runs = [
+      run({ id: 'stuck', attention: 'stuck', since: 100 }),
+      dispatcher('d1', '1700-1', { state: 'idle', attention: 'standby', since: 50 }),
+      worker('w1', '1700-1', { state: 'blocked', attention: 'needs-you' }),
+    ]
+    const es = fleetEntries(runs, 'active', now, 'dispatcher')
+    expect(keys(es)).toEqual(['d1', 'stuck'])
+    const d = es[0]
+    if (d.kind !== 'dispatcher') throw new Error('expected a dispatcher entry')
+    expect(d.needsYou).toBe(1)
+  })
+
+  it('does not lift a lone standby head above stuck, done or needs-you runs', () => {
+    const runs = [
+      dispatcher('d1', '1700-1', { state: 'idle', attention: 'standby', since: 900 }),
+      worker('w1', '1700-1'),
+      run({ id: 'done', state: 'done', attention: 'done', since: 1 }),
+      run({ id: 'stuck', attention: 'stuck', since: 1 }),
+      run({ id: 'blocked', state: 'blocked', since: 1 }),
+    ]
+    const es = fleetEntries(runs, 'active', now, 'dispatcher')
+    expect(keys(es)).toEqual(['blocked', 'stuck', 'done', 'd1'])
+    const d = es[3]
+    if (d.kind !== 'dispatcher') throw new Error('expected a dispatcher entry')
+    expect(d.needsYou).toBe(0)
+  })
+})
+
 describe('fleetEntries: dispatcher groups', () => {
   it('raises the dispatcher entry for a needs-you worker without changing the global count', () => {
     const runs = [

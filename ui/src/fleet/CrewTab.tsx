@@ -29,7 +29,7 @@ function phase(run: Run): string {
   return run.state
 }
 
-const ATTENTION_LABEL = { 'needs-you': 'needs you', stuck: 'stuck', done: 'done' } as const
+const ATTENTION_LABEL = { 'needs-you': 'needs you', stuck: 'stuck', done: 'done', standby: 'standby' } as const
 
 function Member({ run, now }: { run: Run; now: number }) {
   const stale = !isFresh(run, now)

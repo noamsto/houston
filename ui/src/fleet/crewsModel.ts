@@ -12,7 +12,8 @@ export interface CrewCounts {
 
 // Flags are gated on freshness like Fleet's badge; unflagged runs bucket by state.
 export function bucket(run: Run, now: number): keyof CrewCounts {
-  if (run.attention) {
+  // Standby is not a bucket: a dispatcher waiting on its workers counts by state.
+  if (run.attention && run.attention !== 'standby') {
     if (!isFresh(run, now)) return 'ended'
     return run.attention === 'needs-you' ? 'needsYou' : run.attention
   }

@@ -220,7 +220,7 @@ func crewRunAbandoned(b crewBranch, windowless, dispatcherAlive bool, now time.T
 // whose roster the view reports failing is read from its last listed rows,
 // marked stale (spliceHeld). It also returns, under its pane id, a dispatcher
 // layer for every crew that joins its dispatcher pane (joinDispatchers) — Role,
-// crew id, bus, the crew's own attention items and the view's notice and
+// crew id, bus, its unfinished-worker count, the crew's own attention items and the view's notice and
 // errors, so the key lists only while another layer supplies an agent.
 //
 // ok=false means a tmux query failed — a transient error, not evidence every
@@ -315,6 +315,7 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 	notices := map[string]string{}
 	viewErrs := map[string][]string{}
 	rosters := map[string]map[string]rosterSnap{}
+	liveWorkers := map[string]int{} // crew id -> unfinished workers
 	for _, bus := range buses {
 		if s.views == nil {
 			continue
@@ -362,6 +363,9 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 				slog.Debug("crew source: no pane join", "bus", bus, "branch", branch, "candidates", candidates)
 			}
 			out[key] = routed
+			if unfinishedWorker(routed) {
+				liveWorkers[b.Crew.Name]++
+			}
 		}
 		// CrewBus is the bus whose view reported the row, so the action route
 		// can find its items; it has no worktree, which keeps /reply off it. A
@@ -375,6 +379,9 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 				r.Stale, r.Crew.ViewNotice = true, crewRosterHeldNote
 			}
 			out[CrewRemoteKey(r.Crew.Name, r.Branch)] = r
+			if unfinishedWorker(r) {
+				liveWorkers[r.Crew.Name]++
+			}
 		}
 	}
 	s.rosters = rosters
@@ -387,10 +394,16 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 				slog.Debug("crew source: dispatcher pane already keyed", "bus", bus, "crew", crewID, "pane", paneID, "branch", held.Branch)
 				continue
 			}
-			out[paneID] = Run{Role: RoleDispatcher, Crew: &CrewRef{Name: crewID, Attention: crewItems[bus][crewID], ViewNotice: viewNotice(notices[bus], viewErrs[bus], crewID)}, CrewBus: bus}
+			out[paneID] = Run{Role: RoleDispatcher, Crew: &CrewRef{Name: crewID, LiveWorkers: liveWorkers[crewID], Attention: crewItems[bus][crewID], ViewNotice: viewNotice(notices[bus], viewErrs[bus], crewID)}, CrewBus: bus}
 		}
 	}
 	return out, true
+}
+
+// unfinishedWorker reports whether a crew worker row is still on its way to a
+// result: any crew-layer state but done, failed, review or none.
+func unfinishedWorker(r Run) bool {
+	return !slices.Contains([]State{"", StateDone, StateFailed, StateReview}, r.State)
 }
 
 // busIdentity folds every log in bus into the identity per branch, recording

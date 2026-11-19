@@ -300,6 +300,8 @@ func attentionOf(out Run, bySource map[string]Run) (Attention, string) {
 		return AttentionStuck, tmuxFailedNote
 	case out.State == StateReview, crew.State == StateDone, crew.State == StateReview:
 		return AttentionDone, ""
+	case out.Role == RoleDispatcher && out.State == StateIdle && crew.Crew != nil && crew.Crew.LiveWorkers > 0:
+		return AttentionStandby, ""
 	}
 	return AttentionNone, ""
 }
