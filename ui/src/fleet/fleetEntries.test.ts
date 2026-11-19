@@ -114,6 +114,19 @@ describe('fleetEntries: dispatcher groups', () => {
     expect(entryProject(e)).toBe('unknown')
   })
 
+  it('nests a cross-repo worker under its dispatcher and groups both in the dispatcher project', () => {
+    const runs = [
+      dispatcher('d1', 'X', { project: 'dispatcher' }),
+      worker('w1', 'X', { project: 'houston' }),
+    ]
+    const es = fleetEntries(runs, 'all', now, 'dispatcher')
+    expect(keys(es)).toEqual(['d1'])
+    const d = es[0]
+    if (d.kind !== 'dispatcher') throw new Error('expected a dispatcher entry')
+    expect(ids(d.shown)).toEqual(['w1'])
+    expect(groupEntriesByProject(es).map(([p]) => p)).toEqual(['dispatcher'])
+  })
+
   it('names a mixed-repo crew after its home repo', () => {
     const runs = [
       worker('a', '1-1', { project: 'dispatcher', crew: { name: '1-1', home: 'dispatcher' } }),

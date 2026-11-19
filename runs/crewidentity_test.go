@@ -1,6 +1,7 @@
 package runs
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -18,7 +19,7 @@ func TestIdentityFromDispatchRow(t *testing.T) {
 	ids := identityFromCrewLog(strings.NewReader(idDispatch + "\n"))
 	want := crewIdentity{
 		crew: "c1", codename: "otter", color: tmuxColorToHex("colour12"),
-		engineSession: "S1", sessions: 1, workerSilent: true, lastActivity: 1000,
+		engineSession: "S1", sessions: 1, workerSilent: true, lastActivity: 1000, state: "working",
 	}
 	if got := ids["feat/a"]; got != want {
 		t.Fatalf("got %+v, want %+v", got, want)
@@ -50,6 +51,10 @@ func TestIdentityWorkerStatusOnlyTouchesLiveness(t *testing.T) {
 		t.Fatalf("got %+v", a)
 	}
 	b.session, b.lastActivity, b.workerSilent = a.session, a.lastActivity, a.workerSilent
+	b.state, b.detail, b.prURL, b.statusTS, b.blockedSince = a.state, a.detail, a.prURL, a.statusTS, a.blockedSince
+	if a.state != "blocked" || a.detail != "q" || a.prURL != "https://github.com/o/r/pull/9" || a.statusTS != 3000 || a.blockedSince != 3000 {
+		t.Fatalf("status fields = %+v", a)
+	}
 	if !reflect.DeepEqual(a, b) {
 		t.Fatalf("status changed identity: got %+v, want %+v", a, b)
 	}
@@ -125,6 +130,113 @@ func TestIdentityWorkerSilent(t *testing.T) {
 		ids := identityFromCrewLog(strings.NewReader(tc.log))
 		if got := ids[b].workerSilent; got != tc.want {
 			t.Errorf("%s: workerSilent = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestIdentityStatusFold(t *testing.T) {
+	const b = "feat/a"
+	row := func(ts int64, state, detail string) string {
+		return fmt.Sprintf(`{"ts":%d,"crew_id":"c1","from":"worker:%s#s1","kind":"status","body":{"state":%q,"detail":%q}}`+"\n", ts, b, state, detail)
+	}
+	wd := func(ts int64, state, detail string) string {
+		return fmt.Sprintf(`{"ts":%d,"crew_id":"c1","from":"worker:%s#s1","kind":"status","body":{"state":%q,"detail":%q,"source":"watchdog"}}`+"\n", ts, b, state, detail)
+	}
+	dispatch := `{"ts":1000,"crew_id":"c1","kind":"dispatch","branch":"feat/a","title":"T","tier":"standard","engine":"claude","model":"sonnet"}` + "\n"
+	reply := `{"ts":%d,"crew_id":"c1","from":"dispatcher:c1","to":"worker:feat/a#s1","kind":"msg","body":"go on"}` + "\n"
+	tests := []struct {
+		name string
+		log  string
+		want func(crewIdentity) string // empty when it holds
+	}{
+		{"dispatch sets title and resets state", row(900, "done", "x") + dispatch, func(i crewIdentity) string {
+			if i.title != "T" || i.tier != "standard" || i.engine != "claude" || i.model != "sonnet" || i.state != "working" || i.detail != "" || i.statusTS != 0 {
+				return fmt.Sprintf("%+v", i)
+			}
+			return ""
+		}},
+		{"resume resets state", dispatch + row(1100, "pr_open", "") + `{"ts":1200,"crew_id":"c1","kind":"resume","branch":"feat/a"}` + "\n", func(i crewIdentity) string {
+			if i.state != "working" || i.prURL != "" || i.title != "T" {
+				return fmt.Sprintf("%+v", i)
+			}
+			return ""
+		}},
+		{"blockedSince is kept while blocked", dispatch + row(1100, "blocked", "q1") + row(1200, "blocked", "q2"), func(i crewIdentity) string {
+			if i.state != "blocked" || i.detail != "q2" || i.blockedSince != 1100 {
+				return fmt.Sprintf("%+v", i)
+			}
+			return ""
+		}},
+		{"blockedSince clears on leaving blocked", dispatch + row(1100, "blocked", "q") + row(1200, "working", ""), func(i crewIdentity) string {
+			if i.state != "working" || i.blockedSince != 0 {
+				return fmt.Sprintf("%+v", i)
+			}
+			return ""
+		}},
+		{"dispatcher reply answers a blocked worker", dispatch + row(1100, "blocked", "q") + fmt.Sprintf(reply, 1200), func(i crewIdentity) string {
+			if i.state != "answered" || i.statusTS != 1200 {
+				return fmt.Sprintf("%+v", i)
+			}
+			return ""
+		}},
+		{"dispatcher message to a working worker changes nothing", dispatch + row(1100, "working", "") + fmt.Sprintf(reply, 1200), func(i crewIdentity) string {
+			if i.state != "working" {
+				return fmt.Sprintf("%+v", i)
+			}
+			return ""
+		}},
+		{"reap row", dispatch + row(1100, "pr_open", "") + `{"ts":1300,"kind":"reap","branch":"feat/a"}` + "\n", func(i crewIdentity) string {
+			if i.state != "reaped" || i.statusTS != 1300 {
+				return fmt.Sprintf("%+v", i)
+			}
+			return ""
+		}},
+		{"release row", dispatch + `{"ts":1300,"kind":"release","branch":"feat/a"}` + "\n", func(i crewIdentity) string {
+			if i.state != "reaped" {
+				return fmt.Sprintf("%+v", i)
+			}
+			return ""
+		}},
+		{"reaped status", dispatch + row(1100, "reaped", ""), func(i crewIdentity) string {
+			if i.state != "reaped" {
+				return fmt.Sprintf("%+v", i)
+			}
+			return ""
+		}},
+		{"watchdog prompt", dispatch + row(1100, "working", "") + wd(1200, "blocked", "prompt: dialog"), func(i crewIdentity) string {
+			if i.state != "working" || i.watchdog != (watchdogItem{"prompt", "prompt: dialog"}) {
+				return fmt.Sprintf("%+v", i)
+			}
+			return ""
+		}},
+		{"watchdog quiet", dispatch + wd(1200, "blocked", "quiet: x"), func(i crewIdentity) string {
+			if i.watchdog != (watchdogItem{"watchdog", "quiet: x"}) {
+				return fmt.Sprintf("%+v", i)
+			}
+			return ""
+		}},
+		{"watchdog dead fails the worker", dispatch + row(1100, "working", "") + wd(1200, "failed", "dead: engine exited"), func(i crewIdentity) string {
+			if i.state != "failed" || i.statusTS != 1200 || i.watchdog.kind != "dead" {
+				return fmt.Sprintf("%+v", i)
+			}
+			return ""
+		}},
+		{"watchdog unlisted prefix claims nothing", dispatch + wd(1200, "blocked", "load: high"), func(i crewIdentity) string {
+			if i.watchdog != (watchdogItem{}) || i.state != "working" {
+				return fmt.Sprintf("%+v", i)
+			}
+			return ""
+		}},
+		{"worker status clears the watchdog item", dispatch + wd(1200, "blocked", "quiet: x") + row(1300, "working", ""), func(i crewIdentity) string {
+			if i.watchdog != (watchdogItem{}) {
+				return fmt.Sprintf("%+v", i)
+			}
+			return ""
+		}},
+	}
+	for _, tc := range tests {
+		if bad := tc.want(identityFromCrewLog(strings.NewReader(tc.log))[b]); bad != "" {
+			t.Errorf("%s: got %s", tc.name, bad)
 		}
 	}
 }

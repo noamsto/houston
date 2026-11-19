@@ -2386,3 +2386,161 @@ func TestScanNeverAsksAboutAPeerWorker(t *testing.T) {
 		t.Errorf("peer row = %+v, want running, no question, no detail", r)
 	}
 }
+
+// crossRepo is a dispatcher joined on bus A (project "dispatcher") whose
+// worker reports on bus B (project "houston"): crew's view of B omits the
+// crew, which has no live dispatcher on that bus.
+type crossRepo struct {
+	busA, busB string
+	wins       []tmux.WindowOptions
+	panes      []tmux.PaneOptions
+	views      *fakeViews
+}
+
+func newCrossRepo(t *testing.T, busBEvents string) crossRepo {
+	t.Helper()
+	root := t.TempDir()
+	busA := filepath.Join(root, "dispatcher", ".git", "crew")
+	busB := filepath.Join(root, "houston", ".git", "crew")
+	for _, bus := range []string{busA, busB} {
+		if err := os.MkdirAll(bus, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeCrew(t, busA, crewFiles{id: "c1", pane: ptr("%1"), paneMod: regT})
+	writeCrew(t, busB, crewFiles{id: "c1"})
+	writeEvents(t, busB, busBEvents)
+	return crossRepo{
+		busA: busA, busB: busB,
+		wins: []tmux.WindowOptions{
+			{Session: "h", Window: 2, CrewName: dispatcherCrewName, GitRoot: "/rootA"},
+			{Session: "h", Window: 3, Branch: "feat/x", GitRoot: "/rootB"},
+		},
+		panes: []tmux.PaneOptions{dispatcherPane("%1", "h:2"), agentPane("%2", "h:3")},
+		views: &fakeViews{views: map[string]crewview.Overview{busA: overviewOf(nil), busB: overviewOf(nil)}},
+	}
+}
+
+func (c crossRepo) scan(t *testing.T) map[string]Run {
+	t.Helper()
+	return c.scanAt(t, busFixtureNow)
+}
+
+func (c crossRepo) scanAt(t *testing.T, nowMS int64) map[string]Run {
+	t.Helper()
+	s := crewScanner(map[string]string{"/rootA": c.busA, "/rootB": c.busB}, c.views, c.wins, c.panes)
+	s.now = func() time.Time { return time.UnixMilli(nowMS) }
+	s.procStart = startAt(1)
+	got, ok := s.scan()
+	if !ok {
+		t.Fatal("scan reported failure")
+	}
+	return got
+}
+
+const crossRepoDispatch = `{"ts":1000,"crew_id":"c1","kind":"dispatch","branch":"feat/x","name":"onyx","tmux":"colour12","title":"Nest it","tier":"standard","engine":"claude","model":"sonnet"}` + "\n"
+
+func TestScanNestsACrossRepoWorkerUnderItsDispatcher(t *testing.T) {
+	c := newCrossRepo(t, crossRepoDispatch+statusRow(1100, "feat/x", "working"))
+	got := c.scan(t)
+
+	r, ok := got["%2"]
+	if !ok {
+		t.Fatalf("no run under the worker pane: %v", keysOf(got))
+	}
+	if r.Crew == nil {
+		t.Fatalf("worker run has no crew layer: %+v", r)
+	}
+	if r.Crew.Name != "c1" || r.Crew.Title != "Nest it" || r.Crew.Tier != "standard" || r.Crew.Codename != "onyx" {
+		t.Errorf("Crew = %+v, want c1 / Nest it / standard / onyx", r.Crew)
+	}
+	if r.Role != RoleWorker || r.Project != "houston" || r.State != StateRunning {
+		t.Errorf("role=%q project=%q state=%q, want worker / houston / running", r.Role, r.Project, r.State)
+	}
+	if r.Crew.Home != "dispatcher" {
+		t.Errorf("Crew.Home = %q, want the dispatcher's bus project", r.Crew.Home)
+	}
+}
+
+func TestScanCrossRepoGuards(t *testing.T) {
+	working := crossRepoDispatch + statusRow(1100, "feat/x", "working")
+	blocked := crossRepoDispatch + statusRow(1100, "feat/x", "blocked")
+	reply := `{"ts":1200,"crew_id":"c1","from":"dispatcher:c1","to":"worker:feat/x#s1","kind":"msg","body":"go on"}` + "\n"
+	silent := int64(1100) + crewDispatcherSilence.Milliseconds() + 1000
+
+	t.Run("no dispatcher anywhere lists nothing", func(t *testing.T) {
+		c := newCrossRepo(t, working)
+		c.panes = c.panes[1:]
+		if got := c.scan(t); len(got) != 0 {
+			t.Errorf("scan listed %v, want nothing — the crew has no live dispatcher on any bus", keysOf(got))
+		}
+	})
+
+	t.Run("a crew the view lists is not duplicated", func(t *testing.T) {
+		c := newCrossRepo(t, working)
+		c.views.views[c.busB] = workingView("feat/x")
+		got := c.scan(t)
+		if len(got) != 2 || got["%2"].Crew == nil || got["%2"].Crew.Name != "c1" {
+			t.Errorf("scan = %v, want the dispatcher and one worker run", keysOf(got))
+		}
+	})
+
+	t.Run("a finished worker evicts and a reaped one reads done", func(t *testing.T) {
+		c := newCrossRepo(t, crossRepoDispatch+statusRow(1100, "feat/x", "done"))
+		c.panes[1] = agentPaneAt("%2", "h:3", 5)
+		got := c.scan(t)
+		if got["%2"].State != StateDone {
+			t.Fatalf("State = %q, want done", got["%2"].State)
+		}
+		late := time.Unix(1, 0).Add(crewEvictionGrace + time.Minute)
+		deltas, _ := tickCrewDeltas(got, map[string]bool{}, late)
+		for _, d := range deltas {
+			if d.Key == "%2" && (d.Run.State != "" || d.Run.Crew == nil || d.Run.Crew.Name != "c1") {
+				t.Errorf("evicted run = %+v, want identity only", d.Run)
+			}
+		}
+
+		reaped := newCrossRepo(t, crossRepoDispatch+statusRow(1100, "feat/x", "pr_open")+`{"ts":1300,"kind":"reap","branch":"feat/x"}`+"\n")
+		reaped.panes[1] = agentPaneAt("%2", "h:3", 5)
+		if st := reaped.scan(t)["%2"].State; st != StateDone {
+			t.Errorf("reaped State = %q, want done", st)
+		}
+	})
+
+	t.Run("a blocked worker is the human's only after the dispatcher stays silent", func(t *testing.T) {
+		c := newCrossRepo(t, blocked)
+		if r := c.scan(t)["%2"]; r.State != StateRunning || r.Question != nil {
+			t.Errorf("fresh: state=%q question=%+v, want running with no question", r.State, r.Question)
+		}
+		if r := c.scanAt(t, silent)["%2"]; r.State != StateBlocked || r.Question == nil {
+			t.Errorf("silent: state=%q question=%+v, want blocked with a question", r.State, r.Question)
+		}
+		answered := newCrossRepo(t, blocked+reply)
+		if r := answered.scanAt(t, silent)["%2"]; r.State == StateBlocked || r.Question != nil {
+			t.Errorf("answered: state=%q question=%+v, want it never needs-you", r.State, r.Question)
+		}
+	})
+
+	t.Run("a windowless row silent past the stale bound is dropped", func(t *testing.T) {
+		c := newCrossRepo(t, working)
+		c.wins[1].Branch, c.panes = "", c.panes[:1]
+		key := "crew/" + c.busB + "/feat/x"
+		if _, ok := c.scan(t)[key]; !ok {
+			t.Fatalf("fresh windowless row not listed: %v", keysOf(c.scan(t)))
+		}
+		if _, ok := c.scanAt(t, 1100+crewStaleAfter.Milliseconds()+60_000)[key]; ok {
+			t.Errorf("row silent past crewStaleAfter still listed")
+		}
+	})
+
+	t.Run("watchdog items", func(t *testing.T) {
+		prompt := newCrossRepo(t, working+watchdogRow(1200, "feat/x", "prompt: dialog"))
+		if r := prompt.scan(t)["%2"]; r.State != StateBlocked || r.Question == nil || r.Question.Via != "pane" {
+			t.Errorf("prompt: state=%q question=%+v, want blocked with a pane question", r.State, r.Question)
+		}
+		quiet := newCrossRepo(t, working+watchdogRow(1200, "feat/x", "quiet: no output"))
+		if r := quiet.scan(t)["%2"]; r.Attention != AttentionStuck || r.AttentionNote != crewWatchdogQuietNote {
+			t.Errorf("quiet: attention=%q note=%q, want stuck with the quiet note", r.Attention, r.AttentionNote)
+		}
+	})
+}

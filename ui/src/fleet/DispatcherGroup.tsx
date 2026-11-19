@@ -2,6 +2,7 @@ import type { Run } from '../api/runs'
 import { CrewGroupHeader } from './CrewGroupHeader'
 import { dispatcherCrewLine } from './entryRuns'
 import type { FleetEntry } from './fleetEntries'
+import { projectOf } from './fleetList'
 import { RunCard } from './RunCard'
 import { MemberRows } from './WorkerRow'
 
@@ -30,7 +31,7 @@ export function DispatcherGroup({ entry, now, onOpen, selectedId }: GroupProps<'
         crewLine={crewLine}
       />
       {entry.needsYou > 0 && <span className="fleet-group-badge">{entry.needsYou} need you</span>}
-      <MemberRows shown={entry.shown} now={now} onOpen={onOpen} selectedId={selectedId} />
+      <MemberRows shown={entry.shown} now={now} onOpen={onOpen} selectedId={selectedId} groupProject={projectOf(entry.head)} />
     </div>
   )
 }
@@ -39,7 +40,7 @@ export function CrewGroup({ entry, now, onOpen, selectedId }: GroupProps<'crew'>
   return (
     <div className={`fleet-group-card crew${entry.needsYou > 0 ? ' needs-you' : ''}`}>
       <CrewGroupHeader entry={entry} />
-      <MemberRows shown={entry.shown} now={now} onOpen={onOpen} selectedId={selectedId} />
+      <MemberRows shown={entry.shown} now={now} onOpen={onOpen} selectedId={selectedId} groupProject={entry.project} />
     </div>
   )
 }
