@@ -137,6 +137,10 @@ type CrewRef struct {
 	Host       string          `json:"host,omitempty"`        // crew's host name for a remote_worker or peer row; "" for local.
 	Attention  []CrewAttention `json:"attention,omitempty"`   // crew's attention items for this worker, or for a dispatcher run its crew-scoped items.
 	ViewNotice string          `json:"view_notice,omitempty"` // dispatcher runs: why crew's view is unavailable or unsupported, and the errors it reports; a held worker (Run.Stale): crewRosterHeldNote.
+
+	// LiveWorkers counts the crew's unfinished workers. Only a dispatcher's crew
+	// layer sets it, for attentionOf; never on the wire.
+	LiveWorkers int `json:"-"`
 }
 
 // CrewAttention is one item from crew's view that needs the operator.

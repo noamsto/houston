@@ -34,6 +34,8 @@ func TestPeerLayerComposition(t *testing.T) {
 		{"stuck keeps its note", Run{State: StateRunning, Attention: AttentionStuck, AttentionNote: "quiet"}, AttentionStuck, "quiet"},
 		{"needs-you on a non-blocked state is dropped", Run{State: StateRunning, Attention: AttentionNeedsYou, AttentionNote: "x"}, AttentionNone, ""},
 		{"blocked is needs-you", Run{State: StateBlocked, AttentionNote: "x"}, AttentionNeedsYou, ""},
+		{"standby passes through", Run{State: StateIdle, Role: RoleDispatcher, Attention: AttentionStandby}, AttentionStandby, ""},
+		{"blocked beats a standby layer", Run{State: StateBlocked, Role: RoleDispatcher, Attention: AttentionStandby}, AttentionNeedsYou, ""},
 		{"none stays none", Run{State: StateRunning}, AttentionNone, ""},
 	}
 	for _, c := range cases {

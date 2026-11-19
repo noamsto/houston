@@ -129,6 +129,16 @@ describe('FleetView attention filters', () => {
   })
 })
 
+describe('FleetView standby dispatcher', () => {
+  it('shows the standby chip and keeps the needs-you count at zero', () => {
+    const standby = [run({ id: 'd', branch: 'main', role: 'dispatcher', state: 'idle', attention: 'standby' })]
+    const { container } = render(<FleetView runs={standby} connected now={now} mode="dispatcher" />)
+    expect(container.querySelector('.run-chip.standby')?.textContent).toBe('standby')
+    expect(screen.queryByRole('button', { name: /needs you/ })).toBeNull()
+    expect(cardOrder(container)).toEqual(['main'])
+  })
+})
+
 describe('FleetView dispatcher mode', () => {
   const crew = { name: '1700000000-11' }
   const group = [

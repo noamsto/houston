@@ -34,7 +34,9 @@ func AllStates() []State {
 
 // Attention is the second dimension next to State: how much a run wants a
 // human. needs-you holds exactly when State is blocked; stuck is stopped making
-// progress and may need a look; done is finished, awaiting review or cleanup.
+// progress and may need a look; done is finished, awaiting review or cleanup;
+// standby is a dispatcher idle while its crew has unfinished workers: it wants
+// no human.
 type Attention string
 
 const (
@@ -42,6 +44,7 @@ const (
 	AttentionNeedsYou Attention = "needs-you"
 	AttentionStuck    Attention = "stuck"
 	AttentionDone     Attention = "done"
+	AttentionStandby  Attention = "standby"
 )
 
 // NeedsAttention reports whether a human is required. Exactly one state says

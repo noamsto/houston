@@ -6,7 +6,7 @@ import { projectOf } from './fleetList'
 import { PRChip } from './RunCard'
 import { isFresh } from './staleness'
 
-const ATTENTION_LABEL = { 'needs-you': 'needs you', stuck: 'stuck', done: 'done' } as const
+const ATTENTION_LABEL = { 'needs-you': 'needs you', stuck: 'stuck', done: 'done', standby: 'standby' } as const
 
 interface WorkerRowProps {
   run: Run

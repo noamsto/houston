@@ -69,6 +69,22 @@ describe('RunCard accent', () => {
 describe('RunCard attention treatments', () => {
   const card = (r: Run) => render(<RunCard run={r} now={now} />).container.querySelector('.run-card') as HTMLElement
 
+  it('shows a calm standby chip for a standby dispatcher, with no attention class', () => {
+    const r = run({ role: 'dispatcher', state: 'idle', attention: 'standby' })
+    const { container } = render(<RunCard run={r} now={now} />)
+    const chip = container.querySelector('.run-chip.standby') as HTMLElement
+    expect(chip.textContent).toBe('standby')
+    expect(chip.getAttribute('title')).toBe('Waiting on its workers — nothing needs you')
+    const el = container.querySelector('.run-card') as HTMLElement
+    expect(el.classList.contains('attention')).toBe(false)
+    expect(el.classList.contains('stuck')).toBe(false)
+  })
+
+  it('shows no standby chip for a plain idle run', () => {
+    const { container } = render(<RunCard run={run({ role: 'dispatcher', state: 'idle' })} now={now} />)
+    expect(container.querySelector('.run-chip.standby')).toBeNull()
+  })
+
   it('marks a stuck run with the stuck class, chip and note, never the needs-you class', () => {
     const r = run({ state: 'idle', attention: 'stuck', attention_note: 'no output for 20 min' })
     const { container } = render(<RunCard run={r} now={now} />)

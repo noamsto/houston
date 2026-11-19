@@ -116,8 +116,9 @@ export interface Caps {
 }
 
 // Mirror of runs.Attention (Go). Absent means nothing to flag. `needs-you` is
-// exactly state === 'blocked'; `stuck` and `done` are calmer, never urgent.
-export type Attention = 'needs-you' | 'stuck' | 'done'
+// exactly state === 'blocked'; `stuck`, `done` and `standby` (a dispatcher idle
+// while its workers run) are calmer, never urgent.
+export type Attention = 'needs-you' | 'stuck' | 'done' | 'standby'
 
 // Mirror of runs.Run.
 //

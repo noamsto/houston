@@ -24,6 +24,8 @@ describe('bucket', () => {
       [{ state: 'running', attention: 'stuck' }, 'stuck'],
       [{ state: 'idle', attention: 'done' }, 'done'],
       [{ state: 'idle' }, 'idle'],
+      [{ state: 'idle', attention: 'standby' }, 'idle'],
+      [{ state: 'thinking', attention: 'standby' }, 'working'],
       [{ state: 'done' }, 'ended'],
       [{ state: 'blocked', attention: 'needs-you', updated_at: old }, 'ended'],
       [{ state: 'running', updated_at: old }, 'working'],

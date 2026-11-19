@@ -109,6 +109,16 @@ describe('ConsoleShell layout', () => {
     expect(within(rail).getByRole('button', { name: /^All/ }).querySelector('.console-count')?.textContent).toBe('4')
   })
 
+  it('shows the standby chip and counts a standby dispatcher only under Active', () => {
+    const runs = [run({ id: 'd', role: 'dispatcher', state: 'idle', attention: 'standby' })]
+    const { container } = render(<ConsoleShell runs={runs} connected hasSnapshot now={now} mode="dispatcher" />)
+    const rail = screen.getByLabelText('rail')
+    expect(within(rail).queryByRole('button', { name: /needs you/ })).toBeNull()
+    expect(within(rail).getByRole('button', { name: /^Active/ }).querySelector('.console-count')?.textContent).toBe('1')
+    expect(within(rail).getByRole('button', { name: /^Needs you/ }).querySelector('.console-count')?.textContent).toBe('0')
+    expect(container.querySelector('.run-chip.standby')?.textContent).toBe('standby')
+  })
+
   it('shows Stuck and Done rail entries with their counts', () => {
     const runs = [
       run({ id: 'stuck-a', attention: 'stuck' }),

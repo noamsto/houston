@@ -166,6 +166,7 @@
 .run-chip.bg { background: color-mix(in srgb, var(--state-running) 18%, transparent); color: var(--state-running); }
 .run-chip.stuck { background: color-mix(in srgb, var(--state-failed) 18%, transparent); color: var(--state-failed); }
 .run-chip.done { background: color-mix(in srgb, var(--state-running) 18%, transparent); color: var(--state-running); }
+.run-chip.standby { background: color-mix(in srgb, var(--text-dim) 15%, transparent); color: var(--text-dim); }
 .run-chip.host { background: color-mix(in srgb, var(--host-remote) 18%, transparent); color: var(--host-remote); }
 .run-chip.stale { background: var(--bg-sunken); color: var(--text-faint); font-style: italic; }
 

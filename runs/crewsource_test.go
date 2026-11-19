@@ -2387,6 +2387,104 @@ func TestScanNeverAsksAboutAPeerWorker(t *testing.T) {
 	}
 }
 
+func TestScanDispatcherStandbyCountsUnfinishedWorkers(t *testing.T) {
+	remote := viewWorker("feat/r", "working", "", 1)
+	remote.Origin = crewview.OriginRemote
+	remote.Host = "mbp"
+	other := viewWorker("feat/o", "working", "", 1)
+	other.Crew = "c2"
+	const staleT0 = int64(1_000_000_000_000)
+	cases := []struct {
+		name    string
+		workers []crewview.Worker
+		setup   func(t *testing.T, s *CrewSource, views *fakeViews, bus string)
+		want    int
+	}{
+		{"one working worker", []crewview.Worker{viewWorker("feat/a", "working", "", 1)}, nil, 1},
+		{"finished workers do not count", []crewview.Worker{
+			viewWorker("feat/a", "done", "", 1),
+			viewWorker("feat/b", "failed", "", 1),
+			viewWorker("feat/c", "pr_open", "", 1),
+		}, nil, 0},
+		{"a blocked worker still counts", []crewview.Worker{viewWorker("feat/a", "blocked", "q", 1)}, nil, 1},
+		{"a remote_worker row counts", []crewview.Worker{remote}, nil, 1},
+		{"another crew's worker does not count", []crewview.Worker{other}, nil, 0},
+		{"an abandoned windowless worker does not count", []crewview.Worker{viewWorker("feat/a", "working", "", (staleT0+1000)/1000)},
+			func(t *testing.T, s *CrewSource, _ *fakeViews, bus string) {
+				writeEvents(t, bus, statusRow(staleT0, "feat/a", "working")+dispatchRow(staleT0+1000, "feat/a"))
+				s.now = func() time.Time { return time.UnixMilli(staleT0 + 1000).Add(crewStaleAfter + time.Minute) }
+			}, 0},
+		{"a roster-held worker still counts", []crewview.Worker{viewWorker("feat/a", "working", "", testViewGen-60)},
+			func(t *testing.T, s *CrewSource, views *fakeViews, bus string) {
+				s.now = func() time.Time { return time.Unix(testViewGen, 0) }
+				if _, ok := mustScan(t, s)["crew/"+bus+"/feat/a"]; !ok {
+					t.Fatal("tick 1 does not list feat/a")
+				}
+				views.views[bus] = rosterFailed(testViewGen + 300)
+				s.now = func() time.Time { return time.Unix(testViewGen+300, 0) }
+			}, 1},
+		{"mixed", []crewview.Worker{
+			viewWorker("feat/a", "working", "", 1),
+			viewWorker("feat/b", "done", "", 1),
+			remote,
+			other,
+		}, nil, 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, views, bus := joinedC1(t, overviewOf(nil, tc.workers...))
+			if tc.setup != nil {
+				tc.setup(t, s, views, bus)
+			}
+			d := mustScan(t, s)["%1"]
+			if d.Crew == nil || d.Crew.LiveWorkers != tc.want {
+				t.Fatalf("dispatcher layer = %+v, want LiveWorkers %d", d.Crew, tc.want)
+			}
+		})
+	}
+}
+
+func TestScanDispatcherStandbyComposesAttention(t *testing.T) {
+	cases := []struct {
+		name    string
+		workers []crewview.Worker
+		hooks   State
+		want    Attention
+	}{
+		{"idle with a working worker", []crewview.Worker{viewWorker("feat/a", "working", "", 1)}, StateIdle, AttentionStandby},
+		{"idle with only finished workers", []crewview.Worker{viewWorker("feat/a", "done", "", 1)}, StateIdle, AttentionNone},
+		{"blocked with a working worker", []crewview.Worker{viewWorker("feat/a", "working", "", 1)}, StateBlocked, AttentionNeedsYou},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _, _ := joinedC1(t, overviewOf(nil, tc.workers...))
+			reg := NewRegistry(DefaultOrder)
+			for key, run := range mustScan(t, s) {
+				reg.Apply(Delta{Source: "crew", Key: key, Run: run})
+			}
+			wins := []tmux.WindowOptions{{Session: "h", Window: 2, CrewName: "dispatcher", GitRoot: "/wt/a"}}
+			panes := []tmux.PaneOptions{dispatcherPane("%1", "h:2")}
+			for _, td := range deltasFromTmux(wins, panes, func(string) string { return "houston" }) {
+				reg.Apply(td)
+			}
+			reg.Apply(Delta{Source: "hooks", Key: "%1", Run: Run{Agent: "claude", State: tc.hooks}})
+
+			var got *Run
+			for _, r := range reg.Snapshot() {
+				if r.Role == RoleDispatcher {
+					got = &r
+				}
+			}
+			if got == nil {
+				t.Fatalf("no dispatcher run in %+v", reg.Snapshot())
+			}
+			if got.Attention != tc.want {
+				t.Errorf("Attention = %q, want %q", got.Attention, tc.want)
+			}
+		})
+	}
+}
+
 // crossRepo is a dispatcher joined on bus A (project "dispatcher") whose
 // worker reports on bus B (project "houston"): crew's view of B omits the
 // crew, which has no live dispatcher on that bus.
@@ -2439,6 +2537,42 @@ func (c crossRepo) scanAt(t *testing.T, nowMS int64) map[string]Run {
 }
 
 const crossRepoDispatch = `{"ts":1000,"crew_id":"c1","kind":"dispatch","branch":"feat/x","name":"onyx","tmux":"colour12","title":"Nest it","tier":"standard","engine":"claude","model":"sonnet"}` + "\n"
+
+func TestScanIdleDispatcherWithOnlyACrossRepoWorkerIsStandby(t *testing.T) {
+	c := newCrossRepo(t, crossRepoDispatch+statusRow(1100, "feat/x", "working"))
+	got := c.scan(t)
+
+	d, ok := got["%1"]
+	if !ok || d.Crew == nil || d.Crew.LiveWorkers != 1 {
+		t.Fatalf("dispatcher layer = %+v, want LiveWorkers 1", d.Crew)
+	}
+
+	reg := NewRegistry(DefaultOrder)
+	for key, run := range got {
+		reg.Apply(Delta{Source: "crew", Key: key, Run: run})
+	}
+	reg.Apply(Delta{Source: "hooks", Key: "%1", Run: Run{Agent: "claude", State: StateIdle}})
+	var disp *Run
+	for _, r := range reg.Snapshot() {
+		if r.Role == RoleDispatcher {
+			disp = &r
+		}
+	}
+	if disp == nil {
+		t.Fatalf("no dispatcher run in %+v", reg.Snapshot())
+	}
+	if disp.Attention != AttentionStandby {
+		t.Errorf("Attention = %q, want %q", disp.Attention, AttentionStandby)
+	}
+}
+
+func TestScanFinishedCrossRepoWorkerReleasesItsDispatcher(t *testing.T) {
+	c := newCrossRepo(t, crossRepoDispatch+statusRow(1100, "feat/x", "done"))
+	d, ok := c.scan(t)["%1"]
+	if !ok || d.Crew == nil || d.Crew.LiveWorkers != 0 {
+		t.Fatalf("dispatcher layer = %+v, want LiveWorkers 0", d.Crew)
+	}
+}
 
 func TestScanNestsACrossRepoWorkerUnderItsDispatcher(t *testing.T) {
 	c := newCrossRepo(t, crossRepoDispatch+statusRow(1100, "feat/x", "working"))

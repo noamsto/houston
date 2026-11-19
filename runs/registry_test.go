@@ -1208,6 +1208,43 @@ func TestComposeAttention(t *testing.T) {
 		{"crew blocked with a question is needs-you", []layer{
 			{"crew", Run{Agent: "claude", State: StateBlocked, Question: &Question{Text: "go?", Via: "crew"}}},
 		}, AttentionNeedsYou, "", StateBlocked},
+		{"standby: idle dispatcher with unfinished workers", []layer{
+			{"crew", Run{Role: RoleDispatcher, Crew: &CrewRef{Name: "c1", LiveWorkers: 1}}},
+			{"hooks", Run{Agent: "claude", State: StateIdle}},
+		}, AttentionStandby, "", StateIdle},
+		{"idle dispatcher with no unfinished workers is none", []layer{
+			{"crew", Run{Role: RoleDispatcher, Crew: &CrewRef{Name: "c1"}}},
+			{"hooks", Run{Agent: "claude", State: StateIdle}},
+		}, AttentionNone, "", StateIdle},
+		{"idle dispatcher with no crew ref is none", []layer{
+			{"crew", Run{Role: RoleDispatcher}},
+			{"hooks", Run{Agent: "claude", State: StateIdle}},
+		}, AttentionNone, "", StateIdle},
+		{"blocked dispatcher with unfinished workers is needs-you", []layer{
+			{"crew", Run{Role: RoleDispatcher, Crew: &CrewRef{Name: "c1", LiveWorkers: 2}}},
+			{"hooks", Run{Agent: "claude", State: StateBlocked}},
+		}, AttentionNeedsYou, "", StateBlocked},
+		{"running dispatcher with unfinished workers is none", []layer{
+			{"crew", Run{Role: RoleDispatcher, Crew: &CrewRef{Name: "c1", LiveWorkers: 2}}},
+			{"hooks", Run{Agent: "claude", State: StateRunning}},
+		}, AttentionNone, "", StateRunning},
+		{"idle non-dispatcher with unfinished workers is none", []layer{
+			{"crew", Run{Role: RoleWorker, Crew: &CrewRef{Name: "c1", LiveWorkers: 2}}},
+			{"hooks", Run{Agent: "claude", State: StateIdle}},
+		}, AttentionNone, "", StateIdle},
+		{"stuck beats standby", []layer{
+			{"crew", Run{Role: RoleDispatcher, Crew: &CrewRef{Name: "c1", LiveWorkers: 1}, Attention: AttentionStuck, AttentionNote: "x"}},
+			{"hooks", Run{Agent: "claude", State: StateIdle}},
+		}, AttentionStuck, "x", StateIdle},
+		{"tmux failed beats standby", []layer{
+			{"crew", Run{Role: RoleDispatcher, Crew: &CrewRef{Name: "c1", LiveWorkers: 1}}},
+			{"tmux", Run{Agent: "claude", State: StateFailed}},
+			{"hooks", Run{Agent: "claude", State: StateIdle}},
+		}, AttentionStuck, tmuxFailedNote, StateIdle},
+		{"done beats standby", []layer{
+			{"crew", Run{Role: RoleDispatcher, State: StateDone, Crew: &CrewRef{Name: "c1", LiveWorkers: 1}}},
+			{"hooks", Run{Agent: "claude", State: StateIdle}},
+		}, AttentionDone, "", StateIdle},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1233,10 +1270,12 @@ func TestAttentionAgreesWithNeedsAttention(t *testing.T) {
 	}
 	r.Apply(Delta{Source: "crew", Key: "%q", Run: Run{Agent: "claude", State: StateBlocked, Question: &Question{Text: "go?", Via: "crew"}}})
 	r.Apply(Delta{Source: "hooks", Key: "%q", Run: Run{Agent: "claude", State: StateRunning}})
+	r.Apply(Delta{Source: "crew", Key: "%s", Run: Run{Role: RoleDispatcher, Crew: &CrewRef{Name: "c1", LiveWorkers: 1}}})
+	r.Apply(Delta{Source: "hooks", Key: "%s", Run: Run{Agent: "claude", State: StateIdle}})
 
 	rows := r.Snapshot()
-	if len(rows) != len(AllStates())+1 {
-		t.Fatalf("%d rows, want %d", len(rows), len(AllStates())+1)
+	if len(rows) != len(AllStates())+2 {
+		t.Fatalf("%d rows, want %d: one per state, the crew-blocked run and the standby dispatcher", len(rows), len(AllStates())+2)
 	}
 	for _, run := range rows {
 		if got := run.Attention == AttentionNeedsYou; got != run.State.NeedsAttention() {
