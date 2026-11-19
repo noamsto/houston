@@ -14,6 +14,10 @@ export const readBase64 = (file: File) =>
     reader.readAsDataURL(file)
   })
 
+export type StageLimits = { maxTotal: number; maxEach?: number; maxFiles?: number; types?: readonly string[] }
+
+export const COMPOSER_LIMITS: StageLimits = { maxTotal: MAX_STAGED_BYTES }
+
 const revoke = (url: string | null) => {
   if (url) URL.revokeObjectURL(url)
 }
@@ -22,7 +26,7 @@ export const skippedMessage = (n: number) =>
   `${n} file${n === 1 ? '' : 's'} skipped — attachments are limited to ${MAX_STAGED_BYTES / (1024 * 1024)} MiB in total`
 
 /** Attached images held until Send; each preview URL is revoked when its image is removed, cleared or unmounted. */
-export function useStagedImage() {
+export function useStagedImage(limits: StageLimits = COMPOSER_LIMITS) {
   const [staged, setStaged] = useState<StagedImage[]>([])
   const stagedRef = useRef(staged)
   const nextId = useRef(0)
@@ -38,7 +42,12 @@ export function useStagedImage() {
     const added: StagedImage[] = []
     let skipped = 0
     for (const file of files) {
-      if (total + file.size > MAX_STAGED_BYTES) {
+      if (
+        (limits.types && !limits.types.includes(file.type)) ||
+        (limits.maxEach !== undefined && file.size > limits.maxEach) ||
+        (limits.maxFiles !== undefined && stagedRef.current.length + added.length >= limits.maxFiles) ||
+        total + file.size > limits.maxTotal
+      ) {
         skipped++
         continue
       }
@@ -49,7 +58,7 @@ export function useStagedImage() {
     }
     if (added.length > 0) set([...stagedRef.current, ...added])
     return skipped
-  }, [set])
+  }, [set, limits])
 
   const remove = useCallback((id: number) => {
     const gone = stagedRef.current.find((s) => s.id === id)

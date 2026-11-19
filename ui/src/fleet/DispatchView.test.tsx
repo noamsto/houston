@@ -1137,3 +1137,107 @@ describe('DispatchView host picker', () => {
     expect(c.disabled).toBe(false)
   })
 })
+
+describe('DispatchView worker images', () => {
+  const WORKER_HINT = "This host can't attach images to a worker (its dispatch or houston is too old)."
+  const DISPATCHER_HINT = "This host's houston can't attach images to a dispatcher."
+  const shot = () => new File(['hello'], 'shot.png', { type: 'image/png' })
+
+  async function renderAttach(attach: boolean | 'absent' = true) {
+    const o = structuredClone(optionsFixture)
+    if (attach !== 'absent') o.dispatch_attach = attach
+    fetchDispatchOptionsMock.mockResolvedValue(o)
+    const utils = render(<DispatchView runs={[]} />)
+    await screen.findByLabelText('Repo')
+    return utils
+  }
+
+  const attachInput = (c: HTMLElement) => c.querySelector('#dispatch-attach') as HTMLInputElement
+  const attachButtons = () =>
+    screen.queryAllByRole('button', { name: 'Attach image', hidden: true }).filter((b) => !b.closest('[hidden]'))
+  const attach = (c: HTMLElement) => fireEvent.change(attachInput(c), { target: { files: [shot()] } })
+  const dispatch = () => fireEvent.click(screen.getByRole('button', { name: 'Dispatch' }))
+
+  it('sends an attached image in the request, base64 encoded', async () => {
+    const { container } = await renderAttach()
+    submitDispatchMock.mockResolvedValue({ kind: 'started', workerId: 'w', branch: 'feat/1-x' })
+    attach(container)
+    await screen.findByText('shot.png')
+    await submitTitle()
+
+    expect(submitDispatchMock.mock.calls[0][0].images).toEqual([
+      { name: 'shot.png', type: 'image/png', data: btoa('hello') },
+    ])
+  })
+
+  it('removing the chip leaves it out of the next request', async () => {
+    const { container } = await renderAttach()
+    submitDispatchMock.mockResolvedValue({ kind: 'started', workerId: 'w', branch: 'feat/1-x' })
+    attach(container)
+    await screen.findByText('shot.png')
+    fireEvent.click(screen.getByRole('button', { name: 'Remove attachment' }))
+    await submitTitle()
+
+    expect('images' in submitDispatchMock.mock.calls[0][0]).toBe(false)
+  })
+
+  it('a failed dispatch keeps the chip and a retry sends it again', async () => {
+    const { container } = await renderAttach()
+    submitDispatchMock.mockResolvedValue({ kind: 'failed', status: 422, error: 'nope' })
+    attach(container)
+    await screen.findByText('shot.png')
+    await submitTitle()
+    await screen.findByText('nope')
+    expect(screen.getByText('shot.png')).toBeTruthy()
+
+    dispatch()
+    await waitFor(() => expect(submitDispatchMock).toHaveBeenCalledTimes(2))
+    expect(submitDispatchMock.mock.calls[1][0].images).toHaveLength(1)
+  })
+
+  it('a started dispatch clears the chip', async () => {
+    const { container } = await renderAttach()
+    submitDispatchMock.mockResolvedValue({ kind: 'started', workerId: 'w', branch: 'feat/1-x' })
+    attach(container)
+    await screen.findByText('shot.png')
+    await submitTitle()
+    await screen.findByText(/Waiting for it to appear in Fleet/)
+
+    expect(screen.queryByText('shot.png')).toBeNull()
+  })
+
+  it('without dispatch_attach there is no attach button and the hint says so', async () => {
+    for (const flag of [false, 'absent'] as const) {
+      const { unmount } = await renderAttach(flag)
+      expect(attachButtons()).toHaveLength(0)
+      expect(screen.getAllByText(WORKER_HINT).length).toBeGreaterThan(0)
+      unmount()
+    }
+  })
+
+  it('images staged before a switch to an unsupported host stay listed and block submit', async () => {
+    fetchHostsMock.mockResolvedValue([
+      { name: 'local', local: true, health: 'connected' },
+      { name: 'b', local: false, health: 'connected' },
+    ])
+    const { container } = await renderAttach()
+    attach(container)
+    await screen.findByText('shot.png')
+    fetchDispatchOptionsMock.mockResolvedValue(structuredClone(optionsFixture))
+    fireEvent.change(field('Host'), { target: { value: 'b' } })
+    await waitFor(() => expect(screen.getAllByText(WORKER_HINT).length).toBeGreaterThan(0))
+
+    expect(screen.getByText('shot.png')).toBeTruthy()
+    change('Title', 'go')
+    expect((screen.getByRole('button', { name: 'Dispatch' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByText("Remove the images — this host can't attach them.")).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Remove attachment' }))
+    expect((screen.getByRole('button', { name: 'Dispatch' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('shows the dispatcher hint when only the dispatcher lacks the capability', async () => {
+    await renderAttach(true)
+    fireEvent.click(screen.getByRole('button', { name: 'New dispatcher' }))
+    expect(screen.getByText(DISPATCHER_HINT)).toBeTruthy()
+  })
+})

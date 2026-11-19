@@ -8,6 +8,7 @@ import {
   type DispatchOptions,
   type DispatchOutcome,
   type DispatcherOutcome,
+  type DispatchRequest,
   type DispatcherRequest,
 } from '../api/dispatch'
 import { fetchHosts, type HostHealth } from '../api/hosts'
@@ -26,6 +27,10 @@ import {
   taskMaxHeight,
   type DispatchPrefs,
 } from './dispatchForm'
+import { useStagedImage } from '../components/useStagedImage'
+import { StagedImageChip } from '../components/StagedImageChip'
+import { DispatchAttachments } from './DispatchAttachments'
+import { DISPATCH_IMAGE_LIMITS, toImageUploads } from './dispatchAttachments'
 import { DispatcherForm, DispatcherResult } from './DispatcherForm'
 import { RepoPicker } from './RepoPicker'
 import { runHash, useDispatchRoute } from './routes'
@@ -63,6 +68,7 @@ export function DispatchView({ runs }: { runs: Run[] }) {
   const [repo, setRepo] = useState('')
   const [title, setTitle] = useState('')
   const [spec, setSpec] = useState('')
+  const workerImages = useStagedImage(DISPATCH_IMAGE_LIMITS)
   const [tier, setTier] = useState('')
   const [engine, setEngine] = useState('')
   const [model, setModel] = useState('')
@@ -318,7 +324,7 @@ export function DispatchView({ runs }: { runs: Run[] }) {
   async function handleSubmit(e: FormEvent): Promise<void> {
     e.preventDefault()
     if (busy || !title.trim() || !isValidIssue(issue)) return
-    const req = {
+    const req: DispatchRequest = {
       repo,
       title: title.trim(),
       spec: spec || undefined,
@@ -330,6 +336,17 @@ export function DispatchView({ runs }: { runs: Run[] }) {
       issue: issue.trim() || undefined,
     }
     const submitHost = host
+    if (workerImages.staged.length > 0) {
+      try {
+        req.images = await toImageUploads(workerImages.staged)
+      } catch {
+        setResults((rs) => ({
+          ...rs,
+          worker: { host: submitHost, outcome: { kind: 'failed', status: 0, error: 'could not read an image' }, wasNewCrew: false },
+        }))
+        return
+      }
+    }
     const { outcome: result } = await submit('worker', submitHost, async () => ({
       host: submitHost,
       outcome: await submitDispatch(req, peerArg(submitHost)),
@@ -356,10 +373,18 @@ export function DispatchView({ runs }: { runs: Run[] }) {
     )
     setTitle('')
     setSpec('')
+    workerImages.clear()
   }
 
   const issueValid = isValidIssue(issue)
-  const submitDisabledReason = !title.trim() ? 'Title is required.' : !issueValid ? 'Fix the issue id to dispatch.' : null
+  const imagesBlocked = workerImages.staged.length > 0 && !shown?.dispatch_attach
+  const submitDisabledReason = !title.trim()
+    ? 'Title is required.'
+    : !issueValid
+      ? 'Fix the issue id to dispatch.'
+      : imagesBlocked
+        ? "Remove the images — this host can't attach them."
+        : null
 
   const worker = results.worker
   const outcome = worker?.outcome
@@ -475,6 +500,26 @@ export function DispatchView({ runs }: { runs: Run[] }) {
               onChange={(e) => setSpec(e.target.value)}
             />
             <span className="dispatch-hint">Up to 64 KB. Falls back to the title when left empty.</span>
+            {shown.dispatch_attach ? (
+              <DispatchAttachments
+                staged={workerImages.staged}
+                onStage={workerImages.stage}
+                onRemove={workerImages.remove}
+                disabled={submitting}
+                idPrefix="dispatch"
+              />
+            ) : (
+              <>
+                <p className="dispatch-hint">This host can't attach images to a worker (its dispatch or houston is too old).</p>
+                {workerImages.staged.length > 0 && (
+                  <div className="staged-chips">
+                    {workerImages.staged.map((s) => (
+                      <StagedImageChip key={s.id} staged={s} onRemove={() => workerImages.remove(s.id)} disabled={submitting} />
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
           </div>
 
           <div className="dispatch-grid">
@@ -533,7 +578,7 @@ export function DispatchView({ runs }: { runs: Run[] }) {
             )}
           </div>
 
-          <button type="submit" className="dispatch-submit" disabled={busy || !title.trim() || !issueValid}>
+          <button type="submit" className="dispatch-submit" disabled={busy || !title.trim() || !issueValid || imagesBlocked}>
             {submitting ? 'Dispatching…' : 'Dispatch'}
           </button>
           {!submitting && submitDisabledReason && (

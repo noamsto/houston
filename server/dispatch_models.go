@@ -147,3 +147,20 @@ func (s *Server) dispatchModelSet(ctx context.Context, serverPath string) (dispa
 	}
 	return set, nil
 }
+
+// execDispatchAttach reports whether the host's dispatch has `--attach`, with
+// serverPath as in dispatchEnv.
+func execDispatchAttach(ctx context.Context, serverPath string) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, dispatchEnginesTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "dispatch", "--help")
+	cmd.Env = dispatchEnv(serverPath)
+	out, err := cmd.Output()
+	if err != nil {
+		return false, fmt.Errorf("dispatch --help: %w", err)
+	}
+	return dispatchAttachFlagRe.Match(out), nil
+}
+
+var dispatchAttachFlagRe = regexp.MustCompile(`(?m)^\s*--attach\s`)

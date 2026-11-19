@@ -1,7 +1,10 @@
 import { useRef, useState } from 'react'
 import type { FormEvent } from 'react'
-import type { DispatchOptions, DispatcherOutcome, DispatcherRequest } from '../api/dispatch'
+import type { DispatchOptions, DispatcherOutcome, DispatcherRequest, ImageUpload } from '../api/dispatch'
 import type { Run } from '../api/runs'
+import { useStagedImage } from '../components/useStagedImage'
+import { DispatchAttachments } from './DispatchAttachments'
+import { DISPATCH_IMAGE_LIMITS, toImageUploads } from './dispatchAttachments'
 import { buildDispatcherRequest, MAX_TASKS, taskRowsProblem } from './dispatcherForm'
 import { runIdFor } from './dispatchForm'
 import { runHash } from './routes'
@@ -36,6 +39,8 @@ export function DispatcherForm({
   const [model, setModel] = useState('')
   const [effort, setEffort] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [readError, setReadError] = useState<string | null>(null)
+  const images = useStagedImage(DISPATCH_IMAGE_LIMITS)
 
   const engine = engines.includes(chosenEngine) ? chosenEngine : (engines[0] ?? '')
   const models = options.engines[engine] ?? []
@@ -65,12 +70,25 @@ export function DispatcherForm({
     e.preventDefault()
     if (!canSubmit) return
     setSubmitting(true)
+    setReadError(null)
+    let uploads: ImageUpload[] = []
+    // Skipped when nothing is staged so the launch starts in the same tick.
+    if (images.staged.length > 0) {
+      try {
+        uploads = await toImageUploads(images.staged)
+      } catch {
+        setReadError('could not read an image')
+        setSubmitting(false)
+        return
+      }
+    }
     const result = await onSubmit(
-      buildDispatcherRequest({ repo, rows: rows.map((r) => r.text), engine, model, effort }),
+      buildDispatcherRequest({ repo, rows: rows.map((r) => r.text), engine, model, effort, images: uploads }),
     )
     setSubmitting(false)
     if (result.kind !== 'started') return
     setRows([newRow()])
+    images.clear()
     onStarted(host)
   }
 
@@ -110,6 +128,18 @@ export function DispatcherForm({
         Add task
       </button>
 
+      {options.dispatcher_attach ? (
+        <DispatchAttachments
+          staged={images.staged}
+          onStage={images.stage}
+          onRemove={images.remove}
+          disabled={busy || submitting}
+          idPrefix="dispatcher"
+        />
+      ) : (
+        <p className="dispatch-hint">This host's houston can't attach images to a dispatcher.</p>
+      )}
+
       <div className="dispatch-grid">
         <div className="dispatch-field">
           <label htmlFor="dispatcher-engine">Engine</label>
@@ -144,6 +174,7 @@ export function DispatcherForm({
         {submitting ? 'Starting…' : 'Start dispatcher'}
       </button>
       {!busy && disabledReason && <span className="dispatch-hint dispatch-error">{disabledReason}</span>}
+      {readError && <span role="alert" className="dispatch-hint dispatch-error">{readError}</span>}
     </form>
   )
 }

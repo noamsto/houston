@@ -65,6 +65,8 @@ type dispatchRequest struct {
 	Plan   string `json:"plan"`
 	Crew   string `json:"crew"`
 	Issue  string `json:"issue"`
+
+	Images []imageUpload `json:"images"`
 }
 
 // dispatchRepo is one repo houston knows about, offered by the options
@@ -110,6 +112,11 @@ type dispatchOptions struct {
 	// DispatchModelsError is why the models above are houston's built-in
 	// fallback rather than dispatch's own tier map.
 	DispatchModelsError string `json:"dispatch_models_error,omitempty"`
+	// DispatchAttach is whether this host's dispatch has --attach.
+	// DispatcherAttach is constant true: a peer houston that omits it is too
+	// old to accept images.
+	DispatchAttach   bool `json:"dispatch_attach"`
+	DispatcherAttach bool `json:"dispatcher_attach"`
 }
 
 // dispatchResponse covers every documented response shape: an error alone, a
@@ -369,6 +376,8 @@ func (s *Server) handleDispatchOptions(w http.ResponseWriter, r *http.Request) {
 		DispatcherEngines:      engines,
 		DispatcherEnginesError: enginesErr,
 		DispatchModelsError:    modelsErrText,
+		DispatchAttach:         s.dispatchAttach(r.Context(), serverPath),
+		DispatcherAttach:       true,
 	})
 }
 
@@ -385,7 +394,7 @@ func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 	dlog := &dispatchLog{}
 	defer dlog.emit(start)
 
-	r.Body = http.MaxBytesReader(w, r.Body, maxDispatchBody)
+	r.Body = http.MaxBytesReader(w, r.Body, maxDispatchUploadBody)
 	var req dispatchRequest
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
@@ -405,6 +414,18 @@ func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 		dlog.status = http.StatusRequestEntityTooLarge
 		writeDispatchJSON(w, http.StatusRequestEntityTooLarge, dispatchResponse{Error: "spec too large"})
 		return
+	}
+
+	imgs, ierr := validateImages(req.Images)
+	if ierr != nil {
+		dlog.field = ierr.field
+		dlog.status = ierr.code
+		writeDispatchJSON(w, ierr.code, dispatchResponse{Error: ierr.msg})
+		return
+	}
+	dlog.images = len(imgs)
+	for _, img := range imgs {
+		dlog.imageBytes += len(img.data)
 	}
 
 	serverPath := s.dispatchServerPath(r.Context(), "dispatch")
@@ -464,6 +485,12 @@ func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if len(imgs) > 0 && !s.dispatchAttach(r.Context(), serverPath) {
+		dlog.status = http.StatusUnprocessableEntity
+		writeDispatchJSON(w, http.StatusUnprocessableEntity, dispatchResponse{Error: "this host's dispatch can't attach images — update dispatch, or remove the images"})
+		return
+	}
+
 	select {
 	case s.dispatchSlot <- struct{}{}:
 		defer func() { <-s.dispatchSlot }()
@@ -490,12 +517,33 @@ func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 		dlog.crew = id
 	}
 
+	var attachPaths []string
+	if len(imgs) > 0 {
+		dir, err := os.MkdirTemp("", "houston-attach-*")
+		if err == nil {
+			defer os.RemoveAll(dir)
+			attachPaths, err = writeImages(dir, imgs)
+		}
+		if err != nil {
+			slog.Warn("dispatch: could not save images", "error", err)
+			if minted != "" {
+				_ = os.Remove(minted)
+			}
+			dlog.status = http.StatusInternalServerError
+			writeDispatchJSON(w, http.StatusInternalServerError, dispatchResponse{Error: "could not save images"})
+			return
+		}
+	}
+
 	// Detached from the request: a phone dropping its connection mid-dispatch
 	// must not kill dispatch half-way through scaffolding a worktree/issue.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), s.dispatchTimeout)
 	defer cancel()
 
 	argv := []string{"dispatch", valid.Tier, valid.Model, "--effort", valid.Effort, "--agent", valid.Engine, "--plan", valid.Plan, "--crew-id", valid.Crew}
+	for _, p := range attachPaths {
+		argv = append(argv, "--attach", p)
+	}
 	if valid.Issue != "" {
 		argv = append(argv, valid.Issue)
 	}
@@ -620,6 +668,7 @@ type dispatchLog struct {
 	repo, tier, engine, model, effort, plan, crew, issue, title string
 	specBytes, status, exitCode                                 int
 	workerID                                                    string
+	images, imageBytes                                          int
 }
 
 func (l *dispatchLog) setValidated(req dispatchRequest, repoPath string) {
@@ -629,7 +678,7 @@ func (l *dispatchLog) setValidated(req dispatchRequest, repoPath string) {
 }
 
 func (l *dispatchLog) emit(start time.Time) {
-	args := []any{"status", l.status, "spec_bytes", l.specBytes, "duration", time.Since(start)}
+	args := []any{"status", l.status, "spec_bytes", l.specBytes, "images", l.images, "image_bytes", l.imageBytes, "duration", time.Since(start)}
 	switch {
 	case l.validated:
 		args = append(args,

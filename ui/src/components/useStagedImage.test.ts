@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, renderHook } from '@testing-library/react'
-import { MAX_STAGED_BYTES, readBase64, skippedMessage, useStagedImage } from './useStagedImage'
+import { MAX_STAGED_BYTES, readBase64, skippedMessage, useStagedImage, type StageLimits } from './useStagedImage'
 
 const png = (name: string) => new File(['x'], name, { type: 'image/png' })
 // A File whose reported size is what the cap check reads, without allocating it.
@@ -134,6 +134,56 @@ describe('useStagedImage', () => {
     expect(result.current.staged).toEqual([{ id: 0, file, previewUrl: null }])
     act(() => result.current.clear())
     unmount()
+  })
+})
+
+const MiB = 1024 * 1024
+const LIMITS: StageLimits = { maxTotal: 25 * MiB, maxEach: 10 * MiB, maxFiles: 10, types: ['image/png'] }
+
+describe('useStagedImage limits', () => {
+  it('skips a type outside types', () => {
+    const { result } = renderHook(() => useStagedImage(LIMITS))
+    let skipped = -1
+    act(() => { skipped = result.current.stage([new File(['x'], 'a.pdf', { type: 'application/pdf' }), png('b.png')]) })
+    expect(skipped).toBe(1)
+    expect(result.current.staged.map((s) => s.file.name)).toEqual(['b.png'])
+  })
+
+  it('skips a file over maxEach', () => {
+    const { result } = renderHook(() => useStagedImage(LIMITS))
+    let skipped = -1
+    act(() => { skipped = result.current.stage([sized('big.png', 11 * MiB), sized('ok.png', 10 * MiB)]) })
+    expect(skipped).toBe(1)
+    expect(result.current.staged).toHaveLength(1)
+  })
+
+  it('skips files past maxFiles', () => {
+    const { result } = renderHook(() => useStagedImage(LIMITS))
+    let skipped = -1
+    act(() => { skipped = result.current.stage(Array.from({ length: 11 }, (_, i) => png(`${i}.png`))) })
+    expect(skipped).toBe(1)
+    expect(result.current.staged).toHaveLength(10)
+  })
+
+  it('skips files past maxTotal', () => {
+    const { result } = renderHook(() => useStagedImage(LIMITS))
+    let skipped = -1
+    act(() => { skipped = result.current.stage([sized('a.png', 10 * MiB), sized('b.png', 10 * MiB), sized('c.png', 6 * MiB)]) })
+    expect(skipped).toBe(1)
+    expect(result.current.staged).toHaveLength(2)
+  })
+
+  it('default limits stay the composer cap with no type or count limit', () => {
+    const { result } = renderHook(() => useStagedImage())
+    let skipped = -1
+    act(() => {
+      skipped = result.current.stage([
+        ...Array.from({ length: 12 }, (_, i) => new File(['x'], `${i}.txt`, { type: 'text/plain' })),
+        sized('huge.png', MAX_STAGED_BYTES + 1),
+      ])
+    })
+    expect(skipped).toBe(1)
+    expect(result.current.staged).toHaveLength(12)
   })
 })
 

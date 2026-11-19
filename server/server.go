@@ -160,6 +160,8 @@ type Server struct {
 	dispatchEngines func(ctx context.Context, serverPath string) ([]string, error)
 	// dispatchModels reads dispatch's tier map; see dispatchModelSet.
 	dispatchModels func(ctx context.Context, serverPath string) (dispatchModelSet, error)
+	// dispatchAttach reports whether the host's dispatch supports --attach.
+	dispatchAttach func(ctx context.Context, serverPath string) bool
 	// dispatchSlot caps in-flight dispatches at one: dispatch mutates the
 	// repo (worktrees, branches, the crew bus, GitHub issues), and running
 	// two at once against one repo is not something it is designed for.
@@ -177,6 +179,8 @@ type Server struct {
 	// launch files it reads.
 	houstonExe string
 	launchDir  string
+	// attachDir holds each dispatcher launch's uploaded images.
+	attachDir string
 	// launchSlot caps in-flight dispatcher launches at one, separately from
 	// dispatchSlot so a 120 s worker dispatch doesn't block a launch.
 	launchSlot  chan struct{}
@@ -304,6 +308,8 @@ func New(cfg Config) (*Server, error) {
 	repoReg := newRepoRegistry(filepath.Join(cfg.StatusDir, "repos.json"), resolveRepoRoots(cfg.RepoRoots), gitCommonDir)
 	launchDir := filepath.Join(cfg.StatusDir, dispatcherLaunchDirName)
 	sweepLaunchDir(launchDir)
+	attachDir := filepath.Join(cfg.StatusDir, "attachments")
+	sweepAttachmentDir(attachDir)
 	houstonExe, err := os.Executable()
 	if err != nil {
 		slog.Warn("dispatcher launch unavailable: cannot resolve houston's executable", "error", err)
@@ -358,6 +364,13 @@ func New(cfg Config) (*Server, error) {
 		},
 		dispatchEngines: execDispatchEngines,
 		dispatchModels:  execDispatchModels,
+		dispatchAttach: func(ctx context.Context, serverPath string) bool {
+			ok, err := execDispatchAttach(ctx, serverPath)
+			if err != nil {
+				slog.Warn("dispatch attach probe failed", "error", err)
+			}
+			return ok
+		},
 		dispatchSlot:    make(chan struct{}, 1),
 		dispatchTimeout: dispatchTimeout,
 		dispatchNewCrewID: func() string {
@@ -367,6 +380,7 @@ func New(cfg Config) (*Server, error) {
 		launchCommonDir: gitCommonDir,
 		houstonExe:      houstonExe,
 		launchDir:       launchDir,
+		attachDir:       attachDir,
 		launchSlot:      make(chan struct{}, 1),
 		launchCheck:     3 * time.Second,
 		launchPoll:      200 * time.Millisecond,
