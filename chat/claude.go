@@ -46,14 +46,15 @@ func (c *claude) Engine() string { return "claude-code" }
 // left out; an unrecognized field or top-level type is simply dropped, not
 // an error.
 type claudeRecord struct {
-	Type          string          `json:"type"`
-	Timestamp     string          `json:"timestamp"`
-	IsSidechain   bool            `json:"isSidechain"`
-	IsMeta        bool            `json:"isMeta"`
-	Message       *claudeMessage  `json:"message"`
-	Origin        *claudeOrigin   `json:"origin"`
-	Attachment    *claudeAttach   `json:"attachment"`
-	ToolUseResult json.RawMessage `json:"toolUseResult"`
+	Type             string          `json:"type"`
+	Timestamp        string          `json:"timestamp"`
+	IsSidechain      bool            `json:"isSidechain"`
+	IsMeta           bool            `json:"isMeta"`
+	IsCompactSummary bool            `json:"isCompactSummary"`
+	Message          *claudeMessage  `json:"message"`
+	Origin           *claudeOrigin   `json:"origin"`
+	Attachment       *claudeAttach   `json:"attachment"`
+	ToolUseResult    json.RawMessage `json:"toolUseResult"`
 }
 
 type claudeOrigin struct {
@@ -137,6 +138,14 @@ func (c *claude) decodeUser(rec claudeRecord, ts int64, nextID func() string, di
 	text, blocks, isArray, ok := decodeClaudeContent(rec.Message.Content)
 	if !ok {
 		return nil
+	}
+
+	if rec.IsCompactSummary {
+		t, k := joinTextBlocks(text, blocks, isArray)
+		if !k {
+			return nil
+		}
+		return []Update{userChunk(nextID(), ts, t, map[string]any{"origin": "claude-compaction"})}
 	}
 
 	if isArray {

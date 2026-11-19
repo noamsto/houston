@@ -22,6 +22,7 @@ var goldenFixtures = []string{
 	"human",
 	"human_image",
 	"task_notification",
+	"compact_summary",
 	"is_meta",
 	"sidechain",
 	"split_message",
@@ -609,4 +610,28 @@ func findText(cs []Content) string {
 		}
 	}
 	return ""
+}
+
+func TestClaudeCompactSummary(t *testing.T) {
+	raw, err := os.ReadFile(fixturePath("compact_summary"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	path := copyToTemp(t, t.TempDir(), "s1", raw)
+
+	got, _, _, err := NewClaude(nil).Read(path, Cursor{})
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d updates, want 1: %+v", len(got), got)
+	}
+	u := got[0]
+	if u.SessionUpdate != SessionUpdateUserMessageChunk || u.Meta["origin"] != "claude-compaction" {
+		t.Fatalf("update = %+v, want user chunk with origin claude-compaction", u)
+	}
+	b, _ := json.Marshal(u)
+	if !bytes.Contains(b, []byte("we refactored the parser")) {
+		t.Fatalf("summary text missing: %s", b)
+	}
 }

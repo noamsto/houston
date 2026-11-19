@@ -1,0 +1,2 @@
+{"type":"system","subtype":"compact_boundary","uuid":"s1","timestamp":"2024-01-01T00:00:00.000Z","isSidechain":false,"content":"Conversation compacted"}
+{"type":"user","uuid":"u1","parentUuid":"s1","timestamp":"2024-01-01T00:00:01.000Z","isSidechain":false,"isCompactSummary":true,"isVisibleInTranscriptOnly":true,"message":{"role":"user","content":"Summary: we refactored the parser and kept the tests green."}}

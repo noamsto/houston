@@ -178,6 +178,23 @@ describe('ChatTab', () => {
     expect(screen.queryByText('abandoned branch gist')).toBeNull()
   })
 
+  it('folds a claude-compaction summary behind a toggle', async () => {
+    await renderReady({}, {
+      page: page('e1', [userChunk('d1', 1, 'invented compaction gist', { _meta: { origin: 'claude-compaction' } })]),
+    })
+    const toggle = screen.getByRole('button', { name: /context compacted/i })
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByText('invented compaction gist')).toBeNull()
+
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(await screen.findByText('invented compaction gist')).toBeTruthy()
+
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByText('invented compaction gist')).toBeNull()
+  })
+
   it('collapses consecutive tool calls into one row and expands to per-call rows', async () => {
     const { container } = await renderReady({}, {
       page: page('e1', [
