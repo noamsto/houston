@@ -1180,6 +1180,7 @@ button.chat-divider::after { content: ''; position: absolute; left: -6px; right:
   background: color-mix(in srgb, var(--state-blocked) 14%, transparent);
   color: var(--state-blocked);
 }
+.worker-row-project { max-width: 30%; padding: 1px 6px; font-size: 11px; }
 .crew-host-chip {
   flex: none;
   max-width: 30%;

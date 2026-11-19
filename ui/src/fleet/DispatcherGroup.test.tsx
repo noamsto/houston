@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { cleanup, render } from '@testing-library/react'
-import { DispatcherGroup } from './DispatcherGroup'
+import { CrewGroup, DispatcherGroup } from './DispatcherGroup'
 import { RunCard } from './RunCard'
 import type { FleetEntry } from './fleetEntries'
 import type { Run } from '../api/runs'
@@ -52,5 +52,27 @@ describe('DispatcherGroup', () => {
       <DispatcherGroup entry={entry({ shown: [worker], members: [worker] })} now={now} />,
     )
     expect(container.querySelector('.fleet-group-card')).not.toBeNull()
+  })
+
+  it('chips a member working in another repo than the dispatcher', () => {
+    const cross = run({ id: 'w2', role: 'worker', project: 'nix-config', branch: 'w-two' })
+    const same = run({ id: 'w3', role: 'worker', project: 'houston', branch: 'w-three' })
+    const { container } = render(
+      <DispatcherGroup entry={entry({ shown: [cross, same], members: [cross, same] })} now={now} />,
+    )
+    const chips = [...container.querySelectorAll('.worker-row-project')]
+    expect(chips.map((c) => c.textContent)).toEqual(['nix-config'])
+  })
+
+  it('chips each differing member of an orphan crew against the crew project', () => {
+    const a = run({ id: 'a', role: 'worker', project: 'dispatcher', branch: 'a' })
+    const b = run({ id: 'b', role: 'worker', project: 'nix-config', branch: 'b' })
+    // A peer host keeps CrewGroupHeader from fetching the local repo list.
+    const crew: Extract<FleetEntry, { kind: 'crew' }> = {
+      kind: 'crew', key: 'crew:peer-a:1-1', crew: '1-1', host: 'peer-a', project: 'dispatcher', shown: [a, b],
+      members: [a, b], needsYou: 0, counts,
+    }
+    const { container } = render(<CrewGroup entry={crew} now={now} />)
+    expect([...container.querySelectorAll('.worker-row-project')].map((c) => c.textContent)).toEqual(['nix-config'])
   })
 })
