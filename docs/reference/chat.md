@@ -18,6 +18,10 @@ conversation. Design and measured per-engine mapping:
   `chat.For(agent)` picks the reader; claude-code (`"claude"`,
   `"claude-code"`) and `"pi"` have one, so codex and cursor have no Chat tab yet.
   `chat.ToolTitle` mirrors `hook.ToolHint`; `hub/chat_title_test.go` pins them.
+- **Claude compaction**: a `type:"user"` record with `isCompactSummary` becomes
+  a `user_message_chunk` with `_meta.origin` `claude-compaction` and the
+  summary as content (a collapsed "context compacted" divider that expands
+  on demand), never a human chunk.
 - **pi mapping** (`chat/pi.go`): `type:"message"` entries count, with
   roles user/assistant/toolResult; `system` and other roles, and other
   non-message entries (`session`, `session_info`, `model_change`,
@@ -53,8 +57,8 @@ conversation. Design and measured per-engine mapping:
   epoch.
 - **`_meta` keys**: `messageId` (on text chunks and tool calls), `tool` (tool
   name — `title` is the human hint), `origin` (`task-notification`,
-  `pi-branch`, `pi-compaction`; rendered as a divider), `subagent` (on the
-  Agent/Task call's update). The claude reader
+  `pi-branch`, `pi-compaction`, `claude-compaction`; rendered as a divider),
+  `subagent` (on the Agent/Task call's update). The claude reader
   never sets `phase`: the UI treats a text chunk as commentary when
   `_meta.phase == "commentary"` or a later `tool_call` shares its `messageId`.
   Tool input and output never ride the stream; the tool route serves them.
