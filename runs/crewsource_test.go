@@ -2393,30 +2393,49 @@ func TestScanDispatcherStandbyCountsUnfinishedWorkers(t *testing.T) {
 	remote.Host = "mbp"
 	other := viewWorker("feat/o", "working", "", 1)
 	other.Crew = "c2"
+	const staleT0 = int64(1_000_000_000_000)
 	cases := []struct {
 		name    string
 		workers []crewview.Worker
+		setup   func(t *testing.T, s *CrewSource, views *fakeViews, bus string)
 		want    int
 	}{
-		{"one working worker", []crewview.Worker{viewWorker("feat/a", "working", "", 1)}, 1},
+		{"one working worker", []crewview.Worker{viewWorker("feat/a", "working", "", 1)}, nil, 1},
 		{"finished workers do not count", []crewview.Worker{
 			viewWorker("feat/a", "done", "", 1),
 			viewWorker("feat/b", "failed", "", 1),
 			viewWorker("feat/c", "pr_open", "", 1),
-		}, 0},
-		{"a blocked worker still counts", []crewview.Worker{viewWorker("feat/a", "blocked", "q", 1)}, 1},
-		{"a remote_worker row counts", []crewview.Worker{remote}, 1},
-		{"another crew's worker does not count", []crewview.Worker{other}, 0},
+		}, nil, 0},
+		{"a blocked worker still counts", []crewview.Worker{viewWorker("feat/a", "blocked", "q", 1)}, nil, 1},
+		{"a remote_worker row counts", []crewview.Worker{remote}, nil, 1},
+		{"another crew's worker does not count", []crewview.Worker{other}, nil, 0},
+		{"an abandoned windowless worker does not count", []crewview.Worker{viewWorker("feat/a", "working", "", (staleT0+1000)/1000)},
+			func(t *testing.T, s *CrewSource, _ *fakeViews, bus string) {
+				writeEvents(t, bus, statusRow(staleT0, "feat/a", "working")+dispatchRow(staleT0+1000, "feat/a"))
+				s.now = func() time.Time { return time.UnixMilli(staleT0 + 1000).Add(crewStaleAfter + time.Minute) }
+			}, 0},
+		{"a roster-held worker still counts", []crewview.Worker{viewWorker("feat/a", "working", "", testViewGen-60)},
+			func(t *testing.T, s *CrewSource, views *fakeViews, bus string) {
+				s.now = func() time.Time { return time.Unix(testViewGen, 0) }
+				if _, ok := mustScan(t, s)["crew/"+bus+"/feat/a"]; !ok {
+					t.Fatal("tick 1 does not list feat/a")
+				}
+				views.views[bus] = rosterFailed(testViewGen + 300)
+				s.now = func() time.Time { return time.Unix(testViewGen+300, 0) }
+			}, 1},
 		{"mixed", []crewview.Worker{
 			viewWorker("feat/a", "working", "", 1),
 			viewWorker("feat/b", "done", "", 1),
 			remote,
 			other,
-		}, 2},
+		}, nil, 2},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			s, _, _ := joinedC1(t, overviewOf(nil, tc.workers...))
+			s, views, bus := joinedC1(t, overviewOf(nil, tc.workers...))
+			if tc.setup != nil {
+				tc.setup(t, s, views, bus)
+			}
 			d := mustScan(t, s)["%1"]
 			if d.Crew == nil || d.Crew.LiveWorkers != tc.want {
 				t.Fatalf("dispatcher layer = %+v, want LiveWorkers %d", d.Crew, tc.want)
