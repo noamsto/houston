@@ -3,6 +3,7 @@ import type { ChatUpdate } from '../api/chat'
 import {
   buildItems,
   mergeUpdates,
+  newestTs,
   provisionalTool,
   reconcileOptimistic,
   toolRowLabel,
@@ -226,73 +227,109 @@ describe('buildItems', () => {
 })
 
 describe('reconcileOptimistic', () => {
-  it('confirms a pending bubble matched by trimmed text within the window', () => {
-    const pending = [{ localId: 'p1', text: '  hello  ', sentAt: 10_000 }]
+  it('confirms a pending bubble matched by trimmed text after the anchor', () => {
+    const pending = [{ localId: 'p1', text: '  hello  ', sentAt: 10_000, anchorTs: 5_000 }]
     const updates = [userChunk('u1', 1, 'hello', { ts: 10_500 })]
     const result = reconcileOptimistic(pending, updates, 20_000)
     expect(result).toEqual({ confirmed: ['p1'], remaining: [] })
   })
 
   it('does not confirm via an origin chunk with matching text', () => {
-    const pending = [{ localId: 'p1', text: 'hello', sentAt: 10_000 }]
+    const pending = [{ localId: 'p1', text: 'hello', sentAt: 10_000, anchorTs: 0 }]
     const updates = [userChunk('u1', 1, 'hello', { ts: 10_500, _meta: { origin: 'pi-compaction' } })]
     const result = reconcileOptimistic(pending, updates, 20_000)
     expect(result.confirmed).toEqual([])
   })
 
   it('still confirms via a chunk with an unknown origin', () => {
-    const pending = [{ localId: 'p1', text: 'hello', sentAt: 10_000 }]
+    const pending = [{ localId: 'p1', text: 'hello', sentAt: 10_000, anchorTs: 0 }]
     const updates = [userChunk('u1', 1, 'hello', { ts: 10_500, _meta: { origin: 'something-new' } })]
     expect(reconcileOptimistic(pending, updates, 20_000).confirmed).toEqual(['p1'])
     expect(buildItems(updates)[0]).toMatchObject({ kind: 'user', text: 'hello' })
   })
 
   it('confirms a chunk that lands long after the send (a message queued behind a running turn)', () => {
-    const pending = [{ localId: 'p1', text: 'hello', sentAt: 10_000 }]
+    const pending = [{ localId: 'p1', text: 'hello', sentAt: 10_000, anchorTs: 0 }]
     const before = reconcileOptimistic(pending, [], 41_000)
-    expect(before.remaining).toEqual([{ localId: 'p1', text: 'hello', sentAt: 10_000, unconfirmed: true }])
+    expect(before.remaining).toEqual([{ localId: 'p1', text: 'hello', sentAt: 10_000, anchorTs: 0, unconfirmed: true }])
 
-    const updates = [userChunk('u1', 1, 'hello', { ts: 70_000 })]
-    const result = reconcileOptimistic(pending, updates, 71_000)
+    const updates = [userChunk('u1', 1, 'hello', { ts: 10_000 + 40 * 60_000 })]
+    const result = reconcileOptimistic(pending, updates, 10_000 + 41 * 60_000)
     expect(result).toEqual({ confirmed: ['p1'], remaining: [] })
   })
 
-  it('does not confirm a lost bubble from an identical message arriving beyond 30 minutes', () => {
-    const pending = [{ localId: 'p1', text: 'yes', sentAt: 10_000 }]
-    const updates = [userChunk('u1', 1, 'yes', { ts: 10_000 + 30 * 60_000 + 1 })]
-    const result = reconcileOptimistic(pending, updates, 10_000 + 31 * 60_000)
-    expect(result.confirmed).toEqual([])
-    expect(result.remaining).toEqual([{ localId: 'p1', text: 'yes', sentAt: 10_000, unconfirmed: true }])
+  it('confirms despite client clock skew: chunk ts far before sentAt but after the anchor', () => {
+    const pending = [{ localId: 'p1', text: 'hello', sentAt: 100_000, anchorTs: 80_000 }]
+    const updates = [userChunk('u1', 1, 'hello', { ts: 90_000 })]
+    expect(reconcileOptimistic(pending, updates, 101_000)).toEqual({ confirmed: ['p1'], remaining: [] })
   })
 
-  it('does not confirm past the 5s early boundary', () => {
-    const pending = [{ localId: 'p1', text: 'hello', sentAt: 10_000 }]
-    const updates = [userChunk('u1', 1, 'hello', { ts: 4_999 })]
-    const result = reconcileOptimistic(pending, updates, 11_000)
+  it('does not confirm a chunk whose ts equals the anchor', () => {
+    const pending = [{ localId: 'p1', text: 'yes', sentAt: 10_000, anchorTs: 5_000 }]
+    const updates = [userChunk('u1', 1, 'yes', { ts: 5_000 })]
+    expect(reconcileOptimistic(pending, updates, 11_000).confirmed).toEqual([])
+  })
+
+  it('does not confirm a chunk older than the anchor', () => {
+    const pending = [{ localId: 'p1', text: 'yes', sentAt: 10_000, anchorTs: 5_000 }]
+    const updates = [userChunk('u1', 1, 'yes', { ts: 4_999 })]
+    expect(reconcileOptimistic(pending, updates, 11_000).confirmed).toEqual([])
+  })
+
+  it('confirms despite per-line trailing whitespace and CRLF differences', () => {
+    const pending = [
+      { localId: 'p1', text: 'a  \nb\t\nc', sentAt: 10_000, anchorTs: 0 },
+      { localId: 'p2', text: 'x\r\ny\rz', sentAt: 10_001, anchorTs: 0 },
+    ]
+    const updates = [userChunk('u1', 1, 'a\nb\nc', { ts: 10_500 }), userChunk('u2', 2, 'x \ny\nz ', { ts: 10_600 })]
+    expect(reconcileOptimistic(pending, updates, 11_000)).toEqual({ confirmed: ['p1', 'p2'], remaining: [] })
+  })
+
+  it('never confirms a message that is not in the transcript: unconfirmed after 30s', () => {
+    const pending = [{ localId: 'p1', text: 'hello', sentAt: 0, anchorTs: 0 }]
+    const updates = [userChunk('u1', 1, 'something else', { ts: 5_000 })]
+    const result = reconcileOptimistic(pending, updates, 31_000)
     expect(result.confirmed).toEqual([])
+    expect(result.remaining).toEqual([{ localId: 'p1', text: 'hello', sentAt: 0, anchorTs: 0, unconfirmed: true }])
   })
 
   it('flags a pending bubble unconfirmed once 30s have elapsed with no match', () => {
-    const pending = [{ localId: 'p1', text: 'hello', sentAt: 0 }]
+    const pending = [{ localId: 'p1', text: 'hello', sentAt: 0, anchorTs: 0 }]
     const result = reconcileOptimistic(pending, [], 30_001)
-    expect(result.remaining).toEqual([{ localId: 'p1', text: 'hello', sentAt: 0, unconfirmed: true }])
+    expect(result.remaining).toEqual([{ localId: 'p1', text: 'hello', sentAt: 0, anchorTs: 0, unconfirmed: true }])
   })
 
   it('does not flag unconfirmed before 30s have elapsed', () => {
-    const pending = [{ localId: 'p1', text: 'hello', sentAt: 0 }]
+    const pending = [{ localId: 'p1', text: 'hello', sentAt: 0, anchorTs: 0 }]
     const result = reconcileOptimistic(pending, [], 29_000)
-    expect(result.remaining).toEqual([{ localId: 'p1', text: 'hello', sentAt: 0, unconfirmed: false }])
+    expect(result.remaining).toEqual([{ localId: 'p1', text: 'hello', sentAt: 0, anchorTs: 0, unconfirmed: false }])
   })
 
   it('matches each chunk to at most one pending, oldest pending first', () => {
     const pending = [
-      { localId: 'p1', text: 'same', sentAt: 1_000 },
-      { localId: 'p2', text: 'same', sentAt: 2_000 },
+      { localId: 'p1', text: 'same', sentAt: 1_000, anchorTs: 0 },
+      { localId: 'p2', text: 'same', sentAt: 2_000, anchorTs: 0 },
     ]
     const updates = [userChunk('u1', 1, 'same', { ts: 1_100 })]
     const result = reconcileOptimistic(pending, updates, 3_000)
     expect(result.confirmed).toEqual(['p1'])
     expect(result.remaining.map((r) => r.localId)).toEqual(['p2'])
+  })
+})
+
+describe('newestTs', () => {
+  it('is 0 with no updates', () => {
+    expect(newestTs([])).toBe(0)
+  })
+
+  it('is the max ts even when the last update by seq has ts 0', () => {
+    const updates = [textUpdate('a', 1, 'x', { ts: 7_000 }), textUpdate('b', 2, 'y', { ts: 0 })]
+    expect(newestTs(updates)).toBe(7_000)
+  })
+
+  it('is the max ts for out-of-order timestamps', () => {
+    const updates = [textUpdate('a', 1, 'x', { ts: 9_000 }), textUpdate('b', 2, 'y', { ts: 3_000 })]
+    expect(newestTs(updates)).toBe(9_000)
   })
 })
 

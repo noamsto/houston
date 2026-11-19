@@ -86,6 +86,24 @@ conversation. Design and measured per-engine mapping:
   hand-written. `go run -tags tools ./cmd/sessionlog <file>` prints a file as
   ACP JSONL for eyeballing.
 
+### Optimistic bubbles
+
+`handleSend` shows a text send immediately as a pending bubble; `reconcileOptimistic`
+(`ui/src/fleet/chatModel.ts`) swaps it for the transcript's `user_message_chunk`.
+
+- **Anchor**: each bubble records `anchorTs = newestTs(updates)` at send, the max
+  `ts` over all updates (server clock; not the last update by seq, whose `ts` may be 0).
+  A chunk confirms it only if `chunk.ts > anchorTs` (strict). No browser-vs-server
+  clock comparison exists, so client clock skew cannot strand a bubble, and a message
+  queued behind a running turn confirms however late it lands. Tradeoff: a lost bubble
+  can be confirmed by a later identical message.
+- **Text**: `normalizeText` on both sides (CRLF/CR to LF, trailing spaces/tabs per
+  line dropped, outer trim); the transcript's queued prompts can differ from the
+  composer text in per-line trailing whitespace.
+- **Claiming**: each chunk confirms at most one bubble, oldest-sent first.
+- **Unconfirmed**: `sentAt` (browser clock) only drives the flag; a bubble with no
+  match 30s after send shows "not confirmed" but is kept.
+- Image sends create no bubble, so nothing reconciles for them.
 
 ### Answering from Chat
 

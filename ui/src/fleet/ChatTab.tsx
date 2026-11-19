@@ -13,7 +13,7 @@ import { useComposerDraft } from '../components/useComposerDraft'
 import { readBase64, skippedMessage, useStagedImage } from '../components/useStagedImage'
 import { useRunChat } from '../hooks/useRunChat'
 import { useStickyScroll } from '../hooks/useStickyScroll'
-import { buildItems, provisionalTool, reconcileOptimistic, toolRowLabel } from './chatModel'
+import { buildItems, newestTs, provisionalTool, reconcileOptimistic, toolRowLabel } from './chatModel'
 import type { AssistantItem, ChatItem, DividerItem, Optimistic, QuestionItem, ToolCall, ToolsItem, UserItem } from './chatModel'
 import { kindGlyph, statusGlyph } from './chatGlyphs'
 import { ChatMarkdownLazy, ChatPlainText } from './chatMarkdownLazy'
@@ -444,7 +444,7 @@ export function ChatTab({ run, now }: { run: Run; now: number }) {
 
   const handleSend = async (text: string) => {
     const localId = `local-${Date.now()}-${Math.random().toString(36).slice(2)}`
-    setPending((p) => [...p, { localId, text, sentAt: Date.now() }])
+    setPending((p) => [...p, { localId, text, sentAt: Date.now(), anchorTs: newestTs(updates) }])
     const err = await sendText({ kind: 'run', id: run.id }, text)
     if (err) setPending((p) => p.filter((x) => x.localId !== localId))
     return err
