@@ -5,6 +5,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/noamsto/houston/hook"
@@ -16,8 +17,12 @@ type BGTask struct {
 	Kind    string `json:"kind"` // "shell" | "monitor"
 	Hint    string `json:"hint,omitempty"`
 	Since   int64  `json:"since"`             // unix seconds
-	Expires int64  `json:"expires,omitempty"` // unix seconds; 0 = never
+	Expires int64  `json:"expires,omitempty"` // unix seconds a monitor times out at; 0 for a shell
 }
+
+// MonitorMaxLifetime is the longest a Monitor runs: Claude Code caps every
+// Monitor at 1800000ms, persistent included.
+const MonitorMaxLifetime = 30 * time.Minute
 
 const (
 	bgShell   = "shell"
@@ -419,9 +424,11 @@ func (f *fold) endBackground(rec Record) {
 	}
 	if rec.Tool == "Monitor" {
 		t.Kind = bgMonitor
-		if rec.TimeoutMS > 0 {
-			t.Expires = rec.TS/1000 + rec.TimeoutMS/1000
+		life := MonitorMaxLifetime
+		if d := time.Duration(rec.TimeoutMS) * time.Millisecond; d > 0 && d < life {
+			life = d
 		}
+		t.Expires = rec.TS/1000 + int64(life/time.Second)
 	}
 	if f.bg == nil {
 		f.bg = map[string]bgEntry{}

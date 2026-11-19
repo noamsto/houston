@@ -94,9 +94,11 @@ anywhere), one JSON object per event: `{v:1, sid, boot, seq, ts, ev, ...}`.
   houston's question-at-turn-end rule.
 - `task.end` lists only task notifications whose header carries a terminal
   `<status>` (completed, failed, killed, stopped); a monitor's per-event
-  notification ends nothing, and nothing from the first `<event>` body on is
-  read, so tags inside it (opening or closing `task-notification` tags
-  included) are ignored, and so is any notification after it in the batch.
+  notification ends nothing, except a monitor's expiry notice (its first
+  `<event>` body starts with `[Monitor expired after `), which ends its head
+  task ids. Nothing else from the first `<event>` body on is read, so tags
+  inside it (opening or closing `task-notification` tags included) are ignored, and so is any notification after it in the
+  batch.
 - Size: houston answers a body over 16 KiB with 413, so the `notification`
   `message` is cut to 500 characters and `stop` lists its first 32 `tasks`. A
   body still over 15000 bytes (UTF-8) loses, in order, `ask`, `tasks`, `last`,

@@ -432,8 +432,9 @@ func TestBackgroundFromMod(t *testing.T) {
 		bgEnd(f, 4, "p", "Monitor", "mon2", nil)
 		s := f.session()
 		end := int64(ts0/1000 + 2 + 60)
+		capEnd := int64(ts0/1000 + 4 + 30*60)
 		if len(s.Background) != 2 || s.Background[0].Kind != "monitor" || s.Background[0].Expires != end ||
-			s.Background[1].Expires != 0 {
+			s.Background[1].Expires != capEnd {
 			t.Fatalf("background = %+v", s.Background)
 		}
 		if got := ids(s.BackgroundAt(time.Unix(end-1, 0))); !slices.Equal(got, []string{"mon1", "mon2"}) {
@@ -441,6 +442,29 @@ func TestBackgroundFromMod(t *testing.T) {
 		}
 		if got := ids(s.BackgroundAt(time.Unix(end, 0))); !slices.Equal(got, []string{"mon2"}) {
 			t.Fatalf("at expiry: %v", got)
+		}
+		if got := ids(s.BackgroundAt(time.Unix(capEnd, 0))); len(got) != 0 {
+			t.Fatalf("at cap: %v", got)
+		}
+	})
+
+	t.Run("monitor timeout is capped", func(t *testing.T) {
+		f := newFeeder(t)
+		bgStart(f, 1, "m", "Monitor", &ToolInput{Description: "Watch CI"})
+		bgEnd(f, 2, "m", "Monitor", "mon1", func(r *Record) { r.TimeoutMS = 3_600_000 })
+		s := f.session()
+		if want := int64(ts0/1000 + 2 + 30*60); len(s.Background) != 1 || s.Background[0].Expires != want {
+			t.Fatalf("background = %+v, want expires %d", s.Background, want)
+		}
+	})
+
+	t.Run("task.end removes a monitor", func(t *testing.T) {
+		f := newFeeder(t)
+		bgStart(f, 1, "m", "Monitor", &ToolInput{Description: "Watch CI"})
+		bgEnd(f, 2, "m", "Monitor", "mon1", func(r *Record) { r.TimeoutMS = 60_000 })
+		f.apply(3, evTaskEnd, func(r *Record) { r.Tasks = []Task{{ID: "mon1"}} })
+		if s := f.session(); len(s.Background) != 0 {
+			t.Fatalf("after task.end: %+v", s.Background)
 		}
 	})
 
