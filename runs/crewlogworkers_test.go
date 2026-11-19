@@ -36,8 +36,12 @@ func TestLogWorkers(t *testing.T) {
 		t.Errorf("watchdog item = %+v", it)
 	}
 
-	ws, _ = logWorkers(map[string]crewIdentity{"x": {crew: "c1", state: "working"}}, 10_000, func(string) bool { return true })
-	if len(ws) != 1 || ws[0].AgeSec != nil || ws[0].Name != nil {
-		t.Errorf("a worker with no status row = %+v, want no age and no name", ws)
+	ws, _ = logWorkers(map[string]crewIdentity{
+		"dispatch-only": {crew: "c1", state: "working"},
+		"reaped":        {crew: "c1", state: "reaped", statusTS: 1000},
+		"done":          {crew: "c1", state: "done", statusTS: 1000},
+	}, 10_000, func(string) bool { return true })
+	if len(ws) != 1 || ws[0].Branch != "done" || ws[0].Name != nil {
+		t.Errorf("workers = %+v, want only the finished one — no status row and reaped are not listed", ws)
 	}
 }

@@ -142,6 +142,11 @@ func TestIdentityStatusFold(t *testing.T) {
 	wd := func(ts int64, state, detail string) string {
 		return fmt.Sprintf(`{"ts":%d,"crew_id":"c1","from":"worker:%s#s1","kind":"status","body":{"state":%q,"detail":%q,"source":"watchdog"}}`+"\n", ts, b, state, detail)
 	}
+	restampRow := func(ts int64, detail string) string {
+		return fmt.Sprintf(`{"ts":%d,"crew_id":"c1","from":"worker:%s#s1","kind":"status","body":{"state":"blocked","detail":%q,"restamp":true}}`+"\n", ts, b, detail)
+	}
+	reapRow := func(ts int64) string { return fmt.Sprintf(`{"ts":%d,"kind":"reap","branch":"feat/a"}`+"\n", ts) }
+	releaseRow := func(ts int64) string { return fmt.Sprintf(`{"ts":%d,"kind":"release","branch":"feat/a"}`+"\n", ts) }
 	dispatch := `{"ts":1000,"crew_id":"c1","kind":"dispatch","branch":"feat/a","title":"T","tier":"standard","engine":"claude","model":"sonnet"}` + "\n"
 	reply := `{"ts":%d,"crew_id":"c1","from":"dispatcher:c1","to":"worker:feat/a#s1","kind":"msg","body":"go on"}` + "\n"
 	tests := []struct {
@@ -161,8 +166,8 @@ func TestIdentityStatusFold(t *testing.T) {
 			}
 			return ""
 		}},
-		{"blockedSince is kept while blocked", dispatch + row(1100, "blocked", "q1") + row(1200, "blocked", "q2"), func(i crewIdentity) string {
-			if i.state != "blocked" || i.detail != "q2" || i.blockedSince != 1100 {
+		{"blockedSince is kept while blocked", dispatch + row(1100, "blocked", "q1") + row(1200, "blocked", "q1"), func(i crewIdentity) string {
+			if i.state != "blocked" || i.detail != "q1" || i.blockedSince != 1100 {
 				return fmt.Sprintf("%+v", i)
 			}
 			return ""
@@ -185,14 +190,62 @@ func TestIdentityStatusFold(t *testing.T) {
 			}
 			return ""
 		}},
-		{"reap row", dispatch + row(1100, "pr_open", "") + `{"ts":1300,"kind":"reap","branch":"feat/a"}` + "\n", func(i crewIdentity) string {
+		{"reap row on a finished worker", dispatch + row(1100, "done", "") + reapRow(1300), func(i crewIdentity) string {
 			if i.state != "reaped" || i.statusTS != 1300 {
 				return fmt.Sprintf("%+v", i)
 			}
 			return ""
 		}},
-		{"release row", dispatch + `{"ts":1300,"kind":"release","branch":"feat/a"}` + "\n", func(i crewIdentity) string {
+		{"reap row on a failed worker", dispatch + row(1100, "failed", "") + reapRow(1300), func(i crewIdentity) string {
 			if i.state != "reaped" {
+				return fmt.Sprintf("%+v", i)
+			}
+			return ""
+		}},
+		{"reap row on an exited worker", dispatch + row(1100, "exited", "") + reapRow(1300), func(i crewIdentity) string {
+			if i.state != "reaped" {
+				return fmt.Sprintf("%+v", i)
+			}
+			return ""
+		}},
+		{"reap row on a working worker is ignored", dispatch + row(1100, "working", "") + reapRow(1300), func(i crewIdentity) string {
+			if i.state != "working" || i.statusTS != 1100 {
+				return fmt.Sprintf("%+v", i)
+			}
+			return ""
+		}},
+		{"release keeps a done worker done", dispatch + row(1100, "done", "") + releaseRow(1300), func(i crewIdentity) string {
+			if i.state != "done" || i.statusTS != 1100 {
+				return fmt.Sprintf("%+v", i)
+			}
+			return ""
+		}},
+		{"release keeps a failed worker failed", dispatch + row(1100, "failed", "") + releaseRow(1300), func(i crewIdentity) string {
+			if i.state != "failed" {
+				return fmt.Sprintf("%+v", i)
+			}
+			return ""
+		}},
+		{"new question without a working row resets blockedSince", dispatch + row(1100, "blocked", "q1") + row(1200, "blocked", "q2"), func(i crewIdentity) string {
+			if i.state != "blocked" || i.detail != "q2" || i.blockedSince != 1200 {
+				return fmt.Sprintf("%+v", i)
+			}
+			return ""
+		}},
+		{"repeated question keeps blockedSince", dispatch + row(1100, "blocked", "q1") + row(1200, "blocked", "q1"), func(i crewIdentity) string {
+			if i.blockedSince != 1100 {
+				return fmt.Sprintf("%+v", i)
+			}
+			return ""
+		}},
+		{"restamp keeps blockedSince", dispatch + row(1100, "blocked", "q1") + restampRow(1200, "q2"), func(i crewIdentity) string {
+			if i.blockedSince != 1100 || i.detail != "q2" {
+				return fmt.Sprintf("%+v", i)
+			}
+			return ""
+		}},
+		{"watchdog row between questions does not count", dispatch + row(1100, "blocked", "q1") + wd(1150, "blocked", "quiet: x") + row(1200, "blocked", "q1"), func(i crewIdentity) string {
+			if i.blockedSince != 1100 {
 				return fmt.Sprintf("%+v", i)
 			}
 			return ""

@@ -351,7 +351,7 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 		}
 		synthWorkers, synthItems := logWorkers(ids, generatedAt, func(crew string) bool {
 			other := joinedOn[crew]
-			return other != "" && other != bus && !listed[crew] && !held.has(crew)
+			return other != "" && other != bus && !listed[crew]
 		})
 		synthKeys := map[rowKey]bool{}
 		for _, w := range synthWorkers {

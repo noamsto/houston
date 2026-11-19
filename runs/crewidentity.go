@@ -81,6 +81,8 @@ func identityFromCrewLog(rd io.Reader) map[string]crewIdentity {
 				State  string `json:"state"`
 				Detail string `json:"detail"`
 				PRURL  string `json:"pr_url"`
+
+				Restamp bool `json:"restamp"`
 			}
 			_ = json.Unmarshal(rec.Body, &body) // a body without a source reads as the worker's own
 			if s := sessionEpoch(rec.From); s != 0 {
@@ -92,10 +94,12 @@ func identityFromCrewLog(rd io.Reader) map[string]crewIdentity {
 				id.foldWatchdog(body.State, body.Detail, rec.TS)
 				break
 			}
-			if body.State == "blocked" && id.state != "blocked" {
-				id.blockedSince = rec.TS
-			} else if body.State != "blocked" {
+			// crew opens a blocked episode on a new question, not on a repeat or a restamp.
+			switch {
+			case body.State != "blocked":
 				id.blockedSince = 0
+			case id.state != "blocked" || (!body.Restamp && body.Detail != id.detail):
+				id.blockedSince = rec.TS
 			}
 			id.state, id.detail, id.prURL, id.statusTS = body.State, body.Detail, body.PRURL, rec.TS
 			id.watchdog = watchdogItem{}
@@ -103,8 +107,11 @@ func identityFromCrewLog(rd io.Reader) map[string]crewIdentity {
 			if id.state == "blocked" && strings.HasPrefix(rec.From, "dispatcher:") {
 				id.state, id.statusTS = "answered", rec.TS
 			}
-		case "reap", "release":
-			id.state, id.statusTS = "reaped", rec.TS
+		case "reap":
+			switch id.state {
+			case "done", "failed", "exited":
+				id.state, id.statusTS = "reaped", rec.TS
+			}
 		}
 		ids[branch] = id
 	}

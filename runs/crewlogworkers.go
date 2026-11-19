@@ -19,7 +19,8 @@ func logWorkers(ids map[string]crewIdentity, generatedAt int64, include func(cre
 
 	for _, branch := range slices.Sorted(maps.Keys(ids)) {
 		id := ids[branch]
-		if id.crew == "" || !include(id.crew) {
+		// crew lists a worker from its first status and drops a reaped one.
+		if id.crew == "" || id.statusTS == 0 || id.state == "reaped" || !include(id.crew) {
 			continue
 		}
 		w := crewview.Worker{

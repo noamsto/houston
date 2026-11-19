@@ -2478,14 +2478,37 @@ func TestScanCrossRepoGuards(t *testing.T) {
 
 	t.Run("a crew the view lists is not duplicated", func(t *testing.T) {
 		c := newCrossRepo(t, working)
-		c.views.views[c.busB] = workingView("feat/x")
+		v := workingView("feat/x")
+		v.Workers[0].State, v.Workers[0].Detail = "pr_open", optional("from the view")
+		c.views.views[c.busB] = v
 		got := c.scan(t)
 		if len(got) != 2 || got["%2"].Crew == nil || got["%2"].Crew.Name != "c1" {
-			t.Errorf("scan = %v, want the dispatcher and one worker run", keysOf(got))
+			t.Fatalf("scan = %v, want the dispatcher and one worker run", keysOf(got))
+		}
+		if d := got["%2"].Crew.Detail; d != "from the view" {
+			t.Errorf("Crew.Detail = %q, want the view's row to win over the log's", d)
 		}
 	})
 
-	t.Run("a finished worker evicts and a reaped one reads done", func(t *testing.T) {
+	t.Run("a held roster does not hide a synthesized worker", func(t *testing.T) {
+		c := newCrossRepo(t, working)
+		b := c.views.views[c.busB]
+		b.Errors = []string{"roster: timeout"}
+		c.views.views[c.busB] = b
+		r, ok := c.scan(t)["%2"]
+		if !ok || r.Crew == nil || r.Crew.Name != "c1" {
+			t.Errorf("worker run = %+v (ok=%v), want it listed and nested", r, ok)
+		}
+	})
+
+	t.Run("a dispatch-only branch is not listed", func(t *testing.T) {
+		c := newCrossRepo(t, crossRepoDispatch)
+		if got := c.scan(t); len(got) != 1 {
+			t.Errorf("scan = %v, want only the dispatcher — crew lists a worker from its first status", keysOf(got))
+		}
+	})
+
+	t.Run("a finished worker evicts", func(t *testing.T) {
 		c := newCrossRepo(t, crossRepoDispatch+statusRow(1100, "feat/x", "done"))
 		c.panes[1] = agentPaneAt("%2", "h:3", 5)
 		got := c.scan(t)
@@ -2494,16 +2517,34 @@ func TestScanCrossRepoGuards(t *testing.T) {
 		}
 		late := time.Unix(1, 0).Add(crewEvictionGrace + time.Minute)
 		deltas, _ := tickCrewDeltas(got, map[string]bool{}, late)
+		var found bool
 		for _, d := range deltas {
-			if d.Key == "%2" && (d.Run.State != "" || d.Run.Crew == nil || d.Run.Crew.Name != "c1") {
+			if d.Key != "%2" {
+				continue
+			}
+			found = true
+			if d.Run.State != "" || d.Run.Crew == nil || d.Run.Crew.Name != "c1" {
 				t.Errorf("evicted run = %+v, want identity only", d.Run)
 			}
 		}
+		if !found {
+			t.Errorf("deltas = %+v, want one for %%2", deltas)
+		}
+	})
 
-		reaped := newCrossRepo(t, crossRepoDispatch+statusRow(1100, "feat/x", "pr_open")+`{"ts":1300,"kind":"reap","branch":"feat/x"}`+"\n")
+	t.Run("a reaped worker is not listed", func(t *testing.T) {
+		reaped := newCrossRepo(t, crossRepoDispatch+statusRow(1100, "feat/x", "done")+`{"ts":1300,"kind":"reap","branch":"feat/x"}`+"\n")
 		reaped.panes[1] = agentPaneAt("%2", "h:3", 5)
-		if st := reaped.scan(t)["%2"].State; st != StateDone {
-			t.Errorf("reaped State = %q, want done", st)
+		if _, ok := reaped.scan(t)["%2"]; ok {
+			t.Errorf("reaped worker listed, want it dropped as crew's overview does")
+		}
+	})
+
+	t.Run("a released finished worker stays done", func(t *testing.T) {
+		c := newCrossRepo(t, crossRepoDispatch+statusRow(1100, "feat/x", "done")+`{"ts":1300,"kind":"release","branch":"feat/x"}`+"\n")
+		c.panes[1] = agentPaneAt("%2", "h:3", 5)
+		if st := c.scan(t)["%2"].State; st != StateDone {
+			t.Errorf("State = %q, want done", st)
 		}
 	})
 

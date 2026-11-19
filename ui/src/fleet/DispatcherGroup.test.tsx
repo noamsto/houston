@@ -67,10 +67,11 @@ describe('DispatcherGroup', () => {
   it('chips each differing member of an orphan crew against the crew project', () => {
     const a = run({ id: 'a', role: 'worker', project: 'dispatcher', branch: 'a' })
     const b = run({ id: 'b', role: 'worker', project: 'nix-config', branch: 'b' })
-    const crew = {
-      kind: 'crew', key: 'crew:local:1-1', crew: '1-1', project: 'dispatcher', shown: [a, b], members: [a, b],
-      needsYou: 0, counts,
-    } as unknown as Extract<FleetEntry, { kind: 'crew' }>
+    // A peer host keeps CrewGroupHeader from fetching the local repo list.
+    const crew: Extract<FleetEntry, { kind: 'crew' }> = {
+      kind: 'crew', key: 'crew:peer-a:1-1', crew: '1-1', host: 'peer-a', project: 'dispatcher', shown: [a, b],
+      members: [a, b], needsYou: 0, counts,
+    }
     const { container } = render(<CrewGroup entry={crew} now={now} />)
     expect([...container.querySelectorAll('.worker-row-project')].map((c) => c.textContent)).toEqual(['nix-config'])
   })
