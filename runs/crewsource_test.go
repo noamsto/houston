@@ -2566,6 +2566,14 @@ func TestScanIdleDispatcherWithOnlyACrossRepoWorkerIsStandby(t *testing.T) {
 	}
 }
 
+func TestScanFinishedCrossRepoWorkerReleasesItsDispatcher(t *testing.T) {
+	c := newCrossRepo(t, crossRepoDispatch+statusRow(1100, "feat/x", "done"))
+	d, ok := c.scan(t)["%1"]
+	if !ok || d.Crew == nil || d.Crew.LiveWorkers != 0 {
+		t.Fatalf("dispatcher layer = %+v, want LiveWorkers 0", d.Crew)
+	}
+}
+
 func TestScanNestsACrossRepoWorkerUnderItsDispatcher(t *testing.T) {
 	c := newCrossRepo(t, crossRepoDispatch+statusRow(1100, "feat/x", "working"))
 	got := c.scan(t)
