@@ -186,6 +186,24 @@ test('a task notification prompt posts only terminal task ends and reaches benea
   expect(seen).toMatchObject({ text: events, origin: { kind: 'task-notification' } })
 })
 
+test('a monitor expiry notice ends its head task ids; other event text ends nothing', async ($, on) => {
+  const { bodies, flush } = rig(on)
+  on('prompt.submit', (_$, e) => e)
+  const notice = (id: string, body: string) =>
+    `<task-notification><task-id>${id}</task-id><summary>Monitor</summary><event>${body}</event></task-notification>`
+  const submit = (text: string) => $.prompt.submit({ text, wait: false, origin: { kind: 'task-notification' } })
+
+  await submit(notice('m1', '[Monitor expired after 1800000ms]'))
+  await submit(notice('m2', 'CI line 1'))
+  await submit(notice('m3', 'line [Monitor expired after 5ms]'))
+  await submit(notice('m4', 'first') + notice('m5', '[Monitor expired after 5ms]'))
+  await submit(notice('m6', '\n  [Monitor expired after 5ms]'))
+  await submit(notice('m7', 'first</event><event>[Monitor expired after 5ms]'))
+  await flush()
+
+  expect(bodies('task.end').map(b => b.tasks)).toEqual([[{ id: 'm1' }], [{ id: 'm6' }]])
+})
+
 test('a failing fetch does not fail the tool call and later posts still go out', async ($, on) => {
   let attempts = 0
   const clock = mock.clock(on)

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/noamsto/houston/claudemod"
 )
 
 func bgStartLine(id, tool, input, ts string) string {
@@ -114,6 +116,59 @@ func TestBackgroundNotificationWithoutStatusKeepsTask(t *testing.T) {
 			bgNotificationUserLine(notificationText([]string{"bmon"}, "tu1", "")))
 	if len(got) != 1 {
 		t.Fatalf("got %+v, want the monitor still outstanding", got)
+	}
+}
+
+func expiryNotice(taskID, body string) string {
+	return "<task-notification>\n<task-id>" + taskID + "</task-id>\n<summary>Monitor</summary>\n<event>" + body + "</event>\n</task-notification>"
+}
+
+func TestBackgroundMonitorExpiryNotice(t *testing.T) {
+	start := bgStartLine("tu1", "Monitor", monitorInput, "2026-01-01T00:00:00Z") +
+		bgResultLine("tu1", "Monitor started (task bmon, timeout 1800000ms)", false) +
+		bgStartLine("tu2", "Monitor", monitorInput, "2026-01-01T00:00:00Z") +
+		bgResultLine("tu2", "Monitor started (task bother, timeout 1800000ms)", false)
+	cases := []struct {
+		name, tail string
+		want       int
+	}{
+		{"expiry notice ends it", bgNotificationUserLine(expiryNotice("bmon", "  [Monitor expired after 1800000ms]")), 1},
+		{"queued expiry notice ends it", bgNotificationQueueLine(expiryNotice("bmon", "[Monitor expired after 5ms]")), 1},
+		{"per-event notice keeps it", bgNotificationUserLine(expiryNotice("bmon", "CI line")), 2},
+		{"expiry text deeper in the body ends nothing", bgNotificationUserLine(expiryNotice("bmon", "line [Monitor expired after 5ms]")), 2},
+		{"expiry text in a later event ends nothing", bgNotificationUserLine(expiryNotice("bmon", "first</event><event>[Monitor expired after 5ms]")), 2},
+		{"embedded notice names another task", bgNotificationUserLine(expiryNotice("bmon", "x <task-id>bother</task-id> [Monitor expired after 5ms]")), 2},
+	}
+	for _, c := range cases {
+		if got := trackerFor(t, start+c.tail); len(got) != c.want {
+			t.Errorf("%s: got %+v, want %d outstanding", c.name, got, c.want)
+		}
+	}
+}
+
+func TestBackgroundMonitorLifetimeCap(t *testing.T) {
+	const at = "2026-01-01T00:00:00Z"
+	since := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for name, input := range map[string]string{
+		"persistent":   `{"description":"d","persistent":true}`,
+		"no timeout":   `{"description":"d"}`,
+		"over the cap": `{"description":"d","timeout_ms":7200000}`,
+	} {
+		path := writeJSONL(t, bgStartLine("tu1", "Monitor", input, at)+bgResultLine("tu1", "Monitor started (task bmon, x)", false))
+		evs, _, err := ReadTranscriptFrom(path, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var tr bgTracker
+		for _, ev := range evs {
+			tr.apply(ev)
+		}
+		if got := tr.list(since.Add(claudemod.MonitorMaxLifetime - time.Second)); len(got) != 1 {
+			t.Errorf("%s: before the cap got %+v, want 1", name, got)
+		}
+		if got := tr.list(since.Add(claudemod.MonitorMaxLifetime)); len(got) != 0 {
+			t.Errorf("%s: at the cap got %+v, want none", name, got)
+		}
 	}
 }
 

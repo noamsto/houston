@@ -202,16 +202,25 @@ function inputHint(tool: string, x: unknown): Rec | undefined {
 
 // Only a notification's header is ours: a monitor's event body embeds
 // arbitrary output, opening and closing tags included, so nothing from the
-// first event body on is read. A part with no terminal status ends nothing.
+// first event body on is read, bar its opening: a monitor's expiry notice
+// ends its head task ids. A part with no terminal status ends nothing.
 function parseTaskEnds(notification: string) {
   const tasks: Rec[] = []
-  for (const piece of notification.split('<event>')[0]!.split('</task-notification>')) {
+  const [before, ...events] = notification.split('<event>')
+  const pieces = before!.split('</task-notification>')
+  for (const piece of pieces) {
     const open = /^\s*<task-notification\b[^>]*>/.exec(piece)
     if (!open) continue
     const head = piece.slice(open[0].length).split('<summary>')[0]!
     if (!/<status>(completed|failed|killed|stopped)<\/status>/.test(head)) continue
     for (const m of head.matchAll(/<task-id>([^<]*)<\/task-id>/g)) tasks.push({ id: m[1] })
     for (const m of head.matchAll(/<tool-use-id>([^<]*)<\/tool-use-id>/g)) tasks.push({ tool_use: m[1] })
+  }
+  const owner = pieces[pieces.length - 1]!
+  const open = /^\s*<task-notification\b[^>]*>/.exec(owner)
+  if (open && events.length && events.join('<event>').trimStart().startsWith('[Monitor expired after ')) {
+    const head = owner.slice(open[0].length).split('<summary>')[0]!
+    for (const m of head.matchAll(/<task-id>([^<]*)<\/task-id>/g)) tasks.push({ id: m[1] })
   }
   return tasks
 }

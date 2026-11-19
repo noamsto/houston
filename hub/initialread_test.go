@@ -111,7 +111,8 @@ func filler(t *testing.T, size int64) string {
 
 func TestHubRestartListsBackgroundStartedBeforeTheTail(t *testing.T) {
 	persistentMonitor := `{"command":"tail -f log","description":"watch log","persistent":true}`
-	monitorTurn := bgStartLine("tu_mon", "Monitor", persistentMonitor, "2026-01-01T00:00:01Z") +
+	// Recent, so the monitor's 30 min cap has not run out.
+	monitorTurn := bgStartLine("tu_mon", "Monitor", persistentMonitor, time.Now().UTC().Format(time.RFC3339)) +
 		bgResultLine("tu_mon", "Monitor started (task bmon1, persistent)", false)
 	firstTurn := bgStartLine("tu_sh", "Bash", shellInput, "2026-01-01T00:00:00Z") +
 		bgResultLine("tu_sh", fmt.Sprintf(shellResult, "bsh1"), false) +

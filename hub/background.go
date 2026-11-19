@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/noamsto/houston/claudemod"
 )
 
 const (
@@ -28,6 +30,8 @@ var (
 	notifID    = regexp.MustCompile(`<task-id>([^<]*)</task-id>`)
 	notifTool  = regexp.MustCompile(`<tool-use-id>([^<]*)</tool-use-id>`)
 	notifState = regexp.MustCompile(`<status>(completed|failed|killed|stopped)</status>`)
+	// A monitor's own expiry notice: no <status>, a first event that opens with this.
+	monitorExpired = "[Monitor expired after "
 )
 
 // backgroundStart classifies a tool_use block: the kind of background task it
@@ -58,17 +62,18 @@ func backgroundStart(name string, input json.RawMessage) (kind, stopTask string)
 	return "", ""
 }
 
-// monitorTimeout is the lifetime of a non-persistent Monitor. When it runs
-// out the CLI writes no transcript marker, so the tracker must expire it.
+// monitorTimeout is a Monitor's lifetime: its timeout_ms, capped at
+// claudemod.MonitorMaxLifetime, which is also the lifetime of a persistent or
+// untimed one. The tracker expires it itself in case the expiry notice is missed.
 func monitorTimeout(input json.RawMessage) time.Duration {
 	var in struct {
 		TimeoutMS  int64 `json:"timeout_ms"`
 		Persistent bool  `json:"persistent"`
 	}
 	if json.Unmarshal(input, &in) != nil || in.Persistent || in.TimeoutMS <= 0 {
-		return 0
+		return claudemod.MonitorMaxLifetime
 	}
-	return time.Duration(in.TimeoutMS) * time.Millisecond
+	return min(time.Duration(in.TimeoutMS)*time.Millisecond, claudemod.MonitorMaxLifetime)
 }
 
 // backgroundHint prefers the call's own description over its command.
@@ -87,7 +92,7 @@ func backgroundHint(input json.RawMessage) string {
 
 type bgEntry struct {
 	task    BackgroundTask
-	expires int64 // unix seconds a non-persistent monitor times out at; 0 = never
+	expires int64 // unix seconds a monitor times out at; 0 for a shell
 	started bool  // its tool_result confirmed the launch and named a task id
 }
 
@@ -146,13 +151,21 @@ func (t *bgTracker) apply(ev TranscriptEvent) {
 		for _, tag := range []string{"<summary>", "<event>"} {
 			head, _, _ = strings.Cut(head, tag)
 		}
-		// Only a notification carrying a <status> is terminal; a monitor's
-		// per-event notifications are not.
-		if !notifState.MatchString(head) {
+		expired := false
+		if _, rest, ok := strings.Cut(ev.Text, "<event>"); ok {
+			expired = strings.HasPrefix(strings.TrimSpace(rest), monitorExpired)
+		}
+		// Only a notification carrying a <status>, or a monitor's expiry notice, is
+		// terminal; a monitor's per-event notifications are not.
+		terminal := notifState.MatchString(head)
+		if !terminal && !expired {
 			break
 		}
 		for _, m := range notifID.FindAllStringSubmatch(head, -1) {
 			t.finish(m[1], "")
+		}
+		if !terminal {
+			break
 		}
 		for _, m := range notifTool.FindAllStringSubmatch(head, -1) {
 			t.finish("", m[1])
