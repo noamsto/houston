@@ -118,19 +118,23 @@ export function RunStatusStrip({ run, now }: { run: Run; now: number }) {
   )
 }
 
+export const ANSWER_BELOW_TEXT = 'Asking you a question — answer it below.'
+
 /** `answeredHere`: this view already offers the answer, so the pane reply
- *  shortcut would be a second, competing affordance. */
-export function RunQuestion({ run, onTerminal = false, answeredHere = false }: {
+ *  shortcut would be a second, competing affordance. `answerBelow`: the answer
+ *  is a wizard under this banner, so an ask note naming the terminal is replaced. */
+export function RunQuestion({ run, onTerminal = false, answeredHere = false, answerBelow = false }: {
   run: Run
   onTerminal?: boolean
   answeredHere?: boolean
+  answerBelow?: boolean
 }) {
   if (!run.question) return null
   const blocked = run.state === 'blocked'
   const { via } = run.question
   return (
     <>
-      <div className="run-detail-question">{run.question.text}</div>
+      <div className="run-detail-question">{answerBelow && run.question.kind === 'ask' ? ANSWER_BELOW_TEXT : run.question.text}</div>
       {blocked && via === 'crew' && run.caps.reply && <ReplyComposer runId={run.id} />}
       {blocked && via === 'pane' && run.caps.terminal && !onTerminal && !answeredHere && (
         <button
