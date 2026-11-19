@@ -159,6 +159,7 @@ describe('ChatTab', () => {
     })
     expect(container.querySelector('[data-id="d1"]')!.textContent).toMatch(/context compacted/i)
     expect(screen.queryByRole('button', { name: /context compacted/i })).toBeNull()
+    expect(document.querySelector('.chat-divider-chevron')).toBeNull()
   })
 
   it('toggles a pi-branch divider summary', async () => {
@@ -184,10 +185,12 @@ describe('ChatTab', () => {
     })
     const toggle = screen.getByRole('button', { name: /context compacted/i })
     expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(toggle.querySelector('.chat-divider-chevron')!.textContent).toBe('▸')
     expect(screen.queryByText('invented compaction gist')).toBeNull()
 
     fireEvent.click(toggle)
     expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(toggle.querySelector('.chat-divider-chevron')!.textContent).toBe('▾')
     expect(await screen.findByText('invented compaction gist')).toBeTruthy()
 
     fireEvent.click(toggle)

@@ -63,6 +63,7 @@ function Divider({ item }: { item: DividerItem }) {
         onClick={() => setOpen((o) => !o)}
       >
         {label}
+        <span className="chat-divider-chevron" aria-hidden="true">{open ? '▾' : '▸'}</span>
       </button>
       {open && (
         <div className="chat-divider-summary">
