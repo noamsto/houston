@@ -50,7 +50,6 @@
 // hint rides Title instead — see ToolTitle); "origin" marks a
 // user_message_chunk that came from something other than a typed human
 // prompt (e.g. "task-notification", "pi-branch", "pi-compaction",
-// "claude-compaction"); "subagent"
-// names the agent id a tool_call_update's result spawned, when that
-// subagent's transcript file is known to exist.
+// "claude-compaction"); "subagent" names the agent id a tool_call_update's
+// result spawned, when that subagent's transcript file is known to exist.
 package chat

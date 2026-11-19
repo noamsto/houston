@@ -57,8 +57,8 @@ conversation. Design and measured per-engine mapping:
   epoch.
 - **`_meta` keys**: `messageId` (on text chunks and tool calls), `tool` (tool
   name — `title` is the human hint), `origin` (`task-notification`,
-  `pi-branch`, `pi-compaction`, `claude-compaction`; rendered as a divider), `subagent` (on the
-  Agent/Task call's update). The claude reader
+  `pi-branch`, `pi-compaction`, `claude-compaction`; rendered as a divider),
+  `subagent` (on the Agent/Task call's update). The claude reader
   never sets `phase`: the UI treats a text chunk as commentary when
   `_meta.phase == "commentary"` or a later `tool_call` shares its `messageId`.
   Tool input and output never ride the stream; the tool route serves them.
