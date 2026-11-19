@@ -104,6 +104,21 @@ func TestTmuxModeNeverRunsDispatchModels(t *testing.T) {
 	}
 }
 
+func TestTmuxModeNeverRunsDispatchAttach(t *testing.T) {
+	s := newFullServer(t, Config{StatusDir: t.TempDir(), Mode: mode.Tmux})
+	s.dispatchAttach = func(context.Context, string) (bool, error) {
+		t.Error("dispatch --help ran in tmux mode")
+		return false, nil
+	}
+	h := s.Handler()
+	for _, r := range []struct{ method, path string }{
+		{"GET", "/api/dispatch/options"},
+		{"POST", "/api/dispatch"},
+	} {
+		modeRequest(t, h, r.method, r.path, "{}")
+	}
+}
+
 func TestDispatcherModeKeepsRoutes(t *testing.T) {
 	h := newFullServer(t, Config{StatusDir: t.TempDir(), Mode: mode.Dispatcher}).Handler()
 

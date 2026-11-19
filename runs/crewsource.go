@@ -218,11 +218,12 @@ func crewRunAbandoned(b crewBranch, windowless, dispatcherAlive bool, now time.T
 // "crew/<bus>/<branch>"; for a worker crew's view reports on another machine,
 // CrewRemoteKey. Only workers in crew's view are listed, except that a crew
 // whose roster the view reports failing is read from its last listed rows,
-// marked stale (spliceHeld). It also returns, under its pane id, a dispatcher
-// layer for every crew that joins its dispatcher pane (joinDispatchers) — Role,
-// crew id, bus, its unfinished-worker count, the crew's own attention items and
-// the view's notice and errors, so the key lists only while another layer
-// supplies an agent.
+// marked stale (spliceHeld), and a crew absent from a bus's view whose
+// dispatcher is joined on another bus is read from the bus log (logWorkers). It
+// also returns, under its pane id, a dispatcher layer for every crew that joins
+// its dispatcher pane (joinDispatchers) — Role, crew id, bus, its
+// unfinished-worker count, the crew's own attention items and the view's notice
+// and errors, so the key lists only while another layer supplies an agent.
 //
 // ok=false means a tmux query failed — a transient error, not evidence every
 // crew-sourced branch vanished. The caller must skip the tick entirely rather
@@ -297,18 +298,19 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 		s.views.Retain(live)
 	}
 
-	homes := crewHomes(buses)
-
-	// A dispatcher joined on any bus keeps its crew's windowless workers, even
-	// those reporting on another bus.
-	joinedCrews := map[string]bool{}
-	for _, j := range joins {
-		for crewID, paneID := range j {
-			if paneID != "" {
-				joinedCrews[crewID] = true
+	// The bus a crew's dispatcher is joined on, first bus (sorted) winning. A
+	// worker may report on another bus than its dispatcher's: a dispatcher
+	// launched in one repo can dispatch into another.
+	joinedOn := map[string]string{}
+	for _, bus := range buses {
+		for crewID, paneID := range joins[bus] {
+			if _, taken := joinedOn[crewID]; !taken && paneID != "" {
+				joinedOn[crewID] = bus
 			}
 		}
 	}
+
+	homes := crewHomes(buses, joins)
 
 	out := map[string]Run{}
 	liveIDs := map[string]identityLog{}
@@ -334,15 +336,40 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 		}
 		viewErrs[bus] = ov.Errors
 
+		held := heldCrewsOf(ov.Errors)
 		var spliced map[rowKey]bool
-		ov, rosters[bus], _, spliced = spliceHeld(ov, heldCrewsOf(ov.Errors), s.rosters[bus])
+		ov, rosters[bus], _, spliced = spliceHeld(ov, held, s.rosters[bus])
+
+		// crew's view lists a crew only on the bus its dispatcher is live on, so
+		// a worker dispatched into this repo from another bus's dispatcher is
+		// absent from it. Its rows are read from this bus's log instead.
+		listed := map[string]bool{}
+		for _, w := range ov.Workers {
+			listed[w.Crew] = true
+		}
+		generatedAt := ov.GeneratedAt
+		if generatedAt == 0 {
+			generatedAt = now.Unix()
+		}
+		synthWorkers, synthItems := logWorkers(ids, generatedAt, func(crew string) bool {
+			other := joinedOn[crew]
+			return other != "" && other != bus && !listed[crew]
+		})
+		synthKeys := map[rowKey]bool{}
+		for _, w := range synthWorkers {
+			synthKeys[rowKey{w.Crew, w.Branch}] = true
+		}
+		if len(synthWorkers) > 0 {
+			ov.GeneratedAt = generatedAt
+			ov.Workers = slices.Concat(ov.Workers, synthWorkers)
+			ov.Attention = slices.Concat(ov.Attention, synthItems)
+		}
 		vr := crewRunsFromView(ov, ids)
 		crewItems[bus] = vr.crewItems
 
 		project := ProjectFromCommonDir(filepath.Dir(bus))
 		for branch, b := range vr.local {
-			alive := dispatcherLive(joins[bus], b.Crew.Name)
-			routed := routeCrewQuestion(b, alive, now)
+			routed := routeCrewQuestion(b, dispatcherLive(joinedOn, b.Crew.Name), now)
 			if home := homes[b.Crew.Name]; home != "" {
 				routed.Crew.Home = home
 			}
@@ -355,7 +382,7 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 			}
 			paneID, candidates := resolvePane(bus, branch, b.State, b.UpdatedAt, b.session, b.CrewSession, paneSessions, wins, panes, s.crewDir, s.procStart)
 			activity := crewBranch{Run: routed, lastActivity: max(b.lastActivity, b.UpdatedAt*1000), workerSilent: b.workerSilent}
-			if crewRunAbandoned(activity, candidates != 1, joinedCrews[b.Crew.Name], now) {
+			if crewRunAbandoned(activity, candidates != 1, joinedOn[b.Crew.Name] != "" && !synthKeys[rowKey{b.Crew.Name, b.Branch}], now) {
 				continue
 			}
 			key := paneID
@@ -371,9 +398,10 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 		// CrewBus is the bus whose view reported the row, so the action route
 		// can find its items; it has no worktree, which keeps /reply off it. A
 		// remote worker's question goes to its dispatcher on this bus; a peer
-		// row carries no question to route.
+		// row carries no question to route. Synthesized rows are always local, so
+		// none reach this loop.
 		for _, b := range vr.remote {
-			r := routeCrewQuestion(b, dispatcherLive(joins[bus], b.Crew.Name), now)
+			r := routeCrewQuestion(b, dispatcherLive(joinedOn, b.Crew.Name), now)
 			r.Project = project
 			r.CrewBus = bus
 			if spliced[rowKey{b.Crew.Name, b.Branch}] {
@@ -427,30 +455,34 @@ func (s *CrewSource) busIdentity(bus string, live map[string]identityLog) map[st
 }
 
 // crewHomes maps each crew id to the project name of the one bus holding
-// crews/<id>. A crew dir present in several buses has no known home and is
-// left out.
-func crewHomes(buses []string) map[string]string {
-	owner := map[string]string{}
+// crews/<id>. A crew dir present in several buses takes the bus its dispatcher
+// joined on (first join wins), and has no known home when none did.
+func crewHomes(buses []string, joins map[string]map[string]string) map[string]string {
+	holders := map[string][]string{} // crew id -> buses holding crews/<id>
 	for _, bus := range buses {
 		entries, err := os.ReadDir(filepath.Join(bus, "crews"))
 		if err != nil {
 			continue
 		}
 		for _, e := range entries {
-			if !e.IsDir() {
-				continue
-			}
-			if _, dup := owner[e.Name()]; dup {
-				owner[e.Name()] = ""
-			} else {
-				owner[e.Name()] = bus
+			if e.IsDir() {
+				holders[e.Name()] = append(holders[e.Name()], bus)
 			}
 		}
 	}
-	homes := make(map[string]string, len(owner))
-	for crewID, bus := range owner {
-		if bus != "" {
-			homes[crewID] = ProjectFromCommonDir(filepath.Dir(bus))
+	homes := make(map[string]string, len(holders))
+	for crewID, held := range holders {
+		home := ""
+		if len(held) == 1 {
+			home = held[0]
+		}
+		for _, bus := range held {
+			if home == "" && joins[bus][crewID] != "" {
+				home = bus
+			}
+		}
+		if home != "" {
+			homes[crewID] = ProjectFromCommonDir(filepath.Dir(home))
 		}
 	}
 	return homes
@@ -625,9 +657,9 @@ func routeCrewQuestion(b crewBranch, live bool, now time.Time) Run {
 }
 
 // dispatcherLive reports whether the crew's dispatcher is still there to
-// answer, over this tick's join of its bus (joinDispatchers): the same verdict
-// that nests a worker under its dispatcher, so routing and nesting never
-// disagree about who is alive.
+// answer, over this tick's joins on every bus (scan's joinedOn): the same
+// verdict that nests a worker under its dispatcher, so routing and nesting
+// never disagree about who is alive, wherever the worker reports.
 func dispatcherLive(joined map[string]string, crewID string) bool {
 	return joined[crewID] != ""
 }

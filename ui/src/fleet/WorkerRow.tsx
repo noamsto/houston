@@ -2,6 +2,7 @@ import { memo, useState } from 'react'
 import type { Run } from '../api/runs'
 import { agoLabel } from './format'
 import { COLLAPSE_OVER, MEMBER_CAP } from './fleetEntries'
+import { projectOf } from './fleetList'
 import { PRChip } from './RunCard'
 import { isFresh } from './staleness'
 
@@ -12,14 +13,17 @@ interface WorkerRowProps {
   now: number
   onOpen?: (r: Run) => void
   selected?: boolean
+  /** The project the surrounding group is filed under; a worker in another repo gets a chip. */
+  groupProject?: string
 }
 
-export const WorkerRow = memo(function WorkerRow({ run, now, onOpen, selected }: WorkerRowProps) {
+export const WorkerRow = memo(function WorkerRow({ run, now, onOpen, selected, groupProject }: WorkerRowProps) {
   const stale = !isFresh(run, now)
   // The server flags every blocked run needs-you; deriving it keeps the row
   // in step with the group's count when a run carries only the state.
   const attention = run.attention ?? (run.state === 'blocked' ? 'needs-you' : undefined)
   const remote = run.crew?.origin === 'remote_worker' || run.crew?.origin === 'peer'
+  const project = projectOf(run)
   const meta = [run.crew?.tier, run.agent, run.crew?.model].filter(Boolean).join(' · ')
   return (
     <div className={`worker-row${attention ? ` ${attention}` : ''}${attention && stale ? ' muted' : ''}${selected ? ' selected' : ''}`}>
@@ -35,6 +39,11 @@ export const WorkerRow = memo(function WorkerRow({ run, now, onOpen, selected }:
           {remote && (
             <span className="crew-host-chip" title="runs on another machine">
               {run.crew?.host}
+            </span>
+          )}
+          {project !== 'unknown' && project !== groupProject && (
+            <span className="run-project worker-row-project" title={`works in ${project}`}>
+              {project}
             </span>
           )}
           <span className="worker-row-title">{run.crew?.title || run.issue?.title || run.branch}</span>
@@ -61,17 +70,18 @@ interface MemberRowsProps {
   now: number
   onOpen?: (r: Run) => void
   selectedId?: string
+  groupProject?: string
 }
 
 /** A group's worker rows; past COLLAPSE_OVER only MEMBER_CAP render until expanded. */
-export function MemberRows({ shown, now, onOpen, selectedId }: MemberRowsProps) {
+export function MemberRows({ shown, now, onOpen, selectedId, groupProject }: MemberRowsProps) {
   const [expanded, setExpanded] = useState(false)
   const collapsible = shown.length > COLLAPSE_OVER
   const rows = collapsible && !expanded ? shown.slice(0, MEMBER_CAP) : shown
   return (
     <div className="fleet-group-members">
       {rows.map((r) => (
-        <WorkerRow key={r.id} run={r} now={now} onOpen={onOpen} selected={selectedId === r.id} />
+        <WorkerRow key={r.id} run={r} now={now} onOpen={onOpen} selected={selectedId === r.id} groupProject={groupProject} />
       ))}
       {collapsible && (
         <button type="button" className="fleet-group-more" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>

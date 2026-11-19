@@ -104,6 +104,11 @@ describe('buildItems', () => {
     expect(items).toEqual([{ kind: 'divider', id: 'u1', text: 'context compacted', summary: 'the gist', seq: 1 }])
   })
 
+  it('renders a claude-compaction chunk as a divider carrying the summary', () => {
+    const items = buildItems([userChunk('u1', 1, 'the gist', { _meta: { origin: 'claude-compaction' } })])
+    expect(items).toEqual([{ kind: 'divider', id: 'u1', text: 'context compacted', summary: 'the gist', seq: 1 }])
+  })
+
   it('leaves summary undefined for an empty pi origin chunk', () => {
     const items = buildItems([userChunk('u1', 1, '', { _meta: { origin: 'pi-branch' } })])
     expect(items[0]).toMatchObject({ kind: 'divider', text: 'switched branch' })

@@ -40,6 +40,20 @@ describe('WorkerRow', () => {
     expect(container.querySelector('.run-age')?.textContent).toBe('2m')
   })
 
+  it('shows a project chip only when the worker works in another repo than its group', () => {
+    const chip = (c: HTMLElement) => c.querySelector('.worker-row-project')
+    const { container, rerender } = render(<WorkerRow run={run({ project: 'houston' })} now={now} groupProject="dispatcher" />)
+    expect(chip(container)?.textContent).toBe('houston')
+    expect(chip(container)?.getAttribute('title')).toBe('works in houston')
+    expect(chip(container)?.classList.contains('run-project')).toBe(true)
+    rerender(<WorkerRow run={run({ project: 'dispatcher' })} now={now} groupProject="dispatcher" />)
+    expect(chip(container)).toBeNull()
+    rerender(<WorkerRow run={run()} now={now} groupProject="dispatcher" />)
+    expect(chip(container)).toBeNull()
+    rerender(<WorkerRow run={run({ project: 'houston' })} now={now} />)
+    expect(chip(container)?.textContent).toBe('houston')
+  })
+
   it('falls back to the issue title, then the branch, and to "worker" without a codename', () => {
     const { container, rerender } = render(<WorkerRow run={run({ issue: { id: 'A-1', title: 'From issue' } })} now={now} />)
     expect(container.querySelector('.worker-row-title')?.textContent).toBe('From issue')

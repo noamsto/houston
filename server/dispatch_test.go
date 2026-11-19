@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -105,6 +106,7 @@ func newDispatchServer(t *testing.T, runner dispatchRunner, repos func() ([]disp
 		repoReg:           newRepoRegistry(filepath.Join(t.TempDir(), "repos.json"), nil, gitCommonDir),
 		dispatchEngines:   func(context.Context, string) ([]string, error) { return []string{"claude"}, nil },
 		dispatchModels:    func(context.Context, string) (dispatchModelSet, error) { return builtinDispatchModels, nil },
+		dispatchAttach:    func(context.Context, string) (bool, error) { return true, nil },
 		tmuxRun:           serverPathTmux,
 		dispatchRunner:    runner,
 		dispatchRepos:     repos,
@@ -286,7 +288,7 @@ func TestDispatchBodyGates(t *testing.T) {
 		stub := &stubDispatchRunner{}
 		s := newDispatchServer(t, stub.run, stubDispatchRepos([]dispatchRepo{repo}, nil))
 		req := validDispatchRequest(repo, repo.Crews[0])
-		req.Title = strings.Repeat("a", maxDispatchBody)
+		req.Title = strings.Repeat("a", maxDispatchUploadBody)
 		rec := doDispatch(t, s, dispatchHTTPRequest("POST", dispatchRequestJSON(t, req)))
 		if rec.Code != http.StatusRequestEntityTooLarge {
 			t.Errorf("status %d, want 413", rec.Code)
@@ -628,6 +630,31 @@ func TestHandleDispatchOptions(t *testing.T) {
 	}
 	if got := opts.TierModels["claude"]["standard"]; got != "sonnet" {
 		t.Errorf("tier_models.claude.standard = %q, want %q", got, "sonnet")
+	}
+}
+
+func TestHandleDispatchOptionsAttach(t *testing.T) {
+	for _, want := range []bool{true, false} {
+		s := newDispatchServer(t, nil, stubDispatchRepos(nil, nil))
+		s.dispatchAttach = func(context.Context, string) (bool, error) { return want, nil }
+
+		req := httptest.NewRequest("GET", "http://"+dispatchHost+"/api/dispatch/options", nil)
+		req.Host = dispatchHost
+		req.AddCookie(&http.Cookie{Name: authCookie, Value: dispatchToken})
+		rec := doDispatch(t, s, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		var raw map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if got, ok := raw["dispatch_attach"]; !ok || got != want {
+			t.Errorf("dispatch_attach = %v (present %v), want %v", got, ok, want)
+		}
+		if got, ok := raw["dispatcher_attach"]; !ok || got != true {
+			t.Errorf("dispatcher_attach = %v (present %v), want true", got, ok)
+		}
 	}
 }
 
@@ -1167,5 +1194,249 @@ func TestDispatchRejectsUndispatchableEngine(t *testing.T) {
 	}
 	if n := stub.count(); n != 0 {
 		t.Errorf("runner called %d times, want 0", n)
+	}
+}
+
+// attachRunner records, from inside the runner, that every --attach file
+// exists with the right mode and bytes, since the handler removes them after.
+type attachRunner struct {
+	t      *testing.T
+	result dispatchResult
+	argv   []string
+	dirs   []string
+	paths  []string
+	want   [][]byte
+}
+
+func (a *attachRunner) run(_ context.Context, x dispatchExec) dispatchResult {
+	a.argv = x.Argv
+	for i, arg := range x.Argv {
+		if arg != "--attach" {
+			continue
+		}
+		p := x.Argv[i+1]
+		a.paths = append(a.paths, p)
+		a.dirs = append(a.dirs, filepath.Dir(p))
+		info, err := os.Stat(p)
+		if err != nil {
+			a.t.Errorf("attached file missing in runner: %v", err)
+			continue
+		}
+		if info.Mode().Perm() != 0o600 {
+			a.t.Errorf("mode %v, want 0600", info.Mode().Perm())
+		}
+		got, _ := os.ReadFile(p)
+		if n := len(a.paths) - 1; n < len(a.want) && !bytes.Equal(got, a.want[n]) {
+			a.t.Errorf("file %d bytes differ", n)
+		}
+	}
+	return a.result
+}
+
+func dispatchWithImages(t *testing.T, repo dispatchRepo, imgs ...imageUpload) string {
+	req := validDispatchRequest(repo, repo.Crews[0])
+	req.Images = imgs
+	return dispatchRequestJSON(t, req)
+}
+
+func TestDispatchAttachesImages(t *testing.T) {
+	cases := []struct {
+		name   string
+		result dispatchResult
+		want   int
+	}{
+		{"ok", dispatchResult{Stdout: "worker_id: worker:feat#1\n"}, http.StatusOK},
+		{"exit 1", dispatchResult{ExitCode: 1, Stderr: "no"}, http.StatusUnprocessableEntity},
+		{"run error", dispatchResult{Err: errors.New("boom")}, http.StatusBadGateway},
+		{"timeout", dispatchResult{Err: context.DeadlineExceeded}, http.StatusGatewayTimeout},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmp := t.TempDir()
+			t.Setenv("TMPDIR", tmp)
+			repo := newDispatchTestRepo(t, "1700000000-123")
+			ar := &attachRunner{t: t, result: tc.result, want: [][]byte{pngBytes, jpgBytes}}
+			s := newDispatchServer(t, ar.run, stubDispatchRepos([]dispatchRepo{repo}, nil))
+			body := dispatchWithImages(t, repo, upload("a.png", pngBytes), upload("b.jpg", jpgBytes))
+			rec := doDispatch(t, s, dispatchHTTPRequest("POST", body))
+			if rec.Code != tc.want {
+				t.Fatalf("status %d, want %d: %s", rec.Code, tc.want, rec.Body)
+			}
+			if len(ar.paths) != 2 {
+				t.Fatalf("got %d attach paths in %v, want 2", len(ar.paths), ar.argv)
+			}
+			title := slices.Index(ar.argv, "add widget")
+			crewID := slices.Index(ar.argv, "--crew-id")
+			for i, arg := range ar.argv {
+				if arg != "--attach" {
+					continue
+				}
+				if i < crewID+2 || i+1 >= title {
+					t.Errorf("--attach at %d outside (--crew-id value, title) in %v", i, ar.argv)
+				}
+				p := ar.argv[i+1]
+				if !filepath.IsAbs(p) || filepath.Dir(filepath.Dir(p)) != tmp ||
+					!strings.HasPrefix(filepath.Base(filepath.Dir(p)), "houston-attach-") {
+					t.Errorf("path %q not under a houston-attach-* dir in %s", p, tmp)
+				}
+			}
+			for _, p := range append(ar.paths, ar.dirs[0]) {
+				if _, err := os.Stat(p); !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("%s still exists after the handler: %v", p, err)
+				}
+			}
+		})
+	}
+}
+
+func TestDispatchImageRefusalsLeaveNothing(t *testing.T) {
+	big := append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 11<<20)...)
+	eleven := make([]imageUpload, 11)
+	for i := range eleven {
+		eleven[i] = upload("a.png", pngBytes)
+	}
+	cases := []struct {
+		name string
+		imgs []imageUpload
+		body func(t *testing.T, repo dispatchRepo) string
+		want int
+	}{
+		{"eleven images", eleven, nil, http.StatusBadRequest},
+		{"not an image", []imageUpload{upload("a.png", []byte("just text"))}, nil, http.StatusBadRequest},
+		{"11 MiB image", []imageUpload{upload("a.png", big)}, nil, http.StatusRequestEntityTooLarge},
+		{"body over the cap", nil, func(t *testing.T, repo dispatchRepo) string {
+			req := validDispatchRequest(repo, repo.Crews[0])
+			req.Title = strings.Repeat("a", maxDispatchUploadBody)
+			return dispatchRequestJSON(t, req)
+		}, http.StatusRequestEntityTooLarge},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmp := t.TempDir()
+			t.Setenv("TMPDIR", tmp)
+			repo := newDispatchTestRepo(t, "1700000000-123")
+			stub := &stubDispatchRunner{}
+			s := newDispatchServer(t, stub.run, stubDispatchRepos([]dispatchRepo{repo}, nil))
+			var body string
+			if tc.body != nil {
+				body = tc.body(t, repo)
+			} else {
+				body = dispatchWithImages(t, repo, tc.imgs...)
+			}
+			rec := doDispatch(t, s, dispatchHTTPRequest("POST", body))
+			if rec.Code != tc.want {
+				t.Errorf("status %d, want %d", rec.Code, tc.want)
+			}
+			if n := stub.count(); n != 0 {
+				t.Errorf("runner called %d times, want 0", n)
+			}
+			if left, _ := os.ReadDir(tmp); len(left) != 0 {
+				t.Errorf("temp dir has %d leftovers", len(left))
+			}
+		})
+	}
+}
+
+func TestDispatchAttachProbe(t *testing.T) {
+	t.Run("unsupported with images", func(t *testing.T) {
+		tmp := t.TempDir()
+		t.Setenv("TMPDIR", tmp)
+		repo := newDispatchTestRepo(t, "1700000000-123")
+		stub := &stubDispatchRunner{}
+		s := newDispatchServer(t, stub.run, stubDispatchRepos([]dispatchRepo{repo}, nil))
+		probes := 0
+		s.dispatchAttach = func(context.Context, string) (bool, error) { probes++; return false, nil }
+		rec := doDispatch(t, s, dispatchHTTPRequest("POST", dispatchWithImages(t, repo, upload("a.png", pngBytes))))
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("status %d, want 422", rec.Code)
+		}
+		if got, want := decodeDispatchResponse(t, rec).Error, "this host's dispatch can't attach images \u2014 update dispatch, or remove the images"; got != want {
+			t.Errorf("error %q, want %q", got, want)
+		}
+		if stub.count() != 0 || probes != 1 {
+			t.Errorf("runner %d, probes %d; want 0, 1", stub.count(), probes)
+		}
+		if left, _ := os.ReadDir(tmp); len(left) != 0 {
+			t.Errorf("temp dir has %d leftovers", len(left))
+		}
+	})
+	t.Run("unsupported without images", func(t *testing.T) {
+		repo := newDispatchTestRepo(t, "1700000000-123")
+		stub := &stubDispatchRunner{result: dispatchResult{Stdout: "worker_id: worker:feat#1\n"}}
+		s := newDispatchServer(t, stub.run, stubDispatchRepos([]dispatchRepo{repo}, nil))
+		probes := 0
+		s.dispatchAttach = func(context.Context, string) (bool, error) { probes++; return false, nil }
+		rec := doDispatch(t, s, dispatchHTTPRequest("POST", dispatchRequestJSON(t, validDispatchRequest(repo, repo.Crews[0]))))
+		if rec.Code != http.StatusOK || probes != 0 {
+			t.Errorf("status %d, probes %d; want 200, 0", rec.Code, probes)
+		}
+	})
+}
+
+func TestHandleDispatchOptionsAttachProbeError(t *testing.T) {
+	s := newDispatchServer(t, nil, stubDispatchRepos(nil, nil))
+	s.dispatchAttach = func(context.Context, string) (bool, error) {
+		return true, errors.New("dispatch --help: timed out")
+	}
+	opts := getDispatchOptions(t, s)
+	if opts.DispatchAttach {
+		t.Error("dispatch_attach = true on a probe error")
+	}
+	if !strings.Contains(opts.DispatchAttachError, "timed out") {
+		t.Errorf("dispatch_attach_error = %q, want the failure", opts.DispatchAttachError)
+	}
+}
+
+func TestDispatchAttachProbeError(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	repo := newDispatchTestRepo(t, "1700000000-123")
+	stub := &stubDispatchRunner{}
+	s := newDispatchServer(t, stub.run, stubDispatchRepos([]dispatchRepo{repo}, nil))
+	s.dispatchAttach = func(context.Context, string) (bool, error) { return false, errors.New("exec failed") }
+	req := validDispatchRequest(repo, dispatchNewCrew)
+	req.Images = []imageUpload{upload("a.png", pngBytes)}
+	rec := doDispatch(t, s, dispatchHTTPRequest("POST", dispatchRequestJSON(t, req)))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status %d, want 502: %s", rec.Code, rec.Body)
+	}
+	if got, want := decodeDispatchResponse(t, rec).Error, "could not check dispatch's --attach support: exec failed"; got != want {
+		t.Errorf("error %q, want %q", got, want)
+	}
+	if stub.count() != 0 {
+		t.Errorf("runner ran %d times", stub.count())
+	}
+	if left, _ := os.ReadDir(tmp); len(left) != 0 {
+		t.Errorf("temp dir has %d leftovers", len(left))
+	}
+	if _, err := os.Stat(filepath.Join(repo.commonDir, "crew", "crews", dispatchTestNewCrewID)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("crew dir minted (stat err %v)", err)
+	}
+}
+
+func TestDispatchImageWriteFailure(t *testing.T) {
+	tmp := t.TempDir()
+	notDir := filepath.Join(tmp, "file")
+	if err := os.WriteFile(notDir, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	repo := newDispatchTestRepo(t, "1700000000-123")
+	t.Setenv("TMPDIR", notDir)
+	stub := &stubDispatchRunner{}
+	s := newDispatchServer(t, stub.run, stubDispatchRepos([]dispatchRepo{repo}, nil))
+	req := validDispatchRequest(repo, dispatchNewCrew)
+	req.Images = []imageUpload{upload("a.png", pngBytes)}
+	rec := doDispatch(t, s, dispatchHTTPRequest("POST", dispatchRequestJSON(t, req)))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status %d, want 500: %s", rec.Code, rec.Body)
+	}
+	if got := decodeDispatchResponse(t, rec).Error; got != "could not save images" {
+		t.Errorf("error %q", got)
+	}
+	if stub.count() != 0 {
+		t.Errorf("runner ran %d times", stub.count())
+	}
+	if _, err := os.Stat(filepath.Join(repo.commonDir, "crew", "crews", dispatchTestNewCrewID)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("minted crew dir kept (stat err %v)", err)
 	}
 }

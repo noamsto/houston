@@ -56,7 +56,8 @@ interface FetchOpts {
   toolStatus?: number
   answer?: AnswerReply | ((req: { kind: string; index?: number }) => AnswerReply)
   // What a `state` read of the pending question answers; other kinds use `answer`.
-  questionState?: QuestionState
+  // null: the pane shows no dialog for the call (404).
+  questionState?: QuestionState | null
   prompt?: Prompt
 }
 
@@ -76,6 +77,7 @@ function installFetch(opts: FetchOpts): ReturnType<typeof vi.fn> {
     }
     if (url.includes('/answer')) {
       const req = JSON.parse(String(init?.body)) as { kind: string; index?: number }
+      if (req.kind === 'state' && opts.questionState === null) return Promise.resolve({ status: 404, ok: false, text: async () => '' } as Response)
       if (req.kind === 'state' && opts.questionState) return Promise.resolve(jsonResponse(opts.questionState))
       const reply = typeof opts.answer === 'function' ? opts.answer(req) : opts.answer
       const { status, body = '' } = reply ?? { status: 204 }
@@ -157,6 +159,7 @@ describe('ChatTab', () => {
     })
     expect(container.querySelector('[data-id="d1"]')!.textContent).toMatch(/context compacted/i)
     expect(screen.queryByRole('button', { name: /context compacted/i })).toBeNull()
+    expect(document.querySelector('.chat-divider-chevron')).toBeNull()
   })
 
   it('toggles a pi-branch divider summary', async () => {
@@ -174,6 +177,25 @@ describe('ChatTab', () => {
     fireEvent.click(toggle)
     expect(toggle.getAttribute('aria-expanded')).toBe('false')
     expect(screen.queryByText('abandoned branch gist')).toBeNull()
+  })
+
+  it('folds a claude-compaction summary behind a toggle', async () => {
+    await renderReady({}, {
+      page: page('e1', [userChunk('d1', 1, 'invented compaction gist', { _meta: { origin: 'claude-compaction' } })]),
+    })
+    const toggle = screen.getByRole('button', { name: /context compacted/i })
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(toggle.querySelector('.chat-divider-chevron')!.textContent).toBe('▸')
+    expect(screen.queryByText('invented compaction gist')).toBeNull()
+
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(toggle.querySelector('.chat-divider-chevron')!.textContent).toBe('▾')
+    expect(await screen.findByText('invented compaction gist')).toBeTruthy()
+
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByText('invented compaction gist')).toBeNull()
   })
 
   it('collapses consecutive tool calls into one row and expands to per-call rows', async () => {
@@ -1230,6 +1252,94 @@ describe('ChatTab', () => {
       await waitFor(() => expect(container.querySelectorAll('.chat-question-option.chosen')).toHaveLength(2))
       expect(screen.queryByText(/answer in the terminal tab/i)).toBeNull()
       expect(screen.queryByRole('button', { name: 'Next' })).toBeNull()
+    })
+
+    describe('question mode', () => {
+      const askBanner = { text: 'Asking you a question — answer it in its terminal.', via: 'pane', kind: 'ask' as const }
+      const blockedAsk = { state: 'blocked' as const, question: askBanner }
+      const draftKey = 'houston-draft:chat:r1'
+      const message = () => screen.queryByPlaceholderText('Message…')
+      const sendBtn = () => screen.queryByRole('button', { name: 'Send' })
+      const pendingOpts = (questionState: FetchOpts['questionState'] = at(0)): FetchOpts => ({
+        page: page('e1', [askCall({ status: 'in_progress' })]),
+        tool: { toolCallId: 'q1', name: 'AskUserQuestion', input },
+        questionState,
+      })
+
+      it('points the banner at the wizard and leaves only Esc of the composer', async () => {
+        await renderReady(blockedAsk, pendingOpts())
+        await screen.findByText('1 of 2')
+        await waitFor(() => expect(message()).toBeNull())
+        expect(sendBtn()).toBeNull()
+        expect(screen.queryByRole('button', { name: 'Attach image' })).toBeNull()
+        expect(screen.getByRole('button', { name: 'Esc' })).toBeTruthy()
+        expect(screen.getByText('Asking you a question — answer it below.')).toBeTruthy()
+        expect(screen.queryByText(/in its terminal/i)).toBeNull()
+      })
+
+      it('Esc in question mode sends the key and shows a failure', async () => {
+        const { fetchMock } = await renderReady(blockedAsk, pendingOpts())
+        await waitFor(() => expect(message()).toBeNull())
+        fetchMock.mockImplementationOnce(() => Promise.resolve({ status: 500, ok: false, text: async () => 'tmux down' } as Response))
+        fireEvent.click(screen.getByRole('button', { name: 'Esc' }))
+        expect((await screen.findByRole('alert')).className).toContain('chat-composer-error')
+      })
+
+      it('brings the composer back with its draft once the question resolves', async () => {
+        const opts = pendingOpts()
+        localStorage.setItem(draftKey, JSON.stringify({ t: 'half a thought', at: Date.now() }))
+        const stored = localStorage.getItem(draftKey)
+        await renderReady(blockedAsk, opts)
+        await waitFor(() => expect(message()).toBeNull())
+        expect(localStorage.getItem(draftKey)).toBe(stored)
+        opts.tool = { toolCallId: 'q1', name: 'AskUserQuestion', input, output: 'User has answered your questions: "Which scope?"="Z", "Which extras?"="D".' }
+        act(() => {
+          fake.instances[0].emit('updates', [{ id: 'q1u', seq: 2, ts: 2, sessionUpdate: 'tool_call_update', toolCallId: 'q1', status: 'completed' }])
+        })
+        await waitFor(() => expect(message()).toBeTruthy())
+        expect((message() as HTMLTextAreaElement).value).toBe('half a thought')
+        expect(sendBtn()).toBeTruthy()
+        expect(localStorage.getItem(draftKey)).toBe(stored)
+      })
+
+      it('keeps the composer and the terminal wording when the pane shows no dialog', async () => {
+        await renderReady(blockedAsk, pendingOpts(null))
+        await screen.findByText(/terminal isn't showing this question/i)
+        expect(message()).toBeTruthy()
+        expect(sendBtn()).toBeTruthy()
+        expect(screen.getByText(askBanner.text)).toBeTruthy()
+      })
+
+      it('returns to the composer when a later poll finds the dialog gone', async () => {
+        const opts = pendingOpts()
+        localStorage.setItem(draftKey, JSON.stringify({ t: 'kept', at: Date.now() }))
+        const stored = localStorage.getItem(draftKey)
+        const { fetchMock } = await renderReady(blockedAsk, opts)
+        await waitFor(() => expect(message()).toBeNull())
+        const base = fetchMock.getMockImplementation() as (url: string, init?: RequestInit) => Promise<Response>
+        fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+          String(url).includes('/answer') && String(init?.body).includes('"state"')
+            ? Promise.resolve({ status: 404, ok: false, text: async () => '' } as Response)
+            : base(url, init))
+        await waitFor(() => expect(message()).toBeTruthy(), { timeout: 4000 })
+        expect((message() as HTMLTextAreaElement).value).toBe('kept')
+        expect(screen.getByText(askBanner.text)).toBeTruthy()
+        expect(localStorage.getItem(draftKey)).toBe(stored)
+      })
+
+      it('keeps the composer and terminal wording for an agent houston cannot answer for', async () => {
+        await renderReady({ ...blockedAsk, agent: 'pi' }, pendingOpts())
+        await screen.findByText(/answer in the terminal tab/i)
+        expect(message()).toBeTruthy()
+        expect(sendBtn()).toBeTruthy()
+        expect(screen.getByText(askBanner.text)).toBeTruthy()
+      })
+
+      it('keeps a dialog-kind note as is even in question mode', async () => {
+        await renderReady({ state: 'blocked', question: { text: 'Allow Bash?', via: 'pane', kind: 'dialog' } }, pendingOpts())
+        await waitFor(() => expect(message()).toBeNull())
+        expect(screen.getByText('Allow Bash?')).toBeTruthy()
+      })
     })
 
     it('shows a failed call as not answered with its output', async () => {

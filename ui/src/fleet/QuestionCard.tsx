@@ -54,12 +54,13 @@ function parseAnswers(questions: Question[], output: string): Map<string, string
  *  houston can also drive that terminal's prompt (a Claude run). `onLayout`
  *  fires when the card changes height on its own (detail loaded, picker shown
  *  or hidden), so a pinned timeline can stay pinned. */
-export function QuestionCard({ item, runId, canAnswer, answerable, onLayout }: {
+export function QuestionCard({ item, runId, canAnswer, answerable, onLayout, onInteractive }: {
   item: QuestionItem
   runId: string
   canAnswer: boolean
   answerable: boolean
   onLayout: () => void
+  onInteractive?: (toolCallId: string, interactive: boolean) => void
 }) {
   const { call } = item
   const [detail, setDetail] = useState<ChatToolDetail | 'error' | null>(null)
@@ -103,7 +104,7 @@ export function QuestionCard({ item, runId, canAnswer, answerable, onLayout }: {
   if (picking) {
     return (
       <div className="chat-question" data-seq={item.seq} data-id={item.id} data-status={call.status}>
-        <QuestionWizard key={call.toolCallId} runId={runId} call={call} fallbackQuestions={parsed} onLayout={onLayout} />
+        <QuestionWizard key={call.toolCallId} runId={runId} call={call} fallbackQuestions={parsed} onLayout={onLayout} onInteractive={onInteractive} />
       </div>
     )
   }

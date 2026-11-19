@@ -64,7 +64,7 @@ type TranscriptEvent struct {
 	// a background task; StopTask is the task id a TaskStop tool_use targets.
 	Background     string
 	BackgroundHint string
-	// BackgroundTimeout is a non-persistent Monitor's lifetime, else zero.
+	// BackgroundTimeout is a Monitor's lifetime, else zero.
 	BackgroundTimeout time.Duration
 	StopTask          string
 }

@@ -124,6 +124,7 @@ const DIVIDER_LABELS = new Map([
   ['task-notification', 'background task finished'],
   ['pi-branch', 'switched branch'],
   ['pi-compaction', 'context compacted'],
+  ['claude-compaction', 'context compacted'],
 ])
 
 /**

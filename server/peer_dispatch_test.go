@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -281,8 +282,8 @@ func TestHostForwardOversizedBodyIsRefusedLocally(t *testing.T) {
 		path string
 		size int
 	}{
-		{"dispatch", maxDispatchBody + 1},
-		{"dispatch/dispatcher", maxDispatchBody + 1},
+		{"dispatch", maxDispatchUploadBody + 1},
+		{"dispatch/dispatcher", maxDispatchUploadBody + 1},
 		{"repos", maxRepoBody + 1},
 	} {
 		rec := doReply(t, s, browserRequest("POST", "/api/hosts/b/"+tc.path, strings.Repeat("a", tc.size)))
@@ -290,6 +291,22 @@ func TestHostForwardOversizedBodyIsRefusedLocally(t *testing.T) {
 	}
 	if n := len(p.requests()); n != 0 {
 		t.Fatalf("peer saw %d requests, want 0", n)
+	}
+}
+
+func TestHostForwardRelaysImageBodyByteIdentical(t *testing.T) {
+	p := newPeerRecorder(t, peerConflict)
+	s := newForwardServer(t, p.srv.URL)
+
+	img := base64.StdEncoding.EncodeToString(append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 1<<20)...))
+	body := `{"repo":"/r","title":"t","images":[{"name":"a.png","data":"` + img + `"}]}`
+	rec := doReply(t, s, browserRequest("POST", "/api/hosts/b/dispatch", body))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status %d, want the peer's 409", rec.Code)
+	}
+	got := p.requests()
+	if len(got) != 1 || string(got[0].body) != body {
+		t.Fatalf("peer saw %d requests; body identical = %v", len(got), len(got) == 1 && string(got[0].body) == body)
 	}
 }
 
