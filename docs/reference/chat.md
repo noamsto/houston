@@ -96,7 +96,9 @@ conversation. Design and measured per-engine mapping:
   A chunk confirms it only if `chunk.ts > anchorTs` (strict). No browser-vs-server
   clock comparison exists, so client clock skew cannot strand a bubble, and a message
   queued behind a running turn confirms however late it lands. Tradeoff: a lost bubble
-  can be confirmed by a later identical message.
+  can be confirmed by a later identical message, and the anchor is only as fresh as the
+  stream the browser has received (a stale stream plus an identical message typed at
+  the terminal plus a lost send can show a lost bubble as confirmed).
 - **Text**: `normalizeText` on both sides (CRLF/CR to LF, trailing spaces/tabs per
   line dropped, outer trim); the transcript's queued prompts can differ from the
   composer text in per-line trailing whitespace.
