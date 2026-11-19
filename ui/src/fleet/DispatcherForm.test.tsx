@@ -446,6 +446,39 @@ describe('DispatcherForm images', () => {
     expect(screen.queryByText('shot.png')).toBeNull()
   })
 
+  it('a double click while the image is read launches once', async () => {
+    submitDispatcherMock.mockResolvedValue(started)
+    const { container } = setup(withAttach)
+    change('Task 1', 'do it')
+    attach(container)
+    await screen.findByText('shot.png')
+    start()
+    start()
+    await screen.findByText('proj')
+
+    expect(submitDispatcherMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('an unreadable image shows an error, keeps the chip and re-enables submit', async () => {
+    const { container } = setup(withAttach)
+    change('Task 1', 'do it')
+    attach(container)
+    await screen.findByText('shot.png')
+    const read = vi.spyOn(FileReader.prototype, 'readAsDataURL').mockImplementation(function (this: FileReader) {
+      queueMicrotask(() => this.onerror?.(new ProgressEvent('error') as ProgressEvent<FileReader>))
+    })
+    try {
+      start()
+      await screen.findByText('could not read an image')
+    } finally {
+      read.mockRestore()
+    }
+
+    expect(submitDispatcherMock).not.toHaveBeenCalled()
+    expect(screen.getByText('shot.png')).toBeTruthy()
+    expect(startButton().disabled).toBe(false)
+  })
+
   it('without dispatcher_attach there is no attach button and the hint says so', () => {
     setup(options)
 

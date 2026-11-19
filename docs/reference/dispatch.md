@@ -25,8 +25,11 @@ execution from an HTTP request, so the handler is closed by construction:
   command fails, so the worker form still loads. `dispatch_attach` is whether
   this host's `dispatch` has `--attach` (`execDispatchAttach`,
   `server/dispatch_models.go`: `dispatch --help` through `dispatchEnv`, 10 s
-  timeout; true only on exit 0 with a stdout line matching `^\s*--attach\s`, any
-  failure is false and `slog.Warn`s; probed once per options GET, never cached).
+  timeout; true only on exit 0 with a stdout line matching `^\s*--attach\s`; the
+  field `dispatchAttach` returns `(bool, error)`, and a probe error makes
+  `dispatch_attach` false, `slog.Warn`s and sets `dispatch_attach_error` to the
+  error text, as `dispatch_models_error` does; probed once per options GET, never
+  cached).
   `dispatcher_attach` is always `true`: the dispatcher path is houston's own and
   needs no dispatch support. A houston that omits either flag is too old for
   images, so the UI hides the control.
@@ -55,9 +58,11 @@ execution from an HTTP request, so the handler is closed by construction:
   one (`.png`, `.jpg`, `.gif`, `.webp`) unless it already matches
   case-insensitively (`.jpeg` counts for JPEG), within 64 bytes with the
   extension. Order in `handleDispatch`: body, spec size, `validateImages`, fields,
-  engine, repo 404, crew 404, images present and `dispatchAttach` false 422
-  `this host's dispatch can't attach images — update dispatch, or remove the
-  images` (the probe runs on a POST only when it carries images), slot 429, crew
+  engine, repo 404, crew 404, images present and the `dispatchAttach` probe
+  failing 502 `could not check dispatch's --attach support: <err>` or reporting
+  no support 422 `this host's dispatch can't attach images — update dispatch, or
+  remove the images` (the probe runs on a POST only when it carries images, before
+  the slot, so nothing is minted), slot 429, crew
   mint, write images, run. houston writes the files 0600 into a fresh
   `os.MkdirTemp("", "houston-attach-*")` (0700) and adds one `--attach <abs path>`
   pair per image to argv after `--crew-id` and before the issue/title; every path

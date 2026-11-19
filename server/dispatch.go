@@ -112,6 +112,9 @@ type dispatchOptions struct {
 	// DispatchModelsError is why the models above are houston's built-in
 	// fallback rather than dispatch's own tier map.
 	DispatchModelsError string `json:"dispatch_models_error,omitempty"`
+	// DispatchAttachError is why DispatchAttach is false because the probe
+	// itself failed, as opposed to dispatch lacking the flag.
+	DispatchAttachError string `json:"dispatch_attach_error,omitempty"`
 	// DispatchAttach is whether this host's dispatch has --attach.
 	// DispatcherAttach is constant true: a peer houston that omits it is too
 	// old to accept images.
@@ -350,6 +353,14 @@ func (s *Server) handleDispatchOptions(w http.ResponseWriter, r *http.Request) {
 		modelsErrText = modelsErr.Error()
 	}
 
+	attach, attachErr := s.dispatchAttach(r.Context(), serverPath)
+	attachErrText := ""
+	if attachErr != nil {
+		slog.Warn("dispatch options: attach probe failed", "error", attachErr)
+		attachErrText = attachErr.Error()
+		attach = false
+	}
+
 	engines := []string{}
 	enginesErr := ""
 	listed, err := s.dispatchEngines(r.Context(), serverPath)
@@ -376,7 +387,8 @@ func (s *Server) handleDispatchOptions(w http.ResponseWriter, r *http.Request) {
 		DispatcherEngines:      engines,
 		DispatcherEnginesError: enginesErr,
 		DispatchModelsError:    modelsErrText,
-		DispatchAttach:         s.dispatchAttach(r.Context(), serverPath),
+		DispatchAttach:         attach,
+		DispatchAttachError:    attachErrText,
 		DispatcherAttach:       true,
 	})
 }
@@ -485,10 +497,19 @@ func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if len(imgs) > 0 && !s.dispatchAttach(r.Context(), serverPath) {
-		dlog.status = http.StatusUnprocessableEntity
-		writeDispatchJSON(w, http.StatusUnprocessableEntity, dispatchResponse{Error: "this host's dispatch can't attach images — update dispatch, or remove the images"})
-		return
+	if len(imgs) > 0 {
+		supported, perr := s.dispatchAttach(r.Context(), serverPath)
+		if perr != nil {
+			slog.Warn("dispatch: attach probe failed", "error", perr)
+			dlog.status = http.StatusBadGateway
+			writeDispatchJSON(w, http.StatusBadGateway, dispatchResponse{Error: "could not check dispatch's --attach support: " + perr.Error()})
+			return
+		}
+		if !supported {
+			dlog.status = http.StatusUnprocessableEntity
+			writeDispatchJSON(w, http.StatusUnprocessableEntity, dispatchResponse{Error: "this host's dispatch can't attach images — update dispatch, or remove the images"})
+			return
+		}
 	}
 
 	select {

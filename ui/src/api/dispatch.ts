@@ -21,6 +21,7 @@ export interface DispatchOptions {
   dispatcher_engines?: string[]
   dispatcher_engines_error?: string
   dispatch_attach?: boolean
+  dispatch_attach_error?: string // why the `dispatch --help` probe failed
   dispatcher_attach?: boolean
 }
 

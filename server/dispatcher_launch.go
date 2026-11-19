@@ -531,6 +531,7 @@ func (s *Server) handleDispatcherLaunch(w http.ResponseWriter, r *http.Request) 
 		}
 		var err error
 		if imagePaths, attachDir, err = s.saveLaunchImages(images); err != nil {
+			slog.Warn("dispatcher launch: could not save images", "error", err)
 			_ = os.Remove(crewDir)
 			reply(http.StatusInternalServerError, dispatcherResponse{Error: "could not save images"})
 			return

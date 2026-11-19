@@ -1235,6 +1235,52 @@ describe('DispatchView worker images', () => {
     expect((screen.getByRole('button', { name: 'Dispatch' }) as HTMLButtonElement).disabled).toBe(false)
   })
 
+  it('a double click while the image is read submits once', async () => {
+    const { container } = await renderAttach()
+    submitDispatchMock.mockResolvedValue({ kind: 'started', workerId: 'w', branch: 'feat/1-x' })
+    attach(container)
+    await screen.findByText('shot.png')
+    change('Title', 'go')
+    const button = screen.getByRole('button', { name: 'Dispatch' })
+    fireEvent.click(button)
+    fireEvent.click(button)
+    await screen.findByText(/Waiting for it to appear in Fleet/)
+
+    expect(submitDispatchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('an unreadable image shows an error, keeps the chip and re-enables submit', async () => {
+    const { container } = await renderAttach()
+    attach(container)
+    await screen.findByText('shot.png')
+    change('Title', 'go')
+    const read = vi.spyOn(FileReader.prototype, 'readAsDataURL').mockImplementation(function (this: FileReader) {
+      queueMicrotask(() => this.onerror?.(new ProgressEvent('error') as ProgressEvent<FileReader>))
+    })
+    try {
+      dispatch()
+      await screen.findByText('could not read an image')
+    } finally {
+      read.mockRestore()
+    }
+
+    expect(submitDispatchMock).not.toHaveBeenCalled()
+    expect(screen.getByText('shot.png')).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Dispatch' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('names the probe error instead of "too old" when the host could not be checked', async () => {
+    const o = structuredClone(optionsFixture)
+    o.dispatch_attach = false
+    o.dispatch_attach_error = 'exec: dispatch: not found'
+    fetchDispatchOptionsMock.mockResolvedValue(o)
+    render(<DispatchView runs={[]} />)
+    await screen.findByLabelText('Repo')
+
+    expect(screen.getByText("Couldn't check this host's dispatch for image support: exec: dispatch: not found")).toBeTruthy()
+    expect(screen.queryByText(WORKER_HINT)).toBeNull()
+  })
+
   it('shows the dispatcher hint when only the dispatcher lacks the capability', async () => {
     await renderAttach(true)
     fireEvent.click(screen.getByRole('button', { name: 'New dispatcher' }))

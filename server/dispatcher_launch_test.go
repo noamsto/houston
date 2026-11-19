@@ -1129,3 +1129,26 @@ func TestDispatcherLaunchSweepsStaleLaunchFiles(t *testing.T) {
 		t.Error("stale launch file kept past a launch")
 	}
 }
+
+func TestDispatcherLaunchImageWriteFailure(t *testing.T) {
+	f := newLaunchFixture(t)
+	notDir := filepath.Join(realTempDir(t), "file")
+	if err := os.WriteFile(notDir, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.s.attachDir = filepath.Join(notDir, "attachments")
+
+	rec, resp := f.postWithImage(t)
+	wantStatus(t, rec, http.StatusInternalServerError)
+	if resp.Error != "could not save images" {
+		t.Errorf("error = %q", resp.Error)
+	}
+	if exists(f.crewDir) {
+		t.Error("crew dir kept")
+	}
+	for _, c := range f.tmux.all() {
+		if c[0] != "show-environment" {
+			t.Errorf("tmux ran: %q", c)
+		}
+	}
+}

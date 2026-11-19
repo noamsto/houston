@@ -51,7 +51,8 @@ export function DispatcherForm({
       : engines.length === 0
         ? (options.dispatcher_engines_error ?? 'No dispatcher engines available')
         : problem
-  const canSubmit = !busy && !disabledReason
+  const canSubmit = !busy && !submitting && !disabledReason
+  const locked = busy || submitting
 
   function newRow(): TaskRow {
     return { id: nextRowId.current++, text: '' }
@@ -72,7 +73,6 @@ export function DispatcherForm({
     setSubmitting(true)
     setReadError(null)
     let uploads: ImageUpload[] = []
-    // Skipped when nothing is staged so the launch starts in the same tick.
     if (images.staged.length > 0) {
       try {
         uploads = await toImageUploads(images.staged)
@@ -101,7 +101,7 @@ export function DispatcherForm({
             <textarea
               id={`dispatcher-task-${row.id}`}
               value={row.text}
-              disabled={busy}
+              disabled={locked}
               rows={3}
               onChange={(e) => setRow(row.id, e.target.value)}
             />
@@ -110,7 +110,7 @@ export function DispatcherForm({
                 type="button"
                 className="dispatch-task-remove"
                 aria-label={`Remove task ${i + 1}`}
-                disabled={busy}
+                disabled={locked}
                 onClick={() => setRows((rs) => rs.filter((r) => r.id !== row.id))}
               >
                 ×
@@ -122,7 +122,7 @@ export function DispatcherForm({
       <button
         type="button"
         className="dispatch-add-task"
-        disabled={busy || rows.length >= MAX_TASKS}
+        disabled={locked || rows.length >= MAX_TASKS}
         onClick={() => setRows((rs) => [...rs, newRow()])}
       >
         Add task
@@ -133,7 +133,7 @@ export function DispatcherForm({
           staged={images.staged}
           onStage={images.stage}
           onRemove={images.remove}
-          disabled={busy || submitting}
+          disabled={locked}
           idPrefix="dispatcher"
         />
       ) : (
@@ -146,7 +146,7 @@ export function DispatcherForm({
           <select
             id="dispatcher-engine"
             value={engine}
-            disabled={busy}
+            disabled={locked}
             onChange={(e) => chooseEngine(e.target.value)}
           >
             {engines.map((eng) => <option key={eng} value={eng}>{eng}</option>)}
@@ -155,7 +155,7 @@ export function DispatcherForm({
 
         <div className="dispatch-field">
           <label htmlFor="dispatcher-model">Model</label>
-          <select id="dispatcher-model" value={model} disabled={busy} onChange={(e) => setModel(e.target.value)}>
+          <select id="dispatcher-model" value={model} disabled={locked} onChange={(e) => setModel(e.target.value)}>
             <option value="">launcher default</option>
             {models.map((m) => <option key={m} value={m}>{m}</option>)}
           </select>
@@ -163,7 +163,7 @@ export function DispatcherForm({
 
         <div className="dispatch-field">
           <label htmlFor="dispatcher-effort">Effort</label>
-          <select id="dispatcher-effort" value={effort} disabled={busy} onChange={(e) => setEffort(e.target.value)}>
+          <select id="dispatcher-effort" value={effort} disabled={locked} onChange={(e) => setEffort(e.target.value)}>
             <option value="">launcher default</option>
             {options.efforts.map((ef) => <option key={ef} value={ef}>{ef}</option>)}
           </select>

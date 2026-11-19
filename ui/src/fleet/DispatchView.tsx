@@ -336,22 +336,21 @@ export function DispatchView({ runs }: { runs: Run[] }) {
       issue: issue.trim() || undefined,
     }
     const submitHost = host
-    if (workerImages.staged.length > 0) {
-      try {
-        req.images = await toImageUploads(workerImages.staged)
-      } catch {
-        setResults((rs) => ({
-          ...rs,
-          worker: { host: submitHost, outcome: { kind: 'failed', status: 0, error: 'could not read an image' }, wasNewCrew: false },
-        }))
-        return
+    const staged = workerImages.staged
+    const { outcome: result } = await submit('worker', submitHost, async () => {
+      if (staged.length > 0) {
+        try {
+          req.images = await toImageUploads(staged)
+        } catch {
+          return { host: submitHost, outcome: { kind: 'failed', status: 0, error: 'could not read an image' }, wasNewCrew: false }
+        }
       }
-    }
-    const { outcome: result } = await submit('worker', submitHost, async () => ({
-      host: submitHost,
-      outcome: await submitDispatch(req, peerArg(submitHost)),
-      wasNewCrew: req.crew === NEW_CREW,
-    }))
+      return {
+        host: submitHost,
+        outcome: await submitDispatch(req, peerArg(submitHost)),
+        wasNewCrew: req.crew === NEW_CREW,
+      }
+    })
     const minted = result.crew
     if (req.crew === NEW_CREW && minted && hostRef.current === submitHost) {
       // Join the minted crew on the next attempt — success or a retryable
@@ -510,7 +509,11 @@ export function DispatchView({ runs }: { runs: Run[] }) {
               />
             ) : (
               <>
-                <p className="dispatch-hint">This host can't attach images to a worker (its dispatch or houston is too old).</p>
+                <p className="dispatch-hint">
+                  {shown.dispatch_attach_error
+                    ? `Couldn't check this host's dispatch for image support: ${shown.dispatch_attach_error}`
+                    : "This host can't attach images to a worker (its dispatch or houston is too old)."}
+                </p>
                 {workerImages.staged.length > 0 && (
                   <div className="staged-chips">
                     {workerImages.staged.map((s) => (

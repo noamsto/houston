@@ -161,7 +161,7 @@ type Server struct {
 	// dispatchModels reads dispatch's tier map; see dispatchModelSet.
 	dispatchModels func(ctx context.Context, serverPath string) (dispatchModelSet, error)
 	// dispatchAttach reports whether the host's dispatch supports --attach.
-	dispatchAttach func(ctx context.Context, serverPath string) bool
+	dispatchAttach func(ctx context.Context, serverPath string) (bool, error)
 	// dispatchSlot caps in-flight dispatches at one: dispatch mutates the
 	// repo (worktrees, branches, the crew bus, GitHub issues), and running
 	// two at once against one repo is not something it is designed for.
@@ -364,13 +364,7 @@ func New(cfg Config) (*Server, error) {
 		},
 		dispatchEngines: execDispatchEngines,
 		dispatchModels:  execDispatchModels,
-		dispatchAttach: func(ctx context.Context, serverPath string) bool {
-			ok, err := execDispatchAttach(ctx, serverPath)
-			if err != nil {
-				slog.Warn("dispatch attach probe failed", "error", err)
-			}
-			return ok
-		},
+		dispatchAttach:  execDispatchAttach,
 		dispatchSlot:    make(chan struct{}, 1),
 		dispatchTimeout: dispatchTimeout,
 		dispatchNewCrewID: func() string {
