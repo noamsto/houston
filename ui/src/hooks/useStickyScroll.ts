@@ -10,6 +10,8 @@ interface UseStickyScroll<T extends HTMLElement> {
   /** Capture the current scroll offset before prepending content, and unstick. */
   preserveAnchor: () => void
   scrollToLatest: () => void
+  /** Stop pinning to the bottom without moving the view. */
+  unstick: () => void
 }
 
 /**
@@ -61,5 +63,7 @@ export function useStickyScroll<T extends HTMLElement>(stickDeps: unknown[], anc
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, stickDeps)
 
-  return { ref, stuck, onScroll, preserveAnchor, scrollToLatest }
+  const unstick = () => setStick(false)
+
+  return { ref, stuck, onScroll, preserveAnchor, scrollToLatest, unstick }
 }

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { RunQuestion, RunStatusStrip } from './RunStatusStrip'
+import { ANSWER_BELOW_TEXT, RunQuestion, RunStatusStrip } from './RunStatusStrip'
 import { agoLabel } from './format'
 import type { Run } from '../api/runs'
 
@@ -92,6 +92,20 @@ describe('RunQuestion', () => {
     render(<RunQuestion run={run({ state: 'blocked', question: { text: 'which db?', via: 'crew' } })} />)
     expect(screen.getByText('which db?')).toBeTruthy()
     expect(screen.getByLabelText(/reply to the crew/i)).toBeTruthy()
+  })
+
+  it('swaps an ask note for the answer-below wording only when asked to', () => {
+    const r = run({ state: 'blocked', question: { text: 'answer it in its terminal', via: 'pane', kind: 'ask' } })
+    const { rerender } = render(<RunQuestion run={r} />)
+    expect(screen.getByText('answer it in its terminal')).toBeTruthy()
+    rerender(<RunQuestion run={r} answerBelow />)
+    expect(screen.getByText(ANSWER_BELOW_TEXT)).toBeTruthy()
+    expect(screen.queryByText('answer it in its terminal')).toBeNull()
+  })
+
+  it('keeps a non-ask note when answerBelow is set', () => {
+    render(<RunQuestion run={run({ state: 'blocked', question: { text: 'Allow?', via: 'pane', kind: 'dialog' } })} answerBelow />)
+    expect(screen.getByText('Allow?')).toBeTruthy()
   })
 
   it('offers Reply in Terminal for a blocked pane question and jumps to the terminal tab', () => {

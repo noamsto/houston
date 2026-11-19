@@ -14,7 +14,7 @@ import { readBase64, skippedMessage, useStagedImage } from '../components/useSta
 import { useRunChat } from '../hooks/useRunChat'
 import { useStickyScroll } from '../hooks/useStickyScroll'
 import { buildItems, provisionalTool, reconcileOptimistic, toolRowLabel } from './chatModel'
-import type { AssistantItem, ChatItem, DividerItem, Optimistic, ToolCall, ToolsItem, UserItem } from './chatModel'
+import type { AssistantItem, ChatItem, DividerItem, Optimistic, QuestionItem, ToolCall, ToolsItem, UserItem } from './chatModel'
 import { kindGlyph, statusGlyph } from './chatGlyphs'
 import { ChatMarkdownLazy, ChatPlainText } from './chatMarkdownLazy'
 import { preloadChatMarkdown } from './chatMarkdownLoader'
@@ -215,7 +215,7 @@ function ToolsRow({ item, runId }: { item: ToolsItem; runId: string }) {
   )
 }
 
-function ChatItemRow({ item, runId, canAnswer, answerable, live, reducedMotion, revealed, onRevealed, onTick }: {
+function ChatItemRow({ item, runId, canAnswer, answerable, live, reducedMotion, revealed, onRevealed, onTick, onInteractive }: {
   item: ChatItem
   runId: string
   canAnswer: boolean
@@ -225,16 +225,24 @@ function ChatItemRow({ item, runId, canAnswer, answerable, live, reducedMotion, 
   revealed: Set<string>
   onRevealed: (id: string) => void
   onTick: () => void
+  onInteractive: (toolCallId: string, interactive: boolean) => void
 }) {
   if (item.kind === 'user') return <UserBubble item={item} />
   if (item.kind === 'divider') return <Divider item={item} />
   if (item.kind === 'tools') return <ToolsRow item={item} runId={runId} />
-  if (item.kind === 'question') return <QuestionCard item={item} runId={runId} canAnswer={canAnswer} answerable={answerable} onLayout={onTick} />
+  if (item.kind === 'question') return <QuestionCard item={item} runId={runId} canAnswer={canAnswer} answerable={answerable} onLayout={onTick} onInteractive={onInteractive} />
   return <AssistantBubble item={item} live={live} reducedMotion={reducedMotion} revealed={revealed} onRevealed={onRevealed} onTick={onTick} />
 }
 
-/** `onSend` resolves to an error reason, or null once the text was sent. */
-function Composer({ run, suggestion, onSend }: { run: Run; suggestion: string | null; onSend: (text: string) => Promise<string | null> }) {
+/** `onSend` resolves to an error reason, or null once the text was sent.
+ *  `questionMode`: the question wizard is the way to answer, so only Esc
+ *  shows; the component stays mounted so the draft and staged images survive. */
+function Composer({ run, suggestion, questionMode, onSend }: {
+  run: Run
+  suggestion: string | null
+  questionMode: boolean
+  onSend: (text: string) => Promise<string | null>
+}) {
   const [text, setText, clearIf] = useComposerDraft(`chat:${run.draft_key ?? run.id}`)
   const { staged, stage, remove, clear } = useStagedImage()
   const [sending, setSending] = useState(false)
@@ -246,7 +254,11 @@ function Composer({ run, suggestion, onSend }: { run: Run; suggestion: string | 
   const voice = useVoiceInput(setText)
   useLayoutEffect(() => {
     if (textareaRef.current) autoGrow(textareaRef.current)
-  }, [text])
+  }, [text, questionMode])
+  const { listening, toggle: toggleVoice } = voice
+  useEffect(() => {
+    if (questionMode && listening) toggleVoice()
+  }, [questionMode, listening, toggleVoice])
 
   // Esc is the user's stop-the-agent key, so it never takes the in-flight
   // gate; only text/image sends do. A failure is shown until the next action
@@ -318,6 +330,21 @@ function Composer({ run, suggestion, onSend }: { run: Run; suggestion: string | 
     if (skipped > 0) setError(skippedMessage(skipped))
   }
 
+  const escButton = (
+    <button type="button" className="composer-btn" style={{ minWidth: COMPOSER_TAP_PX, minHeight: COMPOSER_TAP_PX }} disabled={disabled} onClick={() => void attempt(() => sendKey(address, 'Escape'), null)}>
+      Esc
+    </button>
+  )
+
+  if (questionMode) {
+    return (
+      <div className="chat-composer composer">
+        {error && <div className="chat-composer-error" role="alert">{error}</div>}
+        <div className="composer-actions">{escButton}</div>
+      </div>
+    )
+  }
+
   return (
     <div className="chat-composer composer">
       <QuickCommands address={address} agent={disabled ? undefined : run.agent} state={run.state} suggestion={suggestion} onPrefill={prefill}>
@@ -352,9 +379,7 @@ function Composer({ run, suggestion, onSend }: { run: Run; suggestion: string | 
               <AttachButton disabled={disabled || sending} onClick={() => fileInputRef.current?.click()} />
               {voice.supported && <VoiceButton listening={voice.listening} disabled={disabled} onClick={voice.toggle} />}
               {!disabled && commandsToggle}
-              <button type="button" className="composer-btn" style={{ minWidth: COMPOSER_TAP_PX, minHeight: COMPOSER_TAP_PX }} disabled={disabled} onClick={() => void attempt(() => sendKey(address, 'Escape'), null)}>
-                Esc
-              </button>
+              {escButton}
               <div className="composer-spacer" />
               <SendButton disabled={disabled || sending} onClick={handleSend} />
             </div>
@@ -406,7 +431,7 @@ export function ChatTab({ run, now }: { run: Run; now: number }) {
   }
   const provisional = toolShown ? provisionalTool(run, updates, toolShown.since) : null
 
-  const { ref: scroller, stuck, onScroll, preserveAnchor, scrollToLatest } = useStickyScroll<HTMLDivElement>(
+  const { ref: scroller, stuck, onScroll, preserveAnchor, scrollToLatest, unstick } = useStickyScroll<HTMLDivElement>(
     [items, provisional, reconciled.remaining, revealVersion],
     items[0]?.seq,
   )
@@ -424,15 +449,46 @@ export function ChatTab({ run, now }: { run: Run; now: number }) {
     return err
   }
 
-  const questionPending = answerable && items.some(
-    (i) => i.kind === 'question' && i.call.status !== 'completed' && i.call.status !== 'failed',
-  )
+  const pendingQuestion = answerable
+    ? items.find((i): i is QuestionItem => i.kind === 'question' && i.call.status !== 'completed' && i.call.status !== 'failed')
+    : undefined
+  const questionPending = !!pendingQuestion
+  // The wizard reports whether its picker is really on screen, so the banner
+  // and composer only switch to "answer below" when that is true.
+  const [interactiveIds, setInteractiveIds] = useState<Set<string>>(new Set())
+  const setInteractive = useCallback((id: string, on: boolean) => {
+    setInteractiveIds((prev) => {
+      if (prev.has(id) === on) return prev
+      const next = new Set(prev)
+      if (on) next.add(id)
+      else next.delete(id)
+      return next
+    })
+  }, [])
+  const questionMode = questionPending && interactiveIds.size > 0
+  const modeQuestionId = questionMode ? pendingQuestion.call.toolCallId : undefined
+
+  // Put the card's top at the top of the timeline so the wizard's step label
+  // is visible, again after the wizard's first layout change.
+  const align = useRef<{ id: string | undefined; left: number }>({ id: undefined, left: 0 })
+  useLayoutEffect(() => {
+    if (align.current.id !== modeQuestionId) align.current = { id: modeQuestionId, left: modeQuestionId ? 2 : 0 }
+    const el = scroller.current
+    if (!el || align.current.left <= 0) return
+    const card = el.querySelector('.chat-question:not([data-status="completed"]):not([data-status="failed"])')
+    if (!card) return
+    align.current.left--
+    el.scrollTop += card.getBoundingClientRect().top - el.getBoundingClientRect().top
+    unstick()
+    // unstick is recreated each render; only a new question or layout bump should re-align.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modeQuestionId, revealVersion])
 
   const header = (
     <>
       <RunStatusStrip run={run} now={now} />
       {!(status === 'ready' && run.question?.kind === 'turn') && (
-        <RunQuestion run={run} answeredHere={promptShown || questionPending} />
+        <RunQuestion run={run} answeredHere={promptShown || questionPending} answerBelow={questionMode} />
       )}
       <PermissionBar run={run} onPrompt={setPromptShown} />
     </>
@@ -482,6 +538,7 @@ export function ChatTab({ run, now }: { run: Run; now: number }) {
               revealed={revealedIds}
               onRevealed={markRevealed}
               onTick={bumpReveal}
+              onInteractive={setInteractive}
             />
           ))}
 
@@ -519,7 +576,7 @@ export function ChatTab({ run, now }: { run: Run; now: number }) {
         )}
       </div>
 
-      <Composer key={run.draft_key ?? run.id} run={run} suggestion={suggestion} onSend={handleSend} />
+      <Composer key={run.draft_key ?? run.id} run={run} suggestion={suggestion} questionMode={questionMode} onSend={handleSend} />
     </div>
   )
 }

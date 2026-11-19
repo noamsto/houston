@@ -31,11 +31,12 @@ type Notice =
 /** Steps through one AskUserQuestion call, one verified request per tab. The
  *  pane is the source of truth: every screen renders from the last `state` it
  *  reported, and nothing here ever re-sends a key on its own. */
-export function QuestionWizard({ runId, call, fallbackQuestions, onLayout }: {
+export function QuestionWizard({ runId, call, fallbackQuestions, onLayout, onInteractive }: {
   runId: string
   call: ToolCall
   fallbackQuestions: Question[]
   onLayout: () => void
+  onInteractive?: (toolCallId: string, interactive: boolean) => void
 }) {
   const [state, setState] = useState<QuestionState | null>(null)
   // The pane shows no dialog for this call (404).
@@ -222,6 +223,13 @@ export function QuestionWizard({ runId, call, fallbackQuestions, onLayout }: {
   }, [busy, settled, isSent])
 
   const questions: Question[] = state?.questions ?? fallbackQuestions
+  // The picker is on screen only when the pane reported this call's dialog.
+  const interactive = !!state && questions.length > 0 && !(missing && !isSent)
+  useEffect(() => {
+    onInteractive?.(call.toolCallId, interactive)
+    return () => onInteractive?.(call.toolCallId, false)
+  }, [call.toolCallId, interactive, onInteractive])
+
   if (questions.length === 0) return <FallbackRow call={call} terminalRunId={loaded ? runId : undefined} />
 
   if (!state || (missing && !isSent)) {
