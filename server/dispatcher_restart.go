@@ -310,7 +310,7 @@ func (s *Server) handleRunRestart(w http.ResponseWriter, r *http.Request) {
 	}
 	sweepLaunchDir(s.launchDir)
 
-	file, err := writeLaunchFile(s.launchDir, dispatcherLaunchFile{Args: dispatcherArgs(valid), CrewID: crew, WaitPID: pid})
+	file, err := writeLaunchFile(s.launchDir, dispatcherLaunchFile{Args: dispatcherArgs(valid, nil), CrewID: crew, WaitPID: pid})
 	if err != nil {
 		reply(http.StatusInternalServerError, dispatcherResponse{Error: "could not write launch file: " + err.Error()})
 		return

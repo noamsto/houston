@@ -352,3 +352,33 @@ echo '{"engines":{"claude":{"tiers":{"deep":{"default":"opus","models":["opus","
 		}
 	})
 }
+
+func TestExecDispatchAttach(t *testing.T) {
+	for name, tc := range map[string]struct {
+		body string
+		want bool
+	}{
+		"flag listed":  {"echo 'Options:'\necho '  --attach FILE   Copy FILE into the worker'\n", true},
+		"flag missing": {"echo 'Options:'\necho '  --crew-id ID   Crew'\n", false},
+		"prefix only":  {"echo '  --attachment FILE   Something else'\n", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			installFakeDispatch(t, `[ "$*" = "--help" ] || exit 2
+`+tc.body)
+			got, err := execDispatchAttach(context.Background(), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Errorf("attach = %v, want %v", got, tc.want)
+			}
+		})
+	}
+	t.Run("exit 1", func(t *testing.T) {
+		installFakeDispatch(t, "echo '  --attach FILE'\nexit 1\n")
+		got, err := execDispatchAttach(context.Background(), "")
+		if err == nil || got {
+			t.Errorf("got %v, %v; want false with an error", got, err)
+		}
+	})
+}

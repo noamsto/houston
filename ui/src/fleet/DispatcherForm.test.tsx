@@ -4,6 +4,8 @@ import { useState } from 'react'
 import { DispatcherForm, DispatcherResult } from './DispatcherForm'
 import type { DispatchOptions, DispatcherOutcome, DispatcherRequest } from '../api/dispatch'
 import type { Run } from '../api/runs'
+import type { StagedImage } from '../components/useStagedImage'
+import { toImageUploads } from './dispatchAttachments'
 
 const submitDispatcherMock = vi.fn<(req: DispatcherRequest) => Promise<DispatcherOutcome>>()
 
@@ -44,9 +46,10 @@ function Harness({
 }) {
   const [outcome, setOutcome] = useState<DispatcherOutcome | null>(null)
   const [busy, setBusy] = useState(false)
-  async function onSubmit(req: DispatcherRequest): Promise<DispatcherOutcome> {
+  async function onSubmit(req: DispatcherRequest, staged: StagedImage[]): Promise<DispatcherOutcome> {
     setBusy(true)
     try {
+      if (staged.length > 0) req.images = await toImageUploads(staged)
       const result = await submitDispatcherMock(req)
       setOutcome(result)
       return result
@@ -316,7 +319,7 @@ describe('DispatcherForm result', () => {
   })
 
   it('disables its inputs and submit while busy, without claiming the launch', () => {
-    const onSubmit = vi.fn<(req: DispatcherRequest) => Promise<DispatcherOutcome>>()
+    const onSubmit = vi.fn<(req: DispatcherRequest, staged: StagedImage[]) => Promise<DispatcherOutcome>>()
     render(<DispatcherForm host="local" options={options} repo="/repo/a" busy onSubmit={onSubmit} onStarted={() => {}} />)
 
     expect(startButton().disabled).toBe(true)
@@ -381,5 +384,88 @@ describe('DispatcherForm result', () => {
     await screen.findByText('bad')
     expect(screen.queryByText(/was left behind/)).toBeNull()
     expect(screen.queryByText(/session/i, { selector: 'p' })).toBeNull()
+  })
+})
+
+describe('DispatcherForm images', () => {
+  const withAttach: DispatchOptions = { ...options, dispatcher_attach: true }
+  const started: DispatcherOutcome = { kind: 'started', crew: '1-2', session: 'proj', window: '@1', pane: '%7', runId: 'pane-7' }
+  const shot = () => new File(['hello'], 'shot.png', { type: 'image/png' })
+  const attach = (c: HTMLElement) =>
+    fireEvent.change(c.querySelector('#dispatcher-attach')!, { target: { files: [shot()] } })
+  const start = () => fireEvent.click(startButton())
+
+  it('sends an attached image in the request, base64 encoded', async () => {
+    submitDispatcherMock.mockResolvedValue(started)
+    const { container } = setup(withAttach)
+    change('Task 1', 'do it')
+    attach(container)
+    await screen.findByText('shot.png')
+    start()
+
+    await vi.waitFor(() => expect(submitDispatcherMock).toHaveBeenCalled())
+    expect(submitDispatcherMock.mock.calls[0][0].images).toEqual([
+      { name: 'shot.png', type: 'image/png', data: btoa('hello') },
+    ])
+  })
+
+  it('removing the chip leaves it out of the next request', async () => {
+    submitDispatcherMock.mockResolvedValue(started)
+    const { container } = setup(withAttach)
+    change('Task 1', 'do it')
+    attach(container)
+    await screen.findByText('shot.png')
+    fireEvent.click(screen.getByRole('button', { name: 'Remove attachment' }))
+    start()
+
+    await vi.waitFor(() => expect(submitDispatcherMock).toHaveBeenCalled())
+    expect('images' in submitDispatcherMock.mock.calls[0][0]).toBe(false)
+  })
+
+  it('a failed launch keeps the chip and a retry sends it again', async () => {
+    submitDispatcherMock.mockResolvedValue({ kind: 'failed', status: 422, error: 'nope' })
+    const { container } = setup(withAttach)
+    change('Task 1', 'do it')
+    attach(container)
+    await screen.findByText('shot.png')
+    start()
+    await screen.findByText('nope')
+    expect(screen.getByText('shot.png')).toBeTruthy()
+
+    start()
+    await vi.waitFor(() => expect(submitDispatcherMock).toHaveBeenCalledTimes(2))
+    expect(submitDispatcherMock.mock.calls[1][0].images).toHaveLength(1)
+  })
+
+  it('a started launch clears the chip', async () => {
+    submitDispatcherMock.mockResolvedValue(started)
+    const { container } = setup(withAttach)
+    change('Task 1', 'do it')
+    attach(container)
+    await screen.findByText('shot.png')
+    start()
+    await screen.findByText('proj')
+
+    expect(screen.queryByText('shot.png')).toBeNull()
+  })
+
+  it('a double click while the image is read launches once', async () => {
+    submitDispatcherMock.mockResolvedValue(started)
+    const { container } = setup(withAttach)
+    change('Task 1', 'do it')
+    attach(container)
+    await screen.findByText('shot.png')
+    start()
+    start()
+    await screen.findByText('proj')
+
+    expect(submitDispatcherMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('without dispatcher_attach there is no attach button and the hint says so', () => {
+    setup(options)
+
+    expect(screen.queryByRole('button', { name: 'Attach image' })).toBeNull()
+    expect(screen.getByText("This host's houston can't attach images to a dispatcher.")).toBeTruthy()
   })
 })

@@ -20,6 +20,15 @@ export interface DispatchOptions {
   repo_roots?: string[]
   dispatcher_engines?: string[]
   dispatcher_engines_error?: string
+  dispatch_attach?: boolean
+  dispatch_attach_error?: string // why the `dispatch --help` probe failed
+  dispatcher_attach?: boolean
+}
+
+export interface ImageUpload {
+  name: string
+  type: string
+  data: string // bare base64
 }
 
 export const NEW_CREW = 'new'
@@ -35,6 +44,7 @@ export interface DispatchRequest {
   plan?: string // server defaults to "required" when omitted; the form never sets it
   crew: string
   issue?: string
+  images?: ImageUpload[]
 }
 
 // Mirror of the POST /api/dispatch response contract. `failed` covers every
@@ -111,6 +121,7 @@ export interface DispatcherRequest {
   engine: string
   model?: string
   effort?: string
+  images?: ImageUpload[]
 }
 
 export type DispatcherOutcome =

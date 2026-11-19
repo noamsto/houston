@@ -71,8 +71,8 @@ var (
 	fwdRestart        = peerRoute{suffix: "restart", method: http.MethodPost, headers: []string{"Content-Type"}, limit: maxDispatchBody, mode: peer.Detached, mapRunID: true}
 
 	fwdHostOptions     = peerRoute{suffix: "dispatch/options", method: http.MethodGet, mode: peer.Long}
-	fwdHostDispatch    = peerRoute{suffix: "dispatch", method: http.MethodPost, headers: []string{"Content-Type"}, limit: maxDispatchBody, mode: peer.Detached}
-	fwdHostDispatcher  = peerRoute{suffix: "dispatch/dispatcher", method: http.MethodPost, headers: []string{"Content-Type"}, limit: maxDispatchBody, mode: peer.Detached, mapRunID: true}
+	fwdHostDispatch    = peerRoute{suffix: "dispatch", method: http.MethodPost, headers: []string{"Content-Type"}, limit: maxDispatchUploadBody, mode: peer.Detached}
+	fwdHostDispatcher  = peerRoute{suffix: "dispatch/dispatcher", method: http.MethodPost, headers: []string{"Content-Type"}, limit: maxDispatchUploadBody, mode: peer.Detached, mapRunID: true}
 	fwdHostRepos       = peerRoute{suffix: "repos", method: http.MethodGet, mode: peer.Long}
 	fwdHostReposAdd    = peerRoute{suffix: "repos", method: http.MethodPost, headers: []string{"Content-Type"}, limit: maxRepoBody, mode: peer.Long}
 	fwdHostReposRemove = peerRoute{suffix: "repos", method: http.MethodDelete, headers: []string{"Content-Type"}, limit: maxRepoBody, mode: peer.Long}

@@ -2,6 +2,10 @@ import { useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import type { DispatchOptions, DispatcherOutcome, DispatcherRequest } from '../api/dispatch'
 import type { Run } from '../api/runs'
+import { useStagedImage } from '../components/useStagedImage'
+import type { StagedImage } from '../components/useStagedImage'
+import { DispatchAttachments } from './DispatchAttachments'
+import { DISPATCH_IMAGE_LIMITS } from './dispatchAttachments'
 import { buildDispatcherRequest, MAX_TASKS, taskRowsProblem } from './dispatcherForm'
 import { runIdFor } from './dispatchForm'
 import { runHash } from './routes'
@@ -26,7 +30,7 @@ export function DispatcherForm({
   options: DispatchOptions
   repo: string
   busy: boolean
-  onSubmit: (req: DispatcherRequest) => Promise<DispatcherOutcome>
+  onSubmit: (req: DispatcherRequest, staged: StagedImage[]) => Promise<DispatcherOutcome>
   onStarted: (host: string) => void
 }) {
   const engines = options.dispatcher_engines ?? []
@@ -36,6 +40,7 @@ export function DispatcherForm({
   const [model, setModel] = useState('')
   const [effort, setEffort] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const images = useStagedImage(DISPATCH_IMAGE_LIMITS)
 
   const engine = engines.includes(chosenEngine) ? chosenEngine : (engines[0] ?? '')
   const models = options.engines[engine] ?? []
@@ -46,7 +51,8 @@ export function DispatcherForm({
       : engines.length === 0
         ? (options.dispatcher_engines_error ?? 'No dispatcher engines available')
         : problem
-  const canSubmit = !busy && !disabledReason
+  const canSubmit = !busy && !submitting && !disabledReason
+  const locked = busy || submitting
 
   function newRow(): TaskRow {
     return { id: nextRowId.current++, text: '' }
@@ -67,10 +73,12 @@ export function DispatcherForm({
     setSubmitting(true)
     const result = await onSubmit(
       buildDispatcherRequest({ repo, rows: rows.map((r) => r.text), engine, model, effort }),
+      images.staged,
     )
     setSubmitting(false)
     if (result.kind !== 'started') return
     setRows([newRow()])
+    images.clear()
     onStarted(host)
   }
 
@@ -83,7 +91,7 @@ export function DispatcherForm({
             <textarea
               id={`dispatcher-task-${row.id}`}
               value={row.text}
-              disabled={busy}
+              disabled={locked}
               rows={3}
               onChange={(e) => setRow(row.id, e.target.value)}
             />
@@ -92,7 +100,7 @@ export function DispatcherForm({
                 type="button"
                 className="dispatch-task-remove"
                 aria-label={`Remove task ${i + 1}`}
-                disabled={busy}
+                disabled={locked}
                 onClick={() => setRows((rs) => rs.filter((r) => r.id !== row.id))}
               >
                 ×
@@ -104,11 +112,23 @@ export function DispatcherForm({
       <button
         type="button"
         className="dispatch-add-task"
-        disabled={busy || rows.length >= MAX_TASKS}
+        disabled={locked || rows.length >= MAX_TASKS}
         onClick={() => setRows((rs) => [...rs, newRow()])}
       >
         Add task
       </button>
+
+      {options.dispatcher_attach ? (
+        <DispatchAttachments
+          staged={images.staged}
+          onStage={images.stage}
+          onRemove={images.remove}
+          disabled={locked}
+          idPrefix="dispatcher"
+        />
+      ) : (
+        <p className="dispatch-hint">This host's houston can't attach images to a dispatcher.</p>
+      )}
 
       <div className="dispatch-grid">
         <div className="dispatch-field">
@@ -116,7 +136,7 @@ export function DispatcherForm({
           <select
             id="dispatcher-engine"
             value={engine}
-            disabled={busy}
+            disabled={locked}
             onChange={(e) => chooseEngine(e.target.value)}
           >
             {engines.map((eng) => <option key={eng} value={eng}>{eng}</option>)}
@@ -125,7 +145,7 @@ export function DispatcherForm({
 
         <div className="dispatch-field">
           <label htmlFor="dispatcher-model">Model</label>
-          <select id="dispatcher-model" value={model} disabled={busy} onChange={(e) => setModel(e.target.value)}>
+          <select id="dispatcher-model" value={model} disabled={locked} onChange={(e) => setModel(e.target.value)}>
             <option value="">launcher default</option>
             {models.map((m) => <option key={m} value={m}>{m}</option>)}
           </select>
@@ -133,7 +153,7 @@ export function DispatcherForm({
 
         <div className="dispatch-field">
           <label htmlFor="dispatcher-effort">Effort</label>
-          <select id="dispatcher-effort" value={effort} disabled={busy} onChange={(e) => setEffort(e.target.value)}>
+          <select id="dispatcher-effort" value={effort} disabled={locked} onChange={(e) => setEffort(e.target.value)}>
             <option value="">launcher default</option>
             {options.efforts.map((ef) => <option key={ef} value={ef}>{ef}</option>)}
           </select>
