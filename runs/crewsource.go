@@ -219,8 +219,8 @@ func crewRunAbandoned(b crewBranch, windowless, dispatcherAlive bool, now time.T
 // CrewRemoteKey. Only workers in crew's view are listed, except that a crew
 // whose roster the view reports failing is read from its last listed rows,
 // marked stale (spliceHeld), and a crew absent from a bus's view whose
-// dispatcher is joined on another bus is read from the bus log (logWorkers). It also returns, under its pane id, a dispatcher
-// layer for every crew that joins its dispatcher pane (joinDispatchers) — Role,
+// dispatcher is joined on another bus is read from the bus log (logWorkers). It
+// also returns, under its pane id, a dispatcher layer for every crew that joins its dispatcher pane (joinDispatchers) — Role,
 // crew id, bus, the crew's own attention items and the view's notice and
 // errors, so the key lists only while another layer supplies an agent.
 //
