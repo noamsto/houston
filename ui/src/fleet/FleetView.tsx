@@ -3,7 +3,7 @@ import type { Run } from '../api/runs'
 import type { Mode } from '../api/mode'
 import { needsYou } from './staleness'
 import { fleetEntries, groupEntriesByHost } from './fleetEntries'
-import type { Filter } from './fleetList'
+import { stuckCount, type Filter } from './fleetList'
 import { CrewViewNotice } from './CrewViewNotice'
 import { crewViewNotices } from './crewViewNotices'
 import { RunList } from './RunList'
@@ -27,6 +27,8 @@ export function FleetView({ runs, connected, now, mode, onOpen }: FleetViewProps
     [runs, now],
   )
 
+  const stuck = useMemo(() => stuckCount(runs, now), [runs, now])
+
   const entries = useMemo(() => fleetEntries(runs, filter, now, mode), [runs, filter, now, mode])
 
   const notices = useMemo(() => crewViewNotices(runs), [runs])
@@ -38,13 +40,20 @@ export function FleetView({ runs, connected, now, mode, onOpen }: FleetViewProps
       <header className="fleet-nav">
         <h1>Fleet</h1>
         <div className="fleet-nav-actions">
-          <button
-            type="button"
-            className={`fleet-badge${attentionCount === 0 ? ' quiet' : ''}`}
-            onClick={() => setFilter('needs-you')}
-          >
-            {attentionCount > 0 ? `${attentionCount} needs you` : connected ? 'all quiet' : 'offline'}
-          </button>
+          {(attentionCount > 0 || !connected || stuck === 0) && (
+            <button
+              type="button"
+              className={`fleet-badge${attentionCount === 0 ? ' quiet' : ''}`}
+              onClick={() => setFilter('needs-you')}
+            >
+              {attentionCount > 0 ? `${attentionCount} needs you` : connected ? 'all quiet' : 'offline'}
+            </button>
+          )}
+          {stuck > 0 && (
+            <button type="button" className="fleet-badge stuck" onClick={() => setFilter('stuck')}>
+              {stuck} stuck
+            </button>
+          )}
         </div>
       </header>
 

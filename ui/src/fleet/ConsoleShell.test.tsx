@@ -426,3 +426,37 @@ describe('ConsoleShell crew view notice', () => {
     expect(within(list).getByRole('status').textContent).toBe('crew is too old')
   })
 })
+
+  describe('ConsoleShell stuck badge', () => {
+    const blockedRun = run({ id: 'b', state: 'blocked' })
+    const stuckRun = run({ id: 's', state: 'idle', attention: 'stuck' })
+    const show = (rs: Run[]) => {
+      render(<ConsoleShell runs={rs} connected hasSnapshot now={now} mode="dispatcher" />)
+      return screen.getByLabelText('rail')
+    }
+
+    it('shows only a stuck badge, never all quiet, when only stuck runs exist', () => {
+      const s = show([stuckRun])
+      expect(within(s).getByRole('button', { name: '1 stuck' })).toBeTruthy()
+      expect(within(s).queryByText('all quiet')).toBeNull()
+      expect(within(s).queryByRole('button', { name: /needs you/ })).toBeNull()
+    })
+
+    it('shows both badges and keeps the needs-you count', () => {
+      const s = show([blockedRun, stuckRun])
+      expect(within(s).getByRole('button', { name: '1 needs you' })).toBeTruthy()
+      expect(within(s).getByRole('button', { name: '1 stuck' })).toBeTruthy()
+    })
+
+    it('shows all quiet when neither exists', () => {
+      const s = show([run({ id: 'r' })])
+      expect(within(s).getByText('all quiet')).toBeTruthy()
+      expect(within(s).queryByRole('button', { name: /stuck/ })).toBeNull()
+    })
+
+    it('selects the Stuck filter when the stuck badge is clicked', () => {
+      const s = show([stuckRun, run({ id: 'r2', branch: 'plain' })])
+      fireEvent.click(within(s).getByRole('button', { name: '1 stuck' }))
+      expect(screen.getAllByRole('button', { name: /^Stuck/, pressed: true }).length).toBe(1)
+    })
+  })

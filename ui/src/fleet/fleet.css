@@ -41,6 +41,7 @@
   color: var(--state-blocked);
   border: 0; font-family: inherit; cursor: pointer;
 }
+.fleet-badge.stuck { background: color-mix(in srgb, var(--state-failed) 22%, transparent); color: var(--state-failed); }
 .fleet-badge.quiet { background: var(--bg-raised); color: var(--text-faint); }
 
 .fleet-filters {

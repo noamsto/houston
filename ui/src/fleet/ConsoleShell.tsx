@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from 'react'
 import type { Run } from '../api/runs'
 import { isHistory, needsYou } from './staleness'
-import { filterRuns, groupByHost, crewShortId, type Filter } from './fleetList'
+import { filterRuns, groupByHost, crewShortId, stuckCount, type Filter } from './fleetList'
 import { entryRuns } from './entryRuns'
 import { fleetEntries, groupEntriesByHost, narrowToCrew } from './fleetEntries'
 import { RunList } from './RunList'
@@ -38,6 +38,8 @@ export function ConsoleShell({ runs, connected, hasSnapshot, now, mode }: ShellD
     () => runs.filter((r) => needsYou(r, now)).length,
     [runs, now],
   )
+
+  const stuck = useMemo(() => stuckCount(runs, now), [runs, now])
 
   const notices = useMemo(() => crewViewNotices(runs), [runs])
 
@@ -107,13 +109,20 @@ export function ConsoleShell({ runs, connected, hasSnapshot, now, mode }: ShellD
       <nav className="console-rail" aria-label="rail">
         <div className="console-rail-head">
           <span className="console-rail-title">houston</span>
-          <button
-            type="button"
-            className={`fleet-badge${attentionCount === 0 ? ' quiet' : ''}`}
-            onClick={() => chooseFilter('needs-you')}
-          >
-            {attentionCount > 0 ? `${attentionCount} needs you` : connected ? 'all quiet' : 'offline'}
-          </button>
+          {(attentionCount > 0 || !connected || stuck === 0) && (
+            <button
+              type="button"
+              className={`fleet-badge${attentionCount === 0 ? ' quiet' : ''}`}
+              onClick={() => chooseFilter('needs-you')}
+            >
+              {attentionCount > 0 ? `${attentionCount} needs you` : connected ? 'all quiet' : 'offline'}
+            </button>
+          )}
+          {stuck > 0 && (
+            <button type="button" className="fleet-badge stuck" onClick={() => chooseFilter('stuck')}>
+              {stuck} stuck
+            </button>
+          )}
         </div>
 
         <div>

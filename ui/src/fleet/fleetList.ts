@@ -82,3 +82,7 @@ export function groupByProject(runs: Run[]): [string, Run[]][] {
 export function crewShortId(name: string): string {
   return name.length > 12 ? `${name.slice(0, 10)}…` : name
 }
+
+export function stuckCount(runs: Run[], now: number): number {
+  return filterRuns(runs, 'stuck', now).length
+}
