@@ -29,7 +29,7 @@ func writeFinishedBus(t *testing.T, log string) string {
 func TestScanFinishedWorkerMissingFromViewJoinsItsPane(t *testing.T) {
 	bus := writeFinishedBus(t, finishedBus)
 	wins := []tmux.WindowOptions{{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a", CrewName: "rust"}}
-	stuck := tmux.PaneOptions{PaneID: "%449", Target: "h:1", ClaudeStatus: "processing 2100 ", PanePID: 7}
+	stuck := tmux.PaneOptions{PaneID: "%449", Target: "h:1", ClaudeStatus: "processing 1990 ", PanePID: 7}
 	view := overviewOf(nil, viewWorker("fix/500", "working", "", 1)) // another live worker, not this one
 
 	s := crewScanner(map[string]string{"/wt/a": bus}, viewsOn(bus, view), wins, []tmux.PaneOptions{stuck})
@@ -82,7 +82,7 @@ func TestScanFinishedWorkerDoesNotCrossAttachByCodename(t *testing.T) {
 `
 	bus := writeFinishedBus(t, log)
 	wins := []tmux.WindowOptions{{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a", CrewName: "rust"}}
-	panes := []tmux.PaneOptions{{PaneID: "%1", Target: "h:1", ClaudeStatus: "processing 2100 ", PanePID: 7}}
+	panes := []tmux.PaneOptions{{PaneID: "%1", Target: "h:1", ClaudeStatus: "processing 1990 ", PanePID: 7}}
 
 	s := crewScanner(map[string]string{"/wt/a": bus}, viewsOn(bus, overviewOf(nil)), wins, panes)
 	s.procStart = startAt(1500)
@@ -100,7 +100,8 @@ func TestScanFinishedWorkerNewOccupantDoesNotJoin(t *testing.T) {
 		pane  tmux.PaneOptions
 		start int64
 	}{
-		"engine started after the terminal row": {tmux.PaneOptions{PaneID: "%1", Target: "h:1", ClaudeStatus: "processing 2100 ", PanePID: 7}, 2050},
+		"engine started after the terminal row": {tmux.PaneOptions{PaneID: "%1", Target: "h:1", ClaudeStatus: "processing 1990 ", PanePID: 7}, 2050},
+		"processing stamp after the slack":      {tmux.PaneOptions{PaneID: "%1", Target: "h:1", ClaudeStatus: "processing 2060 ", PanePID: 7}, 1500},
 		"pane touched after the grace":          {tmux.PaneOptions{PaneID: "%1", Target: "h:1", ClaudeStatus: "processing 9000 ", PanePID: 7}, 1500},
 	}
 	for name, tc := range cases {
@@ -121,5 +122,29 @@ func TestComposeNeverShowsCrewPayloadAsSummary(t *testing.T) {
 	got := deltasFromTmux(wins, panes, fakeProject)
 	if len(got) != 1 || got[0].Run.Activity.Task != "" {
 		t.Fatalf("Task = %+v, want empty for a crew payload", got)
+	}
+}
+
+func TestScanFinishedWorkerWithFinishedPaneKeepsNoPinnedState(t *testing.T) {
+	bus := writeFinishedBus(t, finishedBus)
+	wins := []tmux.WindowOptions{{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a", CrewName: "rust"}}
+	pane := tmux.PaneOptions{PaneID: "%1", Target: "h:1", ClaudeStatus: "done 2005 ", PanePID: 7}
+	view := overviewOf(nil, viewWorker("fix/500", "working", "", 1))
+
+	s := crewScanner(map[string]string{"/wt/a": bus}, viewsOn(bus, view), wins, []tmux.PaneOptions{pane})
+	s.procStart = startAt(1500)
+	got, _ := s.scan()
+	r, found := got["%1"]
+	if !found || r.Crew == nil || r.Crew.Name != "c1" || r.State != StateDone {
+		t.Fatalf("run = %+v (found=%v), want it joined as done under c1", r, found)
+	}
+	if r.CrewFinished {
+		t.Error("CrewFinished set for a pane whose own state says finished")
+	}
+	deltas, _ := tickCrewDeltas(got, map[string]bool{}, time.Unix(2000, 0).Add(crewEvictionGrace+time.Minute))
+	for _, d := range deltas {
+		if d.Key == "%1" && d.Run.State != "" {
+			t.Errorf("state %q kept past the eviction grace, want identity only", d.Run.State)
+		}
 	}
 }
