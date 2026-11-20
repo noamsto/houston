@@ -142,9 +142,17 @@ func TestScanFinishedWorkerWithFinishedPaneKeepsNoPinnedState(t *testing.T) {
 		t.Error("CrewFinished set for a pane whose own state says finished")
 	}
 	deltas, _ := tickCrewDeltas(got, map[string]bool{}, time.Unix(2000, 0).Add(crewEvictionGrace+time.Minute))
+	seen := false
 	for _, d := range deltas {
-		if d.Key == "%1" && d.Run.State != "" {
+		if d.Key != "%1" {
+			continue
+		}
+		seen = true
+		if d.Run.State != "" {
 			t.Errorf("state %q kept past the eviction grace, want identity only", d.Run.State)
 		}
+	}
+	if !seen {
+		t.Fatal("no delta for %1")
 	}
 }
