@@ -260,8 +260,11 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 	// same listing and the hooks layer's own trust rules (paneSetFrom,
 	// paneHookSessions).
 	var paneSessions map[string]string
+	var promptFree promptFreeFunc
 	if s.sessions != nil {
-		paneSessions = paneHookSessions(s.sessions.Snapshot(), paneSetFrom(panes, now))
+		snap := s.sessions.Snapshot()
+		paneSessions = paneHookSessions(snap, paneSetFrom(panes, now))
+		promptFree = panePromptFree(snap, paneSessions)
 	}
 
 	// Every bus, not only those whose log names a branch: a dispatcher that
@@ -371,7 +374,7 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 				continue
 			}
 			join := func(stuckOK bool) (string, bool) {
-				p, n := resolvePaneAs(bus, branch, FromCrewState(id.state), id.statusTS/1000, id.session, id.engineSession, paneSessions, wins, panes, s.crewDir, s.procStart, stuckOK)
+				p, n := resolvePaneWith(bus, branch, FromCrewState(id.state), id.statusTS/1000, id.session, id.engineSession, paneSessions, wins, panes, s.crewDir, s.procStart, stuckOK, promptFree)
 				return p, n == 1
 			}
 			if p, ok := join(false); ok {
@@ -416,7 +419,16 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 			if spliced[rowKey{b.Crew.Name, b.Branch}] {
 				routed.Stale, routed.Crew.ViewNotice = true, crewRosterHeldNote
 			}
-			paneID, candidates := resolvePane(bus, branch, b.State, b.UpdatedAt, b.session, b.CrewSession, paneSessions, wins, panes, s.crewDir, s.procStart)
+			paneID, candidates := resolvePaneWith(bus, branch, b.State, b.UpdatedAt, b.session, b.CrewSession, paneSessions, wins, panes, s.crewDir, s.procStart, false, promptFree)
+			// A crew that lists its finished workers leaves the log-only
+			// synthesis above idle, so a cut-off final turn (a pane still stamped
+			// processing) takes the relaxed join here.
+			if candidates != 1 && (b.State == StateDone || b.State == StateFailed) {
+				if p, n := resolvePaneWith(bus, branch, b.State, b.UpdatedAt, b.session, b.CrewSession, paneSessions, wins, panes, s.crewDir, s.procStart, true, promptFree); n == 1 {
+					paneID, candidates = p, n
+					routed.CrewFinished = true
+				}
+			}
 			if f, ok := finishedPane[rowKey{b.Crew.Name, b.Branch}]; ok {
 				paneID, candidates = f.pane, 1
 				routed.CrewFinished = f.stuck

@@ -193,8 +193,13 @@ func apply(s *SessionState, event string, ev Event, now int64) {
 	case EventSessionStart:
 		s.State = StateStarting
 		if ev.Source == "compact" {
-			// An automatic compaction mid-turn: the agent is still working.
+			// A compaction mid-turn: the agent is still working. One that
+			// interrupted an idle session has no turn behind it.
 			s.State = StateThinking
+			if s.CompactFrom == StateWaiting {
+				s.State = StateWaiting
+			}
+			s.CompactFrom = ""
 		}
 		s.Source = ev.Source
 	case EventSessionEnd:
@@ -204,6 +209,8 @@ func apply(s *SessionState, event string, ev Event, now int64) {
 	case EventUserPromptSubmit:
 		s.State = StateThinking
 		s.Turn++
+		s.LastPromptAt = now
+		s.CompactFrom = ""
 		clearTool()
 	case EventPreToolUse:
 		s.State = StateToolRunning
@@ -236,6 +243,7 @@ func apply(s *SessionState, event string, ev Event, now int64) {
 	case EventStop:
 		clearTool()
 		s.State = StateWaiting
+		s.CompactFrom = ""
 	case EventSubagentStop:
 		// Fires while the main agent is still inside the Task tool, so it ends
 		// nothing: state, tool and any pending dialog's message all stand.
@@ -252,6 +260,9 @@ func apply(s *SessionState, event string, ev Event, now int64) {
 		clearTool()
 		s.State = StateThinking
 	case EventPreCompact:
+		if s.State != StateCompacting {
+			s.CompactFrom = s.State
+		}
 		s.State = StateCompacting
 	}
 }

@@ -68,6 +68,20 @@ func resolvePane(bus, branch string, busState State, busUpdatedAt, busSession in
 // still reads processing joins its own finished worker. The epoch, process
 // start and engine-session rules still bind, so a new occupant never joins.
 func resolvePaneAs(bus, branch string, busState State, busUpdatedAt, busSession int64, busEngineSession string, paneSessions map[string]string, wins []tmux.WindowOptions, panes []tmux.PaneOptions, busOf func(gitRoot string) string, procStart procStartFunc, stuckOK bool) (paneID string, candidates int) {
+	return resolvePaneWith(bus, branch, busState, busUpdatedAt, busSession, busEngineSession, paneSessions, wins, panes, busOf, procStart, stuckOK, nil)
+}
+
+// promptFreeFunc reports whether the hook session on a pane is known to have
+// had no real user prompt after the unix second `after`. A stamp past the
+// terminal record's grace window is then compaction or other non-prompt hook
+// activity, not a follow-up turn. nil, or false for an unknown session, keeps
+// the grace window as the bound.
+type promptFreeFunc func(paneID string, after int64) bool
+
+// resolvePaneWith is resolvePaneAs plus promptFree, which lets a terminal join
+// look past the grace window when nothing but non-prompt activity stamped the
+// pane since the terminal row.
+func resolvePaneWith(bus, branch string, busState State, busUpdatedAt, busSession int64, busEngineSession string, paneSessions map[string]string, wins []tmux.WindowOptions, panes []tmux.PaneOptions, busOf func(gitRoot string) string, procStart procStartFunc, stuckOK bool, promptFree promptFreeFunc) (paneID string, candidates int) {
 	terminal := busState == StateDone || busState == StateFailed
 	byTarget := windowsByTarget(wins)
 	for _, p := range panes {
@@ -98,7 +112,10 @@ func resolvePaneAs(bus, branch string, busState State, busUpdatedAt, busSession 
 				}
 				limit = busUpdatedAt + stuckStampSlack
 			}
-			if epoch <= 0 || epoch > limit {
+			if epoch <= 0 {
+				continue
+			}
+			if epoch > limit && (promptFree == nil || !promptFree(p.PaneID, busUpdatedAt)) {
 				continue
 			}
 			// A /clear or /resume starts a new session id inside the same engine

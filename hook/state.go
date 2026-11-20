@@ -64,6 +64,13 @@ type SessionState struct {
 	Reason        string `json:"reason,omitempty"`       // populated by SessionEnd
 	Source        string `json:"source,omitempty"`       // populated by SessionStart
 
+	// LastPromptAt is the unix-sec of the newest UserPromptSubmit: a real user
+	// turn, unlike compaction or a notification, which also move UpdatedAt.
+	LastPromptAt int64 `json:"last_prompt_at,omitempty"`
+	// CompactFrom is the state a PreCompact interrupted, so the SessionStart
+	// that ends the compaction can tell an idle one from one mid-turn.
+	CompactFrom State `json:"compact_from,omitempty"`
+
 	Turn      int   `json:"turn,omitempty"`
 	Since     int64 `json:"since,omitempty"` // unix-sec state entered
 	UpdatedAt int64 `json:"updated_at"`      // unix-sec last hook fired

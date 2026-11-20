@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/noamsto/houston/hub"
 	"github.com/noamsto/houston/tmux"
 )
 
@@ -154,5 +155,38 @@ func TestScanFinishedWorkerWithFinishedPaneKeepsNoPinnedState(t *testing.T) {
 	}
 	if !seen {
 		t.Fatal("no delta for %1")
+	}
+}
+
+// A crew that still lists its finished worker puts it on the in-view path. Its
+// pane, re-stamped processing 55 minutes after done by an idle compaction,
+// still joins; a real prompt after done keeps it out (#369).
+func TestScanListedFinishedWorkerJoinsAfterPostDoneCompaction(t *testing.T) {
+	bus := writeFinishedBus(t, finishedBus)
+	wins := []tmux.WindowOptions{{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a", CrewName: "rust"}}
+	stamped := tmux.PaneOptions{PaneID: "%449", Target: "h:1", ClaudeStatus: "processing 5300 ", PanePID: 7}
+	view := overviewOf(nil, viewWorker("fix/412", "done", "", 2000))
+
+	run := func(sv hub.SessionView) (Run, bool) {
+		s := crewScanner(map[string]string{"/wt/a": bus}, viewsOn(bus, view), wins, []tmux.PaneOptions{stamped}, fakeHookSessions{[]hub.SessionView{sv}})
+		s.procStart = startAt(1500)
+		got, ok := s.scan()
+		if !ok {
+			t.Fatal("scan failed")
+		}
+		r, found := got["%449"]
+		return r, found
+	}
+
+	compacted := hub.SessionView{SessionID: "S1", TmuxPane: "%449", State: "thinking", Source: "compact", UpdatedAt: 5300}
+	r, found := run(compacted)
+	if !found || r.Crew == nil || r.Crew.Name != "c1" || r.State != StateDone || !r.CrewFinished {
+		t.Errorf("compaction: run = %+v found=%v, want crew c1, done, finished", r, found)
+	}
+
+	prompted := compacted
+	prompted.LastPromptAt = 4000
+	if r, found := run(prompted); found {
+		t.Errorf("real prompt after done joined: %+v", r)
 	}
 }

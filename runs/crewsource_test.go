@@ -2719,3 +2719,49 @@ func TestScanCrossRepoGuards(t *testing.T) {
 		}
 	})
 }
+
+// A finished worker's pane is re-stamped long after its `done` row by an idle
+// compaction. That is non-prompt hook activity, so the pane still joins; a real
+// prompt after the row is a follow-up turn and still does not.
+func TestResolvePaneTerminalPostDoneStamp(t *testing.T) {
+	win := tmux.WindowOptions{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"}
+	const done, gap = 100, 3300
+	panes := []tmux.PaneOptions{{PaneID: "%307", Target: "h:1", ClaudeStatus: fmt.Sprintf("processing %d ", done+gap)}}
+	run := func(promptFree promptFreeFunc) (string, int) {
+		return resolvePaneWith(testBus, "fix/412", StateDone, done, 50, "", nil, []tmux.WindowOptions{win}, panes, testBusOf, startAt(60), true, promptFree)
+	}
+
+	t.Run("compaction joins", func(t *testing.T) {
+		snap := []hub.SessionView{{SessionID: "s1", TmuxPane: "%307", Source: "compact", LastPromptAt: done - 10}}
+		pf := panePromptFree(snap, map[string]string{"%307": "s1"})
+		if pane, n := run(pf); n != 1 || pane != "%307" {
+			t.Errorf("got (%q, %d), want (%%307, 1)", pane, n)
+		}
+	})
+	t.Run("legacy compact state file joins", func(t *testing.T) {
+		snap := []hub.SessionView{{SessionID: "s1", TmuxPane: "%307", Source: "compact"}}
+		pf := panePromptFree(snap, map[string]string{"%307": "s1"})
+		if pane, n := run(pf); n != 1 || pane != "%307" {
+			t.Errorf("got (%q, %d), want (%%307, 1)", pane, n)
+		}
+	})
+	t.Run("real prompt after done does not join", func(t *testing.T) {
+		snap := []hub.SessionView{{SessionID: "s1", TmuxPane: "%307", Source: "compact", LastPromptAt: done + 200}}
+		pf := panePromptFree(snap, map[string]string{"%307": "s1"})
+		if pane, n := run(pf); n != 0 || pane != "" {
+			t.Errorf("got (%q, %d), want (\"\", 0)", pane, n)
+		}
+	})
+	t.Run("prompt just after done does not join", func(t *testing.T) {
+		snap := []hub.SessionView{{SessionID: "s1", TmuxPane: "%307", LastPromptAt: done + 10}}
+		pf := panePromptFree(snap, map[string]string{"%307": "s1"})
+		if pane, n := run(pf); n != 0 || pane != "" {
+			t.Errorf("got (%q, %d), want (\"\", 0)", pane, n)
+		}
+	})
+	t.Run("unknown session does not join", func(t *testing.T) {
+		if pane, n := run(nil); n != 0 || pane != "" {
+			t.Errorf("got (%q, %d), want (\"\", 0)", pane, n)
+		}
+	})
+}

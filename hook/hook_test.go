@@ -726,3 +726,38 @@ func TestDispatchCompactSessionStartStaysThinking(t *testing.T) {
 		t.Errorf("State = %q, want %q", got.State, StateThinking)
 	}
 }
+
+func TestDispatchCompactionAfterStopStaysWaiting(t *testing.T) {
+	dir := t.TempDir()
+	dispatch(t, dir, EventUserPromptSubmit, map[string]any{"session_id": "s"})
+	dispatch(t, dir, EventStop, map[string]any{"session_id": "s"})
+	dispatch(t, dir, EventPreCompact, map[string]any{"session_id": "s"})
+	got := dispatch(t, dir, EventSessionStart, map[string]any{"session_id": "s", "source": "compact"})
+	if got.State != StateWaiting {
+		t.Errorf("State = %q, want %q — an idle compaction has no turn behind it", got.State, StateWaiting)
+	}
+}
+
+func TestDispatchCompactionMidTurnStaysThinking(t *testing.T) {
+	dir := t.TempDir()
+	dispatch(t, dir, EventUserPromptSubmit, map[string]any{"session_id": "s"})
+	dispatch(t, dir, EventPreCompact, map[string]any{"session_id": "s"})
+	got := dispatch(t, dir, EventSessionStart, map[string]any{"session_id": "s", "source": "compact"})
+	if got.State != StateThinking {
+		t.Errorf("State = %q, want %q", got.State, StateThinking)
+	}
+}
+
+func TestDispatchLastPromptAtOnlyMovesOnUserPrompt(t *testing.T) {
+	dir := t.TempDir()
+	got := dispatch(t, dir, EventUserPromptSubmit, map[string]any{"session_id": "s"})
+	if got.LastPromptAt == 0 {
+		t.Fatal("LastPromptAt not set by UserPromptSubmit")
+	}
+	prompt := got.LastPromptAt
+	dispatch(t, dir, EventStop, map[string]any{"session_id": "s"})
+	got = dispatch(t, dir, EventSessionStart, map[string]any{"session_id": "s", "source": "compact"})
+	if got.LastPromptAt != prompt {
+		t.Errorf("LastPromptAt = %d, want %d unchanged by compaction", got.LastPromptAt, prompt)
+	}
+}
