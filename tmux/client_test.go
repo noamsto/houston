@@ -543,15 +543,16 @@ func TestSendKeysMultiLinePastes(t *testing.T) {
 		}
 	})
 
-	t.Run("a failed load sends nothing and is not partial", func(t *testing.T) {
+	t.Run("a failed load deletes the buffer, sends nothing and is not partial", func(t *testing.T) {
 		c, calls, _ := pasteTmux(t, "load-buffer")
 		err := c.SendKeys(context.Background(), pane, text, true)
 		var partial *DeliveryPartialError
 		if err == nil || errors.As(err, &partial) {
 			t.Fatalf("SendKeys() = %v, want a plain error", err)
 		}
-		if got := calls(); len(got) != 1 {
-			t.Errorf("calls = %v, want only the failed load-buffer", got)
+		got := calls()
+		if len(got) != 2 || got[1].args[0] != "delete-buffer" || got[1].args[2] != got[0].args[2] {
+			t.Errorf("calls = %v, want failed load-buffer then delete-buffer of the same buffer", got)
 		}
 	})
 
@@ -565,6 +566,16 @@ func TestSendKeysMultiLinePastes(t *testing.T) {
 		got := calls()
 		if len(got) != 3 || got[2].args[0] != "delete-buffer" || got[2].args[2] != got[0].args[2] {
 			t.Fatalf("calls = %v, want load, failed paste, delete-buffer of the same buffer", got)
+		}
+	})
+
+	t.Run("CRLF is collapsed to LF before loading", func(t *testing.T) {
+		c, _, stdinPath := pasteTmux(t, "")
+		if err := c.SendKeys(context.Background(), pane, "a\r\nb", false); err != nil {
+			t.Fatalf("SendKeys() error: %v", err)
+		}
+		if b, _ := os.ReadFile(stdinPath); string(b) != "a\nb" {
+			t.Errorf("load-buffer stdin = %q, want %q", b, "a\nb")
 		}
 	})
 

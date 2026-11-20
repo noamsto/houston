@@ -576,7 +576,15 @@ func (c *Client) pasteText(ctx context.Context, p Pane, text string) error {
 	}
 	buf := "houston-" + hex.EncodeToString(rnd[:])
 
+	// tmux turns each LF into the CR a terminal paste sends; CRLF would double.
+	text = strings.ReplaceAll(text, "\r\n", "\n")
 	if err := c.runStdin(ctx, text, "load-buffer", "-b", buf, "-"); err != nil {
+		// A timeout can fire after tmux accepted the buffer.
+		_ = c.runStdin(context.WithoutCancel(ctx), "", "delete-buffer", "-b", buf)
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		_ = c.runStdin(context.WithoutCancel(ctx), "", "delete-buffer", "-b", buf)
 		return err
 	}
 	if err := c.runStdin(ctx, "", "paste-buffer", "-p", "-d", "-b", buf, "-t", p.Target()); err != nil {
