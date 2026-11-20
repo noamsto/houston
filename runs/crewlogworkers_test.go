@@ -15,7 +15,7 @@ func TestLogWorkers(t *testing.T) {
 		"feat/b": {crew: "c2", state: "working", hasStatus: true},
 		"feat/c": {state: "working"},
 	}
-	ws, items := logWorkers(ids, 10_000, func(crew string) bool { return crew == "c1" })
+	ws, items := logWorkers(ids, 10_000, func(crew, _ string) bool { return crew == "c1" })
 	if len(ws) != 1 {
 		t.Fatalf("workers = %+v, want only feat/a", ws)
 	}
@@ -41,7 +41,7 @@ func TestLogWorkers(t *testing.T) {
 		"dispatch-only": {crew: "c1", state: "working"},
 		"reaped":        {crew: "c1", state: "reaped", hasStatus: true, statusTS: 1000},
 		"done":          {crew: "c1", state: "done", hasStatus: true, statusTS: 1000},
-	}, 10_000, func(string) bool { return true })
+	}, 10_000, func(string, string) bool { return true })
 	if len(ws) != 1 || ws[0].Branch != "done" || ws[0].Name != nil {
 		t.Errorf("workers = %+v, want only the finished one — no status row and reaped are not listed", ws)
 	}
@@ -50,7 +50,7 @@ func TestLogWorkers(t *testing.T) {
 func TestLogWorkersWatchdogOnlyWorker(t *testing.T) {
 	ids := identityFromCrewLog(strings.NewReader(idDispatch + "\n" +
 		`{"ts":5000000,"crew_id":"c1","from":"worker:feat/a#s1","kind":"status","body":{"state":"blocked","detail":"prompt: trust","source":"watchdog"}}` + "\n"))
-	ws, items := logWorkers(ids, 10_000, func(string) bool { return true })
+	ws, items := logWorkers(ids, 10_000, func(string, string) bool { return true })
 	if len(ws) != 1 || ws[0].State != "working" || ws[0].AgeSec != nil {
 		t.Fatalf("workers = %+v, want one working worker without an age", ws)
 	}
@@ -63,7 +63,7 @@ func TestLogWorkersKeepsPRURLAfterDone(t *testing.T) {
 	ids := identityFromCrewLog(strings.NewReader(idDispatch + "\n" +
 		`{"ts":2000,"crew_id":"c1","from":"worker:feat/a#s1","kind":"status","body":{"state":"pr_open","pr_url":"https://github.com/o/r/pull/9"}}` + "\n" +
 		`{"ts":3000,"crew_id":"c1","from":"worker:feat/a#s1","kind":"status","body":{"state":"done"}}` + "\n"))
-	ws, _ := logWorkers(ids, 10_000, func(string) bool { return true })
+	ws, _ := logWorkers(ids, 10_000, func(string, string) bool { return true })
 	if len(ws) != 1 || deref(ws[0].PRURL) != "https://github.com/o/r/pull/9" {
 		t.Errorf("workers = %+v, want the PR kept", ws)
 	}

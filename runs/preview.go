@@ -12,6 +12,11 @@ func isInjectedTurn(text string) bool {
 	if strings.HasPrefix(text, "[Request interrupted") {
 		return true
 	}
+	// A crew bus payload (`Assignment: {"final":true}`, a bare JSON object) is
+	// machine text; a human prompt that opens with `{` is filtered with it.
+	if strings.HasPrefix(text, "{") || strings.HasPrefix(text, "Assignment: {") || strings.HasPrefix(text, "Assignment:{") {
+		return true
+	}
 	rest, ok := strings.CutPrefix(text, "<")
 	if !ok || rest == "" || !isASCIILetter(rest[0]) {
 		return false

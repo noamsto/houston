@@ -156,7 +156,9 @@ func identityOnly(r Run) Run {
 	crew.ViewNotice = ""
 	r.Crew = &crew
 	r.Stale = false
-	r.State = ""
+	if !r.CrewFinished {
+		r.State = ""
+	}
 	r.Attention = ""
 	r.AttentionNote = ""
 	r.Question = nil
@@ -351,9 +353,43 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 		if generatedAt == 0 {
 			generatedAt = now.Unix()
 		}
-		synthWorkers, synthItems := logWorkers(ids, generatedAt, func(crew string) bool {
+		// crew's view also drops a finished worker whose window is still open,
+		// leaving only the tmux layer's identity-less card. Such a worker is read
+		// from the bus log too, pinned to the one pane that is provably its own.
+		inView := map[rowKey]bool{}
+		for _, w := range ov.Workers {
+			inView[rowKey{w.Crew, w.Branch}] = true
+		}
+		type finishedJoin struct {
+			pane  string
+			stuck bool // only the relaxed join accepts the pane: its own stamp is stale
+		}
+		finishedPane := map[rowKey]finishedJoin{}
+		for branch, id := range ids {
+			k := rowKey{id.crew, branch}
+			if id.crew == "" || !id.hasStatus || inView[k] || id.state != "done" && id.state != "failed" {
+				continue
+			}
+			join := func(stuckOK bool) (string, bool) {
+				p, n := resolvePaneAs(bus, branch, FromCrewState(id.state), id.statusTS/1000, id.session, id.engineSession, paneSessions, wins, panes, s.crewDir, s.procStart, stuckOK)
+				return p, n == 1
+			}
+			if p, ok := join(false); ok {
+				finishedPane[k] = finishedJoin{pane: p}
+			} else if p, ok := join(true); ok {
+				finishedPane[k] = finishedJoin{pane: p, stuck: true}
+			}
+		}
+		synthWorkers, synthItems := logWorkers(ids, generatedAt, func(crew, branch string) bool {
+			if _, ok := finishedPane[rowKey{crew, branch}]; ok {
+				return true
+			}
 			other := joinedOn[crew]
 			return other != "" && other != bus && !listed[crew]
+		})
+		synthItems = slices.DeleteFunc(synthItems, func(it crewview.Item) bool {
+			_, ok := finishedPane[rowKey{it.Crew, it.Branch}]
+			return ok
 		})
 		synthKeys := map[rowKey]bool{}
 		for _, w := range synthWorkers {
@@ -381,6 +417,10 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 				routed.Stale, routed.Crew.ViewNotice = true, crewRosterHeldNote
 			}
 			paneID, candidates := resolvePane(bus, branch, b.State, b.UpdatedAt, b.session, b.CrewSession, paneSessions, wins, panes, s.crewDir, s.procStart)
+			if f, ok := finishedPane[rowKey{b.Crew.Name, b.Branch}]; ok {
+				paneID, candidates = f.pane, 1
+				routed.CrewFinished = f.stuck
+			}
 			activity := crewBranch{Run: routed, lastActivity: max(b.lastActivity, b.UpdatedAt*1000), workerSilent: b.workerSilent}
 			if crewRunAbandoned(activity, candidates != 1, joinedOn[b.Crew.Name] != "" && !synthKeys[rowKey{b.Crew.Name, b.Branch}], now) {
 				continue

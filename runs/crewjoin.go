@@ -60,6 +60,14 @@ import "github.com/noamsto/houston/tmux"
 // busEngineSession is the bus record's engine_session (Run.CrewSession) and
 // paneSessions maps a pane id to its current hook session id.
 func resolvePane(bus, branch string, busState State, busUpdatedAt, busSession int64, busEngineSession string, paneSessions map[string]string, wins []tmux.WindowOptions, panes []tmux.PaneOptions, busOf func(gitRoot string) string, procStart procStartFunc) (paneID string, candidates int) {
+	return resolvePaneAs(bus, branch, busState, busUpdatedAt, busSession, busEngineSession, paneSessions, wins, panes, busOf, procStart, false)
+}
+
+// resolvePaneAs is resolvePane with one knob: stuckOK drops the state-word rule
+// of a terminal join, so a pane whose last turn was cut off and whose stamp
+// still reads processing joins its own finished worker. The epoch, process
+// start and engine-session rules still bind, so a new occupant never joins.
+func resolvePaneAs(bus, branch string, busState State, busUpdatedAt, busSession int64, busEngineSession string, paneSessions map[string]string, wins []tmux.WindowOptions, panes []tmux.PaneOptions, busOf func(gitRoot string) string, procStart procStartFunc, stuckOK bool) (paneID string, candidates int) {
 	terminal := busState == StateDone || busState == StateFailed
 	byTarget := windowsByTarget(wins)
 	for _, p := range panes {
@@ -81,7 +89,7 @@ func resolvePane(bus, branch string, busState State, busUpdatedAt, busSession in
 		}
 		if terminal {
 			epoch := paneActivityEpoch(p)
-			if epoch <= 0 || epoch > busUpdatedAt+terminalJoinGrace || !finishedPaneState(p) {
+			if epoch <= 0 || epoch > busUpdatedAt+terminalJoinGrace || !stuckOK && !finishedPaneState(p) {
 				continue
 			}
 			// A /clear or /resume starts a new session id inside the same engine
