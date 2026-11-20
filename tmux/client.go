@@ -4,6 +4,8 @@ package tmux
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -521,15 +523,26 @@ func (c *Client) SendKeys(ctx context.Context, p Pane, keys string, enter bool) 
 	}
 
 	delivered := 0
-	for _, chunk := range splitSendChunks(keys) {
+	if strings.ContainsAny(keys, "\r\n") {
+		// Agent TUIs drop typed LF bytes; a bracketed paste carries the breaks.
 		if err := ctx.Err(); err != nil {
-			return failSend(delivered, err)
+			return err
 		}
-		// "--" stops tmux parsing text such as "-l" or "-1 x" as flags.
-		if err := c.run("send-keys", "-t", p.Target(), "-l", "--", escapeTrailingSemicolon(chunk)); err != nil {
-			return failSend(delivered, err)
+		if err := c.pasteText(ctx, p, keys); err != nil {
+			return err
 		}
 		delivered++
+	} else {
+		for _, chunk := range splitSendChunks(keys) {
+			if err := ctx.Err(); err != nil {
+				return failSend(delivered, err)
+			}
+			// "--" stops tmux parsing text such as "-l" or "-1 x" as flags.
+			if err := c.run("send-keys", "-t", p.Target(), "-l", "--", escapeTrailingSemicolon(chunk)); err != nil {
+				return failSend(delivered, err)
+			}
+			delivered++
+		}
 	}
 
 	// Send Enter separately (not literal).
@@ -550,6 +563,37 @@ func (c *Client) SendKeys(ctx context.Context, p Pane, keys string, enter bool) 
 		}
 	}
 	return nil
+}
+
+// pasteText delivers text as a bracketed paste through a private tmux buffer.
+// The text travels on load-buffer's stdin, never in argv. A paste that fails
+// after the buffer loaded may have reached the pane, so only a load failure is
+// a clean error.
+func (c *Client) pasteText(ctx context.Context, p Pane, text string) error {
+	var rnd [8]byte
+	if _, err := rand.Read(rnd[:]); err != nil {
+		return err
+	}
+	buf := "houston-" + hex.EncodeToString(rnd[:])
+
+	if err := c.runStdin(ctx, text, "load-buffer", "-b", buf, "-"); err != nil {
+		return err
+	}
+	if err := c.runStdin(ctx, "", "paste-buffer", "-p", "-d", "-b", buf, "-t", p.Target()); err != nil {
+		// -d only deletes after a successful paste.
+		_ = c.runStdin(context.WithoutCancel(ctx), "", "delete-buffer", "-b", buf)
+		return &DeliveryPartialError{Err: err}
+	}
+	return nil
+}
+
+// runStdin runs a tmux command feeding stdin, bounded by cmdTimeout and ctx.
+func (c *Client) runStdin(ctx context.Context, stdin string, args ...string) error {
+	ctx, cancel := context.WithTimeout(ctx, cmdTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, c.tmuxPath, args...) //nolint:gosec // tmuxPath is the resolved tmux binary; args are built by callers
+	cmd.Stdin = strings.NewReader(stdin)
+	return cmd.Run()
 }
 
 // splitSendChunks cuts s into pieces of at most sendChunkBytes, never inside a rune.

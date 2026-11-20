@@ -318,7 +318,6 @@ func TestSendKeys(t *testing.T) {
 		{"double trailing semicolon", "x;;"},
 		{"literal -l", "-l"},
 		{"leading dash", "-1 is wrong"},
-		{"multi-line trailing semicolon", "a\nb;"},
 		{"semicolon at chunk boundary", strings.Repeat("a", maxChunk-1) + ";" + strings.Repeat("b", 12000)},
 		{"long text", strings.Repeat("0123456789", 2500)},
 		{"2-byte rune across boundary", strings.Repeat("a", maxChunk-1) + strings.Repeat("\u00e9", 5000)},
@@ -447,6 +446,136 @@ func TestSendKeys(t *testing.T) {
 		}
 		if got[0].args[5] == got[2].args[5] {
 			t.Errorf("both texts are %q, want one A and one B", got[0].args[5])
+		}
+	})
+}
+
+// pasteTmux logs argv like loggingTmux and saves load-buffer's stdin to the
+// returned path; the call whose first arg is failOn exits 1.
+func pasteTmux(t *testing.T, failOn string) (*Client, func() []loggedCall, string) {
+	t.Helper()
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not found")
+	}
+	if out, _ := exec.Command(bash, "-c", `printf %s "$EPOCHREALTIME"`).Output(); len(out) == 0 {
+		t.Skip("bash lacks EPOCHREALTIME (needs >= 5.0)")
+	}
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "calls.log")
+	stdinPath := filepath.Join(dir, "stdin")
+	script := "#!" + bash + "\n" +
+		"printf '%s\\0' \"$EPOCHREALTIME\" \"$@\" $'\\001' >> " + strconv.Quote(logPath) + "\n" +
+		"[ \"$1\" = load-buffer ] && cat > " + strconv.Quote(stdinPath) + "\n" +
+		"[ \"$1\" = " + strconv.Quote(failOn) + " ] && exit 1\n" +
+		"exit 0\n"
+	path := filepath.Join(dir, "faketmux")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake tmux: %v", err)
+	}
+	calls := func() []loggedCall {
+		data, err := os.ReadFile(logPath)
+		if err != nil {
+			t.Fatalf("read call log: %v", err)
+		}
+		var out []loggedCall
+		var cur []string
+		for _, tok := range strings.Split(string(data), "\x00") {
+			switch tok {
+			case "":
+			case "\x01":
+				micros, err := strconv.ParseInt(strings.NewReplacer(".", "", ",", "").Replace(cur[0]), 10, 64)
+				if err != nil {
+					t.Fatalf("bad call timestamp %q: %v", cur[0], err)
+				}
+				out = append(out, loggedCall{at: time.Duration(micros) * time.Microsecond, args: cur[1:]})
+				cur = nil
+			default:
+				cur = append(cur, tok)
+			}
+		}
+		return out
+	}
+	return &Client{tmuxPath: path}, calls, stdinPath
+}
+
+func TestSendKeysMultiLinePastes(t *testing.T) {
+	pane := Pane{ID: "%1"}
+	const text = "first line\nsecond; line\n\nlast;"
+
+	t.Run("text rides stdin of load-buffer then bracketed paste then Enter", func(t *testing.T) {
+		c, calls, stdinPath := pasteTmux(t, "")
+		if err := c.SendKeys(context.Background(), pane, text, true); err != nil {
+			t.Fatalf("SendKeys() error: %v", err)
+		}
+		got := calls()
+		if len(got) != 3 {
+			t.Fatalf("recorded %d calls, want load-buffer, paste-buffer, Enter: %v", len(got), got)
+		}
+		for _, call := range got {
+			for _, a := range call.args {
+				if strings.Contains(a, "first line") || strings.Contains(a, "last;") {
+					t.Errorf("user text leaked into argv: %q", call.args)
+				}
+			}
+			if slices.Contains(call.args, "-l") {
+				t.Errorf("multi-line text used send-keys -l: %q", call.args)
+			}
+		}
+		load, paste := got[0].args, got[1].args
+		if len(load) != 4 || load[0] != "load-buffer" || load[1] != "-b" || !strings.HasPrefix(load[2], "houston-") || load[3] != "-" {
+			t.Fatalf("load-buffer argv = %q", load)
+		}
+		buf := load[2]
+		want := []string{"paste-buffer", "-p", "-d", "-b", buf, "-t", "%1"}
+		if !slices.Equal(paste, want) {
+			t.Errorf("paste-buffer argv = %q, want %q", paste, want)
+		}
+		if strings.Join(got[2].args, " ") != "send-keys -t %1 Enter" {
+			t.Errorf("last call = %q, want Enter", got[2].args)
+		}
+		if gap := got[2].at - got[1].at; gap < 50*time.Millisecond {
+			t.Errorf("paste->Enter gap %v, want >= 50ms", gap)
+		}
+		b, err := os.ReadFile(stdinPath)
+		if err != nil || string(b) != text {
+			t.Errorf("load-buffer stdin = %q (err %v), want %q", b, err, text)
+		}
+	})
+
+	t.Run("a failed load sends nothing and is not partial", func(t *testing.T) {
+		c, calls, _ := pasteTmux(t, "load-buffer")
+		err := c.SendKeys(context.Background(), pane, text, true)
+		var partial *DeliveryPartialError
+		if err == nil || errors.As(err, &partial) {
+			t.Fatalf("SendKeys() = %v, want a plain error", err)
+		}
+		if got := calls(); len(got) != 1 {
+			t.Errorf("calls = %v, want only the failed load-buffer", got)
+		}
+	})
+
+	t.Run("a failed paste deletes the buffer, sends no Enter and is partial", func(t *testing.T) {
+		c, calls, _ := pasteTmux(t, "paste-buffer")
+		err := c.SendKeys(context.Background(), pane, text, true)
+		var partial *DeliveryPartialError
+		if !errors.As(err, &partial) {
+			t.Fatalf("SendKeys() = %v, want *DeliveryPartialError", err)
+		}
+		got := calls()
+		if len(got) != 3 || got[2].args[0] != "delete-buffer" || got[2].args[2] != got[0].args[2] {
+			t.Fatalf("calls = %v, want load, failed paste, delete-buffer of the same buffer", got)
+		}
+	})
+
+	t.Run("single-line text keeps send-keys -l", func(t *testing.T) {
+		c, calls, _ := pasteTmux(t, "")
+		if err := c.SendKeys(context.Background(), pane, "one line", false); err != nil {
+			t.Fatalf("SendKeys() error: %v", err)
+		}
+		got := calls()
+		if len(got) != 1 || got[0].args[0] != "send-keys" {
+			t.Errorf("calls = %v, want one send-keys", got)
 		}
 	})
 }

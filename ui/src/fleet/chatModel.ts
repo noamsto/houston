@@ -242,12 +242,12 @@ export function newestTs(updates: ChatUpdate[]): number {
   return max
 }
 
-/** Line endings to LF, per-line trailing blanks dropped, outer whitespace trimmed. */
+/**
+ * Match key: every whitespace run removed. A line break the agent's input
+ * dropped or altered must not stop a sent message from confirming.
+ */
 export function normalizeText(s: string): string {
-  return s
-    .replace(/\r\n?/g, '\n')
-    .replace(/[ \t]+$/gm, '')
-    .trim()
+  return s.replace(/\s+/g, '')
 }
 
 /**
