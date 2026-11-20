@@ -76,7 +76,12 @@ the allowlist that bounds it lives there, not on the socket:
   `{"type":"text","text":"..."}` (literal text, then Enter — `tmux.Client.SendKeys` sends it as
   `send-keys -l -- <chunk>` in ≤ 8 KiB chunks, backslash-escaping a chunk's trailing `;` because tmux
   drops it as a command separator, and waits `enterSettle` before Enter so a TUI agent doesn't read
-  text+Enter as one paste and turn the Enter into a newline),
+  text+Enter as one paste and turn the Enter into a newline). Text containing a CR or LF is instead
+  delivered as a bracketed paste, since agent TUIs drop LF bytes typed through `send-keys -l`
+  (breaks vanish and lines run together): `tmux load-buffer -b houston-<random> -` takes the text on
+  stdin (never argv), `paste-buffer -p -d -b … -t <pane>` pastes it, and `delete-buffer` removes the
+  buffer if the paste fails; a paste failure is a partial delivery. The same `settle`+Enter follows.
+  `/answer` typed text and image sends go through the same helper. The pane WebSocket stays raw typing,
   `{"type":"key","key":"<terminalKeys>"}` (one key, no Enter — 400 if `key`
   isn't in the `terminalKeys` allowlist in `server/runs_terminal.go`: Escape,
   C-c, Enter, Tab, BTab, Up, Down, M-p, C-o, C-z, y, n, 1–9), or

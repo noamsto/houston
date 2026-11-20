@@ -99,9 +99,10 @@ conversation. Design and measured per-engine mapping:
   can be confirmed by a later identical message, and the anchor is only as fresh as the
   stream the browser has received (a stale stream plus an identical message typed at
   the terminal plus a lost send can show a lost bubble as confirmed).
-- **Text**: `normalizeText` on both sides (CRLF/CR to LF, trailing spaces/tabs per
-  line dropped, outer trim); the transcript's queued prompts can differ from the
-  composer text in per-line trailing whitespace.
+- **Text**: `normalizeText` on both sides deletes every whitespace run, newlines
+  included, so a message whose line breaks or trailing blanks were altered or
+  dropped on the way into the agent's input still confirms. A genuinely different
+  text never matches.
 - **Claiming**: each chunk confirms at most one bubble, oldest-sent first.
 - **Unconfirmed**: `sentAt` (browser clock) only drives the flag; a bubble with no
   match 30s after send shows "not confirmed" but is kept.

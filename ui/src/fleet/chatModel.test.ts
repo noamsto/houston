@@ -285,6 +285,26 @@ describe('reconcileOptimistic', () => {
     expect(reconcileOptimistic(pending, updates, 11_000)).toEqual({ confirmed: ['p1', 'p2'], remaining: [] })
   })
 
+  it('confirms a multi-line bubble against a transcript chunk with the breaks removed or intact', () => {
+    const pending = [
+      { localId: 'p1', text: 'one thing.\nPicking a place\n\nall set', sentAt: 10_000, anchorTs: 0 },
+      { localId: 'p2', text: 'second\nmessage', sentAt: 10_001, anchorTs: 0 },
+    ]
+    const updates = [
+      userChunk('u1', 1, 'one thing.Picking a placeall set', { ts: 10_500 }),
+      userChunk('u2', 2, 'second\nmessage', { ts: 10_600 }),
+    ]
+    expect(reconcileOptimistic(pending, updates, 11_000)).toEqual({ confirmed: ['p1', 'p2'], remaining: [] })
+  })
+
+  it('still flags a genuinely different multi-line text unconfirmed after 30s', () => {
+    const pending = [{ localId: 'p1', text: 'a\nb', sentAt: 0, anchorTs: 0 }]
+    const updates = [userChunk('u1', 1, 'a\nc', { ts: 5_000 })]
+    const result = reconcileOptimistic(pending, updates, 31_000)
+    expect(result.confirmed).toEqual([])
+    expect(result.remaining[0]).toMatchObject({ localId: 'p1', unconfirmed: true })
+  })
+
   it('never confirms a message that is not in the transcript: unconfirmed after 30s', () => {
     const pending = [{ localId: 'p1', text: 'hello', sentAt: 0, anchorTs: 0 }]
     const updates = [userChunk('u1', 1, 'something else', { ts: 5_000 })]
