@@ -8,11 +8,11 @@ import (
 )
 
 // logWorkers synthesizes crew's overview rows for the branches of ids whose
-// crew include accepts, from the status fold of the bus log. It stands in for
+// (crew, branch) include accepts, from the status fold of the bus log. It stands in for
 // a view that omits a crew whose dispatcher is live on another bus; every row
 // and item is local-origin, ages are against generatedAt, and items carry no
 // Action, since houston has nothing of crew's to run.
-func logWorkers(ids map[string]crewIdentity, generatedAt int64, include func(crew string) bool) ([]crewview.Worker, []crewview.Item) {
+func logWorkers(ids map[string]crewIdentity, generatedAt int64, include func(crew, branch string) bool) ([]crewview.Worker, []crewview.Item) {
 	var workers []crewview.Worker
 	var items []crewview.Item
 	ageOf := func(ms int64) int64 { return generatedAt - ms/1000 }
@@ -21,7 +21,7 @@ func logWorkers(ids map[string]crewIdentity, generatedAt int64, include func(cre
 		id := ids[branch]
 		// crew lists a worker from its first status row, the watchdog's
 		// included, and drops a reaped one.
-		if id.crew == "" || !id.hasStatus || id.state == "reaped" || !include(id.crew) {
+		if id.crew == "" || !id.hasStatus || id.state == "reaped" || !include(id.crew, branch) {
 			continue
 		}
 		w := crewview.Worker{

@@ -60,6 +60,14 @@ import "github.com/noamsto/houston/tmux"
 // busEngineSession is the bus record's engine_session (Run.CrewSession) and
 // paneSessions maps a pane id to its current hook session id.
 func resolvePane(bus, branch string, busState State, busUpdatedAt, busSession int64, busEngineSession string, paneSessions map[string]string, wins []tmux.WindowOptions, panes []tmux.PaneOptions, busOf func(gitRoot string) string, procStart procStartFunc) (paneID string, candidates int) {
+	return resolvePaneAs(bus, branch, busState, busUpdatedAt, busSession, busEngineSession, paneSessions, wins, panes, busOf, procStart, false)
+}
+
+// resolvePaneAs is resolvePane with one knob: stuckOK drops the state-word rule
+// of a terminal join, so a pane whose last turn was cut off and whose stamp
+// still reads processing joins its own finished worker. The epoch, process
+// start and engine-session rules still bind, so a new occupant never joins.
+func resolvePaneAs(bus, branch string, busState State, busUpdatedAt, busSession int64, busEngineSession string, paneSessions map[string]string, wins []tmux.WindowOptions, panes []tmux.PaneOptions, busOf func(gitRoot string) string, procStart procStartFunc, stuckOK bool) (paneID string, candidates int) {
 	terminal := busState == StateDone || busState == StateFailed
 	byTarget := windowsByTarget(wins)
 	for _, p := range panes {
@@ -81,7 +89,16 @@ func resolvePane(bus, branch string, busState State, busUpdatedAt, busSession in
 		}
 		if terminal {
 			epoch := paneActivityEpoch(p)
-			if epoch <= 0 || epoch > busUpdatedAt+terminalJoinGrace || !finishedPaneState(p) {
+			limit := busUpdatedAt + terminalJoinGrace
+			if !finishedPaneState(p) {
+				// A cut-off final turn leaves processing stamped at or before the
+				// terminal row; one stamped after it is a turn begun since.
+				if !stuckOK {
+					continue
+				}
+				limit = busUpdatedAt + stuckStampSlack
+			}
+			if epoch <= 0 || epoch > limit {
 				continue
 			}
 			// A /clear or /resume starts a new session id inside the same engine
@@ -114,6 +131,12 @@ func resolvePane(bus, branch string, busState State, busUpdatedAt, busSession in
 // occupant is rejected by finishedPaneState, and an idle new occupant within
 // the window is rejected by the process-start check below (#158).
 const terminalJoinGrace int64 = 300
+
+// stuckStampSlack is how far past the terminal record a still-working pane
+// stamp may sit and be read as the finished worker's cut-off final turn (the
+// tool hook of `crew status done` can re-stamp processing a moment after the
+// row).
+const stuckStampSlack int64 = 30
 
 // sessionStartSlack tolerates procfs btime truncation (integer seconds) and
 // clock granularity around the session epoch: the real margin is ~1-2s

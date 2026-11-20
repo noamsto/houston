@@ -263,6 +263,14 @@ func (r *Registry) composeLocked(key string) (Run, bool) {
 	}
 	out.DraftKey = draftKeyOf(out)
 	out.Caps = deriveCaps(bySource)
+	// A finished worker's pane can keep a stale processing/thinking stamp (its
+	// last turn was cut off); the crew layer's terminal verdict, read from the
+	// bus, beats it. A blocked state is never overridden: needs-you stays
+	// exactly blocked.
+	if cs := bySource["crew"].State; (cs == StateDone || cs == StateFailed) && bySource["crew"].CrewFinished &&
+		(out.State == StateThinking || out.State == StateRunning || out.State == StateCompacting) {
+		out.State = cs
+	}
 	// run.go documents "non-nil Question implies State == StateBlocked", and
 	// composition is where that invariant must actually hold: hooksource.go
 	// keys on the same pane id as the crew layer and sits above it in
@@ -523,6 +531,9 @@ func mergeInto(dst *Run, src Run) {
 	// First opinion wins, like Project.
 	if src.Session != "" && dst.Session == "" {
 		dst.Session = src.Session
+	}
+	if src.CrewFinished {
+		dst.CrewFinished = true
 	}
 	if src.CrewBus != "" && dst.CrewBus == "" {
 		dst.CrewBus = src.CrewBus

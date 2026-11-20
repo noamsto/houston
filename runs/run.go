@@ -71,6 +71,10 @@ type Run struct {
 	// layer read this run from, on both worker and dispatcher layers.
 	// Internal; never on the wire.
 	CrewBus string `json:"-"`
+	// CrewFinished marks a finished worker read from the bus log because crew's
+	// view dropped it while its window stayed open; its terminal state outlives
+	// the eviction grace (identityOnly), since the pane's own state is stale.
+	CrewFinished bool `json:"-"`
 
 	// Stale means a source stopped reporting. The Run keeps its last known
 	// values and says so; it is never a State, because a stale run still has
