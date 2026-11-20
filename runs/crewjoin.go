@@ -115,7 +115,7 @@ func resolvePaneWith(bus, branch string, busState State, busUpdatedAt, busSessio
 			if epoch <= 0 {
 				continue
 			}
-			if epoch > limit && (promptFree == nil || !promptFree(p.PaneID, busUpdatedAt+stuckStampSlack)) {
+			if epoch > limit && (promptFree == nil || !promptFree(p.PaneID, busUpdatedAt)) {
 				continue
 			}
 			// A /clear or /resume starts a new session id inside the same engine

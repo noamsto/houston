@@ -2752,6 +2752,13 @@ func TestResolvePaneTerminalPostDoneStamp(t *testing.T) {
 			t.Errorf("got (%q, %d), want (\"\", 0)", pane, n)
 		}
 	})
+	t.Run("prompt just after done does not join", func(t *testing.T) {
+		snap := []hub.SessionView{{SessionID: "s1", TmuxPane: "%307", LastPromptAt: done + 10}}
+		pf := panePromptFree(snap, map[string]string{"%307": "s1"})
+		if pane, n := run(pf); n != 0 || pane != "" {
+			t.Errorf("got (%q, %d), want (\"\", 0)", pane, n)
+		}
+	})
 	t.Run("unknown session does not join", func(t *testing.T) {
 		if pane, n := run(nil); n != 0 || pane != "" {
 			t.Errorf("got (%q, %d), want (\"\", 0)", pane, n)
