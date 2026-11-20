@@ -304,6 +304,28 @@ func paneHookSessions(snap []hub.SessionView, ps paneSet) map[string]string {
 	return out
 }
 
+// panePromptFree builds the promptFreeFunc over the hook sessions currently
+// owning each pane (sessions, from paneHookSessions). A session that records
+// its last real prompt answers exactly; a state file written before that field
+// existed answers only when its last SessionStart was a compaction, the one
+// non-prompt event known to move a finished worker's stamp.
+func panePromptFree(snap []hub.SessionView, sessions map[string]string) promptFreeFunc {
+	byID := make(map[string]hub.SessionView, len(sessions))
+	for _, v := range snap {
+		byID[v.SessionID] = v
+	}
+	return func(paneID string, after int64) bool {
+		v, ok := byID[sessions[paneID]]
+		if !ok {
+			return false
+		}
+		if v.LastPromptAt > 0 {
+			return v.LastPromptAt <= after
+		}
+		return v.Source == "compact"
+	}
+}
+
 // listPanes lists the live panes along with the identity of the server that
 // produced this listing. The identity comes off the same list-panes exec as
 // the pane ids themselves, so the two can never disagree about which server

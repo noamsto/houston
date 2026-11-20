@@ -39,6 +39,8 @@ type SessionView struct {
 	ToolInputHint  string      `json:"tool_input_hint,omitempty"`
 	LastMessage    string      `json:"last_message,omitempty"`
 	Turn           int         `json:"turn"`
+	LastPromptAt   int64       `json:"last_prompt_at,omitempty"` // newest real user prompt, unlike UpdatedAt
+	Source         string      `json:"source,omitempty"`         // SessionStart source ("compact" after a compaction)
 	Since          int64       `json:"since,omitempty"`
 	UpdatedAt      int64       `json:"updated_at"`
 	SeenAt         int64       `json:"seen_at,omitempty"` // newest sign of life; kept out of viewSignature so a heartbeat does not broadcast
@@ -879,6 +881,8 @@ func mergeStateIntoView(v *SessionView, s hook.SessionState) {
 		v.LastMessage = s.LastMessage
 	}
 	v.Turn = s.Turn
+	v.LastPromptAt = s.LastPromptAt
+	v.Source = s.Source
 	v.Since = s.Since
 	v.UpdatedAt = s.UpdatedAt
 	v.TranscriptPath = s.TranscriptPath
