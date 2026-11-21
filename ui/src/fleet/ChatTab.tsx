@@ -16,6 +16,7 @@ import { useStickyScroll } from '../hooks/useStickyScroll'
 import { buildItems, newestTs, provisionalTool, reconcileOptimistic, toolRowLabel } from './chatModel'
 import type { AssistantItem, ChatItem, DividerItem, Optimistic, QuestionItem, ToolCall, ToolsItem, UserItem } from './chatModel'
 import { kindGlyph, statusGlyph } from './chatGlyphs'
+import { previewText } from './chatPreview'
 import { ChatMarkdownLazy, ChatPlainText } from './chatMarkdownLazy'
 import { preloadChatMarkdown } from './chatMarkdownLoader'
 import { PermissionBar } from './PermissionBar'
@@ -29,10 +30,24 @@ function prefersReducedMotion(): boolean {
   return typeof window !== 'undefined' && Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches)
 }
 
+function CollapsibleText({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false)
+  const { preview, truncated } = useMemo(() => previewText(text), [text])
+  if (!truncated) return <>{text}</>
+  return (
+    <>
+      {expanded ? text : preview}
+      <button type="button" className="chat-user-toggle" aria-expanded={expanded} onClick={() => setExpanded((v) => !v)}>
+        {expanded ? 'Show less' : 'Show more'}
+      </button>
+    </>
+  )
+}
+
 function UserBubble({ item }: { item: UserItem }) {
   return (
     <div className="chat-bubble chat-user" data-seq={item.seq} data-id={item.id}>
-      {item.text}
+      <CollapsibleText text={item.text} />
     </div>
   )
 }
@@ -550,7 +565,7 @@ export function ChatTab({ run, now }: { run: Run; now: number }) {
               className={`chat-bubble chat-user chat-optimistic${p.unconfirmed ? ' unconfirmed' : ''}`}
               data-id={p.localId}
             >
-              {p.text}
+              <CollapsibleText text={p.text} />
               {p.unconfirmed && <span className="chat-optimistic-flag">not confirmed</span>}
             </div>
           ))}

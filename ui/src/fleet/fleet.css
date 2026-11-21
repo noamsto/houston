@@ -827,7 +827,12 @@ a.run-chip.crew-feed-link::after, a.run-chip.pr.crew-feed-pr::after { content: '
   font-size: 15px; line-height: 1.5; overflow-wrap: anywhere;
 }
 .chat-bubble.chat-user {
-  align-self: flex-end; background: var(--accent); color: var(--bg);
+  align-self: flex-end; background: var(--accent); color: var(--bg); white-space: pre-wrap;
+}
+.chat-user-toggle {
+  display: block; min-height: 44px; margin-top: 2px; padding: 0;
+  background: none; border: 0; color: inherit; font: inherit; font-size: 13px;
+  font-weight: 600; text-decoration: underline; cursor: pointer;
 }
 .chat-bubble.chat-optimistic { opacity: 0.6; }
 .chat-bubble.chat-optimistic.unconfirmed { opacity: 1; border: 1px dashed var(--state-blocked); }

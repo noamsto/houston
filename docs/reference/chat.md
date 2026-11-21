@@ -86,6 +86,10 @@ conversation. Design and measured per-engine mapping:
   hand-written. `go run -tags tools ./cmd/sessionlog <file>` prints a file as
   ACP JSONL for eyeballing.
 
+### Long user messages
+
+A user bubble (transcript or optimistic) with more than 8 lines or 600 characters renders collapsed: the first 6 lines capped at 400 characters (cut at a word boundary, trailing `…`; `previewText` in `chatPreview.ts`) plus a "Show more" / "Show less" button with `aria-expanded`. Expanded state is per-bubble component state, and only the button toggles. Bubbles use `white-space: pre-wrap`.
+
 ### Optimistic bubbles
 
 `handleSend` shows a text send immediately as a pending bubble; `reconcileOptimistic`
