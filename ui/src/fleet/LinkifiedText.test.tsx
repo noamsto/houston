@@ -32,6 +32,12 @@ describe('LinkifiedText', () => {
     expect(hrefs('"https://x.y/a"?')).toEqual(['https://x.y/a'])
   })
 
+  it('excludes markdown emphasis and an ellipsis after the URL', () => {
+    expect(hrefs('`https://x.y/a`')).toEqual(['https://x.y/a'])
+    expect(hrefs('**https://x.y/a**')).toEqual(['https://x.y/a'])
+    expect(hrefs('https://x.y/a…')).toEqual(['https://x.y/a'])
+  })
+
   it('keeps a balanced closing paren', () => {
     expect(hrefs('(https://x.y/a_(b))')).toEqual(['https://x.y/a_(b)'])
   })

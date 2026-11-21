@@ -49,7 +49,7 @@ afterEach(() => {
 describe('PermissionBar', () => {
   it('links URLs in the question and the detail, outside any button', async () => {
     install({
-      onPrompt: async () => json({ ...prompt('p1'), question: 'Fetch https://a.example/x?', detail: 'curl https://b.example/y' }),
+      onPrompt: async () => json({ ...prompt('p1'), question: 'Fetch https://a.example/x?', detail: 'curl https://b.example/y\na\nb\nc' }),
       answer: async () => json({}),
     })
     const { container } = render(<PermissionBar run={run('blocked')} onPrompt={() => {}} />)

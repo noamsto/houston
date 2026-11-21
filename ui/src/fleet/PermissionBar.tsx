@@ -10,6 +10,9 @@ const POLL_MS = 2000
 // on screen after them is the same dialog left open or shown again.
 const ANSWERED_POLLS = 3
 
+// The detail block clamps at a few lines; below this a toggle would do nothing.
+const longDetail = (d: string) => d.split('\n').length > 3 || d.length > 120
+
 function PromptDialog({ runId, prompt, onSending, onAnswered, onMoved }: {
   runId: string
   prompt: Prompt
@@ -41,9 +44,11 @@ function PromptDialog({ runId, prompt, onSending, onAnswered, onMoved }: {
           <div className={`permission-bar-detail${expanded ? ' expanded' : ''}`}>
             <LinkifiedText text={prompt.detail} />
           </div>
+          {longDetail(prompt.detail) && (
           <button type="button" className="permission-bar-detail-toggle" aria-expanded={expanded} onClick={() => setExpanded((e) => !e)}>
             {expanded ? 'Show less' : 'Show more'}
           </button>
+          )}
         </>
       )}
       <div className="permission-bar-choices">

@@ -1425,14 +1425,12 @@ describe('ChatTab permission bar', () => {
     expect(screen.getByRole('button', { name: "2. Yes, and don't ask again" })).toBeTruthy()
     expect(screen.getByRole('button', { name: '3. No' })).toBeTruthy()
     expect(screen.getByText(/rm -rf build/)).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Show more' }).getAttribute('aria-expanded')).toBe('false')
   })
 
-  it('expands the detail on tap', async () => {
+  it('shows no toggle for a short detail', async () => {
     await renderReady({ state: 'blocked' }, withPrompt())
-    const toggle = await screen.findByRole('button', { name: 'Show more' })
-    fireEvent.click(toggle)
-    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    await screen.findByText(/rm -rf build/)
+    expect(screen.queryByRole('button', { name: 'Show more' })).toBeNull()
   })
 
   it('shows for an idle run with a prompt', async () => {
@@ -1666,6 +1664,12 @@ describe('ChatTab long user messages', () => {
     const a = container.querySelector('.chat-user a') as HTMLAnchorElement
     expect(a.getAttribute('href')).toBe('https://x.y/a')
     expect(a.getAttribute('target')).toBe('_blank')
+  })
+
+  it('does not link the preview ellipsis when a long message is cut after a URL', async () => {
+    const text = ['a', 'b', 'c', 'd', 'e', 'see https://x.y/abc', 'g', 'h', 'i'].join('\n')
+    const { container } = await renderReady({}, { page: page('e1', [userChunk('u1', 1, text)]) })
+    expect(container.querySelector('.chat-user a')?.getAttribute('href')).toBe('https://x.y/abc')
   })
 
   it('shows no button on a short message', async () => {
