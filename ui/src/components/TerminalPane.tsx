@@ -22,6 +22,7 @@ import { writeSnapshot, type SnapshotCursor } from '../lib/terminalSnapshot'
 import { desktopFillScale } from '../lib/desktopFillScale'
 import { altScrollMode, cellAt, clampSteps, pxPerStep, scrollInput, takeSteps, wheelDeltaPx } from '../lib/altScroll'
 import { PaneHeader } from './PaneHeader'
+import type { ToolCall } from '../fleet/chatModel'
 import { MobileInputBar } from './MobileInputBar'
 import { ColumnScrubber } from './ColumnScrubber'
 
@@ -37,6 +38,7 @@ interface Props {
   runState?: string
   suggestion?: string | null
   draftKey?: string
+  question?: { runId: string; call: ToolCall }
 }
 
 interface Seed {
@@ -48,7 +50,7 @@ interface Seed {
 const MOBILE_TERM_WIDTH = 960
 const PAD = 6
 
-export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader = false, onConnectionChange, onEnded, runAgent, runState, suggestion, draftKey }: Props) {
+export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader = false, onConnectionChange, onEnded, runAgent, runState, suggestion, draftKey, question }: Props) {
   const key = terminalKey(address)
   // outerRef: observed by ResizeObserver; has padding that creates visual breathing room
   const outerRef = useRef<HTMLDivElement>(null)
@@ -834,6 +836,7 @@ export function TerminalPane({ address, isFocused, onFocus, onClose, hideHeader 
           runAgent={runAgent}
           runState={runState}
           suggestion={suggestion}
+          question={question}
         />
       )}
     </div>

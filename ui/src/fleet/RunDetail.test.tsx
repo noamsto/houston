@@ -402,6 +402,8 @@ describe('RunDetail chat tab', () => {
     return run({ caps: { terminal: true, reply: true, kill: true, chat: true }, ...p })
   }
 
+  const liveAgentRun = () => chatRun({ tmux: { session: 'sess', window: 0, pane_id: '%1' }, agent: 'claude-code' })
+
   function stubChatFetch(body: unknown, status = 200) {
     vi.mocked(fetch).mockImplementation((input: string | URL | Request) => {
       const url = String(input)
@@ -418,6 +420,31 @@ describe('RunDetail chat tab', () => {
   }
 
   const emptyPage = { epoch: 'e1', updates: [], more: false }
+
+  it('shows the step panel above the mobile terminal for a pending AskUserQuestion', async () => {
+    desktop = false
+    const state = {
+      tabbed: true, step: 0, count: 2,
+      questions: [
+        { question: 'Which color?', header: 'Color', multiSelect: false, preview: false, options: [{ label: 'Red' }, { label: 'Blue' }] },
+        { question: 'Which size?', header: 'Size', multiSelect: false, preview: false, options: [{ label: 'S' }, { label: 'L' }] },
+      ],
+    }
+    const chatPage = {
+      epoch: 'e1', more: false,
+      updates: [{ id: 'q1', seq: 1, ts: 1000, sessionUpdate: 'tool_call', toolCallId: 'q1', status: 'in_progress', _meta: { tool: 'AskUserQuestion' } }],
+    }
+    vi.mocked(fetch).mockImplementation((input: string | URL | Request) => {
+      const url = String(input)
+      const body = url.includes('/answer') ? state : url.includes('/chat') ? chatPage : {}
+      return Promise.resolve({ ok: true, status: 200, json: async () => body, text: async () => '' } as Response)
+    })
+    const r = liveAgentRun()
+    const { container } = render(<RunDetail mode={null} runs={[r]} hasSnapshot streamConnected now={now} id={r.id} tab="terminal" />)
+    await screen.findByText('1 of 2')
+    const panel = container.querySelector<HTMLElement>('.terminal-question-panel')!
+    await waitFor(() => expect(panel.hidden).toBe(false))
+  })
 
   it('offers and selects the Chat tab by default when caps.chat is true and no tab is routed', async () => {
     stubChatFetch(emptyPage)

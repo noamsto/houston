@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MobileInputBar } from './MobileInputBar'
 import type { TerminalAddress } from '../api/terminal'
 import { composerMaxHeight } from './composerMaxHeight'
@@ -511,5 +511,49 @@ describe('composer auto-grow', () => {
       expect(parseInt(el.style.minWidth, 10)).toBeGreaterThanOrEqual(44)
       expect(parseInt(el.style.minHeight, 10)).toBeGreaterThanOrEqual(44)
     }
+  })
+})
+
+describe('MobileInputBar question panel and choices', () => {
+  const call = { toolCallId: 'q1', tool: 'AskUserQuestion', status: 'in_progress' as const, seq: 1 }
+  const state = {
+    tabbed: true, step: 0, count: 2,
+    questions: [
+      { question: 'Which color?', header: 'Color', multiSelect: false, preview: false, options: [{ label: 'Red' }, { label: 'Blue' }] },
+      { question: 'Which size?', header: 'Size', multiSelect: false, preview: false, options: [{ label: 'S' }, { label: 'L' }] },
+    ],
+  }
+  const stubState = (status: number) =>
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ status, ok: status < 300, text: async () => '', json: async () => state } as Response)))
+
+  it('shows the step panel instead of the chips when the pane reports the dialog', async () => {
+    stubState(200)
+    const { container } = render(<MobileInputBar address={runAddress} choices={['Red', 'Blue']} agent="claude-code" question={{ runId: 'run-1', call }} />)
+    await screen.findByText('1 of 2')
+    await waitFor(() => expect(screen.queryByTestId('choices')).toBeNull())
+    expect(container.querySelector<HTMLElement>('.terminal-question-panel')!.hidden).toBe(false)
+  })
+
+  it('keeps the chips and hides the panel when the pane shows no dialog (404)', async () => {
+    stubState(404)
+    const { container } = render(<MobileInputBar address={runAddress} choices={['Red', 'Blue']} agent="claude-code" question={{ runId: 'run-1', call }} />)
+    await waitFor(() => expect(fetch).toHaveBeenCalled())
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
+    expect(screen.getByTestId('choices')).toBeTruthy()
+    expect(container.querySelector<HTMLElement>('.terminal-question-panel')!.hidden).toBe(true)
+  })
+
+  it('does not cap or scroll the chips row', () => {
+    render(<MobileInputBar address={runAddress} choices={['Red', 'Blue']} agent="claude-code" />)
+    const style = screen.getByTestId('choices').style
+    expect(style.maxHeight).toBe('')
+    expect(style.overflowY).toBe('')
+  })
+
+  it('ignores the pane input text as placeholder while a dialog is showing, and uses it otherwise', () => {
+    const view = render(<MobileInputBar address={runAddress} choices={['Red']} inputText="Type something." />)
+    expect(screen.getByPlaceholderText('Send a message...')).toBeTruthy()
+    view.rerender(<MobileInputBar address={runAddress} inputText="Type something." />)
+    expect(screen.getByPlaceholderText('Type something.')).toBeTruthy()
   })
 })

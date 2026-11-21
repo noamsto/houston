@@ -8,6 +8,7 @@ import { isClaudeAgent, suggestedCommand } from '../components/quickCommands'
 import { useRunChat } from '../hooks/useRunChat'
 import { useEdgeSwipeBack } from '../hooks/useEdgeSwipeBack'
 import { useTerminalLifecycle } from './useTerminalLifecycle'
+import { buildItems } from './chatModel'
 import { ChatTab } from './ChatTab'
 import { CrewTab } from './CrewTab'
 import { RunQuestion, RunStatusStrip } from './RunStatusStrip'
@@ -141,6 +142,14 @@ function RunDetailBody({ run, runs, tab, mode, streamConnected, now, onBack, tab
   const { updates } = useRunChat(run.id, chatEnabled)
   const suggestion = useMemo(() => (chatEnabled ? suggestedCommand(updates) : null), [chatEnabled, updates])
 
+  const items = useMemo(() => (chatEnabled ? buildItems(updates) : []), [chatEnabled, updates])
+  const question = useMemo(() => {
+    if (!run.caps.terminal || run.state === 'done' || run.state === 'failed') return undefined
+    const pending = items.filter((i) => i.kind === 'question' && i.call.status !== 'completed' && i.call.status !== 'failed')
+    const newest = pending[pending.length - 1]
+    return newest?.kind === 'question' ? { runId: run.id, call: newest.call } : undefined
+  }, [items, run.id, run.caps.terminal, run.state])
+
   return (
     <>
       {!tabsInBar && (
@@ -190,6 +199,7 @@ function RunDetailBody({ run, runs, tab, mode, streamConnected, now, onBack, tab
                   runState={run.state}
                   suggestion={suggestion}
                   draftKey={run.draft_key}
+                  question={question}
                 />
               </>
             )}

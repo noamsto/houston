@@ -1202,3 +1202,27 @@ button.chat-divider::after { content: ''; position: absolute; left: -6px; right:
   color: var(--text-dim);
   border: 1px solid var(--line);
 }
+
+.terminal-question-panel {
+  border-top: 2px solid var(--accent-attention);
+  background: var(--bg-surface);
+}
+.terminal-question-panel[hidden] { display: none; }
+.terminal-question-body {
+  padding: 4px 12px 8px;
+  max-height: 60dvh;
+  overflow-y: auto;
+}
+.terminal-question-body[hidden] { display: none; }
+.terminal-question-toggle {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  background: none;
+  border: 0;
+  color: var(--accent-attention);
+  font-size: 14px;
+  text-align: left;
+  padding: 0 12px;
+  cursor: pointer;
+}

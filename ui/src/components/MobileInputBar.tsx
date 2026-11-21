@@ -2,8 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { sendImages, sendKey, sendText, terminalKey, type TerminalAddress } from '../api/terminal'
 import { AttachButton, SendButton, VoiceButton } from './ComposerControls'
 import { autoGrow, useVoiceInput } from './composerHooks'
+import type { ToolCall } from '../fleet/chatModel'
 import { QuickCommands } from './QuickCommands'
 import { StagedImageChip } from './StagedImageChip'
+import { TerminalQuestionPanel } from './TerminalQuestionPanel'
 import { useComposerDraft } from './useComposerDraft'
 import { readBase64, skippedMessage, useStagedImage } from './useStagedImage'
 
@@ -16,6 +18,7 @@ interface Props {
   runState?: string
   suggestion?: string | null
   draftKey?: string
+  question?: { runId: string; call: ToolCall }
 }
 
 type QuickAction = { label: string; action: 'text' | 'special'; value: string; title?: string }
@@ -64,13 +67,14 @@ const errorStyle: React.CSSProperties = {
   padding: '6px 10px 0',
 }
 
-export function MobileInputBar({ address, choices, inputText, agent, runAgent, runState, suggestion, draftKey }: Props) {
+export function MobileInputBar({ address, choices, inputText, agent, runAgent, runState, suggestion, draftKey, question }: Props) {
   const [text, setText, clearIf] = useComposerDraft(draftKey !== undefined ? `run:${draftKey}` : terminalKey(address))
   const { staged, stage, remove, clear: clearStaged } = useStagedImage()
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState<string | null>(null)
   const [keyError, setKeyError] = useState<string | null>(null)
   const [confirmInterrupt, setConfirmInterrupt] = useState(false)
+  const [interactive, setInteractive] = useState(false)
   const sendingRef = useRef(false)
   const keyErrorTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   useEffect(() => () => clearTimeout(keyErrorTimer.current), [])
@@ -166,7 +170,8 @@ export function MobileInputBar({ address, choices, inputText, agent, runAgent, r
       }}
     >
       {/* Agent choice buttons */}
-      {choices && choices.length > 0 && (
+      {question && <TerminalQuestionPanel runId={question.runId} call={question.call} onInteractive={setInteractive} />}
+      {!interactive && choices && choices.length > 0 && (
         <div
           data-testid="choices"
           style={{
@@ -174,8 +179,6 @@ export function MobileInputBar({ address, choices, inputText, agent, runAgent, r
             gap: 8,
             padding: '8px 8px 0',
             flexWrap: 'wrap',
-            maxHeight: 104,
-            overflowY: 'auto',
             animation: 'slide-up 0.18s ease-out',
           }}
         >
@@ -277,7 +280,7 @@ export function MobileInputBar({ address, choices, inputText, agent, runAgent, r
                 autoCapitalize="off"
                 autoCorrect="off"
                 spellCheck={false}
-                placeholder={inputText || 'Send a message...'}
+                placeholder={(!interactive && !choices?.length && inputText) || 'Send a message...'}
                 rows={1}
               />
 
