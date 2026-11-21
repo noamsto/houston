@@ -1641,3 +1641,45 @@ describe('ChatTab permission bar', () => {
     })
   })
 })
+
+describe('ChatTab long user messages', () => {
+  const long = Array.from({ length: 12 }, (_, i) => `line ${i + 1}`).join('\n')
+
+  it('collapses a long user message behind Show more and expands/collapses on click', async () => {
+    const { container } = await renderReady({}, { page: page('e1', [userChunk('u1', 1, long)]) })
+    const bubble = container.querySelector('.chat-user') as HTMLElement
+    const btn = within(bubble).getByRole('button', { name: 'Show more' })
+    expect(btn.getAttribute('aria-expanded')).toBe('false')
+    expect(bubble.textContent).toContain('line 6')
+    expect(bubble.textContent).not.toContain('line 7')
+    fireEvent.click(btn)
+    expect(bubble.textContent).toContain('line 12')
+    const less = within(bubble).getByRole('button', { name: 'Show less' })
+    expect(less.getAttribute('aria-expanded')).toBe('true')
+    fireEvent.click(less)
+    expect(bubble.textContent).not.toContain('line 12')
+  })
+
+  it('shows no button on a short message', async () => {
+    const { container } = await renderReady({}, { page: page('e1', [userChunk('u1', 1, 'short')]) })
+    expect(container.querySelector('.chat-user button')).toBeNull()
+  })
+
+  it('collapses a long optimistic message and keeps the not confirmed flag', async () => {
+    await renderReady({}, { page: page('e1', []) })
+    vi.useFakeTimers()
+    try {
+      const textarea = screen.getByPlaceholderText('Message…') as HTMLTextAreaElement
+      fireEvent.change(textarea, { target: { value: long } })
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+      await act(async () => {})
+      const bubble = document.querySelector('.chat-optimistic') as HTMLElement
+      expect(within(bubble).getByRole('button', { name: 'Show more' }).getAttribute('aria-expanded')).toBe('false')
+      expect(bubble.textContent).not.toContain('line 12')
+      act(() => { vi.advanceTimersByTime(35_000) })
+      expect(document.querySelector('.chat-optimistic-flag')?.textContent).toBe('not confirmed')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
