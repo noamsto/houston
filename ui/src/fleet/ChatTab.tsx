@@ -19,6 +19,7 @@ import { kindGlyph, statusGlyph } from './chatGlyphs'
 import { previewText } from './chatPreview'
 import { ChatMarkdownLazy, ChatPlainText } from './chatMarkdownLazy'
 import { preloadChatMarkdown } from './chatMarkdownLoader'
+import { LinkifiedText } from './LinkifiedText'
 import { PermissionBar } from './PermissionBar'
 import { QuestionCard } from './QuestionCard'
 import { RunQuestion, RunStatusStrip } from './RunStatusStrip'
@@ -33,10 +34,10 @@ function prefersReducedMotion(): boolean {
 function CollapsibleText({ text }: { text: string }) {
   const [expanded, setExpanded] = useState(false)
   const { preview, truncated } = useMemo(() => previewText(text), [text])
-  if (!truncated) return <>{text}</>
+  if (!truncated) return <LinkifiedText text={text} />
   return (
     <>
-      {expanded ? text : preview}
+      <LinkifiedText text={expanded ? text : preview} />
       <button type="button" className="chat-user-toggle" aria-expanded={expanded} onClick={() => setExpanded((v) => !v)}>
         {expanded ? 'Show less' : 'Show more'}
       </button>

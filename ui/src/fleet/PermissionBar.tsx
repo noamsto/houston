@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { answerChoice, fetchPrompt } from '../api/answer'
 import type { Prompt } from '../api/answer'
 import type { Run } from '../api/runs'
+import { LinkifiedText } from './LinkifiedText'
 import { isClaudeAgent } from '../components/quickCommands'
 
 const POLL_MS = 2000
@@ -34,16 +35,16 @@ function PromptDialog({ runId, prompt, onSending, onAnswered, onMoved }: {
   return (
     <div className="permission-bar" role="group" aria-label="Permission prompt">
       <span className="permission-bar-state">needs you</span>
-      <div className="permission-bar-question">{prompt.question}</div>
+      <div className="permission-bar-question"><LinkifiedText text={prompt.question} /></div>
       {prompt.detail && (
-        <button
-          type="button"
-          className={`permission-bar-detail${expanded ? ' expanded' : ''}`}
-          aria-expanded={expanded}
-          onClick={() => setExpanded((e) => !e)}
-        >
-          {prompt.detail}
-        </button>
+        <>
+          <div className={`permission-bar-detail${expanded ? ' expanded' : ''}`}>
+            <LinkifiedText text={prompt.detail} />
+          </div>
+          <button type="button" className="permission-bar-detail-toggle" aria-expanded={expanded} onClick={() => setExpanded((e) => !e)}>
+            {expanded ? 'Show less' : 'Show more'}
+          </button>
+        </>
       )}
       <div className="permission-bar-choices">
         {prompt.choices.map((label, i) => (
