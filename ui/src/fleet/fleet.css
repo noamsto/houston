@@ -1206,11 +1206,13 @@ button.chat-divider::after { content: ''; position: absolute; left: -6px; right:
 .terminal-question-panel {
   border-top: 2px solid var(--accent-attention);
   background: var(--bg-surface);
+}
+.terminal-question-panel[hidden] { display: none; }
+.terminal-question-body {
+  padding: 4px 12px 8px;
   max-height: 60dvh;
   overflow-y: auto;
 }
-.terminal-question-panel[hidden] { display: none; }
-.terminal-question-body { padding: 4px 12px 8px; }
 .terminal-question-body[hidden] { display: none; }
 .terminal-question-toggle {
   display: block;

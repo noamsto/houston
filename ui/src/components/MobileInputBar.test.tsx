@@ -538,6 +538,7 @@ describe('MobileInputBar question panel and choices', () => {
     stubState(404)
     const { container } = render(<MobileInputBar address={runAddress} choices={['Red', 'Blue']} agent="claude-code" question={{ runId: 'run-1', call }} />)
     await waitFor(() => expect(fetch).toHaveBeenCalled())
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
     expect(screen.getByTestId('choices')).toBeTruthy()
     expect(container.querySelector<HTMLElement>('.terminal-question-panel')!.hidden).toBe(true)
   })

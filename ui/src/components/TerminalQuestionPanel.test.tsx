@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { TerminalQuestionPanel } from './TerminalQuestionPanel'
 import type { QuestionState } from '../api/answer'
 import type { ToolCall } from '../fleet/chatModel'
@@ -49,6 +49,7 @@ describe('TerminalQuestionPanel', () => {
     const onInteractive = vi.fn()
     const { container } = render(<TerminalQuestionPanel runId="r1" call={call} onInteractive={onInteractive} />)
     await waitFor(() => expect(mock).toHaveBeenCalled())
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
     expect(panel(container).hidden).toBe(true)
     expect(onInteractive).not.toHaveBeenCalledWith(true)
   })
