@@ -45,9 +45,9 @@ function PromptDialog({ runId, prompt, onSending, onAnswered, onMoved }: {
             <LinkifiedText text={prompt.detail} />
           </div>
           {longDetail(prompt.detail) && (
-          <button type="button" className="permission-bar-detail-toggle" aria-expanded={expanded} onClick={() => setExpanded((e) => !e)}>
-            {expanded ? 'Show less' : 'Show more'}
-          </button>
+            <button type="button" className="permission-bar-detail-toggle" aria-expanded={expanded} onClick={() => setExpanded((e) => !e)}>
+              {expanded ? 'Show less' : 'Show more'}
+            </button>
           )}
         </>
       )}
