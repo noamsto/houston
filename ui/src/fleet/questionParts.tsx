@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import type { ToolCall } from './chatModel'
 import type { Stage } from './questionStage'
 import { runHash } from './routes'
+import { LinkifiedText } from './LinkifiedText'
 import { onAppLink, switchRunTab } from './nav'
 
 export interface QuestionOption {
@@ -33,7 +34,7 @@ export function QuestionBlock({ q, chosen }: { q: Question; chosen?: string[] })
   return (
     <div className="chat-question-block">
       {q.header && <span className="chat-question-header">{q.header}</span>}
-      <div className="chat-question-text">{q.question}</div>
+      <div className="chat-question-text"><LinkifiedText text={q.question} /></div>
       {q.multiSelect && <div className="chat-question-hint">Select all that apply</div>}
       <ul className="chat-question-options">
         {q.options.map((o) => {
@@ -45,7 +46,7 @@ export function QuestionBlock({ q, chosen }: { q: Question; chosen?: string[] })
               </span>
               <span className="chat-question-option-body">
                 <span className="chat-question-option-label">{o.label}</span>
-                {o.description && <span className="chat-question-option-desc">{o.description}</span>}
+                {o.description && <span className="chat-question-option-desc"><LinkifiedText text={o.description} /></span>}
               </span>
               {picked && <span className="chat-question-sr">chosen</span>}
             </li>
@@ -109,7 +110,7 @@ export function PickerBlock({ q, stage, disabled, showHeader = true, onOption, o
   return (
     <div className="chat-question-block">
       {showHeader && q.header && <span className="chat-question-header">{q.header}</span>}
-      <div className="chat-question-text">{q.question}</div>
+      <div className="chat-question-text"><LinkifiedText text={q.question} /></div>
       {q.multiSelect && <div className="chat-question-hint">Select all that apply</div>}
       <div className="chat-question-picks" role={q.multiSelect ? 'group' : 'radiogroup'} aria-label={q.question} onKeyDown={onKeyDown}>
         {q.options.map((o, i) => {

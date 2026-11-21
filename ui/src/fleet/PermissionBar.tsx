@@ -2,12 +2,16 @@ import { useEffect, useRef, useState } from 'react'
 import { answerChoice, fetchPrompt } from '../api/answer'
 import type { Prompt } from '../api/answer'
 import type { Run } from '../api/runs'
+import { LinkifiedText } from './LinkifiedText'
 import { isClaudeAgent } from '../components/quickCommands'
 
 const POLL_MS = 2000
 // A real answer closes the dialog well within this many polls, so a frame still
 // on screen after them is the same dialog left open or shown again.
 const ANSWERED_POLLS = 3
+
+// The detail block clamps at a few lines; below this a toggle would do nothing.
+const longDetail = (d: string) => d.split('\n').length > 3 || d.length > 120
 
 function PromptDialog({ runId, prompt, onSending, onAnswered, onMoved }: {
   runId: string
@@ -34,16 +38,18 @@ function PromptDialog({ runId, prompt, onSending, onAnswered, onMoved }: {
   return (
     <div className="permission-bar" role="group" aria-label="Permission prompt">
       <span className="permission-bar-state">needs you</span>
-      <div className="permission-bar-question">{prompt.question}</div>
+      <div className="permission-bar-question"><LinkifiedText text={prompt.question} /></div>
       {prompt.detail && (
-        <button
-          type="button"
-          className={`permission-bar-detail${expanded ? ' expanded' : ''}`}
-          aria-expanded={expanded}
-          onClick={() => setExpanded((e) => !e)}
-        >
-          {prompt.detail}
-        </button>
+        <>
+          <div className={`permission-bar-detail${expanded ? ' expanded' : ''}`}>
+            <LinkifiedText text={prompt.detail} />
+          </div>
+          {longDetail(prompt.detail) && (
+            <button type="button" className="permission-bar-detail-toggle" aria-expanded={expanded} onClick={() => setExpanded((e) => !e)}>
+              {expanded ? 'Show less' : 'Show more'}
+            </button>
+          )}
+        </>
       )}
       <div className="permission-bar-choices">
         {prompt.choices.map((label, i) => (
