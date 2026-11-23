@@ -138,7 +138,7 @@ func (r *repoRegistry) Add(path string) (string, error) {
 		return "", &repoError{http.StatusUnprocessableEntity, "not a directory"}
 	}
 	gitDir := filepath.Join(resolved, ".git")
-	if !isDirNoFollow(gitDir) {
+	if !looksLikeGitDir(resolved) {
 		return "", &repoError{http.StatusUnprocessableEntity, "not a git main checkout"}
 	}
 	if dir, err := r.commonDir(resolved); err != nil || filepath.Clean(dir) != gitDir {
@@ -244,7 +244,7 @@ func (r *repoRegistry) listable(p string) bool {
 	if err != nil || !r.insideRoot(resolved) {
 		return false
 	}
-	return isDirNoFollow(filepath.Join(resolved, ".git"))
+	return looksLikeGitDir(resolved)
 }
 
 func (r *repoRegistry) insideRoot(resolved string) bool {
@@ -260,16 +260,22 @@ func (r *repoRegistry) insideRoot(resolved string) bool {
 	return false
 }
 
-// isDirNoFollow uses Lstat so a .git symlink never counts as a repo.
-func isDirNoFollow(path string) bool {
-	info, err := os.Lstat(path)
+// looksLikeGitDir is the cheap repo check: Lstat so a .git symlink never
+// counts, and a HEAD file so a stray .git dir holding only tool state doesn't.
+func looksLikeGitDir(dir string) bool {
+	gitDir := filepath.Join(dir, ".git")
+	info, err := os.Lstat(gitDir)
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	head, err := os.Lstat(filepath.Join(gitDir, "HEAD"))
 	if err != nil {
 		return false
 	}
-	return info.IsDir()
+	return head.Mode().IsRegular()
 }
 
-// Candidates walks every root for directories holding a .git directory,
+// Candidates walks every root for directories holding a git dir (.git with a HEAD),
 // matching q case-insensitively against the root-relative path. The walk is
 // bounded (depth, directories visited, results) and never follows a symlink,
 // so it only ever reports directories really under a root.
@@ -309,7 +315,7 @@ func (w *pickerWalk) walk(dir string, depth int) {
 	}
 	w.visited++
 
-	if isDirNoFollow(filepath.Join(dir, ".git")) {
+	if looksLikeGitDir(dir) {
 		w.report(dir)
 		return
 	}

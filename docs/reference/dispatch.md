@@ -314,14 +314,14 @@ The set of repos beyond tmux's view (`server/repo_registry.go`,
   capped at 500 (409). A corrupt file is logged and read as empty, and is not
   overwritten until the next successful add/remove.
 - **Invariant:** every entry, after symlink resolution, lies inside a root and is
-  a git main checkout (`<real>/.git` is a directory and the git common dir is
+  a git main checkout (`<real>/.git` is a directory with a `HEAD` file and the git common dir is
   `<real>/.git`). The stored value is the resolved path, so a symlink retargeted
   outside the roots fails the next listing. Add runs the full check including
   `git rev-parse` (400 relative or containing a `Cc` or `Cf` rune —
   `dispatchHasControlRune`, checked before any filesystem access — 422 when the
   symlink-resolved path contains one, lies outside the roots, or is not a main
   checkout); listing runs the cheap one (`EvalSymlinks` inside a
-  root plus `Lstat(.git)` is a directory), so an options GET never spawns up to
+  root plus `Lstat(.git)` is a directory holding a `HEAD` file), so an options GET never spawns up to
   500 gits. An entry failing it is dropped from `options.repos` but kept in the
   file — a transient unmount must not delete it — and `GET /api/repos` shows it
   `valid:false` so the picker can still remove it.
@@ -330,7 +330,7 @@ The set of repos beyond tmux's view (`server/repo_registry.go`,
   `{path}` → 204, 404 when absent, never touching the repo itself.
 - **Picker:** `GET /api/repos/candidates?q=` → `{roots, candidates:[{path,name,
   registered}], truncated}`. Depth ≤ 3 below each root, hidden directories
-  skipped, symlinks not followed, a directory with a `.git` directory is reported
+  skipped, symlinks not followed, a directory with a `.git` directory holding a `HEAD` file is reported
   and not descended into; 10 000 directories visited or 200 results →
   `truncated`. `q` is a case-insensitive substring of the root-relative path,
   ≤ 200 runes (400 on a `Cc` or `Cf` rune, `dispatchHasControlRune`). Registration re-validates fully.
