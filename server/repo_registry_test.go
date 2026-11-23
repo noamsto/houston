@@ -45,10 +45,13 @@ func gitInit(t *testing.T, dir string) string {
 }
 
 // fakeRepo makes a directory the picker treats as a repo — the walk only
-// looks for a .git directory, it never runs git.
+// looks for a .git directory with a HEAD file, it never runs git.
 func fakeRepo(t *testing.T, dir string) string {
 	t.Helper()
 	mkdirAll(t, filepath.Join(dir, ".git"))
+	if err := os.WriteFile(filepath.Join(dir, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	return dir
 }
 
@@ -476,5 +479,32 @@ func TestRepoPickerNoRoots(t *testing.T) {
 	reg := newRepoRegistry(filepath.Join(realTempDir(t), "repos.json"), nil, gitCommonDir)
 	if cands, truncated := reg.Candidates(""); len(cands) != 0 || truncated {
 		t.Errorf("Candidates with no roots = %v, %v; want none", cands, truncated)
+	}
+}
+
+func TestRepoPickerSkipsStrayGitDir(t *testing.T) {
+	root := realTempDir(t)
+	mkdirAll(t, filepath.Join(root, ".git", "crew"))
+	repo := fakeRepo(t, filepath.Join(root, "org", "repo"))
+	reg := newRepoRegistry(filepath.Join(realTempDir(t), "repos.json"), []string{root}, gitCommonDir)
+
+	cands, _ := reg.Candidates("")
+	if got := candidatePaths(cands); !slices.Equal(got, []string{repo}) {
+		t.Errorf("candidates = %v, want [%s]", got, repo)
+	}
+}
+
+func TestRepoListableRejectsGitDirWithoutHEAD(t *testing.T) {
+	root := realTempDir(t)
+	good := fakeRepo(t, filepath.Join(root, "good"))
+	stray := mkdirAll(t, filepath.Join(root, "stray"))
+	mkdirAll(t, filepath.Join(stray, ".git", "crew"))
+	reg := newRepoRegistry(filepath.Join(realTempDir(t), "repos.json"), []string{root}, gitCommonDir)
+
+	if !reg.listable(good) {
+		t.Error("listable(good) = false, want true")
+	}
+	if reg.listable(stray) {
+		t.Error("listable(stray) = true, want false")
 	}
 }
