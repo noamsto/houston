@@ -395,7 +395,7 @@ describe('useTouchGestures touchcancel', () => {
 describe('decideDetach', () => {
   it.each([
     { movedX: false, atBottom: true, startedAtBottom: false, expected: 'attach' },
-    { movedX: true, atBottom: true, startedAtBottom: false, expected: 'attach' },
+    { movedX: true, atBottom: true, startedAtBottom: false, expected: 'detach' },
     { movedX: true, atBottom: true, startedAtBottom: true, expected: 'detach' },
     { movedX: false, atBottom: true, startedAtBottom: true, expected: 'keep' },
     { movedX: false, atBottom: false, startedAtBottom: true, expected: 'detach' },
