@@ -578,17 +578,35 @@ describe('TerminalPane detached mode', () => {
     expect(livePill()).toBeNull()
   })
 
-  it('re-attaches and re-snaps ty when a swipe with sideways drift scrolls back to the bottom', async () => {
+  it('re-attaches, re-snaps ty and follows the cursor when a swipe with sub-threshold drift scrolls back to the bottom', async () => {
     const { term } = await mountMobile()
     dragEnd({ movedX: true, startedAtBottom: true })
     expect(livePill()).not.toBeNull()
 
     stubScroll(term, 77, 77)
     touchGesturesMock.translateYRef.current = -30
-    dragEnd({ movedX: true, startedAtBottom: false })
+    touchGesturesMock.easeTranslateXTo.mockClear()
+    dragEnd({ movedX: false, startedAtBottom: false })
 
     expect(livePill()).toBeNull()
     expect(touchGesturesMock.translateYRef.current).toBe(-112)
+    expect(touchGesturesMock.easeTranslateXTo).toHaveBeenCalled()
+  })
+
+  it('stays detached when a real sideways pan ends at the bottom', async () => {
+    const { term } = await mountMobile()
+    dragEnd({ movedX: true, startedAtBottom: true })
+
+    stubScroll(term, 77, 77)
+    dragEnd({ movedX: true, startedAtBottom: false })
+    expect(livePill()).not.toBeNull()
+
+    touchGesturesMock.easeTranslateXTo.mockClear()
+    act(() => {
+      capturedCallbacks!.onOutput('x')
+    })
+    await nextFrame()
+    expect(touchGesturesMock.easeTranslateXTo).not.toHaveBeenCalled()
   })
 
   it('does not re-attach on a swipe that both starts and ends at the bottom while pan-detached', async () => {

@@ -94,8 +94,9 @@ export function computeFollowCursorTranslateX(
 
 /** Whether a finished drag re-attaches the pane to the live follow position,
  *  detaches from it, or leaves the state alone. Scrolling back down to the
- *  bottom edge from above re-attaches, even if the swipe drifted sideways; any
- *  other real horizontal pan, or ending away from the bottom, detaches. */
+ *  bottom edge from above re-attaches unless the drag really panned sideways;
+ *  a real pan detaches wherever it ends, and so does ending away from the
+ *  bottom. */
 export function decideDetach({
   movedX,
   atBottom,
@@ -105,8 +106,9 @@ export function decideDetach({
   atBottom: boolean
   startedAtBottom: boolean
 }): 'attach' | 'detach' | 'keep' {
+  if (movedX) return 'detach'
   if (!startedAtBottom && atBottom) return 'attach'
-  if (movedX || !atBottom) return 'detach'
+  if (!atBottom) return 'detach'
   return 'keep'
 }
 
