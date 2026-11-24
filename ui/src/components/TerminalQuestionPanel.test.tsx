@@ -55,28 +55,29 @@ describe('TerminalQuestionPanel', () => {
   })
 
   it('Next, Back and Submit post the same bodies as the Chat wizard', async () => {
+    // The mock pane remembers its step so the wizard's background poll reads what the pane shows.
+    let cur = at(0)
     const mock = install((b) => {
-      if (b.kind === 'step') return { status: 200, body: b.index === 0 ? at(1) : at(2, { review: ['Blue', 'Large'] }) }
-      if (b.kind === 'back') return { status: 200, body: at(0) }
-      if (b.kind === 'submit') return { status: 200, body: at(2, { review: ['Blue', 'Large'] }) }
-      return { status: 200, body: at(0) }
+      if (b.kind === 'step') cur = b.index === 0 ? at(1) : at(2, { review: ['Blue', 'Large'] })
+      else if (b.kind === 'back') cur = at(0)
+      return { status: 200, body: cur }
     })
     render(<TerminalQuestionPanel runId="r1" call={call} onInteractive={() => {}} />)
     await screen.findByText('1 of 2')
-    fireEvent.click(screen.getByRole('radio', { name: /Blue/ }))
-    fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+    fireEvent.click(await screen.findByRole('radio', { name: /Blue/ }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Next' }))
     await screen.findByText('2 of 2')
     expect(posts(mock, 'step')).toEqual([{ kind: 'step', toolCallId: 'q1', index: 0, answer: { options: [1] } }])
 
-    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Back' }))
     await screen.findByText('1 of 2')
     expect(posts(mock, 'back')).toEqual([{ kind: 'back', toolCallId: 'q1', index: 1 }])
 
-    fireEvent.click(screen.getByRole('radio', { name: /Blue/ }))
-    fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+    fireEvent.click(await screen.findByRole('radio', { name: /Blue/ }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Next' }))
     await screen.findByText('2 of 2')
-    fireEvent.click(screen.getByRole('radio', { name: /Large/ }))
-    fireEvent.click(screen.getByRole('button', { name: 'Review' }))
+    fireEvent.click(await screen.findByRole('radio', { name: /Large/ }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Review' }))
     const submit = await screen.findByRole('button', { name: /Submit/ })
     fireEvent.click(submit)
     await waitFor(() => expect(posts(mock, 'submit')).toEqual([{ kind: 'submit', toolCallId: 'q1', review: ['Blue', 'Large'] }]))
