@@ -609,14 +609,14 @@ func TestResolvePaneTerminalEngineSessionIdentity(t *testing.T) {
 	tests := []struct {
 		name          string
 		engineSession string
-		paneSessions  map[string]string
+		paneSessions  map[string]hub.SessionView
 		start         int64
 		want          bool
 	}{
-		{"matching session joins", "sid-1", map[string]string{"%307": "sid-1"}, 60, true},
-		{"cleared session does not join", "sid-1", map[string]string{"%307": "sid-2"}, 60, false},
-		{"missing engine_session keeps process rule (joins)", "", map[string]string{"%307": "sid-2"}, 60, true},
-		{"missing engine_session keeps process rule (rejects)", "", map[string]string{"%307": "sid-2"}, 150, false},
+		{"matching session joins", "sid-1", map[string]hub.SessionView{"%307": {SessionID: "sid-1"}}, 60, true},
+		{"cleared session does not join", "sid-1", map[string]hub.SessionView{"%307": {SessionID: "sid-2"}}, 60, false},
+		{"missing engine_session keeps process rule (joins)", "", map[string]hub.SessionView{"%307": {SessionID: "sid-2"}}, 60, true},
+		{"missing engine_session keeps process rule (rejects)", "", map[string]hub.SessionView{"%307": {SessionID: "sid-2"}}, 150, false},
 		{"unknown pane session keeps process rule (joins)", "sid-1", nil, 60, true},
 		{"unknown pane session keeps process rule (rejects)", "sid-1", nil, 150, false},
 	}
@@ -1364,7 +1364,7 @@ func TestDispatcherLive(t *testing.T) {
 					}
 				}
 			}
-			joined := joinDispatchers(bus, c.wins, c.panes, liveDispatcher())
+			joined := joinDispatchers(bus, c.wins, c.panes, nil, liveDispatcher())
 			if got := dispatcherLive(joined, c.crewID); got != c.want {
 				t.Errorf("dispatcherLive = %v, want %v (join %v)", got, c.want, joined)
 			}
@@ -2764,4 +2764,51 @@ func TestResolvePaneTerminalPostDoneStamp(t *testing.T) {
 			t.Errorf("got (%q, %d), want (\"\", 0)", pane, n)
 		}
 	})
+}
+
+func TestResolvePaneHookSessionFallback(t *testing.T) {
+	win := tmux.WindowOptions{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"}
+	bare := []tmux.PaneOptions{{PaneID: "%307", Target: "h:1"}}
+	hv := func(state hook.State, updated int64) map[string]hub.SessionView {
+		return map[string]hub.SessionView{"%307": {SessionID: "sid-1", State: state, UpdatedAt: updated}}
+	}
+	run := func(state State, hooks map[string]hub.SessionView, engineSession string, start int64) bool {
+		pane, n := resolvePane(testBus, "fix/412", state, 100, 50, engineSession, hooks, []tmux.WindowOptions{win}, bare, testBusOf, startAt(start))
+		return n == 1 && pane == "%307"
+	}
+	if !run(StateRunning, hv(hook.StateThinking, 90), "", 0) {
+		t.Error("active worker with a hook session did not join")
+	}
+	if pane, n := resolvePane(testBus, "fix/412", StateRunning, 0, 0, "", nil, []tmux.WindowOptions{win}, bare, testBusOf, noProbe(t)); n != 0 || pane != "" {
+		t.Errorf("bare pane without hook session joined: %q %d", pane, n)
+	}
+	for _, st := range []State{StateDone, StateFailed} {
+		if !run(st, hv(hook.StateWaiting, 105), "sid-1", 60) {
+			t.Errorf("%s: finished hook session did not join", st)
+		}
+		if run(st, hv(hook.StateThinking, 105), "", 60) {
+			t.Errorf("%s: working hook session joined", st)
+		}
+		if run(st, hv(hook.StateWaiting, 0), "", 60) {
+			t.Errorf("%s: hook session without activity epoch joined", st)
+		}
+		if run(st, hv(hook.StateWaiting, 105), "sid-2", 60) {
+			t.Errorf("%s: mismatched engine session joined", st)
+		}
+	}
+}
+
+func TestPaneHookViewsRejectsEndedAndForeign(t *testing.T) {
+	ps := paneSet{live: map[string]bool{"%1": true, "%2": true}}
+	snap := []hub.SessionView{
+		{SessionID: "a", TmuxPane: "%1", State: hook.StateEnded},
+		{SessionID: "b", TmuxPane: "%2", State: hook.StateWaiting},
+	}
+	got := paneHookViews(snap, ps)
+	if _, ok := got["%1"]; ok {
+		t.Error("ended session kept")
+	}
+	if got["%2"].SessionID != "b" {
+		t.Errorf("live session missing: %v", got)
+	}
 }

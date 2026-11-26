@@ -1,6 +1,10 @@
 package runs
 
-import "github.com/noamsto/houston/tmux"
+import (
+	"github.com/noamsto/houston/hook"
+	"github.com/noamsto/houston/hub"
+	"github.com/noamsto/houston/tmux"
+)
 
 // resolvePane finds the one agent pane running (bus, branch), if there is
 // exactly one. busOf maps a window's @git_root to its bus directory; "" means
@@ -10,7 +14,8 @@ import "github.com/noamsto/houston/tmux"
 //
 // A candidate must carry a non-empty @claude_status or @agent_screen, the two
 // tmux options that mark an agent pane — Claude hooks stamp the former, and
-// agent-detect the latter for pi, codex and cursor. Joining onto a shell pane
+// agent-detect the latter for pi, codex and cursor. A pane carrying neither
+// still qualifies when a live hook session vouches for it (hookPanes). Joining onto a shell pane
 // would let the crew layer's Agent promote that shell into a listed run.
 //
 // busState is the crew-bus Run.State for this branch, from the latest status
@@ -58,17 +63,20 @@ import "github.com/noamsto/houston/tmux"
 // not terminal and does not gate.
 //
 // busEngineSession is the bus record's engine_session (Run.CrewSession) and
-// paneSessions maps a pane id to its current hook session id.
-func resolvePane(bus, branch string, busState State, busUpdatedAt, busSession int64, busEngineSession string, paneSessions map[string]string, wins []tmux.WindowOptions, panes []tmux.PaneOptions, busOf func(gitRoot string) string, procStart procStartFunc) (paneID string, candidates int) {
-	return resolvePaneAs(bus, branch, busState, busUpdatedAt, busSession, busEngineSession, paneSessions, wins, panes, busOf, procStart, false)
+// hookPanes maps a pane id to its trusted live hook session view: SessionID
+// feeds the engine-session rule, and State and UpdatedAt stand in for the
+// missing tmux stamp on a hook-only pane. A later hook refresh moves UpdatedAt
+// past the grace window and fails closed (a bus card, not a wrong join).
+func resolvePane(bus, branch string, busState State, busUpdatedAt, busSession int64, busEngineSession string, hookPanes map[string]hub.SessionView, wins []tmux.WindowOptions, panes []tmux.PaneOptions, busOf func(gitRoot string) string, procStart procStartFunc) (paneID string, candidates int) {
+	return resolvePaneAs(bus, branch, busState, busUpdatedAt, busSession, busEngineSession, hookPanes, wins, panes, busOf, procStart, false)
 }
 
 // resolvePaneAs is resolvePane with one knob: stuckOK drops the state-word rule
 // of a terminal join, so a pane whose last turn was cut off and whose stamp
 // still reads processing joins its own finished worker. The epoch, process
 // start and engine-session rules still bind, so a new occupant never joins.
-func resolvePaneAs(bus, branch string, busState State, busUpdatedAt, busSession int64, busEngineSession string, paneSessions map[string]string, wins []tmux.WindowOptions, panes []tmux.PaneOptions, busOf func(gitRoot string) string, procStart procStartFunc, stuckOK bool) (paneID string, candidates int) {
-	return resolvePaneWith(bus, branch, busState, busUpdatedAt, busSession, busEngineSession, paneSessions, wins, panes, busOf, procStart, stuckOK, nil)
+func resolvePaneAs(bus, branch string, busState State, busUpdatedAt, busSession int64, busEngineSession string, hookPanes map[string]hub.SessionView, wins []tmux.WindowOptions, panes []tmux.PaneOptions, busOf func(gitRoot string) string, procStart procStartFunc, stuckOK bool) (paneID string, candidates int) {
+	return resolvePaneWith(bus, branch, busState, busUpdatedAt, busSession, busEngineSession, hookPanes, wins, panes, busOf, procStart, stuckOK, nil)
 }
 
 // promptFreeFunc reports whether the hook session on a pane is known to have
@@ -81,11 +89,12 @@ type promptFreeFunc func(paneID string, after int64) bool
 // resolvePaneWith is resolvePaneAs plus promptFree, which lets a terminal join
 // look past the grace window when nothing but non-prompt activity stamped the
 // pane since the terminal row.
-func resolvePaneWith(bus, branch string, busState State, busUpdatedAt, busSession int64, busEngineSession string, paneSessions map[string]string, wins []tmux.WindowOptions, panes []tmux.PaneOptions, busOf func(gitRoot string) string, procStart procStartFunc, stuckOK bool, promptFree promptFreeFunc) (paneID string, candidates int) {
+func resolvePaneWith(bus, branch string, busState State, busUpdatedAt, busSession int64, busEngineSession string, hookPanes map[string]hub.SessionView, wins []tmux.WindowOptions, panes []tmux.PaneOptions, busOf func(gitRoot string) string, procStart procStartFunc, stuckOK bool, promptFree promptFreeFunc) (paneID string, candidates int) {
 	terminal := busState == StateDone || busState == StateFailed
 	byTarget := windowsByTarget(wins)
 	for _, p := range panes {
-		if p.ClaudeStatus == "" && p.AgentScreen == "" {
+		hv, hasHook := hookPanes[p.PaneID]
+		if p.ClaudeStatus == "" && p.AgentScreen == "" && !hasHook {
 			continue
 		}
 		// A role-grid pane reports to the bus under role:<branch>:<role>,
@@ -103,8 +112,14 @@ func resolvePaneWith(bus, branch string, busState State, busUpdatedAt, busSessio
 		}
 		if terminal {
 			epoch := paneActivityEpoch(p)
+			finished := finishedPaneState(p)
+			if p.ClaudeStatus == "" && p.AgentScreen == "" {
+				// Only the hook session vouches for this pane.
+				epoch = hv.UpdatedAt
+				finished = hv.State == hook.StateWaiting
+			}
 			limit := busUpdatedAt + terminalJoinGrace
-			if !finishedPaneState(p) {
+			if !finished {
 				// A cut-off final turn leaves processing stamped at or before the
 				// terminal row; one stamped after it is a turn begun since.
 				if !stuckOK {
@@ -123,7 +138,7 @@ func resolvePaneWith(bus, branch string, busState State, busUpdatedAt, busSessio
 			// sides name a session they must match; either side unknown keeps
 			// that rule.
 			if busEngineSession != "" {
-				if sid := paneSessions[p.PaneID]; sid != "" && sid != busEngineSession {
+				if sid := hv.SessionID; sid != "" && sid != busEngineSession {
 					continue
 				}
 			}

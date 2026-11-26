@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/noamsto/houston/hub"
 	"github.com/noamsto/houston/tmux"
 )
 
@@ -184,7 +185,7 @@ func TestJoinDispatchers(t *testing.T) {
 					writeCrew(t, bus, cf)
 				}
 			}
-			got := joinDispatchers(bus, f.wins, f.panes, f.probe)
+			got := joinDispatchers(bus, f.wins, f.panes, nil, f.probe)
 			if !maps.Equal(got, c.want) {
 				t.Errorf("joinDispatchers = %v, want %v", got, c.want)
 			}
@@ -199,7 +200,7 @@ func TestJoinDispatchersIgnoresStrayFiles(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(bus, "crews", "README"), []byte("%1"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got := joinDispatchers(bus, f.wins, f.panes, f.probe)
+	got := joinDispatchers(bus, f.wins, f.panes, nil, f.probe)
 	if !maps.Equal(got, map[string]string{"c1": "%1"}) {
 		t.Errorf("joinDispatchers = %v, want only c1", got)
 	}
@@ -211,7 +212,7 @@ func TestJoinDispatchersIgnoresStrayFiles(t *testing.T) {
 func joinWithin(t *testing.T, bus string, f joinFixture) map[string]string {
 	t.Helper()
 	done := make(chan map[string]string, 1)
-	go func() { done <- joinDispatchers(bus, f.wins, f.panes, f.probe) }()
+	go func() { done <- joinDispatchers(bus, f.wins, f.panes, nil, f.probe) }()
 	select {
 	case got := <-done:
 		return got
@@ -300,7 +301,7 @@ func TestJoinDispatchersLogsUnreadableFiles(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	f := defaultJoinFixture()
-	joinDispatchers(t.TempDir(), f.wins, f.panes, f.probe)
+	joinDispatchers(t.TempDir(), f.wins, f.panes, nil, f.probe)
 	if logs.Len() != 0 {
 		t.Fatalf("a missing crews directory logged:\n%s", &logs)
 	}
@@ -311,7 +312,7 @@ func TestJoinDispatchersLogsUnreadableFiles(t *testing.T) {
 	if err := os.Chmod(pane, 0); err != nil {
 		t.Fatal(err)
 	}
-	joinDispatchers(bus, f.wins, f.panes, f.probe)
+	joinDispatchers(bus, f.wins, f.panes, nil, f.probe)
 	if !strings.Contains(logs.String(), "level=DEBUG") || !strings.Contains(logs.String(), "crew=c1") {
 		t.Errorf("an unreadable pane file was not logged:\n%s", &logs)
 	}
@@ -322,7 +323,7 @@ func TestJoinDispatchersLogsUnreadableFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(crews, 0o755) })
-	joinDispatchers(bus, f.wins, f.panes, f.probe)
+	joinDispatchers(bus, f.wins, f.panes, nil, f.probe)
 	if !strings.Contains(logs.String(), "level=DEBUG") || !strings.Contains(logs.String(), "bus="+bus) {
 		t.Errorf("an unreadable crews directory was not logged:\n%s", &logs)
 	}
@@ -346,7 +347,7 @@ func TestJoinDispatchersTwoDispatchersOneProject(t *testing.T) {
 		parents: map[int]int{200: dispPanePID, 400: 300},
 	}
 
-	got := joinDispatchers(bus, wins, panes, probe)
+	got := joinDispatchers(bus, wins, panes, nil, probe)
 	if want := map[string]string{"c1": "%1", "c2": "%2"}; !maps.Equal(got, want) {
 		t.Errorf("joinDispatchers = %v, want %v", got, want)
 	}
@@ -360,7 +361,7 @@ func TestJoinDispatchersTwoCrewsOnePane(t *testing.T) {
 		bus := t.TempDir()
 		writeCrew(t, bus, crewFiles{id: "c9", pane: ptr("%1"), paneMod: regT.Add(-time.Minute)})
 		writeCrew(t, bus, crewFiles{id: "c1", pane: ptr("%1"), paneMod: regT})
-		got := joinDispatchers(bus, f.wins, f.panes, f.probe)
+		got := joinDispatchers(bus, f.wins, f.panes, nil, f.probe)
 		if want := map[string]string{"c1": "%1"}; !maps.Equal(got, want) {
 			t.Errorf("joinDispatchers = %v, want %v", got, want)
 		}
@@ -369,7 +370,7 @@ func TestJoinDispatchersTwoCrewsOnePane(t *testing.T) {
 		bus := t.TempDir()
 		writeCrew(t, bus, crewFiles{id: "1800000100-7", pane: ptr("%1"), paneMod: regT})
 		writeCrew(t, bus, crewFiles{id: "1800000200-7", pane: ptr("%1"), paneMod: regT})
-		got := joinDispatchers(bus, f.wins, f.panes, f.probe)
+		got := joinDispatchers(bus, f.wins, f.panes, nil, f.probe)
 		if want := map[string]string{"1800000200-7": "%1"}; !maps.Equal(got, want) {
 			t.Errorf("joinDispatchers = %v, want %v", got, want)
 		}
@@ -380,7 +381,7 @@ func TestJoinDispatchersTwoCrewsOnePane(t *testing.T) {
 		writeCrew(t, bus, crewFiles{id: "c2", pane: ptr("%1"), paneMod: regT.Add(time.Minute), pid: ptr("999"), pidMod: regT})
 		probe := liveDispatcher()
 		probe.dead = map[int]bool{999: true}
-		got := joinDispatchers(bus, f.wins, f.panes, probe)
+		got := joinDispatchers(bus, f.wins, f.panes, nil, probe)
 		if want := map[string]string{"c1": "%1"}; !maps.Equal(got, want) {
 			t.Errorf("joinDispatchers = %v, want %v", got, want)
 		}
@@ -434,5 +435,37 @@ func TestHostProcsDescendsSelf(t *testing.T) {
 	ok, err := (hostProcs{}).Descends(os.Getpid(), os.Getppid())
 	if err != nil || !ok {
 		t.Errorf("Descends(self, parent) = %v, %v; want true", ok, err)
+	}
+}
+
+// A pi dispatcher without @claude_status or @agent_screen joins through a
+// live hook session on its pane, and only through one.
+func TestJoinDispatchersHookSessionFallback(t *testing.T) {
+	bare := func(f *joinFixture) {
+		f.panes[0].ClaudeStatus = ""
+	}
+	hooks := map[string]hub.SessionView{"%1": {SessionID: "s1", TmuxPane: "%1"}}
+	cases := []struct {
+		name  string
+		hooks map[string]hub.SessionView
+		want  map[string]string
+	}{
+		{"hook session joins", hooks, map[string]string{"c1": "%1"}},
+		{"no hook session skips", nil, map[string]string{}},
+		{"hook session on another pane skips", map[string]hub.SessionView{"%9": {SessionID: "s9"}}, map[string]string{}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := defaultJoinFixture()
+			bare(&f)
+			bus := t.TempDir()
+			for _, cf := range f.crews {
+				writeCrew(t, bus, cf)
+			}
+			got := joinDispatchers(bus, f.wins, f.panes, c.hooks, f.probe)
+			if !maps.Equal(got, c.want) {
+				t.Errorf("joinDispatchers = %v, want %v", got, c.want)
+			}
+		})
 	}
 }
