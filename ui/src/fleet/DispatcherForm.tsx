@@ -72,7 +72,7 @@ export function DispatcherForm({
     if (!canSubmit) return
     setSubmitting(true)
     const result = await onSubmit(
-      buildDispatcherRequest({ repo, rows: rows.map((r) => r.text), engine, model, effort }),
+      buildDispatcherRequest({ repo, rows: rows.map((r) => r.text), engine, model: engine ? model : '', effort }),
       images.staged,
     )
     setSubmitting(false)
