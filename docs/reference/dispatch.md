@@ -113,7 +113,7 @@ execution from an HTTP request, so the handler is closed by construction:
 
 `POST /api/dispatch/dispatcher` (`server/dispatcher_launch.go`) opens a tmux
 window in a repo running the host's `dispatcher` launcher, seeded with the
-tasks as its first prompt. Body `{repo, tasks[], engine, model?, effort?, images?}`;
+tasks as its first prompt. Body `{repo, tasks[], engine?, model?, effort?, images?}`;
 unknown fields 400, body over `maxDispatchUploadBody` (36 MiB) 413. `images` follows the
 validation, naming and statuses under "Images" in "Dispatch".
 
@@ -125,7 +125,8 @@ validation, naming and statuses under "Images" in "Dispatch".
   images are refused with 500 `houston's state path can't be listed in a prompt`
   when `<status-dir>/attachments` contains whitespace or a `Cc` rune (server
   config, never client text).
-- **Fields:** `repo` must be in the options set; `engine` must be in
+- **Fields:** `repo` must be in the options set; `engine` is optional (absent: no `--agent`, the launcher
+  uses its own setting; a `model` then 400s) and otherwise must be in
   `dispatch --engines` ∩ `dispatchEngineOrder`, run fresh with a 10 s timeout;
   `model` is empty or in `dispatchModels[engine]`; `effort` is empty or in
   `dispatchEfforts`. At most 20 entries in `tasks` (blank ones count toward the

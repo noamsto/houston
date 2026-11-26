@@ -42,7 +42,7 @@ export function DispatcherForm({
   const [submitting, setSubmitting] = useState(false)
   const images = useStagedImage(DISPATCH_IMAGE_LIMITS)
 
-  const engine = engines.includes(chosenEngine) ? chosenEngine : (engines[0] ?? '')
+  const engine = engines.includes(chosenEngine) ? chosenEngine : ''
   const models = options.engines[engine] ?? []
   const problem = taskRowsProblem(rows.map((r) => r.text))
   const disabledReason =
@@ -139,13 +139,14 @@ export function DispatcherForm({
             disabled={locked}
             onChange={(e) => chooseEngine(e.target.value)}
           >
+            <option value="">launcher default</option>
             {engines.map((eng) => <option key={eng} value={eng}>{eng}</option>)}
           </select>
         </div>
 
         <div className="dispatch-field">
           <label htmlFor="dispatcher-model">Model</label>
-          <select id="dispatcher-model" value={model} disabled={locked} onChange={(e) => setModel(e.target.value)}>
+          <select id="dispatcher-model" value={model} disabled={locked || engine === ''} onChange={(e) => setModel(e.target.value)}>
             <option value="">launcher default</option>
             {models.map((m) => <option key={m} value={m}>{m}</option>)}
           </select>

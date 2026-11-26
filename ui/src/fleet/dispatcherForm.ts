@@ -54,7 +54,8 @@ export function buildDispatcherRequest(f: {
   effort: string
 }): DispatcherRequest {
   const tasks = f.rows.map(normalizeTask).filter((r) => r !== '')
-  const req: DispatcherRequest = { repo: f.repo, tasks, engine: f.engine }
+  const req: DispatcherRequest = { repo: f.repo, tasks }
+  if (f.engine) req.engine = f.engine
   if (f.model) req.model = f.model
   if (f.effort) req.effort = f.effort
   return req

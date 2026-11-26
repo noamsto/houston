@@ -118,7 +118,7 @@ export async function submitDispatch(req: DispatchRequest, host?: string): Promi
 export interface DispatcherRequest {
   repo: string
   tasks: string[]
-  engine: string
+  engine?: string
   model?: string
   effort?: string
   images?: ImageUpload[]

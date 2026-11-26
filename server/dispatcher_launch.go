@@ -116,7 +116,11 @@ func validateDispatcher(req dispatcherRequest, engines []string, models dispatch
 			enabled = append(enabled, e)
 		}
 	}
-	if !slices.Contains(enabled, out.Engine) {
+	if out.Engine == "" && len(enabled) > 0 {
+		if out.Model != "" {
+			return out, &dispatchError{"model", http.StatusBadRequest, "model requires an explicit engine"}
+		}
+	} else if !slices.Contains(enabled, out.Engine) {
 		if len(enabled) == 0 {
 			return out, &dispatchError{"engine", http.StatusBadRequest, "no dispatcher engine is enabled on this host"}
 		}
@@ -201,7 +205,10 @@ func sanitizeSessionName(name string) string {
 }
 
 func dispatcherArgs(req dispatcherRequest, images []string) []string {
-	args := []string{"--agent", req.Engine}
+	var args []string
+	if req.Engine != "" {
+		args = append(args, "--agent", req.Engine)
+	}
 	if req.Model != "" {
 		args = append(args, "--model", req.Model)
 	}
