@@ -98,6 +98,7 @@ describe('buildDispatcherRequest', () => {
   it('omits blank model and effort', () => {
     const req = buildDispatcherRequest({ repo: '/r', rows: ['x'], engine: 'pi', model: '', effort: '' })
     expect(req).toEqual({ repo: '/r', tasks: ['x'], engine: 'pi' })
+    expect(buildDispatcherRequest({ repo: '/r', rows: ['x'], engine: '', model: '', effort: '' })).toEqual({ repo: '/r', tasks: ['x'] })
     expect('model' in req).toBe(false)
     expect('effort' in req).toBe(false)
   })

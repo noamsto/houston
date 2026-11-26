@@ -55,6 +55,7 @@ func TestValidateDispatcherRejections(t *testing.T) {
 		{"unknown engine", func(r *dispatcherRequest) { r.Engine = "bogus" }, "engine"},
 		{"engine not enabled", func(r *dispatcherRequest) { r.Engine = "codex"; r.Model = "" }, "engine"},
 		{"model for other engine", func(r *dispatcherRequest) { r.Model = "gpt-5.6-sol" }, "model"},
+		{"model without engine", func(r *dispatcherRequest) { r.Engine = "" }, "model"},
 		{"bad effort", func(r *dispatcherRequest) { r.Effort = "extreme" }, "effort"},
 		{"too many tasks", func(r *dispatcherRequest) { r.Tasks = many }, "tasks"},
 		{"task too long", func(r *dispatcherRequest) { r.Tasks = []string{strings.Repeat("é", maxTaskRunes+1)} }, "tasks"},
@@ -1150,5 +1151,16 @@ func TestDispatcherLaunchImageWriteFailure(t *testing.T) {
 		if c[0] != "show-environment" {
 			t.Errorf("tmux ran: %q", c)
 		}
+	}
+}
+
+func TestDispatcherEngineOptional(t *testing.T) {
+	req := validDispatcherRequest()
+	req.Engine, req.Model = "", ""
+	if _, derr := validateDispatcher(req, []string{"claude"}, builtinDispatchModels); derr != nil {
+		t.Fatalf("empty engine rejected: %+v", derr)
+	}
+	if args := dispatcherArgs(req, nil); slices.Contains(args, "--agent") {
+		t.Errorf("args %v carry --agent for an empty engine", args)
 	}
 }

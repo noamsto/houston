@@ -162,12 +162,14 @@ describe('DispatcherForm launcher options', () => {
   it('lists exactly the dispatcher engines, in order', () => {
     setup()
 
-    expect(optionValues('Engine')).toEqual(['pi', 'claude'])
+    expect(optionValues('Engine')).toEqual(['', 'pi', 'claude'])
   })
 
   it('offers launcher default plus the chosen engine\'s models', () => {
     setup()
 
+    expect((screen.getByLabelText('Model') as HTMLSelectElement).disabled).toBe(true)
+    change('Engine', 'pi')
     expect(optionValues('Model')).toEqual(['', 'glm'])
     expect(within(screen.getByLabelText('Model')).getAllByRole('option')[0].textContent).toBe('launcher default')
 
@@ -222,7 +224,7 @@ describe('DispatcherForm submit', () => {
 
     fireEvent.click(startButton())
 
-    expect(submitDispatcherMock).toHaveBeenCalledWith({ repo: '/repo/a', tasks: [], engine: 'pi' })
+    expect(submitDispatcherMock).toHaveBeenCalledWith({ repo: '/repo/a', tasks: [] })
     await screen.findByText(/Waiting for it to appear in Fleet/)
   })
 
