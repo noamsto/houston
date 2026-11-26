@@ -16,6 +16,7 @@ import (
 
 	"github.com/noamsto/houston/crewfeed"
 	"github.com/noamsto/houston/crewview"
+	"github.com/noamsto/houston/hub"
 )
 
 // CrewSource publishes the crew layer: each worker's state from crew's own
@@ -259,11 +260,16 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 	// The pane → hook session map the terminal join consults, built from the
 	// same listing and the hooks layer's own trust rules (paneSetFrom,
 	// paneHookSessions).
+	var hookPanes map[string]hub.SessionView
 	var paneSessions map[string]string
 	var promptFree promptFreeFunc
 	if s.sessions != nil {
 		snap := s.sessions.Snapshot()
-		paneSessions = paneHookSessions(snap, paneSetFrom(panes, now))
+		hookPanes = paneHookViews(snap, paneSetFrom(panes, now))
+		paneSessions = make(map[string]string, len(hookPanes))
+		for id, v := range hookPanes {
+			paneSessions[id] = v.SessionID
+		}
 		promptFree = panePromptFree(snap, paneSessions)
 	}
 
@@ -278,7 +284,7 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 			continue
 		}
 		if _, done := joins[bus]; !done {
-			joins[bus] = joinDispatchers(bus, wins, panes, s.procs)
+			joins[bus] = joinDispatchers(bus, wins, panes, hookPanes, s.procs)
 			if s.feed != nil {
 				s.feed.Advance(bus)
 			}
@@ -374,7 +380,7 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 				continue
 			}
 			join := func(stuckOK bool) (string, bool) {
-				p, n := resolvePaneWith(bus, branch, FromCrewState(id.state), id.statusTS/1000, id.session, id.engineSession, paneSessions, wins, panes, s.crewDir, s.procStart, stuckOK, promptFree)
+				p, n := resolvePaneWith(bus, branch, FromCrewState(id.state), id.statusTS/1000, id.session, id.engineSession, hookPanes, wins, panes, s.crewDir, s.procStart, stuckOK, promptFree)
 				return p, n == 1
 			}
 			if p, ok := join(false); ok {
@@ -419,12 +425,12 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 			if spliced[rowKey{b.Crew.Name, b.Branch}] {
 				routed.Stale, routed.Crew.ViewNotice = true, crewRosterHeldNote
 			}
-			paneID, candidates := resolvePaneWith(bus, branch, b.State, b.UpdatedAt, b.session, b.CrewSession, paneSessions, wins, panes, s.crewDir, s.procStart, false, promptFree)
+			paneID, candidates := resolvePaneWith(bus, branch, b.State, b.UpdatedAt, b.session, b.CrewSession, hookPanes, wins, panes, s.crewDir, s.procStart, false, promptFree)
 			// A crew that lists its finished workers leaves the log-only
 			// synthesis above idle, so a cut-off final turn (a pane still stamped
 			// processing) takes the relaxed join here.
 			if candidates != 1 && (b.State == StateDone || b.State == StateFailed) {
-				if p, n := resolvePaneWith(bus, branch, b.State, b.UpdatedAt, b.session, b.CrewSession, paneSessions, wins, panes, s.crewDir, s.procStart, true, promptFree); n == 1 {
+				if p, n := resolvePaneWith(bus, branch, b.State, b.UpdatedAt, b.session, b.CrewSession, hookPanes, wins, panes, s.crewDir, s.procStart, true, promptFree); n == 1 {
 					paneID, candidates = p, n
 					routed.CrewFinished = true
 				}

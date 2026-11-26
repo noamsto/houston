@@ -286,7 +286,17 @@ type hookSessions interface {
 // wins, SessionID breaking ties exactly as current() orders sessions, so a
 // pane carrying two sessions cannot flap the join nondeterministically.
 func paneHookSessions(snap []hub.SessionView, ps paneSet) map[string]string {
-	out := map[string]string{}
+	views := paneHookViews(snap, ps)
+	out := make(map[string]string, len(views))
+	for pane, v := range views {
+		out[pane] = v.SessionID
+	}
+	return out
+}
+
+// paneHookViews is paneHookSessions keeping the whole session view, so the
+// crew join also sees each pane's state and last update.
+func paneHookViews(snap []hub.SessionView, ps paneSet) map[string]hub.SessionView {
 	kept := map[string]hub.SessionView{}
 	for _, v := range snap {
 		if v.TmuxPane == "" || v.SessionID == "" {
@@ -299,9 +309,8 @@ func paneHookSessions(snap []hub.SessionView, ps paneSet) map[string]string {
 			continue
 		}
 		kept[v.TmuxPane] = v
-		out[v.TmuxPane] = v.SessionID
 	}
-	return out
+	return kept
 }
 
 // panePromptFree builds the promptFreeFunc over the hook sessions currently

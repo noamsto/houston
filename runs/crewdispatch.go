@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/noamsto/houston/hub"
 	"github.com/noamsto/houston/tmux"
 )
 
@@ -38,14 +39,14 @@ const maxCrewFile = 64
 
 // joinDispatchers maps each crew of bus to the pane its dispatcher runs in,
 // crew id → pane id. A crew joins pane P when <bus>/crews/<crew>/pane names P,
-// P is listed with an engine status in a window stamped @crew_name dispatcher
+// P is listed with an engine status (or a live hook session) in a window stamped @crew_name dispatcher
 // and is not a role-grid pane, the pane file is no older than the tmux server
 // (an older file names a pane id an earlier server minted), and the crew's pid
 // file, when there is one, names a live process under P that is not a
 // recycled pid. One crew per pane: the newest pane file wins, then the
 // greater crew id, so a dispatcher restarted in the same pane takes over from
 // the crew it left behind.
-func joinDispatchers(bus string, wins []tmux.WindowOptions, panes []tmux.PaneOptions, probe procProbe) map[string]string {
+func joinDispatchers(bus string, wins []tmux.WindowOptions, panes []tmux.PaneOptions, hookPanes map[string]hub.SessionView, probe procProbe) map[string]string {
 	crewsDir := filepath.Join(bus, "crews")
 	entries, err := os.ReadDir(crewsDir)
 	if err != nil {
@@ -86,7 +87,8 @@ func joinDispatchers(bus string, wins []tmux.WindowOptions, panes []tmux.PaneOpt
 		}
 		paneID := strings.TrimSpace(string(raw))
 		p, listed := byID[paneID]
-		if !listed || (p.ClaudeStatus == "" && p.AgentScreen == "") || p.IsRolePane() ||
+		_, hasHook := hookPanes[paneID]
+		if !listed || (p.ClaudeStatus == "" && p.AgentScreen == "" && !hasHook) || p.IsRolePane() ||
 			byTarget[p.Target].CrewName != dispatcherCrewName {
 			continue
 		}
