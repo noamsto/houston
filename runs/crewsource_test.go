@@ -1,6 +1,7 @@
 package runs
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -78,12 +79,14 @@ func TestCrewDirFindsBusFromInsideAWorktree(t *testing.T) {
 func TestBusIdentitySeesAppendAfterCachedRead(t *testing.T) {
 	bus := t.TempDir()
 	writeEvents(t, bus, `{"ts":1000,"crew_id":"c1","kind":"dispatch","branch":"feat/x","engine_session":"s-1"}`+"\n")
-	s := &CrewSource{}
-	live := map[string]identityLog{}
-	if ids := s.busIdentity(bus, live); ids["feat/x"].engineSession != "s-1" {
+	s := &CrewSource{events: newEventTails(fileCrew(map[string]string{"/wt": bus}))}
+	tick := func() map[string]crewIdentity {
+		s.events.advance(context.Background(), bus, "/wt", nil)
+		return s.busIdentity(bus)
+	}
+	if ids := tick(); ids["feat/x"].engineSession != "s-1" {
 		t.Fatalf("first read engineSession = %q, want s-1", ids["feat/x"].engineSession)
 	}
-	s.ids = live
 
 	f, err := os.OpenFile(filepath.Join(bus, "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
@@ -94,8 +97,8 @@ func TestBusIdentitySeesAppendAfterCachedRead(t *testing.T) {
 	}
 	_ = f.Close()
 
-	if ids := s.busIdentity(bus, map[string]identityLog{}); ids["feat/x"].engineSession != "s-2" {
-		t.Fatalf("after append engineSession = %q, want s-2 — the cached read went stale", ids["feat/x"].engineSession)
+	if ids := tick(); ids["feat/x"].engineSession != "s-2" {
+		t.Fatalf("after append engineSession = %q, want s-2 — the cursor went stale", ids["feat/x"].engineSession)
 	}
 }
 
@@ -876,6 +879,7 @@ func crewScanner(dirs map[string]string, views crewViews, wins []tmux.WindowOpti
 		procs:     fakeProcs{},
 		now:       func() time.Time { return time.UnixMilli(busFixtureNow) },
 	}
+	s.events = newEventTails(fileCrew(dirs))
 	if len(sessions) > 0 {
 		s.sessions = sessions[0]
 	}
@@ -919,6 +923,37 @@ func workingOn(bus string, branches ...string) *fakeViews {
 // blockedOn is a view of one worker asking its dispatcher, stamped at (unix s).
 func blockedOn(bus, branch, detail string, at int64) *fakeViews {
 	return viewsOn(bus, overviewOf([]crewview.Item{viewItem("blocked", branch, detail)}, viewWorker(branch, "blocked", detail, at)))
+}
+
+// dispatcherOn registers crew's dispatcher at pane (process pid, alive unless
+// a probe says otherwise) in fv's view of bus, creating the view. Crew reports
+// a dispatcher on its workers' rows, so a crew listing no worker gets a reaped
+// anchor row to carry it.
+func dispatcherOn(fv *fakeViews, bus, crew, pane string, pid int) *fakeViews {
+	if fv.views == nil {
+		fv.views = map[string]crewview.Overview{}
+	}
+	ov, ok := fv.views[bus]
+	if !ok {
+		ov = overviewOf(nil)
+	}
+	d := &crewview.Dispatcher{Where: "here", Pane: new(pane), PID: new(pid)}
+	has := false
+	ws := make([]crewview.Worker, len(ov.Workers))
+	copy(ws, ov.Workers)
+	for i := range ws {
+		if ws[i].Crew == crew {
+			ws[i].Dispatcher, has = d, true
+		}
+	}
+	if !has {
+		w := viewWorker("feat/anchor", "reaped", "", 1)
+		w.Crew, w.Dispatcher = crew, d
+		ws = append(ws, w)
+	}
+	ov.Workers = ws
+	fv.views[bus] = ov
+	return fv
 }
 
 func viewsOn(bus string, ov crewview.Overview) *fakeViews {
@@ -1006,16 +1041,9 @@ func TestScanWorkerBlockedOnLiveDispatcherIsNotNeedsYou(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(bus, "events.jsonl"), []byte(events), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	crewDir := filepath.Join(bus, "crews", "c1")
-	if err := os.MkdirAll(crewDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(crewDir, "pane"), []byte("%1"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	s := crewScanner(
 		map[string]string{"/wt/a": bus},
-		blockedOn(bus, "fix/412", "spec: which engine?", statusTS/1000),
+		dispatcherOn(blockedOn(bus, "fix/412", "spec: which engine?", statusTS/1000), bus, "c1", "%1", 0),
 		[]tmux.WindowOptions{
 			{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"},
 			{Session: "h", Window: 2, CrewName: "dispatcher"},
@@ -1319,52 +1347,36 @@ func TestRouteCrewQuestion(t *testing.T) {
 
 // dispatcherLive is a lookup in the tick's join, so it inherits every join
 // rule; these cases pin the ones routing has always relied on plus the ids a
-// bus record can carry.
+// crew report can carry.
 func TestDispatcherLive(t *testing.T) {
 	dispatcherWin := tmux.WindowOptions{Session: "h", Window: 2, CrewName: "dispatcher"}
 	workerWin := tmux.WindowOptions{Session: "h", Window: 3, CrewName: "bronze"}
 	claudePane := dispatcherPane("%1", "h:2")
 	agentDetect := piPane("%1", "h:2", "idle", 1)
-	agentDetect.PanePID, agentDetect.ServerStart = dispPanePID, serverT.Unix()
+	agentDetect.PanePID = dispPanePID
 
 	cases := []struct {
-		name     string
-		paneFile *string // nil: no file
-		paneMod  time.Time
-		crewID   string
-		wins     []tmux.WindowOptions
-		panes    []tmux.PaneOptions
-		want     bool
+		name   string
+		pane   *string // nil: crew reports no pane
+		crewID string
+		wins   []tmux.WindowOptions
+		panes  []tmux.PaneOptions
+		want   bool
 	}{
-		{"claude pane on a dispatcher window", new("%1"), regT, "c1", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{claudePane}, true},
-		{"agent-detect pane", new("%1"), regT, "c1", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{agentDetect}, true},
-		{"pane missing from the listing", new("%9"), regT, "c1", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{claudePane}, false},
-		{"window is not a dispatcher", new("%1"), regT, "c1", []tmux.WindowOptions{{Session: "h", Window: 2, CrewName: "bronze"}, workerWin}, []tmux.PaneOptions{claudePane}, false},
-		{"no engine status", new("%1"), regT, "c1", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{{PaneID: "%1", Target: "h:2"}}, false},
-		{"no pane file", nil, regT, "c1", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{claudePane}, false},
-		{"pane file from before a tmux restart", new("%1"), serverT.Add(-time.Hour), "c1", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{claudePane}, false},
-		{"empty crew id", new("%1"), regT, "", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{claudePane}, false},
-		{"surrounding whitespace", new("  %1\n"), regT, "c1", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{claudePane}, true},
-		{"another crew", new("%1"), regT, "c2", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{claudePane}, false},
-		{"crew id escaping crews/", new("%1"), regT, "../c1", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{claudePane}, false},
-		{"crew id dot-dot", new("%1"), regT, "..", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{claudePane}, false},
+		{"claude pane on a dispatcher window", new("%1"), "c1", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{claudePane}, true},
+		{"agent-detect pane", new("%1"), "c1", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{agentDetect}, true},
+		{"pane missing from the listing", new("%9"), "c1", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{claudePane}, false},
+		{"window is not a dispatcher", new("%1"), "c1", []tmux.WindowOptions{{Session: "h", Window: 2, CrewName: "bronze"}, workerWin}, []tmux.PaneOptions{claudePane}, false},
+		{"no engine status", new("%1"), "c1", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{{PaneID: "%1", Target: "h:2"}}, false},
+		{"no pane reported", nil, "c1", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{claudePane}, false},
+		{"empty crew id", new("%1"), "", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{claudePane}, false},
+		{"surrounding whitespace", new("  %1\n"), "c1", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{claudePane}, true},
+		{"another crew", new("%1"), "c2", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{claudePane}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			bus := t.TempDir()
-			if c.paneFile != nil {
-				writeCrew(t, bus, crewFiles{id: "c1", pane: c.paneFile, paneMod: c.paneMod})
-				// Files reachable only through a crew id that climbs out of crews/.
-				if err := os.MkdirAll(filepath.Join(bus, "c1"), 0o755); err != nil {
-					t.Fatal(err)
-				}
-				for _, rel := range []string{"pane", filepath.Join("c1", "pane")} {
-					if err := os.WriteFile(filepath.Join(bus, rel), []byte(*c.paneFile), 0o644); err != nil {
-						t.Fatal(err)
-					}
-				}
-			}
-			joined := joinDispatchers(bus, c.wins, c.panes, nil, liveDispatcher())
+			ov := dispatcherOverview(crewDisp{crew: "c1", pane: c.pane, pid: new(dispPID)})
+			joined := joinDispatchers(ov, c.wins, c.panes, nil, liveDispatcher())
 			if got := dispatcherLive(joined, c.crewID); got != c.want {
 				t.Errorf("dispatcherLive = %v, want %v (join %v)", got, c.want, joined)
 			}
@@ -1372,24 +1384,23 @@ func TestDispatcherLive(t *testing.T) {
 	}
 }
 
-// A dispatcher that has dispatched nothing yet has a crews/ dir but no log;
-// its pane still gets the crew layer, which lists only beside the tmux layer.
+// A dispatcher crew reports (on its worker rows) gets the crew layer on its
+// pane, which lists only beside the tmux layer.
 func TestScanEmitsTheDispatcherLayer(t *testing.T) {
 	bus := t.TempDir()
-	writeCrew(t, bus, crewFiles{id: "c1", pane: new("%1"), paneMod: regT, pid: new("200"), pidMod: regT})
 	wins := []tmux.WindowOptions{{Session: "h", Window: 2, CrewName: "dispatcher", GitRoot: "/wt/a"}}
 	panes := []tmux.PaneOptions{dispatcherPane("%1", "h:2")}
-	s := crewScanner(map[string]string{"/wt/a": bus}, nil, wins, panes)
+	s := crewScanner(map[string]string{"/wt/a": bus}, dispatcherOn(&fakeViews{}, bus, "c1", "%1", dispPID), wins, panes)
 	s.procs = liveDispatcher()
 
 	got, ok := s.scan()
 	if !ok {
 		t.Fatal("scan reported failure")
 	}
-	if len(got) != 1 {
-		t.Fatalf("scan = %v, want only the dispatcher pane", keysOf(got))
+	d, has := got["%1"]
+	if !has {
+		t.Fatalf("scan = %v, want the dispatcher pane", keysOf(got))
 	}
-	d := got["%1"]
 	if d.Role != RoleDispatcher || d.Crew == nil || d.Crew.Name != "c1" || d.CrewBus != bus {
 		t.Fatalf("dispatcher layer = %+v (crew %+v), want role dispatcher, crew c1, bus %q", d, d.Crew, bus)
 	}
@@ -1422,10 +1433,9 @@ func TestScanEmitsTheDispatcherLayer(t *testing.T) {
 // keeps it.
 func TestScanDispatcherJoinYieldsToAWorkerKey(t *testing.T) {
 	bus := writeBus(t, "fix/412")
-	writeCrew(t, bus, crewFiles{id: "c1", pane: new("%307"), paneMod: regT})
 	s := crewScanner(
 		map[string]string{"/wt/a": bus},
-		workingOn(bus, "fix/412"),
+		dispatcherOn(workingOn(bus, "fix/412"), bus, "c1", "%307", 0),
 		[]tmux.WindowOptions{{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a", CrewName: "dispatcher"}},
 		[]tmux.PaneOptions{agentPane("%307", "h:1")},
 	)
@@ -1440,20 +1450,19 @@ func TestScanDispatcherJoinYieldsToAWorkerKey(t *testing.T) {
 	}
 }
 
-// A crew whose dispatcher is gone — its pane id reused after a tmux restart,
-// or its process exited — cannot answer a worker's question: it reaches the
-// human at once, and no dispatcher layer is emitted.
+// A crew whose dispatcher is gone — crew reports it dead or its process
+// exited — cannot answer a worker's question: it reaches the human at once, and
+// no dispatcher layer is emitted.
 func TestScanWorkerQuestionWithAGoneDispatcher(t *testing.T) {
 	cases := []struct {
 		name    string
-		crew    crewFiles
+		alive   *bool // crew's verdict; nil: unknown
 		probe   fakeProcs
 		blocked bool
 	}{
-		{"live dispatcher", crewFiles{id: "c1", pane: new("%1"), paneMod: regT, pid: new("200"), pidMod: regT}, liveDispatcher(), false},
-		{"pane file from before a tmux restart", crewFiles{id: "c1", pane: new("%1"), paneMod: serverT.Add(-time.Hour)}, liveDispatcher(), true},
-		{"dispatcher process exited", crewFiles{id: "c1", pane: new("%1"), paneMod: regT, pid: new("200"), pidMod: regT},
-			fakeProcs{dead: map[int]bool{dispPID: true}}, true},
+		{"live dispatcher", nil, liveDispatcher(), false},
+		{"crew reports the dispatcher dead", new(false), liveDispatcher(), true},
+		{"dispatcher process exited", nil, fakeProcs{dead: map[int]bool{dispPID: true}}, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -1464,12 +1473,12 @@ func TestScanWorkerQuestionWithAGoneDispatcher(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(bus, "events.jsonl"), []byte(events), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			writeCrew(t, bus, c.crew)
+			views := dispatcherOn(blockedOn(bus, "fix/412", "spec: which engine?", statusTS/1000), bus, "c1", "%1", dispPID)
+			views.views[bus].Workers[0].Dispatcher.Alive = c.alive
 			worker := agentPane("%307", "h:1")
-			worker.ServerStart = serverT.Unix()
 			s := crewScanner(
 				map[string]string{"/wt/a": bus},
-				blockedOn(bus, "fix/412", "spec: which engine?", statusTS/1000),
+				views,
 				[]tmux.WindowOptions{
 					{Session: "h", Window: 1, Branch: "fix/412", GitRoot: "/wt/a"},
 					{Session: "h", Window: 2, CrewName: "dispatcher"},
@@ -1537,50 +1546,36 @@ func TestBusCodenameYieldsToTmux(t *testing.T) {
 	}
 }
 
-func TestScanSetsCrewHomeFromTheBusHoldingTheCrewDir(t *testing.T) {
-	mk := func(name string, crews ...string) string {
+func TestScanSetsCrewHomeFromTheBusNamingTheCrew(t *testing.T) {
+	mk := func(name string) string {
 		bus := filepath.Join(t.TempDir(), name, ".git", "crew")
-		for _, c := range crews {
-			if err := os.MkdirAll(filepath.Join(bus, "crews", c), 0o755); err != nil {
-				t.Fatal(err)
-			}
-		}
 		if err := os.MkdirAll(bus, 0o755); err != nil {
 			t.Fatal(err)
 		}
 		return bus
 	}
 	log := func(bus, crew, branch string) {
-		rec := fmt.Sprintf(`{"ts":1,"crew_id":%q,"kind":"dispatch","branch":%q,"engine":"claude"}`+"\n", crew, branch)
-		if err := os.WriteFile(filepath.Join(bus, "events.jsonl"), []byte(rec), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	busA := mk("alpha", "c1", "shared")
-	busB := mk("beta", "shared")
-	log(busA, "c1", "on-a")
-	log(busB, "c1", "on-b")
-	// Same crew dir in both buses: no home.
-	if err := os.MkdirAll(filepath.Join(busB, "crews", "shared"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(busA, "crews", "shared"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	logShared := func(bus, branch string) {
-		f, err := os.OpenFile(filepath.Join(bus, "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
+		f, err := os.OpenFile(filepath.Join(bus, "events.jsonl"), os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644)
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer func() { _ = f.Close() }()
-		_, _ = fmt.Fprintf(f, `{"ts":2,"crew_id":"shared","kind":"dispatch","branch":%q,"engine":"claude"}`+"\n", branch)
+		_, _ = fmt.Fprintf(f, `{"ts":1,"crew_id":%q,"kind":"dispatch","branch":%q,"engine":"claude"}`+"\n", crew, branch)
 	}
-	logShared(busA, "sh-a")
-	shared := viewWorker("sh-a", "working", "", 1)
-	shared.Crew = "shared"
+	busA, busB := mk("alpha"), mk("beta")
+	log(busA, "c1", "on-a")
+	log(busB, "c2", "on-b")
+	// A crew named in both buses' logs has no home.
+	log(busA, "shared", "sh-a")
+	log(busB, "shared", "sh-b")
+	worker := func(crew, branch string) crewview.Worker {
+		w := viewWorker(branch, "working", "", 1)
+		w.Crew = crew
+		return w
+	}
 	views := &fakeViews{views: map[string]crewview.Overview{
-		busA: overviewOf(nil, viewWorker("on-a", "working", "", 1), shared),
-		busB: overviewOf(nil, viewWorker("on-b", "working", "", 1)),
+		busA: overviewOf(nil, worker("c1", "on-a"), worker("shared", "sh-a")),
+		busB: overviewOf(nil, worker("c2", "on-b"), worker("shared", "sh-b")),
 	}}
 
 	s := crewScanner(map[string]string{"/a": busA, "/b": busB}, views,
@@ -1598,14 +1593,10 @@ func TestScanSetsCrewHomeFromTheBusHoldingTheCrewDir(t *testing.T) {
 		t.Fatalf("no run for %q: %v", branch, keysOf(got))
 		return ""
 	}
-	if h := home("on-a"); h != "alpha" {
-		t.Errorf("on-a home = %q, want alpha", h)
-	}
-	if h := home("on-b"); h != "alpha" {
-		t.Errorf("on-b home = %q, want alpha — the crew dir lives only in bus A", h)
-	}
-	if h := home("sh-a"); h != "" {
-		t.Errorf("sh-a home = %q, want none — crew dir in both buses", h)
+	for branch, want := range map[string]string{"on-a": "alpha", "on-b": "beta", "sh-a": "", "sh-b": ""} {
+		if h := home(branch); h != want {
+			t.Errorf("%s home = %q, want %q", branch, h, want)
+		}
 	}
 }
 
@@ -1705,8 +1696,13 @@ func TestScanDropsALongSilentWindowlessBranch(t *testing.T) {
 	write := func(bus string) {
 		writeEvents(t, bus, dispatchRow(t0, "fix/412")+statusRow(t0+1000, "fix/412", "working"))
 	}
+	registered := false // crew reports c1's dispatcher at %1
 	scanAt := func(bus string, age time.Duration, panes []tmux.PaneOptions, wins []tmux.WindowOptions) map[string]Run {
-		s := crewScanner(map[string]string{"/wt/a": bus}, viewsOn(bus, overviewOf(nil, viewWorker("fix/412", "working", "", (t0+1000)/1000))), wins, panes)
+		views := viewsOn(bus, overviewOf(nil, viewWorker("fix/412", "working", "", (t0+1000)/1000)))
+		if registered {
+			dispatcherOn(views, bus, "c1", "%1", 0)
+		}
+		s := crewScanner(map[string]string{"/wt/a": bus}, views, wins, panes)
 		s.now = func() time.Time { return time.UnixMilli(t0 + 1000).Add(age) }
 		got, ok := s.scan()
 		if !ok {
@@ -1725,13 +1721,7 @@ func TestScanDropsALongSilentWindowlessBranch(t *testing.T) {
 		t.Error("a recently active windowless branch was dropped")
 	}
 
-	crewDir := filepath.Join(bus, "crews", "c1")
-	if err := os.MkdirAll(crewDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(crewDir, "pane"), []byte("%1"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	registered = true
 	withDispatcher := append(wins, tmux.WindowOptions{Session: "h", Window: 2, CrewName: "dispatcher"})
 	panes := []tmux.PaneOptions{{PaneID: "%1", Target: "h:2", ClaudeStatus: "idle 1 "}}
 	if _, found := scanAt(bus, crewStaleAfter+time.Minute, panes, withDispatcher)[key]; !found {
@@ -1775,19 +1765,12 @@ func TestScanDropsAFinishedWorkerUnderALiveDispatcher(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			bus := t.TempDir()
 			writeEvents(t, bus, tc.events)
-			crewDir := filepath.Join(bus, "crews", "c1")
-			if err := os.MkdirAll(crewDir, 0o755); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(filepath.Join(crewDir, "pane"), []byte("%1"), 0o644); err != nil {
-				t.Fatal(err)
-			}
 			wins := []tmux.WindowOptions{
 				{Session: "h", Window: 1, Branch: "other", GitRoot: "/wt/a"},
 				{Session: "h", Window: 2, CrewName: "dispatcher"},
 			}
 			panes := []tmux.PaneOptions{{PaneID: "%1", Target: "h:2", ClaudeStatus: "idle 1 "}}
-			s := crewScanner(map[string]string{"/wt/a": bus}, viewsOn(bus, tc.view), wins, panes)
+			s := crewScanner(map[string]string{"/wt/a": bus}, dispatcherOn(viewsOn(bus, tc.view), bus, "c1", "%1", 0), wins, panes)
 			s.now = func() time.Time { return time.UnixMilli(tc.lastTS).Add(tc.age) }
 
 			got, ok := s.scan()
@@ -1809,20 +1792,14 @@ func TestScanKeepsAStaleWindowlessWorkerWhoseDispatcherIsJoinedOnAnotherBus(t *t
 	const t0 = int64(1_000_000_000_000)
 	busA, busB := t.TempDir(), t.TempDir()
 	writeEvents(t, busB, dispatchRow(t0, "fix/412")+statusRow(t0+1000, "fix/412", "working"))
-	crewDir := filepath.Join(busA, "crews", "c1")
-	if err := os.MkdirAll(crewDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(crewDir, "pane"), []byte("%1"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	wins := []tmux.WindowOptions{
 		{Session: "h", Window: 1, Branch: "other", GitRoot: "/wt/a"},
 		{Session: "h", Window: 3, Branch: "other2", GitRoot: "/wt/b"},
 		{Session: "h", Window: 2, CrewName: "dispatcher"},
 	}
 	panes := []tmux.PaneOptions{{PaneID: "%1", Target: "h:2", ClaudeStatus: "idle 1 "}}
-	s := crewScanner(map[string]string{"/wt/a": busA, "/wt/b": busB}, viewsOn(busB, overviewOf(nil, viewWorker("fix/412", "working", "", (t0+1000)/1000))), wins, panes)
+	views := dispatcherOn(&fakeViews{views: map[string]crewview.Overview{busB: overviewOf(nil, viewWorker("fix/412", "working", "", (t0+1000)/1000))}}, busA, "c1", "%1", 0)
+	s := crewScanner(map[string]string{"/wt/a": busA, "/wt/b": busB}, views, wins, panes)
 	s.now = func() time.Time { return time.UnixMilli(t0 + 1000).Add(crewStaleAfter + time.Minute) }
 
 	got, ok := s.scan()
@@ -1977,13 +1954,14 @@ func TestScanGoldenView(t *testing.T) {
 	}
 }
 
-// The dispatcher run carries crew's view status: the notice when the view is
-// unsupported or unavailable (no worker runs then), else the crew's own items.
+// The dispatcher run carries crew's view: its errors as the notice and the
+// crew's own items. Crew's overview is also where the dispatcher's pane comes
+// from, so a view that is unsupported or unavailable (or not up yet) lists no
+// dispatcher run at all: the pane stays with the tmux and hook layers.
 func TestScanCarriesTheViewOnTheDispatcherRun(t *testing.T) {
 	scan := func(t *testing.T, views func(bus string) *fakeViews) map[string]Run {
 		t.Helper()
 		bus := writeBus(t, "feat/a")
-		writeCrew(t, bus, crewFiles{id: "c1", pane: new("%1"), paneMod: regT, pid: new("200"), pidMod: regT})
 		wins := []tmux.WindowOptions{{Session: "h", Window: 2, CrewName: "dispatcher", GitRoot: "/wt/a"}}
 		s := crewScanner(map[string]string{"/wt/a": bus}, views(bus), wins, []tmux.PaneOptions{dispatcherPane("%1", "h:2")})
 		s.procs = liveDispatcher()
@@ -2008,19 +1986,15 @@ func TestScanCarriesTheViewOnTheDispatcherRun(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := scan(t, withStatus(tc.status))
-			if len(got) != 1 {
-				t.Fatalf("keys = %v, want only the dispatcher run — no view, no worker runs", keysOf(got))
-			}
-			d := got["%1"]
-			if d.Role != RoleDispatcher || d.Crew == nil || d.Crew.ViewNotice != tc.notice || d.Crew.Attention != nil {
-				t.Errorf("dispatcher = %+v crew %+v, want ViewNotice %q", d, d.Crew, tc.notice)
+			if len(got) != 0 {
+				t.Fatalf("keys = %v, want no runs — no view, no dispatcher join, no worker runs", keysOf(got))
 			}
 		})
 	}
 
 	t.Run("ok", func(t *testing.T) {
 		v := goldenView(t)
-		got := scan(t, func(bus string) *fakeViews { return viewsOn(bus, v) })
+		got := scan(t, func(bus string) *fakeViews { return dispatcherOn(viewsOn(bus, v), bus, "c1", "%1", dispPID) })
 		d := got["%1"]
 		if d.Role != RoleDispatcher || d.Crew == nil || d.Crew.ViewNotice != "peer nuc: sync stale: last ok 900s ago; peer halo: no snapshot yet" {
 			t.Fatalf("dispatcher = %+v crew %+v, want the view's errors as its notice", d, d.Crew)
@@ -2067,8 +2041,7 @@ func TestScanEnsuresOneStreamPerBus(t *testing.T) {
 func joinedC1(t *testing.T, ov crewview.Overview) (*CrewSource, *fakeViews, string) {
 	t.Helper()
 	bus := writeBus(t, "feat/a")
-	writeCrew(t, bus, crewFiles{id: "c1", pane: new("%1"), paneMod: regT, pid: new("200"), pidMod: regT})
-	views := viewsOn(bus, ov)
+	views := dispatcherOn(viewsOn(bus, ov), bus, "c1", "%1", dispPID)
 	wins := []tmux.WindowOptions{{Session: "h", Window: 2, CrewName: "dispatcher", GitRoot: "/wt/a"}}
 	s := crewScanner(map[string]string{"/wt/a": bus}, views, wins, []tmux.PaneOptions{dispatcherPane("%1", "h:2")})
 	s.procs = liveDispatcher()
@@ -2134,6 +2107,7 @@ func TestScanHoldsTheCrewLayerWhileTheRosterFails(t *testing.T) {
 	}
 
 	views.views[bus] = workingView("feat/z")
+	dispatcherOn(views, bus, "c1", "%1", dispPID)
 	tick3 := mustScan(t, s)
 	zKey := "crew/" + bus + "/feat/z"
 	if want := []string{"%1", zKey}; !reflect.DeepEqual(sortedKeys(tick3), want) {
@@ -2301,8 +2275,10 @@ func TestScanReleasesAHoldPastCrewStaleAfter(t *testing.T) {
 	if r, ok := got[key]; ok {
 		t.Errorf("past crewStaleAfter: %+v still listed, want the hold released", r)
 	}
-	if d := got["%1"]; d.Crew == nil || !strings.Contains(d.Crew.ViewNotice, "roster: crew crews: exit 1") {
-		t.Errorf("dispatcher crew = %+v, want the roster error kept in its notice", d.Crew)
+	// Crew's report is where the dispatcher's pane comes from: once the held
+	// rows are released nothing names it, so the layer goes with them.
+	if d, ok := got["%1"]; ok {
+		t.Errorf("dispatcher layer %+v listed, want it released with the held rows", d)
 	}
 }
 
@@ -2503,8 +2479,6 @@ func newCrossRepo(t *testing.T, busBEvents string) crossRepo {
 			t.Fatal(err)
 		}
 	}
-	writeCrew(t, busA, crewFiles{id: "c1", pane: new("%1"), paneMod: regT})
-	writeCrew(t, busB, crewFiles{id: "c1"})
 	writeEvents(t, busB, busBEvents)
 	return crossRepo{
 		busA: busA, busB: busB,
@@ -2513,7 +2487,7 @@ func newCrossRepo(t *testing.T, busBEvents string) crossRepo {
 			{Session: "h", Window: 3, Branch: "feat/x", GitRoot: "/rootB"},
 		},
 		panes: []tmux.PaneOptions{dispatcherPane("%1", "h:2"), agentPane("%2", "h:3")},
-		views: &fakeViews{views: map[string]crewview.Overview{busA: overviewOf(nil), busB: overviewOf(nil)}},
+		views: dispatcherOn(&fakeViews{views: map[string]crewview.Overview{busA: overviewOf(nil), busB: overviewOf(nil)}}, busA, "c1", "%1", 0),
 	}
 }
 
@@ -2530,6 +2504,12 @@ func (c crossRepo) scanAt(t *testing.T, nowMS int64) map[string]Run {
 	got, ok := s.scan()
 	if !ok {
 		t.Fatal("scan reported failure")
+	}
+	// The anchor row only carries the dispatcher's registration (dispatcherOn).
+	for k := range got {
+		if strings.HasSuffix(k, "/feat/anchor") {
+			delete(got, k)
+		}
 	}
 	return got
 }

@@ -65,22 +65,11 @@ func stubDispatchRepos(repos []dispatchRepo, err error) func() ([]dispatchRepo, 
 	return func() ([]dispatchRepo, error) { return repos, err }
 }
 
-// newDispatchTestRepo builds a dispatchRepo backed by a real temp directory
-// with a crew/crews/<id> subdirectory per id, so crew-membership checks
-// (which stat the filesystem) have something real to check.
+// newDispatchTestRepo builds a dispatchRepo with the given crews, which
+// newDispatchServer registers with the fake crew CLI.
 func newDispatchTestRepo(t *testing.T, crewIDs ...string) dispatchRepo {
 	t.Helper()
-	dir := t.TempDir()
-	crewsDir := filepath.Join(dir, "crew", "crews")
-	if err := os.MkdirAll(crewsDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	for _, id := range crewIDs {
-		if err := os.MkdirAll(filepath.Join(crewsDir, id), 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return dispatchRepo{Path: "/repo", Name: "repo", Crews: crewIDs, commonDir: dir}
+	return dispatchRepo{Path: "/repo", Name: "repo", Crews: crewIDs, commonDir: t.TempDir()}
 }
 
 // testServerPath is the global PATH the test tmux servers report.
@@ -100,7 +89,7 @@ func serverPathTmux(_ context.Context, args []string, _ ...string) (string, erro
 func newDispatchServer(t *testing.T, runner dispatchRunner, repos func() ([]dispatchRepo, error)) *Server {
 	t.Helper()
 	allowed := []string{dispatchOrigin}
-	return &Server{
+	s := &Server{
 		auth:              &authGate{token: dispatchToken, enabled: true, allowedOrigins: allowed},
 		hosts:             deriveHosts(nil, allowed),
 		repoReg:           newRepoRegistry(filepath.Join(t.TempDir(), "repos.json"), nil, gitCommonDir),
@@ -114,6 +103,17 @@ func newDispatchServer(t *testing.T, runner dispatchRunner, repos func() ([]disp
 		dispatchTimeout:   5 * time.Second,
 		dispatchNewCrewID: func() string { return dispatchTestNewCrewID },
 	}
+	fc := installFakeCrew(s)
+	if repos != nil {
+		if rs, err := repos(); err == nil {
+			for _, r := range rs {
+				for _, id := range r.Crews {
+					fc.add(id, 0, true)
+				}
+			}
+		}
+	}
+	return s
 }
 
 func validDispatchRequest(repo dispatchRepo, crew string) dispatchRequest {
@@ -481,30 +481,25 @@ func TestDispatchConcurrencyCap(t *testing.T) {
 	}
 }
 
-// TestDispatchNewCrew drives crew:"new" through every runner outcome on a
-// repo with no crew/ directory at all, to prove the MkdirAll rather than just
-// the leaf Mkdir.
+// TestDispatchNewCrew drives crew:"new" through every runner outcome: the
+// crew is minted through `crew init` and stays (houston never deletes a
+// crew), so every outcome reports it.
 func TestDispatchNewCrew(t *testing.T) {
 	cases := []struct {
-		name        string
-		result      dispatchResult
-		wantStatus  int
-		wantDirKept bool
-		wantCrewSet bool
+		name       string
+		result     dispatchResult
+		wantStatus int
 	}{
-		{"success", dispatchResult{Stdout: "worker_id: worker:feat/1-x#s1\n"}, http.StatusOK, true, true},
-		{"exit 1", dispatchResult{ExitCode: 1, Stderr: "nope"}, http.StatusUnprocessableEntity, false, false},
-		{"runner err", dispatchResult{Err: &exec.Error{Name: "dispatch", Err: exec.ErrNotFound}}, http.StatusBadGateway, false, false},
-		{"deadline", dispatchResult{Err: context.DeadlineExceeded}, http.StatusGatewayTimeout, true, true},
-		{"exit 0 no worker_id", dispatchResult{Stdout: "nothing useful"}, http.StatusBadGateway, true, true},
+		{"success", dispatchResult{Stdout: "worker_id: worker:feat/1-x#s1\n"}, http.StatusOK},
+		{"exit 1", dispatchResult{ExitCode: 1, Stderr: "nope"}, http.StatusUnprocessableEntity},
+		{"runner err", dispatchResult{Err: &exec.Error{Name: "dispatch", Err: exec.ErrNotFound}}, http.StatusBadGateway},
+		{"deadline", dispatchResult{Err: context.DeadlineExceeded}, http.StatusGatewayTimeout},
+		{"exit 0 no worker_id", dispatchResult{Stdout: "nothing useful"}, http.StatusBadGateway},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := newDispatchTestRepo(t)
-			if err := os.RemoveAll(filepath.Join(repo.commonDir, "crew")); err != nil {
-				t.Fatal(err)
-			}
 
 			stub := &stubDispatchRunner{result: tc.result}
 			s := newDispatchServer(t, stub.run, stubDispatchRepos([]dispatchRepo{repo}, nil))
@@ -515,18 +510,16 @@ func TestDispatchNewCrew(t *testing.T) {
 				t.Fatalf("status %d, want %d (body %s)", rec.Code, tc.wantStatus, rec.Body.String())
 			}
 
-			mintedDir := filepath.Join(repo.commonDir, "crew", "crews", dispatchTestNewCrewID)
-			_, err := os.Stat(mintedDir)
-			if exists := err == nil; exists != tc.wantDirKept {
-				t.Errorf("minted dir exists = %v, want %v", exists, tc.wantDirKept)
+			fc := crewOf(t, s)
+			if !fc.has(dispatchTestNewCrewID) {
+				t.Errorf("crew %s was not minted through crew init", dispatchTestNewCrewID)
+			}
+			if got := fc.called("init"); len(got) != 1 || got[0][1] != dispatchTestNewCrewID {
+				t.Errorf("crew init calls = %v, want one for %s", got, dispatchTestNewCrewID)
 			}
 
-			body := decodeDispatchResponse(t, rec)
-			switch {
-			case tc.wantCrewSet && body.Crew != dispatchTestNewCrewID:
+			if body := decodeDispatchResponse(t, rec); body.Crew != dispatchTestNewCrewID {
 				t.Errorf("crew = %q, want %q", body.Crew, dispatchTestNewCrewID)
-			case !tc.wantCrewSet && body.Crew != "":
-				t.Errorf("crew = %q, want empty", body.Crew)
 			}
 
 			if n := stub.count(); n != 1 {
@@ -677,16 +670,7 @@ func TestListDispatchRepos(t *testing.T) {
 	mainRoot := filepath.Join(tmp, "repo")
 	worktreeRoot := filepath.Join(tmp, "repo-wt")
 	commonDir := filepath.Join(mainRoot, ".git")
-	crewsDir := filepath.Join(commonDir, "crew", "crews")
-	if err := os.MkdirAll(crewsDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"1700000002-1", "1700000001-1", "not-a-crew-id"} {
-		if err := os.MkdirAll(filepath.Join(crewsDir, name), 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := os.WriteFile(filepath.Join(crewsDir, "1700000001-1", "pane"), []byte("%1"), 0o644); err != nil {
+	if err := os.MkdirAll(commonDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	bareRoot := filepath.Join(tmp, "bare")
@@ -704,7 +688,13 @@ func TestListDispatchRepos(t *testing.T) {
 		return "", errors.New("not a repo")
 	}
 
-	repos, err := listDispatchRepos(lister, lookup, nil)
+	crewsOf := func(repo string) ([]string, []string) {
+		if repo != mainRoot {
+			t.Errorf("crews asked for %q, want %q", repo, mainRoot)
+		}
+		return []string{"1700000002-1", "1700000001-1"}, []string{"1700000001-1"}
+	}
+	repos, err := listDispatchRepos(lister, lookup, nil, crewsOf)
 	if err != nil {
 		t.Fatalf("listDispatchRepos: %v", err)
 	}
@@ -738,7 +728,7 @@ func TestListDispatchReposMissingCrewsDirIsEmptyNotNil(t *testing.T) {
 	lister := &fakeWorkspaceLister{wins: []tmux.WindowOptions{{GitRoot: root}}}
 	lookup := func(string) (string, error) { return commonDir, nil }
 
-	repos, err := listDispatchRepos(lister, lookup, nil)
+	repos, err := listDispatchRepos(lister, lookup, nil, nil)
 	if err != nil {
 		t.Fatalf("listDispatchRepos: %v", err)
 	}
@@ -751,20 +741,15 @@ func TestListDispatchReposMissingCrewsDirIsEmptyNotNil(t *testing.T) {
 }
 
 func TestListDispatchReposHomeEmptyNotNil(t *testing.T) {
-	tmp := t.TempDir()
-	root := filepath.Join(tmp, "repo")
-	commonDir := filepath.Join(root, ".git")
-	crewsDir := filepath.Join(commonDir, "crew", "crews")
-	for _, name := range []string{"1700000002-1", "1700000001-1"} {
-		if err := os.MkdirAll(filepath.Join(crewsDir, name), 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-
+	s := &Server{}
+	fc := installFakeCrew(s)
+	fc.add("1700000002-1", 0, false)
+	fc.add("1700000001-1", 0, false)
+	root := t.TempDir()
 	lister := &fakeWorkspaceLister{wins: []tmux.WindowOptions{{GitRoot: root}}}
-	lookup := func(string) (string, error) { return commonDir, nil }
+	lookup := func(string) (string, error) { return filepath.Join(root, ".git"), nil }
 
-	repos, err := listDispatchRepos(lister, lookup, nil)
+	repos, err := listDispatchRepos(lister, lookup, nil, s.repoCrews)
 	if err != nil {
 		t.Fatalf("listDispatchRepos: %v", err)
 	}
@@ -776,9 +761,41 @@ func TestListDispatchReposHomeEmptyNotNil(t *testing.T) {
 	}
 }
 
+// repoCrews lists a repo's crews through `crew crews`, newest first by the
+// numeric prefix of the id, skipping ids that are not a crew's shape, with
+// the homed subset from `--home`; a crew that cannot answer lists none.
+func TestRepoCrews(t *testing.T) {
+	s := &Server{}
+	fc := installFakeCrew(s)
+	fc.add("1700000001-1", 0, true)
+	fc.add("1700000002-1", 0, false)
+	fc.add("1700000002-0", 0, true)
+	fc.add("not-a-crew-id", 0, true)
+
+	crews, home := s.repoCrews("/repo")
+	if want := []string{"1700000002-1", "1700000002-0", "1700000001-1"}; !slices.Equal(crews, want) {
+		t.Errorf("crews = %q, want %q", crews, want)
+	}
+	if want := []string{"1700000002-0", "1700000001-1"}; !slices.Equal(home, want) {
+		t.Errorf("home = %q, want %q", home, want)
+	}
+	if got := fc.called("crews"); len(got) != 2 || len(got[0]) != 1 || !slices.Equal(got[1], []string{"crews", "--home"}) {
+		t.Errorf("crew crews calls = %v, want a plain call and a --home call", got)
+	}
+
+	fc.listErr = errors.New("boom")
+	crews, home = s.repoCrews("/repo")
+	if crews == nil || home == nil || len(crews) != 0 || len(home) != 0 {
+		t.Errorf("failing crew: crews %v home %v, want empty non-nil", crews, home)
+	}
+	if c, h := (&Server{}).repoCrews("/repo"); c == nil || h == nil || len(c) != 0 || len(h) != 0 {
+		t.Errorf("no crew CLI: crews %v home %v, want empty non-nil", c, h)
+	}
+}
+
 func TestListDispatchReposListerError(t *testing.T) {
 	lister := &fakeWorkspaceLister{winErr: errors.New("tmux unreachable")}
-	_, err := listDispatchRepos(lister, gitCommonDir, nil)
+	_, err := listDispatchRepos(lister, gitCommonDir, nil, nil)
 	if err == nil {
 		t.Fatal("expected an error when the lister fails")
 	}
@@ -791,7 +808,7 @@ func TestListDispatchReposUnionsRegistry(t *testing.T) {
 	lister := &fakeWorkspaceLister{wins: []tmux.WindowOptions{{GitRoot: tmuxRepo}}}
 	lookup := func(root string) (string, error) { return filepath.Join(root, ".git"), nil }
 
-	repos, err := listDispatchRepos(lister, lookup, []string{regRepo})
+	repos, err := listDispatchRepos(lister, lookup, []string{regRepo}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -815,7 +832,7 @@ func TestListDispatchReposDedupesSymlinkedTmuxRoot(t *testing.T) {
 	lister := &fakeWorkspaceLister{wins: []tmux.WindowOptions{{GitRoot: viaLink}}}
 	lookup := func(root string) (string, error) { return filepath.Join(root, ".git"), nil }
 
-	repos, err := listDispatchRepos(lister, lookup, []string{realRepo})
+	repos, err := listDispatchRepos(lister, lookup, []string{realRepo}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -832,7 +849,7 @@ func TestListDispatchReposSkipsUnresolvableTmuxRepo(t *testing.T) {
 	lister := &fakeWorkspaceLister{wins: []tmux.WindowOptions{{GitRoot: gone}}}
 	lookup := func(root string) (string, error) { return filepath.Join(root, ".git"), nil }
 
-	repos, err := listDispatchRepos(lister, lookup, nil)
+	repos, err := listDispatchRepos(lister, lookup, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -843,15 +860,12 @@ func TestListDispatchReposSkipsUnresolvableTmuxRepo(t *testing.T) {
 
 func TestListDispatchReposRegistryOnlyRepoCarriesCrewsAndHome(t *testing.T) {
 	repo := fakeRepo(t, filepath.Join(realTempDir(t), "reg-repo"))
-	crewsDir := filepath.Join(repo, ".git", "crew", "crews")
-	mkdirAll(t, filepath.Join(crewsDir, "1700000002-1"))
-	mkdirAll(t, filepath.Join(crewsDir, "1700000001-1"))
-	if err := os.WriteFile(filepath.Join(crewsDir, "1700000001-1", "pane"), []byte("%1"), 0o644); err != nil {
-		t.Fatal(err)
+	crewsOf := func(string) ([]string, []string) {
+		return []string{"1700000002-1", "1700000001-1"}, []string{"1700000001-1"}
 	}
 	lookup := func(root string) (string, error) { return filepath.Join(root, ".git"), nil }
 
-	repos, err := listDispatchRepos(&fakeWorkspaceLister{}, lookup, []string{repo})
+	repos, err := listDispatchRepos(&fakeWorkspaceLister{}, lookup, []string{repo}, crewsOf)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -882,7 +896,7 @@ func TestListDispatchReposSkipsCommonDirForRegistry(t *testing.T) {
 		return filepath.Join(root, ".git"), nil
 	}
 
-	repos, err := listDispatchRepos(lister, lookup, []string{regRepo, tmuxRepo})
+	repos, err := listDispatchRepos(lister, lookup, []string{regRepo, tmuxRepo}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1409,8 +1423,8 @@ func TestDispatchAttachProbeError(t *testing.T) {
 	if left, _ := os.ReadDir(tmp); len(left) != 0 {
 		t.Errorf("temp dir has %d leftovers", len(left))
 	}
-	if _, err := os.Stat(filepath.Join(repo.commonDir, "crew", "crews", dispatchTestNewCrewID)); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("crew dir minted (stat err %v)", err)
+	if crewOf(t, s).has(dispatchTestNewCrewID) {
+		t.Error("crew minted before the attach check")
 	}
 }
 
@@ -1436,7 +1450,8 @@ func TestDispatchImageWriteFailure(t *testing.T) {
 	if stub.count() != 0 {
 		t.Errorf("runner ran %d times", stub.count())
 	}
-	if _, err := os.Stat(filepath.Join(repo.commonDir, "crew", "crews", dispatchTestNewCrewID)); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("minted crew dir kept (stat err %v)", err)
+	// houston never deletes a crew crew init made, and the response names it.
+	if !crewOf(t, s).has(dispatchTestNewCrewID) {
+		t.Error("minted crew vanished")
 	}
 }

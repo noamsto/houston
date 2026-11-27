@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -316,15 +315,15 @@ const (
 	launchUnchecked
 )
 
-// awaitDispatcher polls until the launcher registers (crew register writes
-// <crew dir>/pid text other than prevPID, the text before the launch, "" for
-// a fresh crew), its pane dies, or wait passes. A dead pane
+// awaitDispatcher polls until the launcher registers (`crew crews` lists a
+// dispatcher pid for crewID other than prevPID, the pid before the launch, ""
+// for a fresh crew), its pane dies, or wait passes. A dead pane
 // lingers only because the wrapper sets remain-on-exit failed. detail is a
 // dead pane's exit status, or why the pane could not be checked.
-func (s *Server) awaitDispatcher(ctx context.Context, crewDir, pane, prevPID string, wait time.Duration) (state launchState, detail string) {
+func (s *Server) awaitDispatcher(ctx context.Context, repoPath, crewID, pane, prevPID string, wait time.Duration) (state launchState, detail string) {
 	deadline := time.Now().Add(wait)
 	for {
-		if t := readPIDText(filepath.Join(crewDir, "pid")); t != "" && t != prevPID {
+		if t := s.crewPIDText(ctx, repoPath, crewID); t != "" && t != prevPID {
 			return launchRegistered, ""
 		}
 		out, err := s.tmuxRun(ctx, []string{"display-message", "-p", "-t", pane, "#{pane_dead} #{pane_dead_status}"})
@@ -352,20 +351,14 @@ func (s *Server) awaitDispatcher(ctx context.Context, crewDir, pane, prevPID str
 
 // readPIDText returns the trimmed text of a crew's pid file, or "" when it is
 // missing, not a regular file, unreadable or over 64 bytes.
-func readPIDText(path string) string {
-	f, err := os.Open(path) //nolint:gosec // path is a crew dir under houston's own resolved bus, not from a request
-	if err != nil {
+// crewPIDText is the dispatcher pid crew records for crewID, as text; "" when
+// crew lists none (or no such crew).
+func (s *Server) crewPIDText(ctx context.Context, repoPath, crewID string) string {
+	row, ok := s.crewRow(ctx, repoPath, crewID)
+	if !ok || row.PID <= 0 {
 		return ""
 	}
-	defer f.Close()
-	if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() {
-		return ""
-	}
-	b, err := io.ReadAll(io.LimitReader(f, 65))
-	if err != nil || len(b) > 64 {
-		return ""
-	}
-	return strings.TrimSpace(string(b))
+	return strconv.Itoa(row.PID)
 }
 
 // launchSession picks where the dispatcher window goes: the session holding
@@ -521,8 +514,7 @@ func (s *Server) handleDispatcherLaunch(w http.ResponseWriter, r *http.Request) 
 	sweepAttachmentDir(s.attachDir)
 
 	id := s.dispatchNewCrewID()
-	crewDir, merr := mintDispatchCrew(repo.commonDir, id)
-	if merr != nil {
+	if merr := s.mintDispatchCrew(r.Context(), repo.Path, id); merr != nil {
 		reply(merr.code, dispatcherResponse{Error: merr.msg})
 		return
 	}
@@ -532,14 +524,12 @@ func (s *Server) handleDispatcherLaunch(w http.ResponseWriter, r *http.Request) 
 	attachDir := ""
 	if len(images) > 0 {
 		if strings.ContainsFunc(s.attachDir, func(r rune) bool { return unicode.IsSpace(r) || isCcRune(r) }) {
-			_ = os.Remove(crewDir)
 			reply(http.StatusInternalServerError, dispatcherResponse{Error: "houston's state path can't be listed in a prompt"})
 			return
 		}
 		var err error
 		if imagePaths, attachDir, err = s.saveLaunchImages(images); err != nil {
 			slog.Warn("dispatcher launch: could not save images", "error", err)
-			_ = os.Remove(crewDir)
 			reply(http.StatusInternalServerError, dispatcherResponse{Error: "could not save images"})
 			return
 		}
@@ -547,7 +537,6 @@ func (s *Server) handleDispatcherLaunch(w http.ResponseWriter, r *http.Request) 
 
 	file, err := writeLaunchFile(s.launchDir, dispatcherLaunchFile{Args: dispatcherArgs(valid, imagePaths), CrewID: id})
 	if err != nil {
-		_ = os.Remove(crewDir)
 		if attachDir != "" {
 			_ = os.RemoveAll(attachDir)
 		}
@@ -560,8 +549,8 @@ func (s *Server) handleDispatcherLaunch(w http.ResponseWriter, r *http.Request) 
 	ctx := context.WithoutCancel(r.Context())
 
 	code, body, pane := s.openDispatcherWindow(ctx, windowLaunch{
-		repo: repo, serverPath: serverPath, crewID: id, crewDir: crewDir,
-		ownsCrew: true, file: file, attachDir: attachDir, wait: s.launchCheck,
+		repo: repo, serverPath: serverPath, crewID: id,
+		file: file, attachDir: attachDir, wait: s.launchCheck,
 	})
 	llog.pane = pane
 	reply(code, body)
@@ -588,8 +577,6 @@ type windowLaunch struct {
 	repo       dispatchRepo
 	serverPath string
 	crewID     string
-	crewDir    string
-	ownsCrew   bool          // launch route: houston minted crewDir and removes it if the launcher never registered
 	prevPID    string        // pid file text before the launch ("" for a fresh crew)
 	file       string        // launch file already written
 	attachDir  string        // image dir houston made for this launch ("" for none or a restart)
@@ -614,12 +601,9 @@ type restartAbort struct {
 // launch and restart routes share one tmux sequence and its cleanup. pane is
 // the new pane id once tmux printed one ("" before), for the caller's log.
 func (s *Server) openDispatcherWindow(ctx context.Context, l windowLaunch) (code int, body dispatcherResponse, pane string) {
-	// The crew of a restart is not houston's to delete, so its id still names
-	// something real after a failure.
-	leftCrew := ""
-	if !l.ownsCrew {
-		leftCrew = l.crewID
-	}
+	// houston never deletes a crew, so its id still names something real
+	// after a failure.
+	leftCrew := l.crewID
 	// A restart keeps its old session while that session still exists.
 	var (
 		session string
@@ -640,9 +624,6 @@ func (s *Server) openDispatcherWindow(ctx context.Context, l windowLaunch) (code
 	if err != nil {
 		_ = os.Remove(l.file)
 		l.removeAttachDir()
-		if l.ownsCrew {
-			_ = os.Remove(l.crewDir)
-		}
 		return http.StatusServiceUnavailable, dispatcherResponse{Error: "tmux unavailable: " + err.Error(), Crew: leftCrew}, ""
 	}
 	// -E: tmux would otherwise copy houston's (service) values of every
@@ -664,9 +645,6 @@ func (s *Server) openDispatcherWindow(ctx context.Context, l windowLaunch) (code
 	if err != nil {
 		_ = os.Remove(l.file)
 		l.removeAttachDir()
-		if l.ownsCrew {
-			_ = os.Remove(l.crewDir)
-		}
 		return http.StatusBadGateway, dispatcherResponse{Error: "tmux could not start the dispatcher window: " + err.Error(), Crew: leftCrew}, ""
 	}
 	parts := strings.Split(out, ":")
@@ -699,7 +677,7 @@ func (s *Server) openDispatcherWindow(ctx context.Context, l windowLaunch) (code
 		}
 	}
 
-	state, detail := s.awaitDispatcher(ctx, l.crewDir, pane, l.prevPID, l.wait)
+	state, detail := s.awaitDispatcher(ctx, l.repo.Path, l.crewID, pane, l.prevPID, l.wait)
 	switch state {
 	case launchDead:
 		output, err := s.tmuxRun(ctx, []string{"capture-pane", "-p", "-J", "-t", pane, "-S", "-40"})
@@ -733,18 +711,11 @@ func (s *Server) openDispatcherWindow(ctx context.Context, l windowLaunch) (code
 }
 
 // removeLaunchLeftovers drops the launch file (the wrapper may never have
-// read it), the launch's images and, when houston minted the crew, its dir
-// if the launcher left it empty, returning the crew id only when its dir
-// still exists.
+// read it) and the launch's images, returning the crew id: crew init made the
+// crew and houston never deletes it.
 func removeLaunchLeftovers(l windowLaunch) string {
 	_ = os.Remove(l.file)
 	l.removeAttachDir()
-	if !l.ownsCrew {
-		return l.crewID
-	}
-	if err := os.Remove(l.crewDir); err == nil || errors.Is(err, os.ErrNotExist) {
-		return ""
-	}
 	return l.crewID
 }
 

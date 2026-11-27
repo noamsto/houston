@@ -7,7 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strconv"
 	"time"
@@ -196,8 +195,9 @@ func (s *Server) handleRunRestart(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("dispatcher restart: model lookup failed, using built-in models", "error", modelsErr)
 	}
 
-	crewDir := filepath.Join(run.CrewBus, "crews", crew)
-	oldPID := readPIDText(filepath.Join(crewDir, "pid"))
+	// The repo checkout is the parent of the bus's common git dir, where crew
+	// runs.
+	oldPID := s.crewPIDText(r.Context(), filepath.Dir(filepath.Dir(run.CrewBus)), crew)
 	pid, err := strconv.Atoi(oldPID)
 	if err != nil {
 		pid = 0
@@ -239,7 +239,7 @@ func (s *Server) handleRunRestart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rlog.repo = repo.Path
-	if fi, err := os.Stat(crewDir); err != nil || !fi.IsDir() {
+	if _, ok := s.crewRow(r.Context(), repo.Path, crew); !ok {
 		reply(http.StatusNotFound, dispatcherResponse{Error: "crew is not a crew of this repo"})
 		return
 	}
@@ -362,7 +362,7 @@ func (s *Server) handleRunRestart(w http.ResponseWriter, r *http.Request) {
 	// half-made window or skip its cleanup.
 	ctx := context.WithoutCancel(r.Context())
 	code, body, newPane := s.openDispatcherWindow(ctx, windowLaunch{
-		repo: repo, serverPath: serverPath, crewID: crew, crewDir: crewDir,
+		repo: repo, serverPath: serverPath, crewID: crew,
 		prevPID: oldPID, file: file, session: session,
 		wait: s.launchCheck + s.restartSlack, afterOpen: end, onStarting: oldOutlived,
 	})

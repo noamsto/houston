@@ -181,14 +181,7 @@ func newRestartFixture(t *testing.T) *restartFixture {
 	t.Helper()
 	lf := newLaunchFixture(t)
 	f := &restartFixture{launchFixture: lf, crew: restartTestCrew}
-	bus := filepath.Join(lf.repo.commonDir, "crew")
-	f.crewDir = filepath.Join(bus, "crews", f.crew)
-	if err := os.MkdirAll(f.crewDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(f.crewDir, "pid"), []byte("123\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	lf.fake(t).add(f.crew, 123, true)
 
 	f.panes = &restartFakePanes{
 		resolve: func(int) (tmux.Pane, error) { return tmux.Pane{ID: "%5", Server: "100"}, nil },
@@ -223,9 +216,7 @@ func newRestartFixture(t *testing.T) *restartFixture {
 		f.mu.Lock()
 		f.launch = &got
 		f.mu.Unlock()
-		if err := os.WriteFile(filepath.Join(f.crewDir, "pid"), []byte("456\n"), 0o644); err != nil {
-			t.Error(err)
-		}
+		f.fake(t).setPID(f.crew, 456)
 		return "proj:@9:%11", nil
 	})
 	f.tmux.set("kill-pane", func([]string) (string, error) { return "", nil })
@@ -238,7 +229,7 @@ func newRestartFixture(t *testing.T) *restartFixture {
 	if !ok {
 		t.Fatalf("fixture run %s not in snapshot", f.runID)
 	}
-	if !got.Caps.Terminal || got.Role != runs.RoleDispatcher || got.Crew == nil || got.Crew.Name != f.crew || got.CrewBus != bus {
+	if !got.Caps.Terminal || got.Role != runs.RoleDispatcher || got.Crew == nil || got.Crew.Name != f.crew || got.CrewBus != filepath.Join(lf.repo.commonDir, "crew") {
 		t.Fatalf("fixture run is not a joined dispatcher: %+v", got)
 	}
 	return f
@@ -420,8 +411,8 @@ func TestRestartIdle(t *testing.T) {
 			if f.index("kill-pane") < f.index("new-window") {
 				t.Errorf("old pane killed before the new window opened: %v", f.tmux.all())
 			}
-			if !exists(f.crewDir) {
-				t.Error("crew dir removed")
+			if !f.fake(t).has(f.crew) {
+				t.Error("crew removed")
 			}
 		})
 	}
@@ -512,8 +503,8 @@ func TestRestartKillFailureRollsBack(t *testing.T) {
 	if files := launchFiles(t, f.s.launchDir); len(files) != 0 {
 		t.Errorf("launch files left: %v", files)
 	}
-	if !exists(f.crewDir) {
-		t.Error("crew dir removed")
+	if !f.fake(t).has(f.crew) {
+		t.Error("crew removed")
 	}
 }
 
@@ -568,24 +559,22 @@ func TestRestartLauncherDies(t *testing.T) {
 	if resp.Crew != f.crew || !strings.Contains(resp.Error, "status 3") || !resp.OldEnded {
 		t.Errorf("response %+v", resp)
 	}
-	if !exists(f.crewDir) {
-		t.Error("crew dir removed")
+	if !f.fake(t).has(f.crew) {
+		t.Error("crew removed")
 	}
 }
 
 func TestRestartRefusesPIDLessCrew(t *testing.T) {
 	f := newRestartFixture(t)
-	if err := os.Remove(filepath.Join(f.crewDir, "pid")); err != nil {
-		t.Fatal(err)
-	}
+	f.fake(t).setPID(f.crew, 0)
 	rec, resp := f.post(t, "{}")
 	wantStatus(t, rec, http.StatusConflict)
 	if resp.Busy || resp.Crew != f.crew || resp.Error != "the crew records no dispatcher pid — restart it from a terminal" || resp.OldEnded {
 		t.Errorf("response %+v", resp)
 	}
 	f.noWindowOrKill(t)
-	if !exists(f.crewDir) {
-		t.Error("crew dir removed")
+	if !f.fake(t).has(f.crew) {
+		t.Error("crew removed")
 	}
 }
 
@@ -609,8 +598,8 @@ func TestRestartBusyAtKill(t *testing.T) {
 	if files := launchFiles(t, f.s.launchDir); len(files) != 0 {
 		t.Errorf("launch files left: %v", files)
 	}
-	if !exists(f.crewDir) {
-		t.Error("crew dir removed")
+	if !f.fake(t).has(f.crew) {
+		t.Error("crew removed")
 	}
 }
 
@@ -663,11 +652,11 @@ func TestRestartOldPIDOutlivesPane(t *testing.T) {
 	if files := launchFiles(t, f.s.launchDir); len(files) != 0 {
 		t.Errorf("launch files left: %v", files)
 	}
-	if !exists(f.crewDir) {
-		t.Error("crew dir removed")
+	if !f.fake(t).has(f.crew) {
+		t.Error("crew removed")
 	}
-	if got := readPIDText(filepath.Join(f.crewDir, "pid")); got != "123" {
-		t.Errorf("pid file %q, want 123", got)
+	if got := f.fake(t).pidOf(f.crew); got != 123 {
+		t.Errorf("recorded pid %d, want 123", got)
 	}
 }
 

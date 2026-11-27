@@ -162,7 +162,7 @@ func TestRunSourcesByMode(t *testing.T) {
 	} {
 		t.Run(string(tc.mode), func(t *testing.T) {
 			var got []string
-			for _, src := range runSources(tc.mode, h, tmux.NewClient(), cm, nil, nil) {
+			for _, src := range runSources(tc.mode, h, tmux.NewClient(), cm, nil, nil, nil) {
 				got = append(got, src.Name())
 			}
 			if !slices.Equal(got, tc.want) {

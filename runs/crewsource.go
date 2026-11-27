@@ -1,6 +1,7 @@
 package runs
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -52,9 +53,10 @@ type CrewSource struct {
 	// with no hub.
 	sessions hookSessions
 
-	// ids caches each bus log's identity fold by path, reused while size and
-	// mtime hold. Same single-goroutine rule as crewDirs.
-	ids map[string]identityLog
+	// events reads each bus's log through crew's events view and folds it into
+	// the feed and the identity per branch; nil reads no log (tests that do
+	// not care, tmux mode).
+	events *eventTails
 
 	// views supplies crew's view per bus; nil means no worker runs, only
 	// dispatcher joins (tests that do not care).
@@ -65,12 +67,22 @@ type CrewSource struct {
 	// single-goroutine rule as crewDirs.
 	rosters map[string]map[string]rosterSnap
 
-	// feed tails every resolved bus's events.jsonl for the activity feed; nil
-	// disables it (tests, tmux mode).
+	// feed folds every resolved bus's events (events) for the activity feed;
+	// nil disables it (tests, tmux mode).
 	feed *crewfeed.Store
 
 	// now is the clock scan uses; nil means time.Now. A field so tests can pin it.
 	now func() time.Time
+}
+
+// WithCrew has the source read every bus's log through run, a crew binary's
+// runner, and feeds the activity feed from it.
+func (s *CrewSource) WithCrew(run crewview.Runner) *CrewSource {
+	s.events = newEventTails(run)
+	if s.feed != nil {
+		s.feed.SetRescan(s.events.rescan)
+	}
+	return s
 }
 
 // crewViews is crew's view per bus (crewview.Manager).
@@ -84,7 +96,7 @@ func NewCrewSource(c lister, sessions hookSessions, feed *crewfeed.Store, views 
 	if every <= 0 {
 		every = 3 * time.Second
 	}
-	return &CrewSource{client: c, sessions: sessions, feed: feed, views: views, every: every, crewDirs: map[string]string{}, ids: map[string]identityLog{}, procStart: foregroundStart, procs: hostProcs{}}
+	return &CrewSource{client: c, sessions: sessions, feed: feed, views: views, every: every, crewDirs: map[string]string{}, procStart: foregroundStart, procs: hostProcs{}}
 }
 
 func (s *CrewSource) Name() string { return "crew" }
@@ -276,22 +288,48 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 	// Every bus, not only those whose log names a branch: a dispatcher that
 	// has not dispatched yet still joins its pane. busRoot is the first root,
 	// sorted, that resolved to the bus and still exists: crew dash runs there.
+	//
+	// crew's view of each bus (spliced with the snapshots of a crew whose
+	// roster failed) is read once: its worker rows carry the dispatchers the
+	// join reads, and the per-bus pass below reads the rows themselves.
+	type busView struct {
+		ov      crewview.Overview
+		st      crewview.Status
+		ok      bool
+		spliced map[rowKey]bool
+	}
 	joins := map[string]map[string]string{}
 	busRoot := map[string]string{}
+	busViews := map[string]busView{}
+	rosters := map[string]map[string]rosterSnap{}
 	for _, repo := range rootList {
 		bus := s.crewDir(repo)
 		if bus == "" {
 			continue
 		}
-		if _, done := joins[bus]; !done {
-			joins[bus] = joinDispatchers(bus, wins, panes, hookPanes, s.procs)
-			if s.feed != nil {
-				s.feed.Advance(bus)
-			}
-		}
 		if _, has := busRoot[bus]; !has {
 			if fi, err := os.Stat(repo); err == nil && fi.IsDir() {
 				busRoot[bus] = repo
+			}
+		}
+		if _, done := joins[bus]; !done {
+			var bv busView
+			if s.views != nil {
+				bv.ov, bv.st, bv.ok = s.views.Latest(bus)
+				if bv.ok {
+					bv.ov, rosters[bus], _, bv.spliced = spliceHeld(bv.ov, heldCrewsOf(bv.ov.Errors), s.rosters[bus])
+				} else {
+					// No view lists no workers, but keeps the snapshots for a
+					// roster failure after it.
+					rosters[bus] = s.rosters[bus]
+				}
+			}
+			busViews[bus] = bv
+			joins[bus] = joinDispatchers(bv.ov, wins, panes, hookPanes, s.procs)
+			if s.events != nil {
+				ctx, cancel := context.WithTimeout(context.Background(), eventsTickTimeout)
+				s.events.advance(ctx, bus, cmp.Or(busRoot[bus], repo), s.feed)
+				cancel()
 			}
 		}
 	}
@@ -321,35 +359,27 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 		}
 	}
 
-	homes := crewHomes(buses, joins)
+	homes := s.crewHomes(buses, joins)
 
 	out := map[string]Run{}
-	liveIDs := map[string]identityLog{}
 	crewItems := map[string]map[string][]CrewAttention{} // bus -> crew id -> items
 	notices := map[string]string{}
 	viewErrs := map[string][]string{}
-	rosters := map[string]map[string]rosterSnap{}
 	liveWorkers := map[string]int{} // crew id -> unfinished workers
 	for _, bus := range buses {
 		if s.views == nil {
 			continue
 		}
-		ids := s.busIdentity(bus, liveIDs)
-		ov, st, ok := s.views.Latest(bus)
-		if st.State == crewview.StateUnsupported || st.State == crewview.StateUnavailable {
-			notices[bus] = st.Notice
+		ids := s.busIdentity(bus)
+		bv := busViews[bus]
+		if bv.st.State == crewview.StateUnsupported || bv.st.State == crewview.StateUnavailable {
+			notices[bus] = bv.st.Notice
 		}
-		if !ok {
-			// No view lists no workers, but keeps the snapshots for a roster
-			// failure after it.
-			rosters[bus] = s.rosters[bus]
+		if !bv.ok {
 			continue
 		}
+		ov, spliced := bv.ov, bv.spliced
 		viewErrs[bus] = ov.Errors
-
-		held := heldCrewsOf(ov.Errors)
-		var spliced map[rowKey]bool
-		ov, rosters[bus], _, spliced = spliceHeld(ov, held, s.rosters[bus])
 
 		// crew's view lists a crew only on the bus its dispatcher is live on, so
 		// a worker dispatched into this repo from another bus's dispatcher is
@@ -472,7 +502,6 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 		}
 	}
 	s.rosters = rosters
-	s.ids = liveIDs
 
 	// Sorted so that two buses naming one pane resolve the same way every tick.
 	for _, bus := range buses {
@@ -493,39 +522,30 @@ func unfinishedWorker(r Run) bool {
 	return !slices.Contains([]State{"", StateDone, StateFailed, StateReview}, r.State)
 }
 
-// busIdentity folds every log in bus into the identity per branch, recording
-// each log it read in live (the next tick's cache).
-func (s *CrewSource) busIdentity(bus string, live map[string]identityLog) map[string]crewIdentity {
-	ids := map[string]crewIdentity{}
-	logs, err := filepath.Glob(filepath.Join(bus, "*.jsonl"))
-	if err != nil {
-		return ids
+// busIdentity is the identity per branch folded from bus's log.
+func (s *CrewSource) busIdentity(bus string) map[string]crewIdentity {
+	if s.events == nil {
+		return map[string]crewIdentity{}
 	}
-	for _, path := range logs {
-		il, ok := readIdentityLog(path, s.ids)
-		if !ok {
-			continue
-		}
-		live[path] = il
-		maps.Copy(ids, il.ids)
-	}
-	return ids
+	return s.events.identity(bus)
 }
 
-// crewHomes maps each crew id to the project name of the one bus holding
-// crews/<id>. A crew dir present in several buses takes the bus its dispatcher
-// joined on (first join wins), and has no known home when none did.
-func crewHomes(buses []string, joins map[string]map[string]string) map[string]string {
-	holders := map[string][]string{} // crew id -> buses holding crews/<id>
+// crewHomes maps each crew id to the project name of the one bus holding the
+// crew. A crew named on several buses takes the bus its dispatcher joined on
+// (first join wins), and has no known home when none did. A bus holds the
+// crews its log names and those whose dispatcher joined on it.
+func (s *CrewSource) crewHomes(buses []string, joins map[string]map[string]string) map[string]string {
+	holders := map[string][]string{} // crew id -> buses holding the crew
 	for _, bus := range buses {
-		entries, err := os.ReadDir(filepath.Join(bus, "crews"))
-		if err != nil {
-			continue
+		held := map[string]bool{}
+		if s.events != nil {
+			held = s.events.crewsOn(bus)
 		}
-		for _, e := range entries {
-			if e.IsDir() {
-				holders[e.Name()] = append(holders[e.Name()], bus)
-			}
+		for crewID := range joins[bus] {
+			held[crewID] = true
+		}
+		for crewID := range held {
+			holders[crewID] = append(holders[crewID], bus)
 		}
 	}
 	homes := make(map[string]string, len(holders))
@@ -549,6 +569,9 @@ func crewHomes(buses []string, joins map[string]map[string]string) map[string]st
 // crewDirTimeout bounds the git call below so a hung git cannot park this
 // source's goroutine forever.
 const crewDirTimeout = 5 * time.Second
+
+// eventsTickTimeout bounds one bus's event reads in a scan tick.
+const eventsTickTimeout = 30 * time.Second
 
 // crewDir resolves where dispatcher writes its bus for a checkout.
 // lazytmux's @git_root is the worktree's top level, but dispatcher writes under

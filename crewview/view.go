@@ -48,6 +48,23 @@ type Worker struct {
 	// reply that moved it to state "answered".
 	BlockedSince *int64 `json:"blocked_since"`
 	AnsweredAt   *int64 `json:"answered_at"`
+
+	// Session is the newest worker session, Live and ExitSuspect the worker's
+	// own liveness as crew judges it; nil when unknown.
+	Session     *string     `json:"session"`
+	Live        *bool       `json:"live"`
+	ExitSuspect *bool       `json:"exit_suspect"`
+	Dispatcher  *Dispatcher `json:"dispatcher"`
+}
+
+// Dispatcher is the registration of a crew's dispatcher: where it lives
+// relative to the bus the row was read from, its pid, pane and a signal-0
+// verdict. PID, Pane and Alive are nil when unknown.
+type Dispatcher struct {
+	Where string  `json:"where"`
+	PID   *int    `json:"pid"`
+	Pane  *string `json:"pane"`
+	Alive *bool   `json:"alive"`
 }
 
 // Item is one attention entry; Action is nil when the item has no runnable

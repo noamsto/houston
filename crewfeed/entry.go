@@ -1,4 +1,4 @@
-// Package crewfeed folds a crew bus's events.jsonl into a one-line-per-event
+// Package crewfeed folds a crew bus's rows (crew's events view) into a one-line-per-event
 // activity feed. It is standalone — it imports only the standard library
 // (enforced by boundary_test.go) — so the fold stays a pure function of the
 // bus lines and never reaches back into the run registry.
