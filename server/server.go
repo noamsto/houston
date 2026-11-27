@@ -130,6 +130,10 @@ type Server struct {
 	// server's PATH ahead of houston's, the same search mode resolution used;
 	// never logged.
 	crewPath string
+	// crewCLI runs crew for the reads and writes houston leaves to it (the
+	// bus events, `crew init`, `crew crews`); a field so tests fake it. nil in
+	// tmux mode.
+	crewCLI crewview.Runner
 
 	// crewViews holds crew's current view per bus, the only source of a crew
 	// action's argv; nil until wired, which the action route answers 503.
@@ -341,27 +345,25 @@ func New(cfg Config) (*Server, error) {
 	}
 
 	s := &Server{
-		instance:       hex.EncodeToString(instance[:]),
-		mode:           cfg.Mode,
-		cancel:         cancel,
-		pumpDone:       make(chan struct{}),
-		tmux:           tmuxClient,
-		controlMgr:     tmux.NewControlManager(),
-		registry:       registry,
-		font:           cfg.FontController,
-		uiFS:           cfg.UIFS,
-		hub:            hub.NewWithOptions(cfg.StatusDir, hub.Options{Mod: modStore}, slog.Default()),
-		replyRunner:    crewReplyRunner(crewPath),
-		crewPath:       crewPath,
-		crewRunner:     runCrew,
-		wsRepos:        newRepoClassifier(),
-		wsTmux:         tmuxClient,
-		runPanes:       tmuxClient,
-		dispatchRunner: execDispatch,
-		repoReg:        repoReg,
-		dispatchRepos: func() ([]dispatchRepo, error) {
-			return listDispatchRepos(tmuxClient, gitCommonDir, repoReg.ValidPaths())
-		},
+		instance:        hex.EncodeToString(instance[:]),
+		mode:            cfg.Mode,
+		cancel:          cancel,
+		pumpDone:        make(chan struct{}),
+		tmux:            tmuxClient,
+		controlMgr:      tmux.NewControlManager(),
+		registry:        registry,
+		font:            cfg.FontController,
+		uiFS:            cfg.UIFS,
+		hub:             hub.NewWithOptions(cfg.StatusDir, hub.Options{Mod: modStore}, slog.Default()),
+		replyRunner:     crewReplyRunner(crewPath),
+		crewPath:        crewPath,
+		crewCLI:         crewCLIFor(cfg.Mode, crewPath),
+		crewRunner:      runCrew,
+		wsRepos:         newRepoClassifier(),
+		wsTmux:          tmuxClient,
+		runPanes:        tmuxClient,
+		dispatchRunner:  execDispatch,
+		repoReg:         repoReg,
 		dispatchEngines: execDispatchEngines,
 		dispatchModels:  execDispatchModels,
 		dispatchAttach:  execDispatchAttach,
@@ -388,6 +390,9 @@ func New(cfg Config) (*Server, error) {
 		claudeMod:      modSrv,
 	}
 	s.chat = s.hub
+	s.dispatchRepos = func() ([]dispatchRepo, error) {
+		return listDispatchRepos(tmuxClient, gitCommonDir, repoReg.ValidPaths(), s.repoCrews)
+	}
 	if cfg.Mode != mode.Tmux {
 		s.crewFeed = crewfeed.NewStore()
 	}
@@ -416,7 +421,7 @@ func New(cfg Config) (*Server, error) {
 		s.crewViews = views
 		s.crewViewManager = views
 	}
-	for _, src := range runSources(cfg.Mode, s.hub, tmuxClient, s.controlMgr, s.crewFeed, views) {
+	for _, src := range runSources(cfg.Mode, s.hub, tmuxClient, s.controlMgr, s.crewFeed, views, s.crewCLI) {
 		s.sourcesWG.Add(1)
 		go func(src runs.Source) {
 			defer s.sourcesWG.Done()
@@ -484,13 +489,17 @@ func New(cfg Config) (*Server, error) {
 
 // runSources lists the run sources for m in the registry's layer order; tmux
 // mode has no crew bus. The crew source advances feed on every tick.
-func runSources(m mode.Mode, h *hub.Hub, c *tmux.Client, cm *tmux.ControlManager, feed *crewfeed.Store, views *crewview.Manager) []runs.Source {
+func runSources(m mode.Mode, h *hub.Hub, c *tmux.Client, cm *tmux.ControlManager, feed *crewfeed.Store, views *crewview.Manager, crewRun crewview.Runner) []runs.Source {
 	srcs := []runs.Source{
 		runs.NewHookSource(h, c),
 		runs.NewTmuxSource(c, 2*time.Second, m),
 	}
 	if m != mode.Tmux {
-		srcs = append(srcs, runs.NewCrewSource(c, h, feed, views, 3*time.Second))
+		src := runs.NewCrewSource(c, h, feed, views, 3*time.Second)
+		if crewRun != nil {
+			src.WithCrew(crewRun)
+		}
+		srcs = append(srcs, src)
 	}
 	return append(srcs, runs.NewConnectionSource(cm, c, 2*time.Second))
 }
@@ -888,4 +897,12 @@ func (s *Server) handleOpenCodeAbort(w http.ResponseWriter, r *http.Request, ser
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+// crewCLIFor is the crew runner of a mode: only dispatcher mode has a crew bus.
+func crewCLIFor(m mode.Mode, crewPath string) crewview.Runner {
+	if m != mode.Dispatcher {
+		return nil
+	}
+	return crewview.ExecRunner(crewPath)
 }

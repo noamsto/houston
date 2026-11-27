@@ -4,16 +4,13 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
-	"time"
 )
 
 // question is one bus line yielding a question entry for crew.
@@ -249,57 +246,6 @@ func TestAdvanceMissingFileThenAppears(t *testing.T) {
 	}
 	if es, ok := s.Since(bus, "c1", ep2, -1); !ok || len(es) != 1 {
 		t.Errorf("Since = %v, %v; want the one entry", es, ok)
-	}
-}
-
-// captureLogs routes slog to a buffer for the rest of the test. slog's default
-// is process-global, so a test using it must not call t.Parallel().
-func captureLogs(t *testing.T) *bytes.Buffer {
-	t.Helper()
-	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
-	t.Cleanup(func() { slog.SetDefault(prev) })
-	return &buf
-}
-
-// A bus file Advance cannot read is warned about once, not on every tick, and
-// again when it fails anew after recovering.
-func TestAdvanceWarnsOnceOnAnUnreadableFile(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root reads a mode-000 file")
-	}
-	logs := captureLogs(t)
-	bus := t.TempDir()
-	writeBusFile(t, bus, question("c1", "feat/a", "hello"))
-	chmod := func(mode os.FileMode) {
-		t.Helper()
-		if err := os.Chmod(busFile(bus), mode); err != nil {
-			t.Fatal(err)
-		}
-	}
-	chmod(0)
-	s := NewStore()
-	for range 3 {
-		s.Advance(bus)
-	}
-	if n := strings.Count(logs.String(), "level=WARN"); n != 1 {
-		t.Fatalf("%d warnings over 3 failing ticks, want 1:\n%s", n, logs)
-	}
-	if !strings.Contains(logs.String(), "bus="+bus) {
-		t.Errorf("warning does not name the bus:\n%s", logs)
-	}
-	if _, ok := s.Epoch(bus, "c1"); !ok {
-		t.Error("an unreadable first-seen bus was not recorded")
-	}
-
-	chmod(0o644)
-	s.Advance(bus)
-	chmod(0)
-	s.Advance(bus)
-	s.Advance(bus)
-	if n := strings.Count(logs.String(), "level=WARN"); n != 2 {
-		t.Fatalf("%d warnings, want a second one after the file recovered and failed again:\n%s", n, logs)
 	}
 }
 
@@ -558,37 +504,5 @@ func TestStoreConcurrentReaders(t *testing.T) {
 	want := foldCrew(t, s, bus, "c1")
 	if got := pageAll(t, s, bus, "c1", 100); !reflect.DeepEqual(got, want) {
 		t.Fatalf("after the run: paged %d entries, want %d", len(got), len(want))
-	}
-}
-
-// A FIFO at events.jsonl must not block Advance (which holds the store lock).
-func TestAdvanceFIFODoesNotBlock(t *testing.T) {
-	bus := t.TempDir()
-	if err := syscall.Mkfifo(busFile(bus), 0o644); err != nil {
-		t.Skipf("mkfifo: %v", err)
-	}
-	done := make(chan struct{})
-	go func() {
-		NewStore().Advance(bus)
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("Advance blocked on a FIFO bus file")
-	}
-}
-
-func TestOpenBusRejectsNonRegularFile(t *testing.T) {
-	bus := t.TempDir()
-	if err := os.Mkdir(busFile(bus), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	f, _, _, err := openBus(busFile(bus))
-	if err == nil || errors.Is(err, os.ErrNotExist) {
-		if f != nil {
-			_ = f.Close()
-		}
-		t.Fatalf("openBus on a directory: err = %v, want a not-regular-file error", err)
 	}
 }

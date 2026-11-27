@@ -293,10 +293,11 @@ func TestDispatcherLaunchWithRealTmuxRunner(t *testing.T) {
 case "$1" in
 has-session) echo "can't find session: proj" >&2; exit 1 ;;
 show-environment) echo "PATH=$PATH" ;;
-new-session) mkdir -p '`+f.crewDir+`' && echo 123 > '`+f.crewDir+`/pid'; printf 'proj:@3:%%7\n' ;;
+new-session) printf 'proj:@3:%%7\n' ;;
 esac
 `)
 	f.s.tmuxRun = execTmux
+	f.registerOnInit(t)
 
 	rec, resp := f.post(t, f.request())
 	wantStatus(t, rec, 200)
@@ -306,6 +307,23 @@ esac
 	argv := strings.Split(strings.TrimSuffix(readFile(t, filepath.Join(out, "tmux-argv")), "\n"), "\n")
 	if !slices.Equal(argv[:9], []string{"-u", "new-session", "-d", "-E", "-P", "-F", launchFormat, "-s", "proj"}) {
 		t.Errorf("tmux argv = %q", argv)
+	}
+}
+
+// waitFile reads path once the launcher script has written it: the launch
+// returns when the crew lists a dispatcher pid, which these tests record up
+// front, so the script's own output can land a moment later.
+func waitFile(t *testing.T, path string) string {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if b, err := os.ReadFile(path); err == nil && len(b) > 0 {
+			return string(b)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s was never written", path)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 
@@ -365,18 +383,19 @@ func TestDispatcherLaunchNewSessionKeepsServerEnv(t *testing.T) {
 	f.s.tmuxRun = execTmux
 	out := filepath.Join(t.TempDir(), "agent")
 	f.s.houstonExe = filepath.Join(t.TempDir(), "houston")
-	script := "#!" + bash + "\nprintf '%s' \"${SSH_AUTH_SOCK-unset}\" > '" + out + "'\necho 123 > '" + f.crewDir + "/pid'\nsleep 30\n"
+	script := "#!" + bash + "\nprintf '%s' \"${SSH_AUTH_SOCK-unset}\" > '" + out + "'\nsleep 30\n"
 	if err := os.WriteFile(f.s.houstonExe, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	f.s.launchCheck = 5 * time.Second
+	f.registerOnInit(t)
 
 	rec, resp := f.post(t, f.request())
 	wantStatus(t, rec, 200)
 	if resp.Session != "proj" {
 		t.Errorf("session = %q, want a new one named proj", resp.Session)
 	}
-	if got := readFile(t, out); got != "/fake/agent" {
+	if got := waitFile(t, out); got != "/fake/agent" {
 		t.Errorf("SSH_AUTH_SOCK in the new session = %q, want the server's global /fake/agent", got)
 	}
 }
@@ -401,18 +420,19 @@ func TestDispatcherLaunchPaneGetsServerPath(t *testing.T) {
 			f.s.tmuxRun = execTmux
 			out := filepath.Join(t.TempDir(), "path")
 			f.s.houstonExe = filepath.Join(t.TempDir(), "houston")
-			script := "#!" + bash + "\nprintf '%s' \"$PATH\" > '" + out + "'\necho 123 > '" + f.crewDir + "/pid'\nsleep 30\n"
+			script := "#!" + bash + "\nprintf '%s' \"$PATH\" > '" + out + "'\nsleep 30\n"
 			if err := os.WriteFile(f.s.houstonExe, []byte(script), 0o755); err != nil {
 				t.Fatal(err)
 			}
 			f.s.launchCheck = 5 * time.Second
+			f.registerOnInit(t)
 
 			rec, resp := f.post(t, f.request())
 			wantStatus(t, rec, 200)
 			if resp.Session != "proj" {
 				t.Errorf("session = %q, want proj", resp.Session)
 			}
-			if got := readFile(t, out); !strings.Contains(":"+got+":", ":"+marker+":") {
+			if got := waitFile(t, out); !strings.Contains(":"+got+":", ":"+marker+":") {
 				t.Errorf("pane PATH lacks the server's global entry %s: houston's PATH reached the pane", marker)
 			}
 		})
@@ -435,11 +455,12 @@ func TestDispatcherLaunchKeepsCurrentWindow(t *testing.T) {
 	f := newLaunchFixture(t)
 	f.s.tmuxRun = execTmux
 	f.s.houstonExe = filepath.Join(t.TempDir(), "houston")
-	script := "#!" + bash + "\necho 123 > '" + f.crewDir + "/pid'\nsleep 30\n"
+	script := "#!" + bash + "\nsleep 30\n"
 	if err := os.WriteFile(f.s.houstonExe, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	f.s.launchCheck = 5 * time.Second
+	f.registerOnInit(t)
 
 	rec, resp := f.post(t, f.request())
 	wantStatus(t, rec, 200)

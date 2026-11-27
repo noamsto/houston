@@ -63,7 +63,7 @@ func feedServer(t *testing.T, lines []string, tune ...func(*Server)) (*Server, *
 		writeFeedFile(t, bus, strings.Join(lines, ""))
 	}
 	store := crewfeed.NewStore()
-	store.Advance(bus)
+	advanceFeed(store, bus)
 	s := newReplyServer(t, nil, dispatcherDelta(bus, feedCrew))
 	s.crewFeed = store
 	for _, fn := range tune {
@@ -132,7 +132,7 @@ func TestRunCrewFeedWithoutRegistryIs503(t *testing.T) {
 func TestRunCrewFeedLadder(t *testing.T) {
 	bus := t.TempDir()
 	store := crewfeed.NewStore()
-	store.Advance(bus)
+	advanceFeed(store, bus)
 
 	worker := dispatcherDelta(bus, feedCrew)
 	worker.Key, worker.Run.Role = "crew/"+bus+"/w", runs.RoleWorker
@@ -311,7 +311,7 @@ func TestRunCrewFeedStreamResumesAfterCursorAndFollowsAppends(t *testing.T) {
 	}
 
 	appendFeedFile(t, bus, feedLine(feedCrew, "feat/a", "q4")+feedLine("1700000001-7", "feat/z", "other")+feedLine(feedCrew, "feat/a", "q5"))
-	s.crewFeed.Advance(bus)
+	advanceFeed(s.crewFeed, bus)
 	if got := decodeEntries(t, c.next(t)); feedTexts(got) != "q4,q5" {
 		t.Fatalf("appended batch %s, want q4,q5", feedTexts(got))
 	}
@@ -330,7 +330,7 @@ func TestRunCrewFeedStreamLastEventIDWinsOverAfter(t *testing.T) {
 		t.Fatalf("resumed batch %s, want q3 only", feedTexts(got))
 	}
 	appendFeedFile(t, bus, feedLine(feedCrew, "feat/a", "q4"))
-	s.crewFeed.Advance(bus)
+	advanceFeed(s.crewFeed, bus)
 	if got := decodeEntries(t, c.next(t)); feedTexts(got) != "q4" {
 		t.Fatalf("appended batch %s, want q4", feedTexts(got))
 	}
@@ -365,7 +365,7 @@ func TestRunCrewFeedStreamWithoutCursorSendsOnlyLaterEntries(t *testing.T) {
 	c := openChatStream(t, ts, path+"/stream", "")
 
 	appendFeedFile(t, bus, feedLine(feedCrew, "feat/a", "q3"))
-	s.crewFeed.Advance(bus)
+	advanceFeed(s.crewFeed, bus)
 	if got := decodeEntries(t, c.next(t)); feedTexts(got) != "q3" {
 		t.Fatalf("batch %s, want only q3", feedTexts(got))
 	}
@@ -376,7 +376,7 @@ func TestRunCrewFeedStreamWithoutCursorOnAnCrewWithNoEntriesSendsEveryEntryThatF
 	c := openChatStream(t, ts, path+"/stream", "")
 
 	appendFeedFile(t, bus, feedLine(feedCrew, "feat/a", "q1"))
-	s.crewFeed.Advance(bus)
+	advanceFeed(s.crewFeed, bus)
 	if got := decodeEntries(t, c.next(t)); feedTexts(got) != "q1" {
 		t.Fatalf("batch %s, want q1", feedTexts(got))
 	}
@@ -402,7 +402,7 @@ func TestRunCrewFeedStreamResets(t *testing.T) {
 		decodeEntries(t, c.next(t))
 
 		writeFeedFile(t, bus, feedLine(feedCrew, "feat/b", "fresh"))
-		s.crewFeed.Advance(bus)
+		advanceFeed(s.crewFeed, bus)
 		c.wantReset(t)
 	})
 

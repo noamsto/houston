@@ -2,8 +2,6 @@ package runs
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -68,20 +66,15 @@ func TestIdentityWatchdogStatusIsSilent(t *testing.T) {
 	}
 }
 
-func TestReadIdentityLogCachesOnSizeAndMtime(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "bus.jsonl")
-	if err := os.WriteFile(path, []byte(idDispatch+"\n"), 0o600); err != nil {
-		t.Fatal(err)
+// Rows folded one at a time give what folding the whole log does.
+func TestIdentityFoldIsIncremental(t *testing.T) {
+	log := idDispatch + "\n" + idStatus + "\n"
+	var f identityFold
+	for line := range strings.SplitSeq(strings.TrimSpace(log), "\n") {
+		f.Row([]byte(line))
 	}
-	cache := map[string]identityLog{}
-	first, ok := readIdentityLog(path, cache)
-	if !ok {
-		t.Fatal("first read failed")
-	}
-	cache[path] = first
-	second, ok := readIdentityLog(path, cache)
-	if !ok || !reflect.DeepEqual(first, second) {
-		t.Fatalf("second read differs: %+v vs %+v", first, second)
+	if want := identityFromCrewLog(strings.NewReader(log)); !reflect.DeepEqual(f.result(), want) {
+		t.Fatalf("incremental fold = %+v, want %+v", f.result(), want)
 	}
 }
 

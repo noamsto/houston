@@ -1,33 +1,26 @@
 package runs
 
 import (
-	"bytes"
 	"errors"
-	"log/slog"
 	"maps"
 	"os"
-	"path/filepath"
-	"strings"
-	"syscall"
 	"testing"
-	"time"
 
+	"github.com/noamsto/houston/crewview"
 	"github.com/noamsto/houston/hub"
 	"github.com/noamsto/houston/tmux"
 )
 
 // fakeProcs is a procProbe over a made-up process table: every pid is alive
-// unless dead, starts at starts[pid] (0 = unknown), and has parents[pid] as
-// its parent. err makes every parent walk fail.
+// unless dead and has parents[pid] as its parent. err makes every parent walk
+// fail.
 type fakeProcs struct {
 	dead    map[int]bool
-	starts  map[int]int64
 	parents map[int]int
 	err     error
 }
 
-func (f fakeProcs) Alive(pid int) bool  { return !f.dead[pid] }
-func (f fakeProcs) Start(pid int) int64 { return f.starts[pid] }
+func (f fakeProcs) Alive(pid int) bool { return !f.dead[pid] }
 func (f fakeProcs) Descends(pid, root int) (bool, error) {
 	if f.err != nil {
 		return false, f.err
@@ -35,71 +28,47 @@ func (f fakeProcs) Descends(pid, root int) (bool, error) {
 	return descendsVia(func(p int) (int, error) { return f.parents[p], nil }, pid, root)
 }
 
-// The join tests' clock: the tmux server started at serverT, and the
-// dispatcher registered (pane and pid files) at regT.
-var (
-	serverT = time.Unix(1_800_000_000, 0)
-	regT    = serverT.Add(30 * time.Minute)
-)
-
 const (
 	dispPanePID = 100 // the dispatcher pane's shell
 	dispPID     = 200 // the dispatcher process, the shell's grandchild
 )
 
-// crewFiles is one <bus>/crews/<id> directory; a nil pane or pid writes no
-// file.
-type crewFiles struct {
-	id      string
-	pane    *string
-	paneMod time.Time
-	pid     *string
-	pidMod  time.Time
+// crewDisp is the dispatcher registration crew's overview reports for one
+// crew's worker; a nil pid, pane or alive is one crew does not know.
+type crewDisp struct {
+	crew  string
+	pane  *string
+	pid   *int
+	alive *bool
 }
 
-func writeCrew(t *testing.T, bus string, c crewFiles) {
-	t.Helper()
-	dir := filepath.Join(bus, "crews", c.id)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
+// dispatcherOverview is an overview with one worker per crewDisp.
+func dispatcherOverview(ds ...crewDisp) crewview.Overview {
+	var ov crewview.Overview
+	for _, d := range ds {
+		ov.Workers = append(ov.Workers, crewview.Worker{
+			Crew: d.crew, Branch: "feat/" + d.crew, Origin: crewview.OriginLocal, State: "working",
+			Dispatcher: &crewview.Dispatcher{Where: "here", PID: d.pid, Pane: d.pane, Alive: d.alive},
+		})
 	}
-	for _, f := range []struct {
-		name string
-		body *string
-		mod  time.Time
-	}{{"pane", c.pane, c.paneMod}, {"pid", c.pid, c.pidMod}} {
-		if f.body == nil {
-			continue
-		}
-		path := filepath.Join(dir, f.name)
-		if err := os.WriteFile(path, []byte(*f.body), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Chtimes(path, f.mod, f.mod); err != nil {
-			t.Fatal(err)
-		}
-	}
+	return ov
 }
 
-// dispatcherPane is a Claude pane listed by the server that started at
-// serverT.
+// dispatcherPane is a Claude pane listed by the tmux server.
 func dispatcherPane(id, target string) tmux.PaneOptions {
-	return tmux.PaneOptions{PaneID: id, Target: target, ClaudeStatus: "idle 1 ", PanePID: dispPanePID, ServerStart: serverT.Unix()}
+	return tmux.PaneOptions{PaneID: id, Target: target, ClaudeStatus: "idle 1 ", PanePID: dispPanePID}
 }
 
-// liveDispatcher is the probe's view of a dispatcher that registered at regT
-// two levels below its pane's shell.
+// liveDispatcher is the probe's view of a dispatcher two levels below its
+// pane's shell.
 func liveDispatcher() fakeProcs {
-	return fakeProcs{
-		starts:  map[int]int64{dispPID: regT.Add(-time.Second).Unix()},
-		parents: map[int]int{dispPID: 150, 150: dispPanePID},
-	}
+	return fakeProcs{parents: map[int]int{dispPID: 150, 150: dispPanePID}}
 }
 
 type joinFixture struct {
 	wins  []tmux.WindowOptions
 	panes []tmux.PaneOptions
-	crews []crewFiles
+	ov    crewview.Overview
 	probe fakeProcs
 }
 
@@ -107,7 +76,7 @@ func defaultJoinFixture() joinFixture {
 	return joinFixture{
 		wins:  []tmux.WindowOptions{{Session: "h", Window: 2, CrewName: "dispatcher"}},
 		panes: []tmux.PaneOptions{dispatcherPane("%1", "h:2")},
-		crews: []crewFiles{{id: "c1", pane: new("%1"), paneMod: regT, pid: new("200\n"), pidMod: regT}},
+		ov:    dispatcherOverview(crewDisp{crew: "c1", pane: new("%1"), pid: new(dispPID), alive: new(true)}),
 		probe: liveDispatcher(),
 	}
 }
@@ -115,77 +84,56 @@ func defaultJoinFixture() joinFixture {
 func TestJoinDispatchers(t *testing.T) {
 	joined := map[string]string{"c1": "%1"}
 	none := map[string]string{}
+	disp := func(f *joinFixture) *crewview.Dispatcher { return f.ov.Workers[0].Dispatcher }
 	cases := []struct {
-		name  string
-		edit  func(f *joinFixture)
-		want  map[string]string
-		write bool // false: no crews/ directory at all
+		name string
+		edit func(f *joinFixture)
+		want map[string]string
 	}{
-		{"live claude dispatcher", func(f *joinFixture) {}, joined, true},
+		{"live claude dispatcher", func(f *joinFixture) {}, joined},
 		{"agent-detect pane", func(f *joinFixture) {
 			p := piPane("%1", "h:2", "idle", 1)
-			p.PanePID, p.ServerStart = dispPanePID, serverT.Unix()
+			p.PanePID = dispPanePID
 			f.panes = []tmux.PaneOptions{p}
-		}, joined, true},
-		{"surrounding whitespace in the pane file", func(f *joinFixture) { f.crews[0].pane = new("  %1\n") }, joined, true},
-		{"pane missing from the listing", func(f *joinFixture) { f.crews[0].pane = new("%9") }, none, true},
-		{"no pane file", func(f *joinFixture) { f.crews[0].pane = nil }, none, true},
-		{"no engine status", func(f *joinFixture) {
-			f.panes[0].ClaudeStatus = ""
-		}, none, true},
-		{"window is not a dispatcher", func(f *joinFixture) { f.wins[0].CrewName = "bronze" }, none, true},
-		{"window not listed", func(f *joinFixture) { f.wins = nil }, none, true},
-		{"role-grid pane", func(f *joinFixture) { f.panes[0].CrewRole = "critic" }, none, true},
-		{"grid lead pane", func(f *joinFixture) { f.panes[0].CrewRole = tmux.CrewRoleLead }, joined, true},
-		{"pane id reused after a tmux restart", func(f *joinFixture) {
-			f.crews[0].paneMod = serverT.Add(-time.Hour)
-			f.crews[0].pid = nil
-		}, none, true},
-		{"pane file written the second the server started", func(f *joinFixture) {
-			f.crews[0].paneMod = serverT
-		}, joined, true},
-		{"server start unknown", func(f *joinFixture) {
-			f.panes[0].ServerStart = 0
-			f.crews[0].paneMod = serverT.Add(-time.Hour)
-		}, joined, true},
-		{"dead pid", func(f *joinFixture) { f.probe.dead = map[int]bool{dispPID: true} }, none, true},
-		{"recycled pid", func(f *joinFixture) {
-			f.probe.starts[dispPID] = regT.Add(3 * time.Second).Unix()
-		}, none, true},
-		{"start within the recycle slack", func(f *joinFixture) {
-			f.probe.starts[dispPID] = regT.Add(2 * time.Second).Unix()
-		}, joined, true},
-		{"start unknown", func(f *joinFixture) { f.probe.starts = nil }, none, true},
+		}, joined},
+		{"surrounding whitespace in the pane", func(f *joinFixture) { disp(f).Pane = new("  %1\n") }, joined},
+		{"pane missing from the listing", func(f *joinFixture) { disp(f).Pane = new("%9") }, none},
+		{"no pane registered", func(f *joinFixture) { disp(f).Pane = nil }, none},
+		{"no dispatcher reported", func(f *joinFixture) { f.ov.Workers[0].Dispatcher = nil }, none},
+		{"no engine status", func(f *joinFixture) { f.panes[0].ClaudeStatus = "" }, none},
+		{"window is not a dispatcher", func(f *joinFixture) { f.wins[0].CrewName = "bronze" }, none},
+		{"window not listed", func(f *joinFixture) { f.wins = nil }, none},
+		{"role-grid pane", func(f *joinFixture) { f.panes[0].CrewRole = "critic" }, none},
+		{"grid lead pane", func(f *joinFixture) { f.panes[0].CrewRole = tmux.CrewRoleLead }, joined},
+		{"crew says the dispatcher is dead", func(f *joinFixture) { disp(f).Alive = new(false) }, none},
+		{"crew's verdict wins over the probe", func(f *joinFixture) { f.probe.dead = map[int]bool{dispPID: true} }, joined},
+		{"alive unknown, probe says dead", func(f *joinFixture) {
+			disp(f).Alive = nil
+			f.probe.dead = map[int]bool{dispPID: true}
+		}, none},
+		{"alive unknown, probe says alive", func(f *joinFixture) { disp(f).Alive = nil }, joined},
 		{"pid not in the pane's tree", func(f *joinFixture) {
 			f.probe.parents = map[int]int{dispPID: 150, 150: 1}
-		}, none, true},
-		{"parent walk fails", func(f *joinFixture) { f.probe.err = errors.New("procfs gone") }, none, true},
-		{"pid is the pane's own process", func(f *joinFixture) {
-			f.crews[0].pid = new("100")
-			f.probe.starts = map[int]int64{dispPanePID: regT.Unix()}
-		}, joined, true},
-		{"pane pid unknown", func(f *joinFixture) { f.panes[0].PanePID = 0 }, none, true},
-		{"missing pid file", func(f *joinFixture) {
-			f.crews[0].pid = nil
+		}, none},
+		{"parent walk fails", func(f *joinFixture) { f.probe.err = errors.New("procfs gone") }, none},
+		{"pid is the pane's own process", func(f *joinFixture) { disp(f).PID = new(dispPanePID) }, joined},
+		{"pane pid unknown", func(f *joinFixture) { f.panes[0].PanePID = 0 }, none},
+		{"no pid reported", func(f *joinFixture) {
+			disp(f).PID = nil
 			f.probe = fakeProcs{dead: map[int]bool{dispPID: true}, err: errors.New("never asked")}
-		}, joined, true},
-		{"unparseable pid file", func(f *joinFixture) {
-			f.crews[0].pid = new("not a pid")
-			f.probe = fakeProcs{dead: map[int]bool{dispPID: true}, err: errors.New("never asked")}
-		}, joined, true},
-		{"no crews directory", func(f *joinFixture) {}, none, false},
+		}, joined},
+		{"no pid and dead", func(f *joinFixture) {
+			disp(f).PID = nil
+			disp(f).Alive = new(false)
+		}, none},
+		{"dispatcher registered elsewhere", func(f *joinFixture) { disp(f).Where = "elsewhere" }, none},
+		{"empty overview", func(f *joinFixture) { f.ov = crewview.Overview{} }, none},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			f := defaultJoinFixture()
 			c.edit(&f)
-			bus := t.TempDir()
-			if c.write {
-				for _, cf := range f.crews {
-					writeCrew(t, bus, cf)
-				}
-			}
-			got := joinDispatchers(bus, f.wins, f.panes, nil, f.probe)
+			got := joinDispatchers(f.ov, f.wins, f.panes, nil, f.probe)
 			if !maps.Equal(got, c.want) {
 				t.Errorf("joinDispatchers = %v, want %v", got, c.want)
 			}
@@ -193,146 +141,9 @@ func TestJoinDispatchers(t *testing.T) {
 	}
 }
 
-func TestJoinDispatchersIgnoresStrayFiles(t *testing.T) {
-	f := defaultJoinFixture()
-	bus := t.TempDir()
-	writeCrew(t, bus, f.crews[0])
-	if err := os.WriteFile(filepath.Join(bus, "crews", "README"), []byte("%1"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	got := joinDispatchers(bus, f.wins, f.panes, nil, f.probe)
-	if !maps.Equal(got, map[string]string{"c1": "%1"}) {
-		t.Errorf("joinDispatchers = %v, want only c1", got)
-	}
-}
-
-// joinWithin runs joinDispatchers and fails the test if it does not return
-// within a second: a crew file that is not a regular file must never block
-// the scan.
-func joinWithin(t *testing.T, bus string, f joinFixture) map[string]string {
-	t.Helper()
-	done := make(chan map[string]string, 1)
-	go func() { done <- joinDispatchers(bus, f.wins, f.panes, nil, f.probe) }()
-	select {
-	case got := <-done:
-		return got
-	case <-time.After(time.Second):
-		t.Fatal("joinDispatchers blocked")
-		return nil
-	}
-}
-
-// Pane and pid files are read only when they are small regular files; a FIFO
-// or an oversized file reads as unreadable (pane: no join; pid: fail closed).
-// A symlink is followed, so one to a regular file reads as that file.
-func TestJoinDispatchersCrewFileShapes(t *testing.T) {
-	cases := []struct {
-		name string
-		file string // "pane" or "pid"
-		make func(t *testing.T, path string)
-		want map[string]string
-	}{
-		{"FIFO pane file", "pane", mkfifo, map[string]string{}},
-		{"FIFO pid file", "pid", mkfifo, map[string]string{}},
-		{"oversized pane file", "pane", writeFile("%1" + strings.Repeat(" ", 100) + "\n"), map[string]string{}},
-		{"oversized pid file", "pid", writeFile("200" + strings.Repeat(" ", 100) + "\n"), map[string]string{}},
-		{"pane file at the size cap", "pane", writeFile("%1" + strings.Repeat(" ", maxCrewFile-2)), map[string]string{"c1": "%1"}},
-		{"symlinked pane file", "pane", symlinkTo("%1\n"), map[string]string{"c1": "%1"}},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			f := defaultJoinFixture()
-			bus := t.TempDir()
-			writeCrew(t, bus, f.crews[0])
-			path := filepath.Join(bus, "crews", "c1", c.file)
-			if err := os.Remove(path); err != nil {
-				t.Fatal(err)
-			}
-			c.make(t, path)
-			if err := os.Chtimes(path, regT, regT); err != nil {
-				t.Fatal(err)
-			}
-			if got := joinWithin(t, bus, f); !maps.Equal(got, c.want) {
-				t.Errorf("joinDispatchers = %v, want %v", got, c.want)
-			}
-		})
-	}
-}
-
-func mkfifo(t *testing.T, path string) {
-	t.Helper()
-	if err := syscall.Mkfifo(path, 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func writeFile(body string) func(*testing.T, string) {
-	return func(t *testing.T, path string) {
-		t.Helper()
-		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-
-func symlinkTo(body string) func(*testing.T, string) {
-	return func(t *testing.T, path string) {
-		t.Helper()
-		target := filepath.Join(t.TempDir(), "target")
-		writeFile(body)(t, target)
-		if err := os.Chtimes(target, regT, regT); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Symlink(target, path); err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-
-// An unreadable crews directory or pane file is logged at Debug rather than
-// passed over in silence; a missing one is not logged.
-func TestJoinDispatchersLogsUnreadableFiles(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root reads mode-000 files")
-	}
-	var logs bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	t.Cleanup(func() { slog.SetDefault(prev) })
-
-	f := defaultJoinFixture()
-	joinDispatchers(t.TempDir(), f.wins, f.panes, nil, f.probe)
-	if logs.Len() != 0 {
-		t.Fatalf("a missing crews directory logged:\n%s", &logs)
-	}
-
-	bus := t.TempDir()
-	writeCrew(t, bus, f.crews[0])
-	pane := filepath.Join(bus, "crews", "c1", "pane")
-	if err := os.Chmod(pane, 0); err != nil {
-		t.Fatal(err)
-	}
-	joinDispatchers(bus, f.wins, f.panes, nil, f.probe)
-	if !strings.Contains(logs.String(), "level=DEBUG") || !strings.Contains(logs.String(), "crew=c1") {
-		t.Errorf("an unreadable pane file was not logged:\n%s", &logs)
-	}
-
-	logs.Reset()
-	crews := filepath.Join(bus, "crews")
-	if err := os.Chmod(crews, 0); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(crews, 0o755) })
-	joinDispatchers(bus, f.wins, f.panes, nil, f.probe)
-	if !strings.Contains(logs.String(), "level=DEBUG") || !strings.Contains(logs.String(), "bus="+bus) {
-		t.Errorf("an unreadable crews directory was not logged:\n%s", &logs)
-	}
-}
-
 // Two dispatchers in one project each own their crew; neither borrows the
 // other's pane.
 func TestJoinDispatchersTwoDispatchersOneProject(t *testing.T) {
-	bus := t.TempDir()
 	wins := []tmux.WindowOptions{
 		{Session: "h", Window: 2, CrewName: "dispatcher"},
 		{Session: "h", Window: 3, CrewName: "dispatcher"},
@@ -340,48 +151,45 @@ func TestJoinDispatchersTwoDispatchersOneProject(t *testing.T) {
 	p2 := dispatcherPane("%2", "h:3")
 	p2.PanePID = 300
 	panes := []tmux.PaneOptions{dispatcherPane("%1", "h:2"), p2}
-	writeCrew(t, bus, crewFiles{id: "c1", pane: new("%1"), paneMod: regT, pid: new("200"), pidMod: regT})
-	writeCrew(t, bus, crewFiles{id: "c2", pane: new("%2"), paneMod: regT, pid: new("400"), pidMod: regT})
-	probe := fakeProcs{
-		starts:  map[int]int64{200: regT.Unix(), 400: regT.Unix()},
-		parents: map[int]int{200: dispPanePID, 400: 300},
-	}
+	ov := dispatcherOverview(
+		crewDisp{crew: "c1", pane: new("%1"), pid: new(200)},
+		crewDisp{crew: "c2", pane: new("%2"), pid: new(400)},
+	)
+	probe := fakeProcs{parents: map[int]int{200: dispPanePID, 400: 300}}
 
-	got := joinDispatchers(bus, wins, panes, nil, probe)
+	got := joinDispatchers(ov, wins, panes, nil, probe)
 	if want := map[string]string{"c1": "%1", "c2": "%2"}; !maps.Equal(got, want) {
 		t.Errorf("joinDispatchers = %v, want %v", got, want)
 	}
 }
 
 // A dispatcher restarted in the same pane registers a new crew; the old
-// crew's files stay behind and must not keep the pane.
+// crew's registration stays behind and must not keep the pane.
 func TestJoinDispatchersTwoCrewsOnePane(t *testing.T) {
 	f := defaultJoinFixture()
-	t.Run("newest pane file wins", func(t *testing.T) {
-		bus := t.TempDir()
-		writeCrew(t, bus, crewFiles{id: "c9", pane: new("%1"), paneMod: regT.Add(-time.Minute)})
-		writeCrew(t, bus, crewFiles{id: "c1", pane: new("%1"), paneMod: regT})
-		got := joinDispatchers(bus, f.wins, f.panes, nil, f.probe)
-		if want := map[string]string{"c1": "%1"}; !maps.Equal(got, want) {
-			t.Errorf("joinDispatchers = %v, want %v", got, want)
-		}
-	})
-	t.Run("tie goes to the greater crew id", func(t *testing.T) {
-		bus := t.TempDir()
-		writeCrew(t, bus, crewFiles{id: "1800000100-7", pane: new("%1"), paneMod: regT})
-		writeCrew(t, bus, crewFiles{id: "1800000200-7", pane: new("%1"), paneMod: regT})
-		got := joinDispatchers(bus, f.wins, f.panes, nil, f.probe)
+	t.Run("the greater crew id wins", func(t *testing.T) {
+		ov := dispatcherOverview(
+			crewDisp{crew: "1800000200-7", pane: new("%1")},
+			crewDisp{crew: "1800000100-7", pane: new("%1")},
+		)
+		got := joinDispatchers(ov, f.wins, f.panes, nil, f.probe)
 		if want := map[string]string{"1800000200-7": "%1"}; !maps.Equal(got, want) {
 			t.Errorf("joinDispatchers = %v, want %v", got, want)
 		}
 	})
 	t.Run("a newer crew that fails its checks does not displace the live one", func(t *testing.T) {
-		bus := t.TempDir()
-		writeCrew(t, bus, crewFiles{id: "c1", pane: new("%1"), paneMod: regT, pid: new("200"), pidMod: regT})
-		writeCrew(t, bus, crewFiles{id: "c2", pane: new("%1"), paneMod: regT.Add(time.Minute), pid: new("999"), pidMod: regT})
-		probe := liveDispatcher()
-		probe.dead = map[int]bool{999: true}
-		got := joinDispatchers(bus, f.wins, f.panes, nil, probe)
+		ov := dispatcherOverview(
+			crewDisp{crew: "c1", pane: new("%1"), pid: new(dispPID)},
+			crewDisp{crew: "c2", pane: new("%1"), pid: new(999), alive: new(false)},
+		)
+		got := joinDispatchers(ov, f.wins, f.panes, nil, f.probe)
+		if want := map[string]string{"c1": "%1"}; !maps.Equal(got, want) {
+			t.Errorf("joinDispatchers = %v, want %v", got, want)
+		}
+	})
+	t.Run("a crew with several workers joins once", func(t *testing.T) {
+		d := crewDisp{crew: "c1", pane: new("%1"), pid: new(dispPID)}
+		got := joinDispatchers(dispatcherOverview(d, d), f.wins, f.panes, nil, f.probe)
 		if want := map[string]string{"c1": "%1"}; !maps.Equal(got, want) {
 			t.Errorf("joinDispatchers = %v, want %v", got, want)
 		}
@@ -441,9 +249,6 @@ func TestHostProcsDescendsSelf(t *testing.T) {
 // A pi dispatcher without @claude_status or @agent_screen joins through a
 // live hook session on its pane, and only through one.
 func TestJoinDispatchersHookSessionFallback(t *testing.T) {
-	bare := func(f *joinFixture) {
-		f.panes[0].ClaudeStatus = ""
-	}
 	hooks := map[string]hub.SessionView{"%1": {SessionID: "s1", TmuxPane: "%1"}}
 	cases := []struct {
 		name  string
@@ -457,12 +262,8 @@ func TestJoinDispatchersHookSessionFallback(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			f := defaultJoinFixture()
-			bare(&f)
-			bus := t.TempDir()
-			for _, cf := range f.crews {
-				writeCrew(t, bus, cf)
-			}
-			got := joinDispatchers(bus, f.wins, f.panes, c.hooks, f.probe)
+			f.panes[0].ClaudeStatus = ""
+			got := joinDispatchers(f.ov, f.wins, f.panes, c.hooks, f.probe)
 			if !maps.Equal(got, c.want) {
 				t.Errorf("joinDispatchers = %v, want %v", got, c.want)
 			}

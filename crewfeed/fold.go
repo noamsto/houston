@@ -21,7 +21,7 @@ var (
 	watchdogNameRe = regexp.MustCompile(`^[a-z][a-z-]{0,15}$`)
 )
 
-// record is one events.jsonl line. Body is a JSON object on a status record
+// record is one bus row (an events-view row's raw line). Body is a JSON object on a status record
 // and a JSON string on a msg record, so it is decoded only where its shape is
 // known; PR is a URL string on a reap record.
 type record struct {

@@ -16,8 +16,8 @@ execution from an HTTP request, so the handler is closed by construction:
 - `GET /api/dispatch/options` — the repos houston knows (tmux ∪ the repo
   registry, deduplicated by resolved path; a tmux `@git_root` is resolved to its
   main repo), each with `registered` (a registry member), that repo's crews from
-  `<git-common-dir>/crew/crews/` and `home` — the subset of `crews` whose
-  dispatcher pane lives in that repo. Also `repo_roots` (the configured roots),
+  `crew crews` run in the repo (`crewview.ListCrews`, newest first by id prefix)
+  and `home` — the subset `crew crews --home` lists (homed in that repo). Also `repo_roots` (the configured roots),
   tiers, efforts, plans, the per-engine model allowlist (`engines`, displayed in
   `engine_order`), `tier_models` (the default model per engine+tier), and
   `dispatcher_engines`: `dispatch --engines` intersected with
@@ -69,17 +69,18 @@ execution from an HTTP request, so the handler is closed by construction:
   is houston-generated, no client text. A `defer` removes the directory on every
   outcome after the write (200, 422, 502, 504; `execDispatch` returns only after
   the process group has exited, and dispatch has copied the files by then). A
-  write failure is 500 `could not save images`, the minted crew removed, dispatch
-  not run. The request log carries the image count and byte total only.
+  write failure is 500 `could not save images` (the minted crew stays, named in
+  the response), dispatch not run. The request log carries the image count and byte total only.
 - `crew: "new"` mints a crew itself rather than requiring an existing one:
-  `<unix>-<pid>` (houston's own pid), created under `<git-common-dir>/crew/crews/`
+  `<unix>-<pid>` (houston's own pid), created with `crew init <id>` run in the repo
+  (`crewview.InitCrew`; houston never makes a directory under the crew state)
   inside the dispatch slot so only one request can mint per second; a
-  same-second collision is 409 (retry). The literal `"new"` never reaches
-  argv — `--crew-id` always carries the minted or supplied id. The minted
-  directory is removed only when dispatch couldn't be started or exited
-  non-zero; it's kept on timeout, on success, and on the rare exit-0-without-
-  `worker_id` case. A houston-minted crew has no dispatcher process (no
-  `pid`/`pane` files) — its workers report into the bus and Fleet only;
+  same-second collision (`crew init` answers `created: false`) is 409 (retry). The literal `"new"` never reaches
+  argv — `--crew-id` always carries the minted or supplied id. A minted
+  crew is never removed (houston does not delete crews; `crew init` leaves an
+  empty crew a failed dispatch can reuse), so every outcome after the mint
+  reports it in `crew`. A houston-minted crew has no dispatcher process (no
+  registered pid or pane) — its workers report into the bus and Fleet only;
   `crew adopt <id>` attaches a dispatcher to it later.
 - One dispatch at a time (429 otherwise), 120 s timeout. The run is detached
   from the request, so a dropped phone connection doesn't abort a half-built
@@ -121,7 +122,7 @@ validation, naming and statuses under "Images" in "Dispatch".
   502 → fields 400 (`validateDispatcher`) → images 400/413 (`validateImages`) → repo 404 → unsafe repo path 422 →
   houston exe/launch dir not passable to tmux 500 → slot 429 → stale launch and attachment dirs swept → crew mint 409 → images written
   → launch file → tmux 503/502. A repo-list failure is 502, a launch-file write 500;
-  an image write failure is 500 `could not save images` (crew dir removed), and
+  an image write failure is 500 `could not save images` (crew kept), and
   images are refused with 500 `houston's state path can't be listed in a prompt`
   when `<status-dir>/attachments` contains whitespace or a `Cc` rune (server
   config, never client text).
@@ -147,8 +148,7 @@ validation, naming and statuses under "Images" in "Dispatch".
   appended after the tasks, or is the whole prompt when there are none (the
   launcher's 40-char session name then reads `Owner-supplied images (data, not in…`).
   The 8 KiB cap covers the tasks part only; the paths part is bounded by 10 paths.
-- **Crew:** houston mints `<unix>-<pid>` with an exclusive `os.Mkdir` under
-  `<git-common-dir>/crew/crews/` (same mint as the worker's `crew: "new"`; a
+- **Crew:** houston mints `<unix>-<pid>` with `crew init` (same mint as the worker's `crew: "new"`; a
   same-second clash is 409) and forces it through the wrapper's `CREW_ID`, so the
   id is known before launch and `crews` lists it at once.
 - **No user text in tmux argv.** tmux 3.x splits a command at any argv element
@@ -246,11 +246,10 @@ validation, naming and statuses under "Images" in "Dispatch".
   killed. A gone pane — a tmux error matching `tmux.IsGoneMessage` (`can't
   find`, no socket, `no server running`), or blank fields from a live server
   that no longer knows it — → 422 `dispatcher exited immediately`. Either 422
-  removes the launch file and the crew dir when it is empty, otherwise returns
-  `crew`. Any other check error → 502 `could not check the dispatcher pane: …`
-  with `crew, session, window, pane`, keeping the crew dir and the launch file.
+  removes the launch file and returns `crew` (the crew stays). Any other check error → 502 `could not check the dispatcher pane: …`
+  with `crew, session, window, pane`, keeping the crew and the launch file.
   Neither within 3 s → 200, still starting. Other 502s: engines lookup, tmux
-  failing to start the window (crew dir and launch file removed), or tmux
+  failing to start the window (launch file removed, `crew` returned), or tmux
   printing no pane (crew and launch file kept, `crew` returned).
 - **Slot:** `launchSlot`, separate from the worker's `dispatchSlot` so a 120 s
   worker dispatch doesn't block a launch; busy → 429.
@@ -268,14 +267,14 @@ validation, naming and statuses under "Images" in "Dispatch".
 
 `POST /api/runs/{id}/restart` (`server/dispatcher_restart.go`, dispatcher mode, behind the auth gate) ends a dispatcher run's engine session and starts a new dispatcher on the same crew in the same repo. Workers are untouched.
 
-- **Server state only:** the crew id (`Run.Crew.Name`, which must match `dispatchCrewRe`) and the bus (`Run.CrewBus`) come from the dispatcher ↔ crew join; the repo is the dispatch repo whose common dir is the bus's parent (symlink-resolved before matching, so a repo reached through a symlink still matches), and `crews/<id>` must be a directory there. The crew reaches the launcher through the launch file's `crew_id` (`launchEnv` sets `CREW_ID`); it is never minted and houston never removes it, whatever fails.
+- **Server state only:** the crew id (`Run.Crew.Name`, which must match `dispatchCrewRe`) and the bus (`Run.CrewBus`) come from the dispatcher ↔ crew join; the repo is the dispatch repo whose common dir is the bus's parent (symlink-resolved before matching, so a repo reached through a symlink still matches), and `crew crews` run in that repo must list the crew. The crew reaches the launcher through the launch file's `crew_id` (`launchEnv` sets `CREW_ID`); it is never minted and houston never removes it, whatever fails.
 - **Body** `{engine?, model?, effort?, force?}`, unknown fields 400. An absent field inherits; `""` for model or effort is the launcher default. Inheritance reads the old launcher's argv (`/proc/<pid>/cmdline` of the crew's recorded `pid`, Linux only; `parseLauncherArgv` mirrors the launcher's flag loop). Without it the engine is the run's `agent` and model/effort the launcher defaults. A changed engine does not inherit the model (models are per engine). The resolved values pass `validateDispatcher` exactly like the launch route; an inherited value that no longer validates is a 400, never a silent change. A restart carries no task prompt. `--autocompact` and a `/model` toggled inside the session are not carried.
 - **Busy** (`restartBusy`): `thinking`/`running`/`compacting`, or `blocked` unless the question kind is `turn`; for a Claude run also a permission dialog on screen (`answer.PermissionPrompt` over a capture, since a dialog left open past `idle_prompt` reads `idle`). Busy without `force` → 409 `{busy: true}`, nothing touched; the state check (not the capture) repeats just before the kill. Residual: an `AskUserQuestion` dialog left open past `idle_prompt` reads `idle` and is not detected.
 - **Order** (`handleRunRestart`; only the window, kill and startup steps are `openDispatcherWindow`, shared with the launch route, as is `launchSlot`): registry 503 → run, dispatcher and crew 404 → body 400/413 → tmux server `PATH` 503 → engines 502 → settings 400 → repo list 502 → repo and crew 404 → crew records no dispatcher pid 409 (`the crew records no dispatcher pid — restart it from a terminal`; fail closed: without the pid the wrapper could not wait for the old dispatcher, and an abort would leave the crew registered to the killed new pane) → unsafe repo path 422 → houston exe/launch dir 500 → old pane re-resolved (`resolveRunPane`) 409/503 → busy 409, or 503 when the Claude pane capture for the dialog check fails → launcher on the tmux server's `PATH` 502 (checked before anything is touched) → slot 429 → launch file 500. Then the new window opens first (the old pane's session while it exists, else the launch route's session rule), the old pane is re-resolved (point-of-use server check) and ended with `kill-pane` by pane id, then the startup check runs. A pane already gone at the kill is fine.
   - The launch file carries `wait_pid` (the old recorded pid): the wrapper waits for that pid to exit before exec, because `crew register` refuses while the recorded pid is alive and the old launcher's `crew deregister` would otherwise remove the new registration. `launchWaitLimit` (60 s) is only a backstop that matters if houston itself dies mid-request (the wrapper then stops waiting and registers): on every houston-side outcome, including the post-await check below, houston has already answered or killed the new window, which ends the waiting wrapper.
   - Killing first was rejected: a failed new window would leave the crew without a dispatcher, and killing a session's last window can take the tmux server down with it. A failure between opening and the kill (busy again, different server, `kill-pane` failed) kills the new window and leaves the old one running.
   - `kill-pane`, not `kill-window`: a dispatcher window has one pane, so the window closes; a user's extra panes in it survive.
-- **Startup check:** `awaitDispatcher` counts the launcher as registered when the crew's `pid` file text is non-empty and differs from the text before the launch (a restart's pid file already exists); houston's own await, after the kill, is `launchCheck + restartSlack` (`Server.restartSlack`, 5 s in production, covering a slow exit of the old process).
+- **Startup check:** `awaitDispatcher` counts the launcher as registered when the dispatcher pid `crew crews` lists for the crew is non-empty and differs from the pid before the launch (a restart's crew already has one); houston's own await, after the kill, is `launchCheck + restartSlack` (`Server.restartSlack`, 5 s in production, covering a slow exit of the old process).
   - **Post-await check** (restart only, `windowLaunch.onStarting`, runs only when the startup check is still "starting"): if the old recorded pid is still alive (`Server.pidAlive`, default `processAlive`), the wrapper is still waiting on it and cannot register, so the new window is killed and the restart answers 502 `the old dispatcher process is still running after its pane was ended — the new launcher could not register; stop pid N and relaunch with CREW_ID=<crew> dispatcher`, with `old_ended`. Old pid dead → the 200 "still starting" is genuine.
 - **`old_ended`** (`dispatcherResponse.OldEnded`, `omitempty`, restart only; the launch route never sets it): true exactly when the restart's `afterOpen` killed the old pane or found it already gone. So every post-kill status carries it (200, 422 dead/gone, 502 unchecked, the 502 above) and no pre-kill refusal does (those leave the old dispatcher running).
 - **Statuses:**

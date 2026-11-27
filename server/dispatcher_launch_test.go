@@ -187,11 +187,16 @@ func (f *scriptedTmux) find(cmd string) []string {
 }
 
 type launchFixture struct {
-	s       *Server
-	tmux    *scriptedTmux
-	repo    dispatchRepo
-	crewDir string
+	s    *Server
+	tmux *scriptedTmux
+	repo dispatchRepo
 }
+
+// fake is the fake crew CLI behind the fixture's server.
+func (f launchFixture) fake(t *testing.T) *fakeCrewCLI { return crewOf(t, f.s) }
+
+// crewExists reports whether the launch's crew exists in the fake crew state.
+func (f launchFixture) crewExists(t *testing.T) bool { return f.fake(t).has(dispatchTestNewCrewID) }
 
 // newLaunchFixture serves one fake main checkout named "proj" with no tmux
 // windows; by default tmux reports no session, starts the window as pane %7,
@@ -221,24 +226,25 @@ func newLaunchFixture(t *testing.T) launchFixture {
 	s.launchCheck = 300 * time.Millisecond
 	s.launchPoll = 10 * time.Millisecond
 
-	return launchFixture{
-		s:       s,
-		tmux:    ft,
-		repo:    repo,
-		crewDir: filepath.Join(repo.commonDir, "crew", "crews", dispatchTestNewCrewID),
-	}
+	return launchFixture{s: s, tmux: ft, repo: repo}
 }
 
 // registerOnStart makes the stubbed window "start" a launcher that registers
-// itself, the way crew register writes <crew dir>/pid.
+// itself, the way crew register records the dispatcher pid.
 func (f launchFixture) registerOnStart(t *testing.T, cmd string) {
 	t.Helper()
 	f.tmux.set(cmd, func([]string) (string, error) {
-		if err := os.WriteFile(filepath.Join(f.crewDir, "pid"), []byte("123"), 0o644); err != nil {
-			t.Error(err)
-		}
+		f.fake(t).setPID(dispatchTestNewCrewID, 123)
 		return "proj:@3:%7", nil
 	})
+}
+
+// registerOnInit has the launch's crew list a dispatcher pid from the moment
+// crew init makes it, the way a launcher that registers at once looks to the
+// launch's first poll.
+func (f launchFixture) registerOnInit(t *testing.T) {
+	t.Helper()
+	f.fake(t).initPID = 123
 }
 
 func (f launchFixture) post(t *testing.T, req dispatcherRequest) (*httptest.ResponseRecorder, dispatcherResponse) {
@@ -297,30 +303,21 @@ func exists(path string) bool {
 }
 
 func TestAwaitDispatcherPIDChange(t *testing.T) {
-	ptr := func(s string) *string { return &s }
 	cases := []struct {
 		name, prev string
-		file       *string
+		pid        int // the pid crew lists for the crew; 0: none
 		want       launchState
 	}{
-		{"fresh absent", "", nil, launchStarting},
-		{"fresh written", "", ptr("123\n"), launchRegistered},
-		{"unchanged", "123", ptr("123\n"), launchStarting},
-		{"changed", "123", ptr("456\n"), launchRegistered},
-		{"empty file", "", ptr(""), launchStarting},
+		{"fresh absent", "", 0, launchStarting},
+		{"fresh written", "", 123, launchRegistered},
+		{"unchanged", "123", 123, launchStarting},
+		{"changed", "123", 456, launchRegistered},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newLaunchFixture(t)
-			if err := os.MkdirAll(f.crewDir, 0o755); err != nil {
-				t.Fatal(err)
-			}
-			if tc.file != nil {
-				if err := os.WriteFile(filepath.Join(f.crewDir, "pid"), []byte(*tc.file), 0o644); err != nil {
-					t.Fatal(err)
-				}
-			}
-			got, _ := f.s.awaitDispatcher(context.Background(), f.crewDir, "%7", tc.prev, 30*time.Millisecond)
+			f.fake(t).add(dispatchTestNewCrewID, tc.pid, true)
+			got, _ := f.s.awaitDispatcher(context.Background(), f.repo.Path, dispatchTestNewCrewID, "%7", tc.prev, 30*time.Millisecond)
 			if got != tc.want {
 				t.Errorf("state = %v, want %v", got, tc.want)
 			}
@@ -328,28 +325,18 @@ func TestAwaitDispatcherPIDChange(t *testing.T) {
 	}
 }
 
-func TestReadPIDText(t *testing.T) {
-	dir := t.TempDir()
-	write := func(name, content string) string {
-		p := filepath.Join(dir, name)
-		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		return p
+// A crew crew does not list, or one that cannot answer, has registered nothing.
+func TestAwaitDispatcherUnlistedCrew(t *testing.T) {
+	f := newLaunchFixture(t)
+	if got, _ := f.s.awaitDispatcher(context.Background(), f.repo.Path, dispatchTestNewCrewID, "%7", "", 30*time.Millisecond); got != launchStarting {
+		t.Errorf("unlisted crew: state = %v, want starting", got)
 	}
-	cases := []struct{ name, path, want string }{
-		{"trimmed", write("ok", " 42\n"), "42"},
-		{"64 bytes", write("max", strings.Repeat("1", 64)), strings.Repeat("1", 64)},
-		{"over 64 bytes", write("big", strings.Repeat("1", 65)), ""},
-		{"directory", dir, ""},
-		{"missing", filepath.Join(dir, "nope"), ""},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := readPIDText(tc.path); got != tc.want {
-				t.Errorf("readPIDText = %q, want %q", got, tc.want)
-			}
-		})
+	f.fake(t).add(dispatchTestNewCrewID, 123, true)
+	f.fake(t).listErr = errors.New("boom")
+	// A crew that cannot say is not "still starting": the launch reports that
+	// the registration could not be read.
+	if got, detail := f.s.awaitDispatcher(context.Background(), f.repo.Path, dispatchTestNewCrewID, "%7", "", 30*time.Millisecond); got != launchUnchecked || detail == "" {
+		t.Errorf("failing crew: state = %v (%q), want unchecked with a reason", got, detail)
 	}
 }
 
@@ -378,8 +365,8 @@ func TestDispatcherLaunchNewSessionSuccess(t *testing.T) {
 	if got := f.tmux.find("new-session"); !slices.Equal(got, wantArgv) {
 		t.Errorf("new-session argv = %q\nwant %q", got, wantArgv)
 	}
-	if !exists(f.crewDir) {
-		t.Error("minted crew dir is gone after success")
+	if !f.crewExists(t) {
+		t.Error("minted crew is gone after success")
 	}
 }
 
@@ -520,16 +507,14 @@ func TestDispatcherLaunchExistingSessionByName(t *testing.T) {
 // windowLaunch openDispatcherWindow takes for it.
 func (f launchFixture) launchFor(t *testing.T) windowLaunch {
 	t.Helper()
-	if err := os.MkdirAll(f.crewDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	f.fake(t).add(dispatchTestNewCrewID, 0, true)
 	file, err := writeLaunchFile(f.s.launchDir, dispatcherLaunchFile{Args: []string{"--agent", "claude"}, CrewID: dispatchTestNewCrewID})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return windowLaunch{
 		repo: f.repo, serverPath: testServerPath, crewID: dispatchTestNewCrewID,
-		crewDir: f.crewDir, file: file, wait: f.s.launchCheck,
+		file: file, wait: f.s.launchCheck,
 	}
 }
 
@@ -582,8 +567,8 @@ func TestOpenDispatcherWindowAfterOpenAborts(t *testing.T) {
 	if files := launchFiles(t, f.s.launchDir); len(files) != 0 {
 		t.Errorf("launch files left behind: %q", files)
 	}
-	if !exists(f.crewDir) {
-		t.Error("crew dir removed although houston did not mint it")
+	if !f.crewExists(t) {
+		t.Error("crew removed although houston did not mint it")
 	}
 }
 
@@ -600,8 +585,8 @@ func TestDispatcherLaunchDeadPane(t *testing.T) {
 	if resp.Output != "dispatcher: engine claude is not enabled" {
 		t.Errorf("output = %q", resp.Output)
 	}
-	if resp.Crew != "" {
-		t.Errorf("crew = %q, want none (removed)", resp.Crew)
+	if resp.Crew != dispatchTestNewCrewID {
+		t.Errorf("crew = %q, want %q (houston never deletes a crew)", resp.Crew, dispatchTestNewCrewID)
 	}
 	if got := f.tmux.find("capture-pane"); !slices.Equal(got, []string{"capture-pane", "-p", "-J", "-t", "%7", "-S", "-40"}) {
 		t.Errorf("capture-pane argv = %q", got)
@@ -615,8 +600,8 @@ func TestDispatcherLaunchDeadPane(t *testing.T) {
 	if f.tmux.find("kill-session") != nil {
 		t.Error("kill-session ran for a session houston did not create")
 	}
-	if exists(f.crewDir) {
-		t.Error("crew dir kept after the dispatcher died")
+	if !f.crewExists(t) {
+		t.Error("crew removed after the dispatcher died")
 	}
 }
 
@@ -715,8 +700,8 @@ func TestDispatcherLaunchInvalidImage(t *testing.T) {
 			t.Errorf("tmux ran: %q", c)
 		}
 	}
-	if exists(f.crewDir) {
-		t.Error("crew dir minted for an invalid image")
+	if f.crewExists(t) {
+		t.Error("crew minted for an invalid image")
 	}
 	if dirs := attachDirs(t, f.s.attachDir); len(dirs) != 0 {
 		t.Errorf("attach dirs = %q", dirs)
@@ -732,8 +717,8 @@ func TestDispatcherLaunchAttachDirWithSpace(t *testing.T) {
 	if resp.Error != "houston's state path can't be listed in a prompt" {
 		t.Errorf("error = %q", resp.Error)
 	}
-	if exists(f.crewDir) {
-		t.Error("crew dir kept")
+	if !f.crewExists(t) {
+		t.Error("crew removed")
 	}
 	for _, c := range f.tmux.all() {
 		if c[0] != "show-environment" {
@@ -812,8 +797,8 @@ func TestDispatcherLaunchPaneGone(t *testing.T) {
 			if resp.Error != "dispatcher exited immediately" {
 				t.Errorf("error = %q", resp.Error)
 			}
-			if exists(f.crewDir) {
-				t.Error("empty crew dir kept after the pane vanished")
+			if !f.crewExists(t) {
+				t.Error("crew removed after the pane vanished")
 			}
 			if files := launchFiles(t, f.s.launchDir); len(files) != 0 {
 				t.Errorf("launch files left behind: %q", files)
@@ -839,8 +824,8 @@ func TestDispatcherLaunchPaneCheckFailed(t *testing.T) {
 	if resp != want {
 		t.Errorf("response = %+v, want %+v", resp, want)
 	}
-	if !exists(f.crewDir) {
-		t.Error("crew dir removed although the pane was never confirmed gone")
+	if !f.crewExists(t) {
+		t.Error("crew removed although the pane was never confirmed gone")
 	}
 	if files := launchFiles(t, f.s.launchDir); len(files) != 1 {
 		t.Errorf("launch files = %q, want the one still unread", files)
@@ -866,8 +851,8 @@ func TestDispatcherLaunchSessionLookupFailed(t *testing.T) {
 			if !strings.HasPrefix(resp.Error, "tmux unavailable") {
 				t.Errorf("error = %q", resp.Error)
 			}
-			if resp.Crew != "" {
-				t.Errorf("crew = %q, want none", resp.Crew)
+			if resp.Crew != dispatchTestNewCrewID {
+				t.Errorf("crew = %q, want %q", resp.Crew, dispatchTestNewCrewID)
 			}
 			if f.tmux.find("new-session") != nil || f.tmux.find("new-window") != nil {
 				t.Error("tmux was asked to create a window")
@@ -875,8 +860,8 @@ func TestDispatcherLaunchSessionLookupFailed(t *testing.T) {
 			if files := launchFiles(t, f.s.launchDir); len(files) != 0 {
 				t.Errorf("launch files left behind: %q", files)
 			}
-			if exists(f.crewDir) {
-				t.Error("crew dir kept after tmux was unavailable")
+			if !f.crewExists(t) {
+				t.Error("crew removed after tmux was unavailable")
 			}
 		})
 	}
@@ -894,8 +879,8 @@ func TestDispatcherLaunchStillStarting(t *testing.T) {
 	if resp.Pane != "%7" || resp.Crew != dispatchTestNewCrewID {
 		t.Errorf("response = %+v", resp)
 	}
-	if !exists(f.crewDir) {
-		t.Error("crew dir removed while the dispatcher is still starting")
+	if !f.crewExists(t) {
+		t.Error("crew removed while the dispatcher is still starting")
 	}
 }
 
@@ -911,11 +896,11 @@ func TestDispatcherLaunchTmuxFailure(t *testing.T) {
 	if files := launchFiles(t, f.s.launchDir); len(files) != 0 {
 		t.Errorf("launch files left behind: %q", files)
 	}
-	if exists(f.crewDir) {
-		t.Error("crew dir kept after tmux failed")
+	if !f.crewExists(t) {
+		t.Error("crew removed after tmux failed")
 	}
-	if resp.Crew != "" {
-		t.Errorf("crew = %q, want none", resp.Crew)
+	if resp.Crew != dispatchTestNewCrewID {
+		t.Errorf("crew = %q, want %q", resp.Crew, dispatchTestNewCrewID)
 	}
 }
 
@@ -942,7 +927,7 @@ func TestDispatcherLaunchRefusalsBeforeTmux(t *testing.T) {
 		}, http.StatusServiceUnavailable},
 		{"engine not enabled", func(_ *launchFixture, req *dispatcherRequest) { req.Engine, req.Model = "pi", "" }, http.StatusBadRequest},
 		{"slot busy", func(f *launchFixture, _ *dispatcherRequest) { f.s.launchSlot <- struct{}{} }, http.StatusTooManyRequests},
-		{"crew collision", func(f *launchFixture, _ *dispatcherRequest) { mkdirAll(t, f.crewDir) }, http.StatusConflict},
+		{"crew collision", func(f *launchFixture, _ *dispatcherRequest) { f.fake(t).add(dispatchTestNewCrewID, 0, true) }, http.StatusConflict},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newLaunchFixture(t)
@@ -990,7 +975,6 @@ func TestDispatcherLaunchRemembersRepo(t *testing.T) {
 	root := realTempDir(t)
 	path := gitInit(t, filepath.Join(root, "proj"))
 	f.repo.Path, f.repo.commonDir = path, filepath.Join(path, ".git")
-	f.crewDir = filepath.Join(f.repo.commonDir, "crew", "crews", dispatchTestNewCrewID)
 	f.s.dispatchRepos = stubDispatchRepos([]dispatchRepo{f.repo}, nil)
 	f.s.repoReg = newRepoRegistry(filepath.Join(realTempDir(t), "repos.json"), []string{root}, gitCommonDir)
 	f.registerOnStart(t, "new-session")
@@ -1068,8 +1052,8 @@ func TestDispatcherLaunchNoServerPath(t *testing.T) {
 			if resp.Error != tc.want {
 				t.Errorf("error = %q, want %q", resp.Error, tc.want)
 			}
-			if exists(f.crewDir) {
-				t.Error("crew dir created")
+			if f.crewExists(t) {
+				t.Error("crew created")
 			}
 		})
 	}
@@ -1144,8 +1128,8 @@ func TestDispatcherLaunchImageWriteFailure(t *testing.T) {
 	if resp.Error != "could not save images" {
 		t.Errorf("error = %q", resp.Error)
 	}
-	if exists(f.crewDir) {
-		t.Error("crew dir kept")
+	if !f.crewExists(t) {
+		t.Error("crew removed")
 	}
 	for _, c := range f.tmux.all() {
 		if c[0] != "show-environment" {

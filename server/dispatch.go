@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io/fs"
+	"github.com/noamsto/houston/crewview"
 	"log/slog"
 	"net/http"
 	"os"
@@ -76,19 +76,16 @@ type dispatchRepo struct {
 	Name  string   `json:"name"`
 	Crews []string `json:"crews"` // newest first, never nil
 
-	// Home is the subset of Crews whose <commonDir>/crew/crews/<id>/pane
-	// file exists. The dispatcher launcher (adapters/core/dispatcher.sh)
-	// writes pane once, into the repo it runs from, never into a mirror
-	// another repo's dispatch creates when sending a worker there. pid
-	// exists in every mirror, so it's not a usable signal; pane is.
+	// Home is the subset of Crews homed in this repo (`crew crews --home`),
+	// not ones that merely dispatched workers into it from another repo.
 	Home []string `json:"home"`
 
 	// Registered is true when the repo is in houston's persisted registry
 	// (it may also have a tmux window).
 	Registered bool `json:"registered"`
 
-	// commonDir is <repo>/.git (or a linked worktree's shared common dir),
-	// used to check crew membership. Not exposed to the client.
+	// commonDir is <repo>/.git (or a linked worktree's shared common dir).
+	// Not exposed to the client.
 	commonDir string
 }
 
@@ -225,7 +222,7 @@ func dispatchHasASCIIAlnum(s string) bool {
 // worktrees collapse to one entry, and symlink-resolved so a window opened
 // through a symlink dedupes against the registry's resolved entry. Registry
 // paths are already resolved main checkouts, so they skip the git lookup.
-func listDispatchRepos(lister workspaceLister, commonDir func(root string) (string, error), registryPaths []string) ([]dispatchRepo, error) {
+func listDispatchRepos(lister workspaceLister, commonDir func(root string) (string, error), registryPaths []string, crewsOf func(repoPath string) (crews, home []string)) ([]dispatchRepo, error) {
 	wins, err := lister.ListWindowOptions()
 	if err != nil {
 		return nil, err
@@ -250,12 +247,15 @@ func listDispatchRepos(lister workspaceLister, commonDir func(root string) (stri
 
 	repos := make([]dispatchRepo, 0, len(byPath))
 	for repo, dir := range byPath {
-		crews := listDispatchCrews(dir)
+		crews, home := []string{}, []string{}
+		if crewsOf != nil {
+			crews, home = crewsOf(repo)
+		}
 		repos = append(repos, dispatchRepo{
 			Path:       repo,
 			Name:       filepath.Base(repo),
 			Crews:      crews,
-			Home:       dispatchHomeCrews(dir, crews),
+			Home:       home,
 			Registered: slices.Contains(registryPaths, repo),
 			commonDir:  dir,
 		})
@@ -288,19 +288,36 @@ func dispatchRepoPath(commonDir func(root string) (string, error), root string) 
 	return repo, true
 }
 
-// listDispatchCrews lists <commonDir>/crew/crews/*, newest first by the
-// numeric prefix of the <unix>-<pid> id. A missing directory is not an
-// error — it just means the repo has no crew yet.
-func listDispatchCrews(commonDir string) []string {
-	entries, err := os.ReadDir(filepath.Join(commonDir, "crew", "crews"))
-	if err != nil {
-		return []string{}
-	}
+// dispatchCrewsTimeout bounds the `crew crews` calls one options request makes.
+const dispatchCrewsTimeout = 10 * time.Second
 
-	crews := make([]string, 0, len(entries))
-	for _, e := range entries {
-		if e.IsDir() && dispatchCrewRe.MatchString(e.Name()) {
-			crews = append(crews, e.Name())
+// repoCrews lists repoPath's crews through `crew crews`, newest first by the
+// numeric prefix of the <unix>-<pid> id, and the subset homed in the repo
+// (`--home`). No crew, or a crew that cannot answer, is no crews: the form
+// still lists the repo.
+func (s *Server) repoCrews(repoPath string) (crews, home []string) {
+	crews, home = []string{}, []string{}
+	if s.crewCLI == nil {
+		return crews, home
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), dispatchCrewsTimeout)
+	defer cancel()
+	all, err := crewview.ListCrews(ctx, s.crewCLI, repoPath, false)
+	if err != nil {
+		slog.Warn("dispatch: crew crews failed", "repo", repoPath, "err", err)
+		return crews, home
+	}
+	homed, err := crewview.ListCrews(ctx, s.crewCLI, repoPath, true)
+	if err != nil {
+		slog.Warn("dispatch: crew crews --home failed", "repo", repoPath, "err", err)
+	}
+	homeSet := map[string]bool{}
+	for _, r := range homed {
+		homeSet[r.ID] = true
+	}
+	for _, r := range all {
+		if dispatchCrewRe.MatchString(r.ID) {
+			crews = append(crews, r.ID)
 		}
 	}
 	sort.Slice(crews, func(i, j int) bool {
@@ -310,19 +327,35 @@ func listDispatchCrews(commonDir string) []string {
 		}
 		return crews[i] > crews[j]
 	})
-	return crews
-}
-
-// dispatchHomeCrews returns the subset of crews whose
-// <commonDir>/crew/crews/<id>/pane file exists — see dispatchRepo.Home.
-func dispatchHomeCrews(commonDir string, crews []string) []string {
-	home := make([]string, 0, len(crews))
 	for _, id := range crews {
-		if info, err := os.Stat(filepath.Join(commonDir, "crew", "crews", id, "pane")); err == nil && !info.IsDir() {
+		if homeSet[id] {
 			home = append(home, id)
 		}
 	}
-	return home
+	return crews, home
+}
+
+// errCrewUnavailable is a crew that could not answer: not a crew that lists
+// no such id.
+var errCrewUnavailable = errors.New("crew is unavailable")
+
+// crewRow is crew's row for crewID among repoPath's crews. found is false when
+// crew answered and lists no such crew; err is set when it could not answer.
+func (s *Server) crewRow(ctx context.Context, repoPath, crewID string) (row crewview.CrewRow, found bool, err error) {
+	if s.crewCLI == nil {
+		return crewview.CrewRow{}, false, errCrewUnavailable
+	}
+	rows, err := crewview.ListCrews(ctx, s.crewCLI, repoPath, false)
+	if err != nil {
+		slog.Warn("dispatch: crew crews failed", "repo", repoPath, "err", err)
+		return crewview.CrewRow{}, false, errCrewUnavailable
+	}
+	for _, r := range rows {
+		if r.ID == crewID {
+			return r, true, nil
+		}
+	}
+	return crewview.CrewRow{}, false, nil
 }
 
 func dispatchCrewUnixPrefix(id string) int64 {
@@ -489,8 +522,13 @@ func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 	dlog.setValidated(valid, repo.Path)
 
 	if valid.Crew != dispatchNewCrew {
-		crewDir := filepath.Join(repo.commonDir, "crew", "crews", valid.Crew)
-		if info, err := os.Stat(crewDir); err != nil || !info.IsDir() {
+		_, ok, err := s.crewRow(r.Context(), repo.Path, valid.Crew)
+		switch {
+		case err != nil:
+			dlog.status = http.StatusBadGateway
+			writeDispatchJSON(w, http.StatusBadGateway, dispatchResponse{Error: "could not list the repo's crews"})
+			return
+		case !ok:
 			dlog.status = http.StatusNotFound
 			writeDispatchJSON(w, http.StatusNotFound, dispatchResponse{Error: "crew is not a crew of this repo"})
 			return
@@ -521,19 +559,13 @@ func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// minted is the crew leaf this request created, if any — removed only
-	// when dispatch could not be started or exited non-zero, since those
-	// are the outcomes where the crew never got used.
-	var minted string
 	if valid.Crew == dispatchNewCrew {
 		id := s.dispatchNewCrewID()
-		dir, merr := mintDispatchCrew(repo.commonDir, id)
-		if merr != nil {
+		if merr := s.mintDispatchCrew(r.Context(), repo.Path, id); merr != nil {
 			dlog.status = merr.code
 			writeDispatchJSON(w, merr.code, dispatchResponse{Error: merr.msg})
 			return
 		}
-		minted = dir
 		valid.Crew = id
 		dlog.crew = id
 	}
@@ -547,11 +579,8 @@ func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 		}
 		if err != nil {
 			slog.Warn("dispatch: could not save images", "error", err)
-			if minted != "" {
-				_ = os.Remove(minted)
-			}
 			dlog.status = http.StatusInternalServerError
-			writeDispatchJSON(w, http.StatusInternalServerError, dispatchResponse{Error: "could not save images"})
+			writeDispatchJSON(w, http.StatusInternalServerError, dispatchResponse{Error: "could not save images", Crew: valid.Crew})
 			return
 		}
 	}
@@ -586,18 +615,12 @@ func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 		dlog.status = http.StatusGatewayTimeout
 		writeDispatchJSON(w, http.StatusGatewayTimeout, body)
 	case res.Err != nil:
-		if minted != "" {
-			_ = os.Remove(minted)
-		}
 		dlog.status = http.StatusBadGateway
-		writeDispatchJSON(w, http.StatusBadGateway, dispatchResponse{Error: "could not run dispatch: " + res.Err.Error()})
+		writeDispatchJSON(w, http.StatusBadGateway, dispatchResponse{Error: "could not run dispatch: " + res.Err.Error(), Crew: valid.Crew})
 	case res.ExitCode != 0:
-		// Only report a crew that still exists; a minted one was just removed.
+		// The crew stays (crew init made it and houston does not remove a
+		// crew), so it is reported for a retry.
 		crew := valid.Crew
-		if minted != "" {
-			_ = os.Remove(minted)
-			crew = ""
-		}
 		errMsg := res.Stderr
 		if errMsg == "" {
 			errMsg = "dispatch failed"
@@ -626,21 +649,24 @@ func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// mintDispatchCrew creates <commonDir>/crew/crews/<id> exclusively, so two
-// requests minting in the same second can't share a crew.
-func mintDispatchCrew(commonDir, id string) (string, *dispatchError) {
-	crewsDir := filepath.Join(commonDir, "crew", "crews")
-	if err := os.MkdirAll(crewsDir, 0o755); err != nil { //nolint:gosec // crew dir under the repo's .git; 0755 matches the crew CLI
-		return "", &dispatchError{"crew", http.StatusInternalServerError, "could not create crew: " + err.Error()}
+// mintDispatchCrew creates crew id through `crew init` run in repoPath, so
+// houston never makes a directory under the crew state itself and two requests
+// minting in the same second can't share a crew.
+func (s *Server) mintDispatchCrew(ctx context.Context, repoPath, id string) *dispatchError {
+	if s.crewCLI == nil {
+		return &dispatchError{"crew", http.StatusServiceUnavailable, "crew is not available"}
 	}
-	dir := filepath.Join(crewsDir, id)
-	if err := os.Mkdir(dir, 0o755); err != nil { //nolint:gosec // crew dir under the repo's .git; 0755 matches the crew CLI
-		if errors.Is(err, fs.ErrExist) {
-			return "", &dispatchError{"crew", http.StatusConflict, "a new crew was just started in this second — retry"}
-		}
-		return "", &dispatchError{"crew", http.StatusInternalServerError, "could not create crew: " + err.Error()}
+	_, err := crewview.InitCrew(ctx, s.crewCLI, repoPath, id)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, crewview.ErrCrewExists):
+		return &dispatchError{"crew", http.StatusConflict, "a new crew was just started in this second — retry"}
+	default:
+		// crew's own words (paths, stderr) stay in the log, not the response.
+		slog.Warn("dispatch: crew init failed", "err", err)
+		return &dispatchError{"crew", http.StatusInternalServerError, "could not create crew"}
 	}
-	return dir, nil
 }
 
 // dispatchWorkerID returns the first stdout line matching `worker_id: …`,

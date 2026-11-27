@@ -95,3 +95,29 @@ func TestDecodeEdge(t *testing.T) {
 		t.Errorf("line 5: err = %v, want UnsupportedError version 0", err)
 	}
 }
+
+// A worker row carries the liveness fields and the dispatcher registration
+// (pid, pane, alive: null when unknown) crew's overview reports.
+func TestDecodeWorkerDispatcher(t *testing.T) {
+	line := `{"schema_version":1,"view":"overview","generated_at":1,"attention":[],"errors":[],"workers":[` +
+		`{"crew":"c1","branch":"feat/a","session":"s1","live":true,"exit_suspect":false,"dispatcher":{"where":"here","pid":42,"pane":"%3","alive":true}},` +
+		`{"crew":"c1","branch":"feat/b","dispatcher":{"where":"none","pid":null,"pane":null,"alive":null}},` +
+		`{"crew":"c2","branch":"feat/c","dispatcher":null}]}`
+	ov, err := Decode([]byte(line))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, b, c := ov.Workers[0], ov.Workers[1], ov.Workers[2]
+	if a.Session == nil || *a.Session != "s1" || a.Live == nil || !*a.Live || a.ExitSuspect == nil || *a.ExitSuspect {
+		t.Errorf("liveness fields = %v %v %v", a.Session, a.Live, a.ExitSuspect)
+	}
+	if d := a.Dispatcher; d == nil || d.Where != "here" || d.PID == nil || *d.PID != 42 || d.Pane == nil || *d.Pane != "%3" || d.Alive == nil || !*d.Alive {
+		t.Errorf("dispatcher = %+v", a.Dispatcher)
+	}
+	if d := b.Dispatcher; d == nil || d.PID != nil || d.Pane != nil || d.Alive != nil {
+		t.Errorf("unknown dispatcher = %+v, want nil pid, pane and alive", d)
+	}
+	if c.Dispatcher != nil {
+		t.Errorf("null dispatcher = %+v, want nil", c.Dispatcher)
+	}
+}
