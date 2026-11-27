@@ -130,6 +130,9 @@ func synthesizeFromTranscript(path string, info fs.FileInfo, cwd string, cutoff 
 			gitBranch = ev.GitBranch
 		}
 	}
+	if isTempCWD(cwd) {
+		return hook.SessionState{}, false
+	}
 	updated := info.ModTime()
 	if !lastEvent.IsZero() {
 		updated = lastEvent
@@ -189,6 +192,22 @@ func synthesizeFromTranscript(path string, info fs.FileInfo, cwd string, cutoff 
 		state.State = hook.StateIdle
 	}
 	return state, true
+}
+
+// isTempCWD reports whether cwd is a temporary directory or inside one.
+// Ephemeral test runs of claude under /tmp would otherwise flood Fleet.
+func isTempCWD(cwd string) bool {
+	if cwd == "" {
+		return false
+	}
+	c := filepath.Clean(cwd)
+	roots := []string{"/tmp", "/var/tmp", "/private/tmp", "/private/var/tmp", filepath.Clean(os.TempDir())}
+	for _, r := range roots {
+		if c == r || strings.HasPrefix(c, r+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
 }
 
 // decodeProjectDirName reverses Claude's `-home-me-foo` path encoding. It

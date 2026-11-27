@@ -403,3 +403,46 @@ func TestPruneDeadDropsEndedDiscoverySessionsPastTTL(t *testing.T) {
 		t.Error("dropped session was re-seeded by the next discovery run")
 	}
 }
+
+func discoverInProject(t *testing.T, projectDirName, body string) []hook.SessionState {
+	t.Helper()
+	root := t.TempDir()
+	dir := filepath.Join(root, projectDirName)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "s.jsonl"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := DiscoverClaudeSessions(root, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+func TestDiscoverySkipsTempCWDTranscripts(t *testing.T) {
+	const text = `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}`
+	withCWD := func(cwd string) string {
+		return `{"type":"user","cwd":"` + cwd + `","message":{"role":"user","content":"hi"}}` + "\n" + text + "\n"
+	}
+	tmp := filepath.Join(os.TempDir(), "x", "work")
+	cases := []struct {
+		name, dir, body string
+		want            int
+	}{
+		{"cwd under /tmp", "-home-me-project", withCWD("/tmp/tmp.abc/work"), 0},
+		{"cwd under os.TempDir", "-home-me-project", withCWD(tmp), 0},
+		{"no cwd, tmp project dir", "-tmp-tmp.abc-work", text + "\n", 0},
+		{"tmp project dir, real cwd", "-tmp-tmp.abc-work", withCWD("/home/me/project"), 1},
+		{"normal home transcript", "-home-me-project", withCWD("/home/me/project"), 1},
+		{"sibling prefix not temp", "-home-me-project", withCWD("/tmpfoo/x"), 1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := discoverInProject(t, c.dir, c.body); len(got) != c.want {
+				t.Fatalf("got %d sessions, want %d", len(got), c.want)
+			}
+		})
+	}
+}
