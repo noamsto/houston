@@ -15,15 +15,16 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	rtmux "github.com/noamsto/tmux-remux/pkg/tmux"
 )
 
-func TestParseSessionLine(t *testing.T) {
-	line := "main|1735689600|3|1|1735690000"
-
-	session, err := parseSessionLine(line)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+func TestSessionFromRow(t *testing.T) {
+	rows, err := rtmux.ParseSessions("main\x1f0\x1f1735689600\x1f3\x1f1\x1f1735690000")
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("ParseSessions: %v, %d rows", err, len(rows))
 	}
+	session := sessionFromRow(rows[0])
 
 	if session.Name != "main" {
 		t.Errorf("expected name 'main', got %q", session.Name)
@@ -34,33 +35,27 @@ func TestParseSessionLine(t *testing.T) {
 	if !session.Attached {
 		t.Error("expected attached=true")
 	}
+	if !session.Created.Equal(time.Unix(1735689600, 0)) || !session.LastActivity.Equal(time.Unix(1735690000, 0)) {
+		t.Errorf("created=%v activity=%v", session.Created, session.LastActivity)
+	}
 }
 
-func TestParsePaneInfoLine(t *testing.T) {
-	cases := []struct {
-		name   string
-		line   string
-		want   PaneInfo
-		wantOK bool
-	}{
-		{"full", "1|1|%307|1966|claude|/home/u/repo|my title",
-			PaneInfo{Index: 1, Active: true, ID: "%307", Server: "1966", Command: "claude", Path: "/home/u/repo", Title: "my title"}, true},
-		{"inactive, no title", "0|0|%3|42|fish|/tmp|",
-			PaneInfo{Index: 0, ID: "%3", Server: "42", Command: "fish", Path: "/tmp"}, true},
-		{"title keeps pipes", "2|0|%9|42|vim|/tmp|a|b",
-			PaneInfo{Index: 2, ID: "%9", Server: "42", Command: "vim", Path: "/tmp", Title: "a|b"}, true},
-		{"no path", "0|1|%1|7|bash",
-			PaneInfo{Index: 0, Active: true, ID: "%1", Server: "7", Command: "bash"}, true},
-		{"too short", "0|1|%1|7", PaneInfo{}, false},
-		{"empty", "", PaneInfo{}, false},
+func TestWindowFromRowStripsEscapes(t *testing.T) {
+	got := windowFromRow(rtmux.WindowRow{Index: 2, Name: "#[fg=red]web ", Active: true, Panes: 3, LastActivity: 100, Path: "/tmp"})
+	want := Window{Index: 2, Name: "web", Active: true, Panes: 3, LastActivity: time.Unix(100, 0), Path: "/tmp"}
+	if got != want {
+		t.Errorf("windowFromRow = %+v, want %+v", got, want)
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got, ok := parsePaneInfoLine(tc.line)
-			if ok != tc.wantOK || got != tc.want {
-				t.Errorf("parsePaneInfoLine(%q) = %+v, %v; want %+v, %v", tc.line, got, ok, tc.want, tc.wantOK)
-			}
-		})
+}
+
+func TestPaneInfoFromRow(t *testing.T) {
+	got := paneInfoFromRow(rtmux.PaneRow{PaneIndex: 1, Active: true, ID: "%307", ServerPID: 1966, Command: "claude", Cwd: "/home/u/repo", Title: "a|b"})
+	want := PaneInfo{Index: 1, Active: true, ID: "%307", Server: "1966", Command: "claude", Path: "/home/u/repo", Title: "a|b"}
+	if got != want {
+		t.Errorf("paneInfoFromRow = %+v, want %+v", got, want)
+	}
+	if got := paneInfoFromRow(rtmux.PaneRow{ID: "%3"}); got.Server != "" {
+		t.Errorf("Server = %q, want empty when tmux gave no server pid", got.Server)
 	}
 }
 

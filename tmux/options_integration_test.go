@@ -49,6 +49,7 @@ func TestListOptionsIntegration(t *testing.T) {
 	for _, tc := range []struct{ name, target, value string }{
 		{"@claude_status", "proj:0.0", "processing 1790000000 "},
 		{"@claude_task", "proj:0.0", "fix #205 | locale"},
+		{"@crew_role", "proj:0.0", "line one\nline two"},
 		{"@window_task", "proj:0", "fix #205 | locale"},
 	} {
 		scope := "-p"
@@ -69,6 +70,10 @@ func TestListOptionsIntegration(t *testing.T) {
 	}
 	if panes[0].Target != "proj:0" || panes[0].ClaudeStatus != "processing 1790000000 " || panes[0].ClaudeTask != "fix #205 | locale" {
 		t.Errorf("pane = %+v, want target proj:0 and both free-text fields intact", panes[0])
+	}
+
+	if panes[0].CrewRole != "line one line two" {
+		t.Errorf("CrewRole = %q, want the embedded newline joined so the row stays whole", panes[0].CrewRole)
 	}
 
 	wins, err := c.ListWindowOptions()
