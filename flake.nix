@@ -3,6 +3,10 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    # Only the Go toolchain comes from here: tmux-remux needs go >= 1.26.7, newer
+    # than the go in the pinned nixpkgs, and bumping all of nixpkgs would drag
+    # in new golangci-lint rules and a nilaway that does not build with go 1.27.
+    nixpkgs-go.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-parts.url = "github:hercules-ci/flake-parts";
     git-hooks-nix.url = "github:cachix/git-hooks.nix";
     git-hooks-nix.inputs.nixpkgs.follows = "nixpkgs";
@@ -14,7 +18,7 @@
 
       systems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
 
-      perSystem = { config, pkgs, lib, ... }:
+      perSystem = { config, pkgs, lib, system, ... }:
         let
           ui = pkgs.buildNpmPackage {
             pname = "houston-ui";
@@ -25,6 +29,8 @@
             installPhase = "cp -r dist $out";
             dontNpmInstall = true;
           };
+          go = inputs.nixpkgs-go.legacyPackages.${system}.go_1_26;
+          buildGoModule = pkgs.buildGoModule.override { inherit go; };
         in {
           pre-commit.settings.package = pkgs.prek;
 
@@ -48,11 +54,11 @@
             };
           };
 
-          packages.default = pkgs.buildGoModule {
+          packages.default = buildGoModule {
             pname = "houston";
             version = "0.1.0";
             src = pkgs.lib.cleanSource ./.;
-            vendorHash = "sha256-k+n4q0IS9AnH3Btb/IQ0dZLcJwhRhoaZmw86fgbjJoU=";
+            vendorHash = "sha256-dZy1aoDNtnbn6viXJkWa8Vgk74+D90QygOv/WF9MeOk=";
 
             # tmux/control_integration_test.go drives a real server;
             # server/workspace_repo_test.go shells out to git;
@@ -88,7 +94,7 @@
               gotools
               go-tools # staticcheck
               golangci-lint
-              nilaway
+              (nilaway.override { inherit buildGoModule; })
               air # hot reload
               just
               tmux

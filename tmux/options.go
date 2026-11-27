@@ -1,26 +1,29 @@
 package tmux
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
+
+	rtmux "github.com/noamsto/tmux-remux/pkg/tmux"
 )
 
-// optSep separates fields below. tmux emits option values verbatim, and free
-// text like @window_task is captured from a user prompt — it can contain "|"
-// (e.g. "run x | grep y"), which would shift every later field. \x1f (ASCII
-// unit separator) is not something a user types, so it round-trips safely.
-const optSep = "\x1f"
+// windowExtraFormats and paneExtraFormats are the user options and format
+// variables read beside tmux-remux's base fields, in one list-windows /
+// list-panes call each: tmux resolves #{@name} inline, so no per-window
+// show-options loop is needed. Free text like @window_task is captured from a
+// user prompt; it may contain "|" but tmux-remux separates fields with \x1f,
+// which a user does not type.
+var windowExtraFormats = []string{
+	"@branch", "@issue_id", "@pr_number", "@crew_name", "@pr_state",
+	"@pr_check_state", "@pr_mergeable", "@window_task", "@git_root", "@crew_color",
+}
 
-// windowOptionsFormat harvests every lazytmux window user-option in one call.
-// tmux resolves #{@name} inline, so no per-window show-options loop is needed.
-const windowOptionsFormat = "#{session_name}" + optSep + "#{window_index}" + optSep + "#{@branch}" + optSep + "#{@issue_id}" + optSep +
-	"#{@pr_number}" + optSep + "#{@crew_name}" + optSep + "#{@pr_state}" + optSep + "#{@pr_check_state}" + optSep + "#{@pr_mergeable}" + optSep +
-	"#{@window_task}" + optSep + "#{@git_root}" + optSep + "#{@crew_color}" + optSep + "#{window_name}" + optSep + "#{window_active}"
-
-const paneOptionsFormat = "#{pane_id}" + optSep + "#{session_name}:#{window_index}" + optSep + "#{@claude_status}" + optSep + "#{@agent_screen}" + optSep +
-	"#{@claude_task}" + optSep + "#{pane_current_command}" + optSep + "#{pane_index}" + optSep + "#{pane_active}" + optSep +
-	"#{@crew_role}" + optSep + "#{pid}" + optSep + "#{start_time}" + optSep + "#{pane_pid}"
+var paneExtraFormats = []string{
+	"@claude_status", "@agent_screen", "@claude_task", "@crew_role", "start_time",
+}
 
 // WindowOptions is lazytmux's per-window enrichment. Every field may be empty:
 // a window with no linked issue or PR simply has none.
@@ -95,64 +98,69 @@ func WithoutCrew(wins []WindowOptions) []WindowOptions {
 }
 
 func (c *Client) ListWindowOptions() ([]WindowOptions, error) {
-	out, err := c.output("list-windows", "-a", "-F", windowOptionsFormat)
+	// Run + parse rather than rtmux.Client.ListWindows, which would also read
+	// decoration options once per window.
+	rc := c.remux().SetExtraFormats(nil, windowExtraFormats, nil)
+	out, err := rc.Run(context.Background(), []string{"list-windows", "-a", "-F", rc.WindowFormat()})
+	if errors.Is(err, rtmux.ErrNoServer) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
-	return ParseWindowOptions(string(out)), nil
+	return ParseWindowOptions(out), nil
 }
 
 func (c *Client) ListPaneOptions() ([]PaneOptions, error) {
-	out, err := c.output("list-panes", "-a", "-F", paneOptionsFormat)
+	rows, err := c.remux().SetExtraFormats(nil, nil, paneExtraFormats).ListPanes(context.Background())
 	if err != nil {
 		return nil, err
 	}
-	return ParsePaneOptions(string(out)), nil
+	res := make([]PaneOptions, 0, len(rows))
+	for _, r := range rows {
+		res = append(res, paneOptionsFromRow(r))
+	}
+	return res, nil
 }
 
+// ParseWindowOptions parses list-windows output carrying windowExtraFormats.
+// A line that does not parse (wrong field count, e.g. a value with a newline)
+// is skipped on its own so it cannot drop the rest of the listing.
 func ParseWindowOptions(out string) []WindowOptions {
 	var res []WindowOptions
 	for line := range strings.SplitSeq(out, "\n") {
-		f := strings.Split(line, optSep)
-		if len(f) != 14 {
+		rows, err := rtmux.ParseWindowsExtra(line, windowExtraFormats)
+		if err != nil || len(rows) != 1 {
 			continue
 		}
-		idx, err := strconv.Atoi(f[1])
-		if err != nil {
-			continue
-		}
+		r := rows[0]
+		x := r.Extra
 		res = append(res, WindowOptions{
-			Session: f[0], Window: idx, Branch: f[2], IssueID: f[3],
-			PRNumber: f[4], CrewName: f[5], PRState: f[6], PRCheckState: f[7],
-			PRMergeable: f[8], Task: f[9], GitRoot: f[10], CrewColor: f[11],
-			Name: f[12], Active: f[13] == "1",
+			Session: r.Session, Window: r.Index, Branch: x["@branch"], IssueID: x["@issue_id"],
+			PRNumber: x["@pr_number"], CrewName: x["@crew_name"], PRState: x["@pr_state"],
+			PRCheckState: x["@pr_check_state"], PRMergeable: x["@pr_mergeable"],
+			Task: x["@window_task"], GitRoot: x["@git_root"], CrewColor: x["@crew_color"],
+			Name: r.Name, Active: r.Active,
 		})
 	}
 	return res
 }
 
-func ParsePaneOptions(out string) []PaneOptions {
-	var res []PaneOptions
-	for line := range strings.SplitSeq(out, "\n") {
-		f := strings.Split(line, optSep)
-		if len(f) != 12 {
-			continue
-		}
-		idx, err := strconv.Atoi(f[6])
-		if err != nil {
-			continue
-		}
-		// start_time and pane_pid are parsed leniently: this function is also
-		// TmuxSource's ground truth for every pane's capabilities, so a strict
-		// parse would turn one unexpandable field into "every pane vanished"
-		// and drop every run's capabilities rather than just its identity.
-		start, _ := strconv.ParseInt(f[10], 10, 64)
-		panePID, _ := strconv.Atoi(f[11])
-		res = append(res, PaneOptions{
-			PaneID: f[0], Target: f[1], ClaudeStatus: f[2], AgentScreen: f[3],
-			ClaudeTask: f[4], Command: f[5], Index: idx, Active: f[7] == "1",
-			CrewRole: f[8], ServerPID: f[9], ServerStart: start, PanePID: panePID,
-		})
+func paneOptionsFromRow(r rtmux.PaneRow) PaneOptions {
+	x := r.Extra
+	// start_time is parsed leniently: this listing is TmuxSource's ground truth
+	// for every pane's capabilities, so a strict parse would turn one
+	// unexpandable field into "every pane vanished".
+	start, _ := strconv.ParseInt(x["start_time"], 10, 64)
+	var serverPID string // empty, as before, when tmux gave none
+	if r.ServerPID != 0 {
+		serverPID = strconv.Itoa(r.ServerPID)
 	}
-	return res
+	return PaneOptions{
+		PaneID: r.ID, Target: fmt.Sprintf("%s:%d", r.Session, r.WindowIndex),
+		ClaudeStatus: x["@claude_status"], AgentScreen: x["@agent_screen"],
+		ClaudeTask: x["@claude_task"], Command: r.Command, Index: r.PaneIndex,
+		Active: r.Active, CrewRole: x["@crew_role"],
+		ServerPID: serverPID, ServerStart: start, PanePID: r.PID,
+	}
 }

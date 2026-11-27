@@ -9,12 +9,13 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	rtmux "github.com/noamsto/tmux-remux/pkg/tmux"
 )
 
 // ErrPaneNotFound indicates tmux ran and confirmed the pane is gone, as
@@ -25,12 +26,8 @@ var ErrPaneNotFound = errors.New("pane not found")
 // unknown side (empty) is never a mismatch.
 func ServerMismatch(a, b string) bool { return a != "" && b != "" && a != b }
 
-var tmuxEscapeRe = regexp.MustCompile(`#\[[^\]]*\]`)
-
 // StripTmuxEscapes removes tmux style directives like #[fg=color] from text.
-func StripTmuxEscapes(s string) string {
-	return strings.TrimSpace(tmuxEscapeRe.ReplaceAllString(s, ""))
-}
+func StripTmuxEscapes(s string) string { return rtmux.StripTmuxEscapes(s) }
 
 // cmdTimeout is the maximum time any single tmux command is allowed to run.
 const cmdTimeout = 5 * time.Second
@@ -126,92 +123,83 @@ func (c *Client) run(args ...string) error {
 	return exec.CommandContext(ctx, c.tmuxPath, args...).Run() //nolint:gosec // tmuxPath is the resolved tmux binary; args are built by callers
 }
 
-func parseSessionLine(line string) (Session, error) {
-	parts := strings.Split(line, "|")
-	if len(parts) != 5 {
-		return Session{}, fmt.Errorf("invalid session line: %s", line)
-	}
+// remux returns the tmux-remux client that owns the list/parse code. It is
+// built per call so it always follows c.tmuxPath. UTF-8 mode and the timeout
+// match output().
+func (c *Client) remux() *rtmux.Client {
+	return rtmux.NewClient(c.tmuxPath).SetUTF8(true).SetTimeout(cmdTimeout)
+}
 
-	created, _ := strconv.ParseInt(parts[1], 10, 64)
-	windows, _ := strconv.Atoi(parts[2])
-	attached := parts[3] == "1"
-	activity, _ := strconv.ParseInt(parts[4], 10, 64)
-
+func sessionFromRow(r rtmux.SessionRow) Session {
 	return Session{
-		Name:         StripTmuxEscapes(parts[0]),
-		Created:      time.Unix(created, 0),
-		Windows:      windows,
-		Attached:     attached,
-		LastActivity: time.Unix(activity, 0),
-	}, nil
+		Name:         StripTmuxEscapes(r.Name),
+		Created:      time.Unix(r.Created, 0),
+		Windows:      r.Windows,
+		Attached:     r.Attached == 1,
+		LastActivity: time.Unix(r.LastActivity, 0),
+	}
+}
+
+func windowFromRow(r rtmux.WindowRow) Window {
+	return Window{
+		Index:        r.Index,
+		Name:         StripTmuxEscapes(r.Name),
+		Active:       r.Active,
+		Panes:        r.Panes,
+		LastActivity: time.Unix(r.LastActivity, 0),
+		Path:         r.Path,
+	}
+}
+
+func paneInfoFromRow(r rtmux.PaneRow) PaneInfo {
+	var server string // empty, as before, when tmux gave none
+	if r.ServerPID != 0 {
+		server = strconv.Itoa(r.ServerPID)
+	}
+	return PaneInfo{
+		Index:   r.PaneIndex,
+		Active:  r.Active,
+		ID:      r.ID,
+		Server:  server,
+		Command: r.Command,
+		Path:    r.Cwd,
+		Title:   StripTmuxEscapes(r.Title),
+	}
 }
 
 func (c *Client) ListSessions() ([]Session, error) {
-	out, err := c.output("list-sessions", "-F",
-		"#{session_name}|#{session_created}|#{session_windows}|#{session_attached}|#{session_activity}")
+	rows, err := c.remux().ListSessions(context.Background())
 	if err != nil {
-		if strings.Contains(err.Error(), "no server running") {
-			return nil, nil
-		}
 		return nil, err
 	}
-
 	var sessions []Session
-	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
-		if line == "" {
-			continue
-		}
-		s, err := parseSessionLine(line)
-		if err != nil {
-			continue
-		}
-		sessions = append(sessions, s)
+	for _, r := range rows {
+		sessions = append(sessions, sessionFromRow(r))
 	}
-
 	return sessions, nil
 }
 
 func (c *Client) ListWindows(session string) ([]Window, error) {
-	out, err := c.output("list-windows", "-t", session, "-F",
-		"#{window_index}|#{window_name}|#{window_active}|#{window_panes}|#{window_activity}|#{pane_current_path}")
+	// Run + ParseWindows rather than rtmux.Client.ListWindows: that lists every
+	// window (-a) and reads decoration options once per window, none of which a
+	// single session's listing needs.
+	rc := c.remux()
+	out, err := rc.Run(context.Background(), []string{"list-windows", "-t", session, "-F", rc.WindowFormat()})
+	if err != nil {
+		return nil, err
+	}
+	rows, err := rtmux.ParseWindows(out)
 	if err != nil {
 		return nil, err
 	}
 
 	var windows []Window
 	var firstPath string // Use first window path to get worktrees
-
-	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
-		if line == "" {
-			continue
+	for _, r := range rows {
+		if firstPath == "" {
+			firstPath = r.Path
 		}
-		parts := strings.Split(line, "|")
-		if len(parts) < 6 {
-			continue
-		}
-		idx, _ := strconv.Atoi(parts[0])
-		active := parts[2] == "1"
-		panes, _ := strconv.Atoi(parts[3])
-		var lastActivity time.Time
-		if len(parts) >= 5 {
-			activityTs, _ := strconv.ParseInt(parts[4], 10, 64)
-			lastActivity = time.Unix(activityTs, 0)
-		}
-		path := ""
-		if len(parts) >= 6 {
-			path = parts[5]
-			if firstPath == "" {
-				firstPath = path
-			}
-		}
-		windows = append(windows, Window{
-			Index:        idx,
-			Name:         StripTmuxEscapes(parts[1]),
-			Active:       active,
-			Panes:        panes,
-			LastActivity: lastActivity,
-			Path:         path,
-		})
+		windows = append(windows, windowFromRow(r))
 	}
 
 	// Get worktrees and populate branch names
@@ -226,45 +214,17 @@ func (c *Client) ListWindows(session string) ([]Window, error) {
 }
 
 func (c *Client) ListPanes(session string, window int) ([]PaneInfo, error) {
-	target := fmt.Sprintf("%s:%d", session, window)
-	out, err := c.output("list-panes", "-t", target, "-F",
-		"#{pane_index}|#{pane_active}|#{pane_id}|#{pid}|#{pane_current_command}|#{pane_current_path}|#{pane_title}")
+	rows, err := c.remux().ListPanes(context.Background())
 	if err != nil {
 		return nil, err
 	}
-
 	var panes []PaneInfo
-	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
-		if p, ok := parsePaneInfoLine(line); ok {
-			panes = append(panes, p)
+	for _, r := range rows {
+		if r.Session == session && r.WindowIndex == window {
+			panes = append(panes, paneInfoFromRow(r))
 		}
 	}
-
 	return panes, nil
-}
-
-// parsePaneInfoLine parses one ListPanes line. The title goes last and keeps
-// any "|" it contains.
-func parsePaneInfoLine(line string) (PaneInfo, bool) {
-	parts := strings.SplitN(line, "|", 7)
-	if len(parts) < 5 {
-		return PaneInfo{}, false
-	}
-	idx, _ := strconv.Atoi(parts[0])
-	p := PaneInfo{
-		Index:   idx,
-		Active:  parts[1] == "1",
-		ID:      parts[2],
-		Server:  parts[3],
-		Command: parts[4],
-	}
-	if len(parts) >= 6 {
-		p.Path = parts[5]
-	}
-	if len(parts) >= 7 {
-		p.Title = StripTmuxEscapes(parts[6])
-	}
-	return p, true
 }
 
 // CaptureResult holds the captured pane output and detected mode
