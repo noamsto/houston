@@ -73,6 +73,9 @@ func fromEnvelope(in input) (event string, ev Event, agent string, err error) {
 	}
 
 	if in.Env.Engine == envelope.ClaudeCode {
+		if len(in.Env.Native) == 0 {
+			return "", Event{}, "", fmt.Errorf("decode claude-code native payload: missing native")
+		}
 		if err := json.Unmarshal(native, &ev); err != nil {
 			return "", Event{}, "", fmt.Errorf("decode claude-code native payload: %w", err)
 		}
@@ -107,7 +110,7 @@ func fromEnvelope(in input) (event string, ev Event, agent string, err error) {
 		event = ""
 	case in.Env.CanonicalEvent == "" && in.Env.Engine == envelope.Pi && in.Env.NativeEvent == "session_shutdown":
 		event = EventSessionEnd
-	case in.Env.Engine == envelope.Pi && in.Env.CanonicalEvent == "turn_end":
+	case in.Env.Engine == envelope.Pi && in.Env.CanonicalEvent == envelope.TurnEnd:
 		// pi fires turn_end after every LLM response; only agent_settled
 		// (below) is the run's final signal, so this turn is intermediate.
 		event = EventTurnEnd
