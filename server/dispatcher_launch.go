@@ -355,8 +355,6 @@ func (s *Server) awaitDispatcher(ctx context.Context, repoPath, crewID, pane, pr
 	}
 }
 
-// readPIDText returns the trimmed text of a crew's pid file, or "" when it is
-// missing, not a regular file, unreadable or over 64 bytes.
 // crewPIDText is the dispatcher pid crew records for crewID, as text; "" when
 // crew lists none (or no such crew), an error when crew could not answer.
 func (s *Server) crewPIDText(ctx context.Context, repoPath, crewID string) (string, error) {
@@ -583,7 +581,7 @@ type windowLaunch struct {
 	repo       dispatchRepo
 	serverPath string
 	crewID     string
-	prevPID    string        // pid file text before the launch ("" for a fresh crew)
+	prevPID    string        // dispatcher pid crew listed before the launch ("" for a fresh crew)
 	file       string        // launch file already written
 	attachDir  string        // image dir houston made for this launch ("" for none or a restart)
 	session    string        // preferred existing session ("" → launchSession rule)
