@@ -51,16 +51,16 @@ func TestControlClientIntegration(t *testing.T) {
 	// Wait for output containing our text
 	timer := time.NewTimer(5 * time.Second)
 	defer timer.Stop()
-	var received string
+	var received strings.Builder
 	for {
 		select {
 		case ev := <-sub.C():
-			received += string(ev.Data)
-			if strings.Contains(received, "hello-control-mode") {
+			received.WriteString(string(ev.Data))
+			if strings.Contains(received.String(), "hello-control-mode") {
 				return // success
 			}
 		case <-timer.C:
-			t.Fatalf("timeout waiting for output, received so far: %q", received)
+			t.Fatalf("timeout waiting for output, received so far: %q", received.String())
 		}
 	}
 }
@@ -172,13 +172,13 @@ func TestGapDeadlineResumeActuallyResumesThePane(t *testing.T) {
 	if _, err := cc.RunCommand("display-message -p sync"); err != nil {
 		t.Fatalf("sync command failed: %v", err)
 	}
-	var receivedWhilePaused string
+	var receivedWhilePaused strings.Builder
 	for drained := false; !drained; {
 		select {
 		case ev := <-sub.C():
-			receivedWhilePaused += string(ev.Data)
-			if strings.Contains(receivedWhilePaused, pausedMarker) {
-				t.Fatalf("marker reached the subscriber while the pane was paused: %q", receivedWhilePaused)
+			receivedWhilePaused.WriteString(string(ev.Data))
+			if strings.Contains(receivedWhilePaused.String(), pausedMarker) {
+				t.Fatalf("marker reached the subscriber while the pane was paused: %q", receivedWhilePaused.String())
 			}
 		default:
 			drained = true
@@ -209,18 +209,18 @@ func TestGapDeadlineResumeActuallyResumesThePane(t *testing.T) {
 		t.Fatalf("SendSpecialKey Enter failed: %v", err)
 	}
 
-	var receivedAfterResume string
+	var receivedAfterResume strings.Builder
 	timer := time.NewTimer(5 * time.Second)
 	defer timer.Stop()
 	for {
 		select {
 		case ev := <-sub.C():
-			receivedAfterResume += string(ev.Data)
-			if strings.Contains(receivedAfterResume, resumedMarker) {
+			receivedAfterResume.WriteString(string(ev.Data))
+			if strings.Contains(receivedAfterResume.String(), resumedMarker) {
 				return
 			}
 		case <-timer.C:
-			t.Fatalf("resumed output never reached the subscriber, received so far: %q", receivedAfterResume)
+			t.Fatalf("resumed output never reached the subscriber, received so far: %q", receivedAfterResume.String())
 		}
 	}
 }

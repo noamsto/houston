@@ -157,7 +157,7 @@ func (c *Client) ListSessions() ([]Session, error) {
 	}
 
 	var sessions []Session
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
 		if line == "" {
 			continue
 		}
@@ -181,7 +181,7 @@ func (c *Client) ListWindows(session string) ([]Window, error) {
 	var windows []Window
 	var firstPath string // Use first window path to get worktrees
 
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
 		if line == "" {
 			continue
 		}
@@ -234,7 +234,7 @@ func (c *Client) ListPanes(session string, window int) ([]PaneInfo, error) {
 	}
 
 	var panes []PaneInfo
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
 		if p, ok := parsePaneInfoLine(line); ok {
 			panes = append(panes, p)
 		}
@@ -645,7 +645,7 @@ func (c *Client) GetPaneLocation(session string, paneID int) (int, int, error) {
 	}
 
 	target := fmt.Sprintf("%%%d", paneID)
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
 		if line == "" {
 			continue
 		}
@@ -795,7 +795,7 @@ func GetWorktrees(path string) (map[string]string, error) {
 	result := make(map[string]string)
 	var currentPath string
 
-	for _, line := range strings.Split(string(out), "\n") {
+	for line := range strings.SplitSeq(string(out), "\n") {
 		if after, ok := strings.CutPrefix(line, "worktree "); ok {
 			currentPath = after
 		} else if strings.HasPrefix(line, "branch ") {

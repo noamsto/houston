@@ -354,7 +354,7 @@ func TestRunAnswerState(t *testing.T) {
 		s, _ := newAnswerServer(t, panes, "claude")
 
 		wantTab(t, postAnswer(t, s, stateBody(m3Call)), 0, []int{}, "")
-		for _, line := range strings.Split(logs.String(), "\n") {
+		for line := range strings.SplitSeq(logs.String(), "\n") {
 			if strings.Contains(line, "kind=state") && !strings.Contains(line, "level=DEBUG") {
 				t.Errorf("state logged above Debug: %s", line)
 			}

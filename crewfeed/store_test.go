@@ -511,9 +511,7 @@ func TestStoreConcurrentReaders(t *testing.T) {
 	done := make(chan struct{})
 	var wg sync.WaitGroup
 	for range 4 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for {
 				select {
 				case <-done:
@@ -541,7 +539,7 @@ func TestStoreConcurrentReaders(t *testing.T) {
 					s.Since(bus, "c1", ep, first)
 				}
 			}
-		}()
+		})
 	}
 
 	for i := range 3 * feedRing {

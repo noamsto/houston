@@ -52,7 +52,7 @@
             pname = "houston";
             version = "0.1.0";
             src = pkgs.lib.cleanSource ./.;
-            vendorHash = "sha256-ArYCbm+rj0VYQV58tiVyYPXGfgiW45hfc+wFGQuQy3U=";
+            vendorHash = "sha256-k+n4q0IS9AnH3Btb/IQ0dZLcJwhRhoaZmw86fgbjJoU=";
 
             # tmux/control_integration_test.go drives a real server;
             # server/workspace_repo_test.go shells out to git;
@@ -93,7 +93,6 @@
               just
               tmux
               nodejs
-              nodePackages.npm
             ] ++ config.pre-commit.settings.enabledPackages;
 
             shellHook = ''

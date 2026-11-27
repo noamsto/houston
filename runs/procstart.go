@@ -115,7 +115,7 @@ func parsePPID(stat string) (int, bool) {
 // parseBtime extracts the "btime <N>" line from /proc/stat: the kernel boot
 // time, needed to turn a starttime in ticks-since-boot into a unix time.
 func parseBtime(procStat string) (int64, bool) {
-	for _, line := range strings.Split(procStat, "\n") {
+	for line := range strings.SplitSeq(procStat, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) == 2 && fields[0] == "btime" {
 			btime, err := strconv.ParseInt(fields[1], 10, 64)

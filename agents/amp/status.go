@@ -42,8 +42,8 @@ func ParseStatus(statusLine string) AmpStatus {
 	// Strip ANSI codes before parsing - they interfere with regex matching
 	statusLine = ansi.Strip(statusLine)
 
-	lines := strings.Split(statusLine, "\n")
-	for _, line := range lines {
+	lines := strings.SplitSeq(statusLine, "\n")
+	for line := range lines {
 		// Try to parse top line
 		if strings.HasPrefix(strings.TrimSpace(line), "╭") {
 			// Try full pattern first

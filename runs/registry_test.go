@@ -461,9 +461,7 @@ func TestApplyDoesNotRaceSubscribeClose(t *testing.T) {
 		}(i)
 	}
 
-	churnWG.Add(1)
-	go func() {
-		defer churnWG.Done()
+	churnWG.Go(func() {
 		for {
 			select {
 			case <-stop:
@@ -474,7 +472,7 @@ func TestApplyDoesNotRaceSubscribeClose(t *testing.T) {
 				churned.Add(1)
 			}
 		}
-	}()
+	})
 
 	applyWG.Wait()
 	close(stop)
@@ -680,8 +678,8 @@ func fillNonZero(v reflect.Value) {
 		v.Set(reflect.MakeSlice(v.Type(), 1, 1))
 		fillNonZero(v.Index(0))
 	case reflect.Struct:
-		for i := 0; i < v.NumField(); i++ {
-			fillNonZero(v.Field(i))
+		for _, field := range v.Fields() {
+			fillNonZero(field)
 		}
 	default:
 	}
@@ -1307,12 +1305,12 @@ func TestComposeAttentionFromCrewView(t *testing.T) {
 		branch = "fix/7"
 	)
 	view := func(state, detail, itemKind string) crewview.Overview {
-		w := crewview.Worker{Crew: "c1", Branch: branch, Origin: crewview.OriginLocal, State: state, Engine: sp("claude"), AgeSec: ip(0)}
+		w := crewview.Worker{Crew: "c1", Branch: branch, Origin: crewview.OriginLocal, State: state, Engine: new("claude"), AgeSec: ip(0)}
 		if detail != "" {
-			w.Detail = sp(detail)
+			w.Detail = new(detail)
 		}
 		if state == "pr_open" {
-			w.PRURL = sp("https://github.com/x/y/pull/3")
+			w.PRURL = new("https://github.com/x/y/pull/3")
 		}
 		v := crewview.Overview{GeneratedAt: gen, Workers: []crewview.Worker{w}}
 		if itemKind != "" {

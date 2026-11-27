@@ -210,16 +210,14 @@ func TestPiConcurrentUse(t *testing.T) {
 	r := NewPi()
 	var wg sync.WaitGroup
 	for range 8 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if _, _, _, err := r.Read(path, Cursor{}); err != nil {
 				t.Errorf("Read: %v", err)
 			}
 			if _, err := r.Tool(path, "call_edit1"); err != nil {
 				t.Errorf("Tool: %v", err)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 }

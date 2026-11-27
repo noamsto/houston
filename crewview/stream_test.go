@@ -214,7 +214,7 @@ func starts(t *testing.T, path string) []time.Time {
 		t.Fatal(err)
 	}
 	var out []time.Time
-	for _, f := range strings.Fields(string(b)) {
+	for f := range strings.FieldsSeq(string(b)) {
 		n, err := strconv.ParseInt(f, 10, 64)
 		if err != nil {
 			t.Fatal(err)

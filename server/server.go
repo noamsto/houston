@@ -394,13 +394,11 @@ func New(cfg Config) (*Server, error) {
 
 	// Run the hub in the background. It watches <status-dir>/claude/ and the
 	// transcripts referenced from hook state files.
-	s.sourcesWG.Add(1)
-	go func() {
-		defer s.sourcesWG.Done()
+	s.sourcesWG.Go(func() {
 		if err := s.hub.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			slog.Warn("agent hub stopped", "err", err)
 		}
-	}()
+	})
 
 	reg := runs.NewRegistry(runs.Order(cfg.Mode))
 	s.runs = reg
@@ -431,13 +429,11 @@ func New(cfg Config) (*Server, error) {
 	for _, pc := range cfg.Peers {
 		src := peer.New(pc, peer.Options{Self: s.instance, Caps: forwardCaps(cfg.Mode, cfg.AuthEnabled)})
 		s.peers = append(s.peers, src)
-		s.sourcesWG.Add(1)
-		go func() {
-			defer s.sourcesWG.Done()
+		s.sourcesWG.Go(func() {
 			if err := src.Run(ctx, deltas); err != nil && !errors.Is(err, context.Canceled) {
 				slog.Warn("run source stopped", "source", src.Name(), "error", err)
 			}
-		}()
+		})
 	}
 
 	// Initialize OpenCode integration if enabled

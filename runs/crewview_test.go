@@ -22,8 +22,8 @@ func goldenView(t *testing.T) crewview.Overview {
 	return v
 }
 
-func sp(s string) *string { return &s }
-func ip(i int64) *int64   { return &i }
+//go:fix inline
+func ip(i int64) *int64 { return new(i) }
 
 func TestCrewRunsFromViewGolden(t *testing.T) {
 	v := goldenView(t)
@@ -112,7 +112,7 @@ func TestCrewRunsFromViewGolden(t *testing.T) {
 func oneWorker(state string, detail *string, age int64) crewview.Overview {
 	return crewview.Overview{
 		GeneratedAt: 1000000,
-		Workers:     []crewview.Worker{{Crew: "c1", Branch: "feat/x", Origin: "local", State: state, Detail: detail, AgeSec: ip(age)}},
+		Workers:     []crewview.Worker{{Crew: "c1", Branch: "feat/x", Origin: "local", State: state, Detail: detail, AgeSec: new(age)}},
 	}
 }
 
@@ -126,7 +126,7 @@ func TestCrewRunsFromViewBlockedNoDetail(t *testing.T) {
 }
 
 func TestCrewRunsFromViewUnlistedWatchdogPrefix(t *testing.T) {
-	v := oneWorker("blocked", sp("load: host busy"), 0)
+	v := oneWorker("blocked", new("load: host busy"), 0)
 	v.Attention = []crewview.Item{{ID: "w", Crew: "c1", Branch: "feat/x", Origin: "local", Kind: "watchdog", Message: "load: host busy"}}
 	r := crewRunsFromView(v, nil).local["feat/x"]
 	if r.State != StateRunning || r.Attention != "" || r.AttentionNote != "" || r.Crew.Detail != "" || r.Question != nil {
@@ -154,7 +154,7 @@ func TestCrewRunsFromViewIdentity(t *testing.T) {
 // window still shows after a houston restart, and a re-stamp (age_sec reset)
 // does not move it.
 func TestCrewRunsFromViewBlockedSince(t *testing.T) {
-	v := oneWorker("blocked", sp("q?"), 5)
+	v := oneWorker("blocked", new("q?"), 5)
 	v.Workers[0].BlockedSince = ip(500_000_000)
 	v.Attention = []crewview.Item{{ID: "b", Crew: "c1", Branch: "feat/x", Origin: "local", Kind: "blocked", Message: "q?"}}
 	r := crewRunsFromView(v, nil).local["feat/x"]
@@ -176,7 +176,7 @@ func TestCrewRunsFromViewBlockedSince(t *testing.T) {
 // crew reports a worker its dispatcher replied to as "answered": it is not
 // needs-you and carries no question.
 func TestCrewRunsFromViewAnsweredIsNotNeedsYou(t *testing.T) {
-	v := oneWorker("answered", sp("q?"), 300)
+	v := oneWorker("answered", new("q?"), 300)
 	v.Workers[0].BlockedSince, v.Workers[0].AnsweredAt = ip(700_000_000), ip(900_000_000)
 	r := crewRunsFromView(v, nil).local["feat/x"]
 	if r.State != StateRunning || r.Question != nil || r.blockedSince != 0 {
@@ -204,7 +204,7 @@ func TestCrewRunsFromViewWatchdogPrefixes(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.msg, func(t *testing.T) {
-			v := oneWorker("blocked", sp(c.msg), 0)
+			v := oneWorker("blocked", new(c.msg), 0)
 			v.Attention = []crewview.Item{{ID: "w", Crew: "c1", Branch: "feat/x", Origin: "local", Kind: "watchdog", Message: c.msg}}
 			r := crewRunsFromView(v, nil).local["feat/x"]
 			if r.State != StateRunning || r.Question != nil || r.Attention != c.att || r.AttentionNote != c.note ||
@@ -217,7 +217,7 @@ func TestCrewRunsFromViewWatchdogPrefixes(t *testing.T) {
 
 func TestCrewRunsFromViewStates(t *testing.T) {
 	for state, want := range map[string]State{"done": StateDone, "pr_open": StateReview, "failed": StateFailed, "exited": StateFailed} {
-		r := crewRunsFromView(oneWorker(state, sp("gate won't pass"), 0), nil).local["feat/x"]
+		r := crewRunsFromView(oneWorker(state, new("gate won't pass"), 0), nil).local["feat/x"]
 		if r.State != want || r.Attention != "" || r.AttentionNote != "" || r.Question != nil || r.Crew.Detail != "gate won't pass" {
 			t.Errorf("%s: got %+v detail %q, want %q with the detail kept", state, r.Run, r.Crew.Detail, want)
 		}
@@ -261,7 +261,7 @@ func TestProjectItemWordsWatchdogItems(t *testing.T) {
 // A blocked row without blocked_since or age_sec has no known episode start:
 // it is at least as old as the view.
 func TestCrewRunsFromViewBlockedWithUnknownAge(t *testing.T) {
-	v := oneWorker("blocked", sp("q?"), 0)
+	v := oneWorker("blocked", new("q?"), 0)
 	v.Workers[0].AgeSec = nil
 	v.Attention = []crewview.Item{{ID: "b", Crew: "c1", Branch: "feat/x", Origin: "local", Kind: "blocked", Message: "q?"}}
 	r := crewRunsFromView(v, nil).local["feat/x"]
@@ -380,7 +380,7 @@ func TestSpliceHeldRebasesAges(t *testing.T) {
 func TestSpliceHeldKeepsLivePeerRows(t *testing.T) {
 	const gen = int64(10_000)
 	peer := func(branch, state string, age int64) crewview.Worker {
-		return crewview.Worker{Crew: "c1", Branch: branch, Origin: crewview.OriginPeer, State: state, AgeSec: ip(age)}
+		return crewview.Worker{Crew: "c1", Branch: branch, Origin: crewview.OriginPeer, State: state, AgeSec: new(age)}
 	}
 	item := func(branch string, age int64) crewview.Item {
 		return crewview.Item{ID: "blocked:c1:" + branch, Crew: "c1", Branch: branch, Origin: crewview.OriginPeer, Kind: "blocked", AgeSec: age}

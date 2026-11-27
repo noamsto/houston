@@ -165,7 +165,7 @@ func execDispatchEngines(ctx context.Context, serverPath string) ([]string, erro
 		return nil, fmt.Errorf("dispatch --engines: %w", err)
 	}
 	var engines []string
-	for _, line := range strings.Split(string(out), "\n") {
+	for line := range strings.SplitSeq(string(out), "\n") {
 		if line = strings.TrimSpace(line); line != "" {
 			engines = append(engines, line)
 		}
