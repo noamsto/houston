@@ -73,7 +73,7 @@ func fromEnvelope(in input) (event string, ev Event, agent string, err error) {
 	}
 
 	if in.Env.Engine == envelope.ClaudeCode {
-		if len(in.Env.Native) == 0 {
+		if in.Env.Native == nil {
 			return "", Event{}, "", fmt.Errorf("decode claude-code native payload: missing native")
 		}
 		if err := json.Unmarshal(native, &ev); err != nil {
