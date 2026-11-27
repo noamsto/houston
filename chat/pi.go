@@ -194,7 +194,7 @@ func (pi) Tool(path, toolCallID string) (*Update, error) {
 		stop   string
 	)
 
-	for _, line := range bytes.Split(data, []byte("\n")) {
+	for line := range bytes.SplitSeq(data, []byte("\n")) {
 		line = bytes.TrimSpace(line)
 		if len(line) == 0 {
 			continue

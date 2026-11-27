@@ -55,8 +55,6 @@ func withPR(it Item, pr *int) Item {
 	return it
 }
 
-func intp(n int) *int { return &n }
-
 func withCrew(it Item, crew string) Item     { it.Crew = crew; return it }
 func withBranch(it Item, branch string) Item { it.Branch = branch; return it }
 func withWorker(it Item, worker string) Item { it.Worker = worker; return it }
@@ -157,7 +155,7 @@ func TestActionNotExecutable(t *testing.T) {
 		t.Fatal("golden nudge item has no action")
 	}
 	nudgeAsMergeVerb := nudge
-	nudgeAsMergeVerb.Action = &Action{Verb: "merge", Argv: nudge.Action.Argv, PR: intp(12)}
+	nudgeAsMergeVerb.Action = &Action{Verb: "merge", Argv: nudge.Action.Argv, PR: new(12)}
 	codename := withWorker(nudge, "otter")
 
 	tests := []struct {
@@ -202,8 +200,8 @@ func TestActionNotExecutable(t *testing.T) {
 		{"merge N leading zero", withArgv(merge, "crew", "merge", "012", "--crew", "c1")},
 		{"merge N not pr", withArgv(merge, "crew", "merge", "13", "--crew", "c1")},
 		{"merge pr nil", withPR(merge, nil)},
-		{"merge pr zero", withArgv(withPR(merge, intp(0)), "crew", "merge", "0", "--crew", "c1")},
-		{"merge pr negative", withArgv(withPR(merge, intp(-1)), "crew", "merge", "-1", "--crew", "c1")},
+		{"merge pr zero", withArgv(withPR(merge, new(0)), "crew", "merge", "0", "--crew", "c1")},
+		{"merge pr negative", withArgv(withPR(merge, new(-1)), "crew", "merge", "-1", "--crew", "c1")},
 		{"peek extra trailing element", withArgv(peek, "crew", "where", "--crew", "c1", "--", "feat/h", "extra")},
 		{"nudge extra trailing element", withArgv(nudge, "crew", "nudge", "--crew", "c1", "--", "feat/e", "extra")},
 		{"reply extra trailing element", withArgv(reply, "crew", "reply", "--crew", "c1", "--", "worker:feat/c", "<text>", "extra")},

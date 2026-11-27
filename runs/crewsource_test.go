@@ -887,9 +887,9 @@ func crewScanner(dirs map[string]string, views crewViews, wins []tmux.WindowOpti
 const testViewGen = int64(4_000_000_000)
 
 func viewWorker(branch, state, detail string, updatedAt int64) crewview.Worker {
-	w := crewview.Worker{Crew: "c1", Branch: branch, Origin: crewview.OriginLocal, State: state, Engine: sp("claude"), AgeSec: ip(testViewGen - updatedAt)}
+	w := crewview.Worker{Crew: "c1", Branch: branch, Origin: crewview.OriginLocal, State: state, Engine: new("claude"), AgeSec: new(testViewGen - updatedAt)}
 	if detail != "" {
-		w.Detail = sp(detail)
+		w.Detail = new(detail)
 	}
 	return w
 }
@@ -1336,18 +1336,18 @@ func TestDispatcherLive(t *testing.T) {
 		panes    []tmux.PaneOptions
 		want     bool
 	}{
-		{"claude pane on a dispatcher window", ptr("%1"), regT, "c1", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{claudePane}, true},
-		{"agent-detect pane", ptr("%1"), regT, "c1", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{agentDetect}, true},
-		{"pane missing from the listing", ptr("%9"), regT, "c1", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{claudePane}, false},
-		{"window is not a dispatcher", ptr("%1"), regT, "c1", []tmux.WindowOptions{{Session: "h", Window: 2, CrewName: "bronze"}, workerWin}, []tmux.PaneOptions{claudePane}, false},
-		{"no engine status", ptr("%1"), regT, "c1", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{{PaneID: "%1", Target: "h:2"}}, false},
+		{"claude pane on a dispatcher window", new("%1"), regT, "c1", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{claudePane}, true},
+		{"agent-detect pane", new("%1"), regT, "c1", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{agentDetect}, true},
+		{"pane missing from the listing", new("%9"), regT, "c1", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{claudePane}, false},
+		{"window is not a dispatcher", new("%1"), regT, "c1", []tmux.WindowOptions{{Session: "h", Window: 2, CrewName: "bronze"}, workerWin}, []tmux.PaneOptions{claudePane}, false},
+		{"no engine status", new("%1"), regT, "c1", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{{PaneID: "%1", Target: "h:2"}}, false},
 		{"no pane file", nil, regT, "c1", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{claudePane}, false},
-		{"pane file from before a tmux restart", ptr("%1"), serverT.Add(-time.Hour), "c1", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{claudePane}, false},
-		{"empty crew id", ptr("%1"), regT, "", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{claudePane}, false},
-		{"surrounding whitespace", ptr("  %1\n"), regT, "c1", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{claudePane}, true},
-		{"another crew", ptr("%1"), regT, "c2", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{claudePane}, false},
-		{"crew id escaping crews/", ptr("%1"), regT, "../c1", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{claudePane}, false},
-		{"crew id dot-dot", ptr("%1"), regT, "..", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{claudePane}, false},
+		{"pane file from before a tmux restart", new("%1"), serverT.Add(-time.Hour), "c1", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{claudePane}, false},
+		{"empty crew id", new("%1"), regT, "", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{claudePane}, false},
+		{"surrounding whitespace", new("  %1\n"), regT, "c1", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{claudePane}, true},
+		{"another crew", new("%1"), regT, "c2", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{claudePane}, false},
+		{"crew id escaping crews/", new("%1"), regT, "../c1", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{claudePane}, false},
+		{"crew id dot-dot", new("%1"), regT, "..", []tmux.WindowOptions{dispatcherWin}, []tmux.PaneOptions{claudePane}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -1372,13 +1372,11 @@ func TestDispatcherLive(t *testing.T) {
 	}
 }
 
-func ptr[T any](v T) *T { return &v }
-
 // A dispatcher that has dispatched nothing yet has a crews/ dir but no log;
 // its pane still gets the crew layer, which lists only beside the tmux layer.
 func TestScanEmitsTheDispatcherLayer(t *testing.T) {
 	bus := t.TempDir()
-	writeCrew(t, bus, crewFiles{id: "c1", pane: ptr("%1"), paneMod: regT, pid: ptr("200"), pidMod: regT})
+	writeCrew(t, bus, crewFiles{id: "c1", pane: new("%1"), paneMod: regT, pid: new("200"), pidMod: regT})
 	wins := []tmux.WindowOptions{{Session: "h", Window: 2, CrewName: "dispatcher", GitRoot: "/wt/a"}}
 	panes := []tmux.PaneOptions{dispatcherPane("%1", "h:2")}
 	s := crewScanner(map[string]string{"/wt/a": bus}, nil, wins, panes)
@@ -1424,7 +1422,7 @@ func TestScanEmitsTheDispatcherLayer(t *testing.T) {
 // keeps it.
 func TestScanDispatcherJoinYieldsToAWorkerKey(t *testing.T) {
 	bus := writeBus(t, "fix/412")
-	writeCrew(t, bus, crewFiles{id: "c1", pane: ptr("%307"), paneMod: regT})
+	writeCrew(t, bus, crewFiles{id: "c1", pane: new("%307"), paneMod: regT})
 	s := crewScanner(
 		map[string]string{"/wt/a": bus},
 		workingOn(bus, "fix/412"),
@@ -1452,9 +1450,9 @@ func TestScanWorkerQuestionWithAGoneDispatcher(t *testing.T) {
 		probe   fakeProcs
 		blocked bool
 	}{
-		{"live dispatcher", crewFiles{id: "c1", pane: ptr("%1"), paneMod: regT, pid: ptr("200"), pidMod: regT}, liveDispatcher(), false},
-		{"pane file from before a tmux restart", crewFiles{id: "c1", pane: ptr("%1"), paneMod: serverT.Add(-time.Hour)}, liveDispatcher(), true},
-		{"dispatcher process exited", crewFiles{id: "c1", pane: ptr("%1"), paneMod: regT, pid: ptr("200"), pidMod: regT},
+		{"live dispatcher", crewFiles{id: "c1", pane: new("%1"), paneMod: regT, pid: new("200"), pidMod: regT}, liveDispatcher(), false},
+		{"pane file from before a tmux restart", crewFiles{id: "c1", pane: new("%1"), paneMod: serverT.Add(-time.Hour)}, liveDispatcher(), true},
+		{"dispatcher process exited", crewFiles{id: "c1", pane: new("%1"), paneMod: regT, pid: new("200"), pidMod: regT},
 			fakeProcs{dead: map[int]bool{dispPID: true}}, true},
 	}
 	for _, c := range cases {
@@ -1985,7 +1983,7 @@ func TestScanCarriesTheViewOnTheDispatcherRun(t *testing.T) {
 	scan := func(t *testing.T, views func(bus string) *fakeViews) map[string]Run {
 		t.Helper()
 		bus := writeBus(t, "feat/a")
-		writeCrew(t, bus, crewFiles{id: "c1", pane: ptr("%1"), paneMod: regT, pid: ptr("200"), pidMod: regT})
+		writeCrew(t, bus, crewFiles{id: "c1", pane: new("%1"), paneMod: regT, pid: new("200"), pidMod: regT})
 		wins := []tmux.WindowOptions{{Session: "h", Window: 2, CrewName: "dispatcher", GitRoot: "/wt/a"}}
 		s := crewScanner(map[string]string{"/wt/a": bus}, views(bus), wins, []tmux.PaneOptions{dispatcherPane("%1", "h:2")})
 		s.procs = liveDispatcher()
@@ -2069,7 +2067,7 @@ func TestScanEnsuresOneStreamPerBus(t *testing.T) {
 func joinedC1(t *testing.T, ov crewview.Overview) (*CrewSource, *fakeViews, string) {
 	t.Helper()
 	bus := writeBus(t, "feat/a")
-	writeCrew(t, bus, crewFiles{id: "c1", pane: ptr("%1"), paneMod: regT, pid: ptr("200"), pidMod: regT})
+	writeCrew(t, bus, crewFiles{id: "c1", pane: new("%1"), paneMod: regT, pid: new("200"), pidMod: regT})
 	views := viewsOn(bus, ov)
 	wins := []tmux.WindowOptions{{Session: "h", Window: 2, CrewName: "dispatcher", GitRoot: "/wt/a"}}
 	s := crewScanner(map[string]string{"/wt/a": bus}, views, wins, []tmux.PaneOptions{dispatcherPane("%1", "h:2")})
@@ -2505,7 +2503,7 @@ func newCrossRepo(t *testing.T, busBEvents string) crossRepo {
 			t.Fatal(err)
 		}
 	}
-	writeCrew(t, busA, crewFiles{id: "c1", pane: ptr("%1"), paneMod: regT})
+	writeCrew(t, busA, crewFiles{id: "c1", pane: new("%1"), paneMod: regT})
 	writeCrew(t, busB, crewFiles{id: "c1"})
 	writeEvents(t, busB, busBEvents)
 	return crossRepo{

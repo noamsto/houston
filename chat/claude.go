@@ -298,7 +298,7 @@ func (c *claude) Tool(path, toolCallID string) (*Update, error) {
 		tr     claudeToolUseResult
 	)
 
-	for _, line := range bytes.Split(data, []byte("\n")) {
+	for line := range bytes.SplitSeq(data, []byte("\n")) {
 		line = bytes.TrimSpace(line)
 		if len(line) == 0 {
 			continue

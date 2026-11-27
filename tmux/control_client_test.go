@@ -2179,12 +2179,12 @@ func TestCloseDuringDialDoesNotLeak(t *testing.T) {
 }
 
 func TestReconnectBacksOffWhenConnectionsDieImmediately(t *testing.T) {
-	var dials int32
+	var dials atomic.Int32
 
 	cc := NewControlClient("test")
 	cc.backoff = 5 * time.Millisecond
 	cc.dial = func() (io.ReadCloser, io.Writer, func() error, error) {
-		atomic.AddInt32(&dials, 1)
+		dials.Add(1)
 		// dial succeeds, but the connection is dead on arrival
 		return io.NopCloser(strings.NewReader("")), io.Discard,
 			func() error { return nil }, nil
@@ -2195,16 +2195,16 @@ func TestReconnectBacksOffWhenConnectionsDieImmediately(t *testing.T) {
 	}
 	defer func() { _ = cc.Close() }()
 
-	for deadline := time.Now().Add(5 * time.Second); atomic.LoadInt32(&dials) < 2; {
+	for deadline := time.Now().Add(5 * time.Second); dials.Load() < 2; {
 		if time.Now().After(deadline) {
-			t.Fatalf("dialled %d times — never retried at all", atomic.LoadInt32(&dials))
+			t.Fatalf("dialled %d times — never retried at all", dials.Load())
 		}
 		time.Sleep(time.Millisecond)
 	}
 
 	time.Sleep(60 * time.Millisecond)
 
-	n := atomic.LoadInt32(&dials)
+	n := dials.Load()
 	// 5ms doubling gives roughly 5+10+20+40 -> about 5 dials in 60ms, and
 	// oversleeping only lets the doubling push the count down. With no
 	// backoff on this path it would be thousands.

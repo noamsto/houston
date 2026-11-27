@@ -94,7 +94,7 @@ echo "worker_id: worker:feat/1-x#s1"
 		t.Errorf("DISPATCH_SPEC = %q, want a houston temp file", specPath)
 	}
 	var specVars []string
-	for _, line := range strings.Split(readFile(t, filepath.Join(out, "env")), "\n") {
+	for line := range strings.SplitSeq(readFile(t, filepath.Join(out, "env")), "\n") {
 		for _, key := range []string{"CREW_ID=", "CREW_WORKER_ID=", "TMUX_PANE="} {
 			if strings.HasPrefix(line, key) {
 				t.Errorf("inherited %s reached dispatch", line)

@@ -291,8 +291,7 @@ func TestConnectionSourceRunReactsToChangeSignal(t *testing.T) {
 	panes := &fakePaneLister{panes: []tmux.PaneOptions{{PaneID: "%1", Target: "s:1"}}}
 	src := NewConnectionSource(conns, panes, time.Hour) // ticker effectively off
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	out := make(chan Delta, 8)
 	go func() { _ = src.Run(ctx, out) }()
 

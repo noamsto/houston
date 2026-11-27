@@ -112,7 +112,7 @@ func (c *Client) ListPaneOptions() ([]PaneOptions, error) {
 
 func ParseWindowOptions(out string) []WindowOptions {
 	var res []WindowOptions
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		f := strings.Split(line, optSep)
 		if len(f) != 14 {
 			continue
@@ -133,7 +133,7 @@ func ParseWindowOptions(out string) []WindowOptions {
 
 func ParsePaneOptions(out string) []PaneOptions {
 	var res []PaneOptions
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		f := strings.Split(line, optSep)
 		if len(f) != 12 {
 			continue

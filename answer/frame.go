@@ -40,7 +40,7 @@ const dialogRule = "── dialog rule ──"
 // whitespace rune, so Claude's hard wrapping never affects a comparison.
 func Normalize(s string) string {
 	var b strings.Builder
-	for _, line := range strings.Split(s, "\n") {
+	for line := range strings.SplitSeq(s, "\n") {
 		line = strings.TrimLeftFunc(line, unicode.IsSpace)
 		line = strings.TrimPrefix(line, "│")
 		for _, r := range line {
@@ -231,13 +231,13 @@ func tabBoxes(bar string) []bool {
 // consumeText consumes the lines that spell want exactly, so a wrapped
 // question matches however Claude broke it.
 func consumeText(lines []string, want string) ([]string, bool) {
-	got := ""
+	var got strings.Builder
 	for i, l := range lines {
-		got += l
-		if got == want {
+		got.WriteString(l)
+		if got.String() == want {
 			return lines[i+1:], true
 		}
-		if !strings.HasPrefix(want, got) {
+		if !strings.HasPrefix(want, got.String()) {
 			return nil, false
 		}
 	}

@@ -76,7 +76,7 @@ func Dispatch(event string, stateDir string, stdin io.Reader) error {
 
 	var ev Event
 	var agent string
-	if in.Engine != "" {
+	if in.Env.Engine != "" {
 		var err error
 		event, ev, agent, err = fromEnvelope(in)
 		if err != nil {

@@ -107,7 +107,7 @@ func defaultJoinFixture() joinFixture {
 	return joinFixture{
 		wins:  []tmux.WindowOptions{{Session: "h", Window: 2, CrewName: "dispatcher"}},
 		panes: []tmux.PaneOptions{dispatcherPane("%1", "h:2")},
-		crews: []crewFiles{{id: "c1", pane: ptr("%1"), paneMod: regT, pid: ptr("200\n"), pidMod: regT}},
+		crews: []crewFiles{{id: "c1", pane: new("%1"), paneMod: regT, pid: new("200\n"), pidMod: regT}},
 		probe: liveDispatcher(),
 	}
 }
@@ -127,8 +127,8 @@ func TestJoinDispatchers(t *testing.T) {
 			p.PanePID, p.ServerStart = dispPanePID, serverT.Unix()
 			f.panes = []tmux.PaneOptions{p}
 		}, joined, true},
-		{"surrounding whitespace in the pane file", func(f *joinFixture) { f.crews[0].pane = ptr("  %1\n") }, joined, true},
-		{"pane missing from the listing", func(f *joinFixture) { f.crews[0].pane = ptr("%9") }, none, true},
+		{"surrounding whitespace in the pane file", func(f *joinFixture) { f.crews[0].pane = new("  %1\n") }, joined, true},
+		{"pane missing from the listing", func(f *joinFixture) { f.crews[0].pane = new("%9") }, none, true},
 		{"no pane file", func(f *joinFixture) { f.crews[0].pane = nil }, none, true},
 		{"no engine status", func(f *joinFixture) {
 			f.panes[0].ClaudeStatus = ""
@@ -161,7 +161,7 @@ func TestJoinDispatchers(t *testing.T) {
 		}, none, true},
 		{"parent walk fails", func(f *joinFixture) { f.probe.err = errors.New("procfs gone") }, none, true},
 		{"pid is the pane's own process", func(f *joinFixture) {
-			f.crews[0].pid = ptr("100")
+			f.crews[0].pid = new("100")
 			f.probe.starts = map[int]int64{dispPanePID: regT.Unix()}
 		}, joined, true},
 		{"pane pid unknown", func(f *joinFixture) { f.panes[0].PanePID = 0 }, none, true},
@@ -170,7 +170,7 @@ func TestJoinDispatchers(t *testing.T) {
 			f.probe = fakeProcs{dead: map[int]bool{dispPID: true}, err: errors.New("never asked")}
 		}, joined, true},
 		{"unparseable pid file", func(f *joinFixture) {
-			f.crews[0].pid = ptr("not a pid")
+			f.crews[0].pid = new("not a pid")
 			f.probe = fakeProcs{dead: map[int]bool{dispPID: true}, err: errors.New("never asked")}
 		}, joined, true},
 		{"no crews directory", func(f *joinFixture) {}, none, false},
@@ -340,8 +340,8 @@ func TestJoinDispatchersTwoDispatchersOneProject(t *testing.T) {
 	p2 := dispatcherPane("%2", "h:3")
 	p2.PanePID = 300
 	panes := []tmux.PaneOptions{dispatcherPane("%1", "h:2"), p2}
-	writeCrew(t, bus, crewFiles{id: "c1", pane: ptr("%1"), paneMod: regT, pid: ptr("200"), pidMod: regT})
-	writeCrew(t, bus, crewFiles{id: "c2", pane: ptr("%2"), paneMod: regT, pid: ptr("400"), pidMod: regT})
+	writeCrew(t, bus, crewFiles{id: "c1", pane: new("%1"), paneMod: regT, pid: new("200"), pidMod: regT})
+	writeCrew(t, bus, crewFiles{id: "c2", pane: new("%2"), paneMod: regT, pid: new("400"), pidMod: regT})
 	probe := fakeProcs{
 		starts:  map[int]int64{200: regT.Unix(), 400: regT.Unix()},
 		parents: map[int]int{200: dispPanePID, 400: 300},
@@ -359,8 +359,8 @@ func TestJoinDispatchersTwoCrewsOnePane(t *testing.T) {
 	f := defaultJoinFixture()
 	t.Run("newest pane file wins", func(t *testing.T) {
 		bus := t.TempDir()
-		writeCrew(t, bus, crewFiles{id: "c9", pane: ptr("%1"), paneMod: regT.Add(-time.Minute)})
-		writeCrew(t, bus, crewFiles{id: "c1", pane: ptr("%1"), paneMod: regT})
+		writeCrew(t, bus, crewFiles{id: "c9", pane: new("%1"), paneMod: regT.Add(-time.Minute)})
+		writeCrew(t, bus, crewFiles{id: "c1", pane: new("%1"), paneMod: regT})
 		got := joinDispatchers(bus, f.wins, f.panes, nil, f.probe)
 		if want := map[string]string{"c1": "%1"}; !maps.Equal(got, want) {
 			t.Errorf("joinDispatchers = %v, want %v", got, want)
@@ -368,8 +368,8 @@ func TestJoinDispatchersTwoCrewsOnePane(t *testing.T) {
 	})
 	t.Run("tie goes to the greater crew id", func(t *testing.T) {
 		bus := t.TempDir()
-		writeCrew(t, bus, crewFiles{id: "1800000100-7", pane: ptr("%1"), paneMod: regT})
-		writeCrew(t, bus, crewFiles{id: "1800000200-7", pane: ptr("%1"), paneMod: regT})
+		writeCrew(t, bus, crewFiles{id: "1800000100-7", pane: new("%1"), paneMod: regT})
+		writeCrew(t, bus, crewFiles{id: "1800000200-7", pane: new("%1"), paneMod: regT})
 		got := joinDispatchers(bus, f.wins, f.panes, nil, f.probe)
 		if want := map[string]string{"1800000200-7": "%1"}; !maps.Equal(got, want) {
 			t.Errorf("joinDispatchers = %v, want %v", got, want)
@@ -377,8 +377,8 @@ func TestJoinDispatchersTwoCrewsOnePane(t *testing.T) {
 	})
 	t.Run("a newer crew that fails its checks does not displace the live one", func(t *testing.T) {
 		bus := t.TempDir()
-		writeCrew(t, bus, crewFiles{id: "c1", pane: ptr("%1"), paneMod: regT, pid: ptr("200"), pidMod: regT})
-		writeCrew(t, bus, crewFiles{id: "c2", pane: ptr("%1"), paneMod: regT.Add(time.Minute), pid: ptr("999"), pidMod: regT})
+		writeCrew(t, bus, crewFiles{id: "c1", pane: new("%1"), paneMod: regT, pid: new("200"), pidMod: regT})
+		writeCrew(t, bus, crewFiles{id: "c2", pane: new("%1"), paneMod: regT.Add(time.Minute), pid: new("999"), pidMod: regT})
 		probe := liveDispatcher()
 		probe.dead = map[int]bool{999: true}
 		got := joinDispatchers(bus, f.wins, f.panes, nil, probe)

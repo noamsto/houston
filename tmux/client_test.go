@@ -266,7 +266,7 @@ func loggingTmux(t *testing.T, failAt int) (*Client, func() []loggedCall) {
 		}
 		var out []loggedCall
 		var cur []string
-		for _, tok := range strings.Split(string(data), "\x00") {
+		for tok := range strings.SplitSeq(string(data), "\x00") {
 			switch tok {
 			case "":
 			case "\x01":
@@ -426,13 +426,11 @@ func TestSendKeys(t *testing.T) {
 		c, calls := recordingTmux(t)
 		var wg sync.WaitGroup
 		for _, text := range []string{"A", "B"} {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				if err := c.SendKeys(context.Background(), pane, text, true); err != nil {
 					t.Errorf("SendKeys(%q) error: %v", text, err)
 				}
-			}()
+			})
 		}
 		wg.Wait()
 		got := calls()
@@ -480,7 +478,7 @@ func pasteTmux(t *testing.T, failOn string) (*Client, func() []loggedCall, strin
 		}
 		var out []loggedCall
 		var cur []string
-		for _, tok := range strings.Split(string(data), "\x00") {
+		for tok := range strings.SplitSeq(string(data), "\x00") {
 			switch tok {
 			case "":
 			case "\x01":
@@ -635,7 +633,7 @@ func holdSecondChunkTmux(t *testing.T) (*Client, func() []loggedCall, string) {
 		}
 		var out []loggedCall
 		var cur []string
-		for _, tok := range strings.Split(string(data), "\x00") {
+		for tok := range strings.SplitSeq(string(data), "\x00") {
 			switch tok {
 			case "":
 			case "\x01":

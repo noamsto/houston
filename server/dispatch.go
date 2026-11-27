@@ -646,7 +646,7 @@ func mintDispatchCrew(commonDir, id string) (string, *dispatchError) {
 // dispatchWorkerID returns the first stdout line matching `worker_id: …`,
 // dispatch's own success marker.
 func dispatchWorkerID(stdout string) string {
-	for _, line := range strings.Split(stdout, "\n") {
+	for line := range strings.SplitSeq(stdout, "\n") {
 		if m := dispatchWorkerIDRe.FindStringSubmatch(line); m != nil {
 			return m[1]
 		}

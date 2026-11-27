@@ -3,29 +3,39 @@ package hook
 import (
 	"encoding/json"
 	"fmt"
+
+	"github.com/noamsto/hookyard/pkg/envelope"
 )
 
 // input decodes both stdin shapes: Claude Code's native payload and
 // hookyard's envelope. Claude's session_id/cwd/tool_name/tool_input keys
-// coincide with the envelope's, so one decode serves both; Engine is empty
-// for the native payload.
+// coincide with the envelope's, so the same bytes decode into Event (native
+// payload) and into hookyard's envelope.Envelope; Engine is empty for the
+// native payload.
 type input struct {
 	Event
-	Engine         string          `json:"engine,omitempty"`
-	CanonicalEvent string          `json:"canonical_event,omitempty"`
-	NativeEvent    string          `json:"native_event,omitempty"`
-	Native         json.RawMessage `json:"native,omitempty"`
+	Env envelope.Envelope
+}
+
+// UnmarshalJSON decodes data twice: Event and envelope.Envelope declare the
+// same json keys, which encoding/json would drop as ambiguous if both were
+// embedded in one decode.
+func (in *input) UnmarshalJSON(data []byte) error {
+	if err := json.Unmarshal(data, &in.Event); err != nil {
+		return err
+	}
+	return json.Unmarshal(data, &in.Env)
 }
 
 // canonicalEventMap maps hookyard's engine-neutral canonical events onto
 // houston's Claude event constants, which double as its internal vocabulary.
 var canonicalEventMap = map[string]string{
-	"session_start": EventSessionStart,
-	"prompt_submit": EventUserPromptSubmit,
-	"pre_tool":      EventPreToolUse,
-	"post_tool":     EventPostToolUse,
-	"pre_compact":   EventPreCompact,
-	"turn_end":      EventStop,
+	envelope.SessionStart: EventSessionStart,
+	envelope.PromptSubmit: EventUserPromptSubmit,
+	envelope.PreTool:      EventPreToolUse,
+	envelope.PostTool:     EventPostToolUse,
+	envelope.PreCompact:   EventPreCompact,
+	envelope.TurnEnd:      EventStop,
 }
 
 // nativeExtra is what fromEnvelope reads from a non-Claude native payload.
@@ -48,62 +58,70 @@ func first(a, b string) string {
 // write) — an envelope event houston doesn't track (e.g. an engine-scoped
 // extra like codex:PermissionRequest).
 func fromEnvelope(in input) (event string, ev Event, agent string, err error) {
-	switch in.Engine {
-	case "claude-code":
+	switch in.Env.Engine {
+	case envelope.ClaudeCode:
 		agent = AgentClaude
-	case "codex", "cursor", "pi":
-		agent = in.Engine
+	case envelope.Codex, envelope.Cursor, envelope.Pi:
+		agent = string(in.Env.Engine)
 	default:
-		return "", Event{}, "", fmt.Errorf("unknown engine %q", in.Engine)
+		return "", Event{}, "", fmt.Errorf("unknown engine %q", in.Env.Engine)
 	}
 
-	if in.Engine == "claude-code" {
-		if err := json.Unmarshal(in.Native, &ev); err != nil {
+	native, err := json.Marshal(in.Env.Native)
+	if err != nil {
+		return "", Event{}, "", fmt.Errorf("encode %s native payload: %w", in.Env.Engine, err)
+	}
+
+	if in.Env.Engine == envelope.ClaudeCode {
+		if in.Env.Native == nil {
+			return "", Event{}, "", fmt.Errorf("decode claude-code native payload: missing native")
+		}
+		if err := json.Unmarshal(native, &ev); err != nil {
 			return "", Event{}, "", fmt.Errorf("decode claude-code native payload: %w", err)
 		}
 		event = ev.HookEventName
 		if event == "" {
-			event = in.NativeEvent
+			event = in.Env.NativeEvent
 		}
 		return event, ev, agent, nil
 	}
 
 	var extra nativeExtra
-	if len(in.Native) > 0 {
-		if err := json.Unmarshal(in.Native, &extra); err != nil {
-			return "", Event{}, "", fmt.Errorf("decode %s native payload: %w", in.Engine, err)
+	if len(in.Env.Native) > 0 {
+		if err := json.Unmarshal(native, &extra); err != nil {
+			return "", Event{}, "", fmt.Errorf("decode %s native payload: %w", in.Env.Engine, err)
 		}
 	}
 	ev = Event{
-		SessionID:      in.SessionID,
-		CWD:            in.CWD,
+		SessionID:      in.Env.SessionID,
+		CWD:            in.Env.Cwd,
 		TranscriptPath: first(extra.TranscriptPath, extra.SessionFile),
-		ToolName:       in.ToolName,
-		ToolInput:      in.ToolInput,
+		ToolName:       in.Env.ToolName,
+		ToolInput:      in.Env.ToolInput,
 		Source:         first(extra.Source, extra.Reason),
 		Reason:         extra.Reason,
 	}
 
 	switch {
-	case in.Engine == "pi" && in.NativeEvent == "session_shutdown" && extra.Reason == "reload":
+	case in.Env.Engine == envelope.Pi && in.Env.NativeEvent == "session_shutdown" && extra.Reason == "reload":
 		// pi's /reload emits this then re-emits session_start for the same
 		// session id, both as separate detached processes; if the start
 		// lands first, treating this as SessionEnd would end a live session.
 		event = ""
-	case in.CanonicalEvent == "" && in.Engine == "pi" && in.NativeEvent == "session_shutdown":
+	case in.Env.CanonicalEvent == "" && in.Env.Engine == envelope.Pi && in.Env.NativeEvent == "session_shutdown":
 		event = EventSessionEnd
-	case in.Engine == "pi" && in.CanonicalEvent == "turn_end":
+	case in.Env.Engine == envelope.Pi && in.Env.CanonicalEvent == envelope.TurnEnd:
 		// pi fires turn_end after every LLM response; only agent_settled
 		// (below) is the run's final signal, so this turn is intermediate.
 		event = EventTurnEnd
-	case in.Engine == "pi" && in.NativeEvent == "agent_settled":
+	case in.Env.Engine == envelope.Pi && in.Env.NativeEvent == "agent_settled":
 		event = EventStop
-	case in.Engine == "codex" && in.NativeEvent == "SessionEnd":
+	case in.Env.Engine == envelope.Codex && in.Env.NativeEvent == "SessionEnd":
 		event = EventSessionEnd
-	case in.Engine == "cursor" && in.NativeEvent == "sessionEnd":
+	case in.Env.Engine == envelope.Cursor && in.Env.NativeEvent == "sessionEnd":
 		event = EventSessionEnd
 	default:
-		event = canonicalEventMap[in.CanonicalEvent]
+		event = canonicalEventMap[in.Env.CanonicalEvent]
 	}
 	return event, ev, agent, nil
 }
