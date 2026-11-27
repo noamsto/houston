@@ -304,12 +304,12 @@ func (s *Server) repoCrews(repoPath string) (crews, home []string) {
 	defer cancel()
 	all, err := crewview.ListCrews(ctx, s.crewCLI, repoPath, false)
 	if err != nil {
-		slog.Debug("dispatch: crew crews failed", "repo", repoPath, "err", err)
+		slog.Warn("dispatch: crew crews failed", "repo", repoPath, "err", err)
 		return crews, home
 	}
 	homed, err := crewview.ListCrews(ctx, s.crewCLI, repoPath, true)
 	if err != nil {
-		slog.Debug("dispatch: crew crews --home failed", "repo", repoPath, "err", err)
+		slog.Warn("dispatch: crew crews --home failed", "repo", repoPath, "err", err)
 	}
 	homeSet := map[string]bool{}
 	for _, r := range homed {
@@ -335,22 +335,27 @@ func (s *Server) repoCrews(repoPath string) (crews, home []string) {
 	return crews, home
 }
 
-// crewRow is crew's row for crewID among repoPath's crews, when it lists one.
-func (s *Server) crewRow(ctx context.Context, repoPath, crewID string) (crewview.CrewRow, bool) {
+// errCrewUnavailable is a crew that could not answer: not a crew that lists
+// no such id.
+var errCrewUnavailable = errors.New("crew is unavailable")
+
+// crewRow is crew's row for crewID among repoPath's crews. found is false when
+// crew answered and lists no such crew; err is set when it could not answer.
+func (s *Server) crewRow(ctx context.Context, repoPath, crewID string) (row crewview.CrewRow, found bool, err error) {
 	if s.crewCLI == nil {
-		return crewview.CrewRow{}, false
+		return crewview.CrewRow{}, false, errCrewUnavailable
 	}
 	rows, err := crewview.ListCrews(ctx, s.crewCLI, repoPath, false)
 	if err != nil {
-		slog.Debug("dispatch: crew crews failed", "repo", repoPath, "err", err)
-		return crewview.CrewRow{}, false
+		slog.Warn("dispatch: crew crews failed", "repo", repoPath, "err", err)
+		return crewview.CrewRow{}, false, errCrewUnavailable
 	}
 	for _, r := range rows {
 		if r.ID == crewID {
-			return r, true
+			return r, true, nil
 		}
 	}
-	return crewview.CrewRow{}, false
+	return crewview.CrewRow{}, false, nil
 }
 
 func dispatchCrewUnixPrefix(id string) int64 {
@@ -517,7 +522,13 @@ func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 	dlog.setValidated(valid, repo.Path)
 
 	if valid.Crew != dispatchNewCrew {
-		if _, ok := s.crewRow(r.Context(), repo.Path, valid.Crew); !ok {
+		_, ok, err := s.crewRow(r.Context(), repo.Path, valid.Crew)
+		switch {
+		case err != nil:
+			dlog.status = http.StatusBadGateway
+			writeDispatchJSON(w, http.StatusBadGateway, dispatchResponse{Error: "could not list the repo's crews"})
+			return
+		case !ok:
 			dlog.status = http.StatusNotFound
 			writeDispatchJSON(w, http.StatusNotFound, dispatchResponse{Error: "crew is not a crew of this repo"})
 			return
@@ -652,8 +663,9 @@ func (s *Server) mintDispatchCrew(ctx context.Context, repoPath, id string) *dis
 	case errors.Is(err, crewview.ErrCrewExists):
 		return &dispatchError{"crew", http.StatusConflict, "a new crew was just started in this second — retry"}
 	default:
+		// crew's own words (paths, stderr) stay in the log, not the response.
 		slog.Warn("dispatch: crew init failed", "err", err)
-		return &dispatchError{"crew", http.StatusInternalServerError, "could not create crew: " + err.Error()}
+		return &dispatchError{"crew", http.StatusInternalServerError, "could not create crew"}
 	}
 }
 

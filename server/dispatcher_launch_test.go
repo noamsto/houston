@@ -333,8 +333,10 @@ func TestAwaitDispatcherUnlistedCrew(t *testing.T) {
 	}
 	f.fake(t).add(dispatchTestNewCrewID, 123, true)
 	f.fake(t).listErr = errors.New("boom")
-	if got, _ := f.s.awaitDispatcher(context.Background(), f.repo.Path, dispatchTestNewCrewID, "%7", "", 30*time.Millisecond); got != launchStarting {
-		t.Errorf("failing crew: state = %v, want starting", got)
+	// A crew that cannot say is not "still starting": the launch reports that
+	// the registration could not be read.
+	if got, detail := f.s.awaitDispatcher(context.Background(), f.repo.Path, dispatchTestNewCrewID, "%7", "", 30*time.Millisecond); got != launchUnchecked || detail == "" {
+		t.Errorf("failing crew: state = %v (%q), want unchecked with a reason", got, detail)
 	}
 }
 

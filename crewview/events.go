@@ -234,15 +234,24 @@ func ListCrews(ctx context.Context, run Runner, root string, home bool) ([]CrewR
 		return nil, err
 	}
 	rows := []CrewRow{}
-	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
+	text := strings.TrimSpace(string(out))
+	seen := false // a header or a row: output that is neither is not crew's table
+	for line := range strings.SplitSeq(text, "\n") {
 		f := strings.Split(line, "\t")
+		if f[0] == "crew_id" {
+			seen = true
+		}
 		if len(f) < 6 || f[0] == "" || f[0] == "crew_id" {
 			continue
 		}
+		seen = true
 		r := CrewRow{ID: f[0], Alive: f[5] == "yes"}
 		r.Workers, _ = strconv.Atoi(f[3])
 		r.PID, _ = strconv.Atoi(f[4])
 		rows = append(rows, r)
+	}
+	if text != "" && !seen {
+		return nil, fmt.Errorf("crewview: crew crews: unrecognised output")
 	}
 	return rows, nil
 }

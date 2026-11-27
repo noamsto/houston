@@ -322,8 +322,11 @@ const (
 // dead pane's exit status, or why the pane could not be checked.
 func (s *Server) awaitDispatcher(ctx context.Context, repoPath, crewID, pane, prevPID string, wait time.Duration) (state launchState, detail string) {
 	deadline := time.Now().Add(wait)
+	var listErr error // the last time crew could not say what it records
 	for {
-		if t := s.crewPIDText(ctx, repoPath, crewID); t != "" && t != prevPID {
+		t, err := s.crewPIDText(ctx, repoPath, crewID)
+		listErr = err
+		if err == nil && t != "" && t != prevPID {
 			return launchRegistered, ""
 		}
 		out, err := s.tmuxRun(ctx, []string{"display-message", "-p", "-t", pane, "#{pane_dead} #{pane_dead_status}"})
@@ -343,6 +346,9 @@ func (s *Server) awaitDispatcher(ctx context.Context, repoPath, crewID, pane, pr
 			return launchDead, status
 		}
 		if time.Now().After(deadline) {
+			if listErr != nil {
+				return launchUnchecked, "could not read the dispatcher registration from crew"
+			}
 			return launchStarting, ""
 		}
 		time.Sleep(s.launchPoll)
@@ -352,13 +358,13 @@ func (s *Server) awaitDispatcher(ctx context.Context, repoPath, crewID, pane, pr
 // readPIDText returns the trimmed text of a crew's pid file, or "" when it is
 // missing, not a regular file, unreadable or over 64 bytes.
 // crewPIDText is the dispatcher pid crew records for crewID, as text; "" when
-// crew lists none (or no such crew).
-func (s *Server) crewPIDText(ctx context.Context, repoPath, crewID string) string {
-	row, ok := s.crewRow(ctx, repoPath, crewID)
-	if !ok || row.PID <= 0 {
-		return ""
+// crew lists none (or no such crew), an error when crew could not answer.
+func (s *Server) crewPIDText(ctx context.Context, repoPath, crewID string) (string, error) {
+	row, ok, err := s.crewRow(ctx, repoPath, crewID)
+	if err != nil || !ok || row.PID <= 0 {
+		return "", err
 	}
-	return strconv.Itoa(row.PID)
+	return strconv.Itoa(row.PID), nil
 }
 
 // launchSession picks where the dispatcher window goes: the session holding

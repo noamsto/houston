@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/noamsto/houston/crewfeed"
@@ -301,6 +302,7 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 	joins := map[string]map[string]string{}
 	busRoot := map[string]string{}
 	busViews := map[string]busView{}
+	advance := map[string]string{} // bus -> root its events are read from
 	rosters := map[string]map[string]rosterSnap{}
 	for _, repo := range rootList {
 		bus := s.crewDir(repo)
@@ -326,12 +328,19 @@ func (s *CrewSource) scan() (map[string]Run, bool) {
 			}
 			busViews[bus] = bv
 			joins[bus] = joinDispatchers(bv.ov, wins, panes, hookPanes, s.procs)
-			if s.events != nil {
-				ctx, cancel := context.WithTimeout(context.Background(), eventsTickTimeout)
-				s.events.advance(ctx, bus, cmp.Or(busRoot[bus], repo), s.feed)
-				cancel()
-			}
+			advance[bus] = cmp.Or(busRoot[bus], repo)
 		}
+	}
+	// Each bus's events are read concurrently and bounded by one tick timeout,
+	// so a hung crew stalls neither the other buses nor the joins for long.
+	if s.events != nil && len(advance) > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), eventsTickTimeout)
+		var wg sync.WaitGroup
+		for bus, root := range advance {
+			wg.Go(func() { s.events.advance(ctx, bus, root, s.feed) })
+		}
+		wg.Wait()
+		cancel()
 	}
 	buses := slices.Sorted(maps.Keys(joins))
 	if s.views != nil {
@@ -571,7 +580,7 @@ func (s *CrewSource) crewHomes(buses []string, joins map[string]map[string]strin
 const crewDirTimeout = 5 * time.Second
 
 // eventsTickTimeout bounds one bus's event reads in a scan tick.
-const eventsTickTimeout = 30 * time.Second
+const eventsTickTimeout = 10 * time.Second
 
 // crewDir resolves where dispatcher writes its bus for a checkout.
 // lazytmux's @git_root is the worktree's top level, but dispatcher writes under

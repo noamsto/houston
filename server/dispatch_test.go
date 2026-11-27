@@ -1455,3 +1455,42 @@ func TestDispatchImageWriteFailure(t *testing.T) {
 		t.Error("minted crew vanished")
 	}
 }
+
+// A crew that cannot answer is not a crew that lists no such id: the check
+// answers 502, never a 404 that blames the request.
+func TestDispatchExistingCrewWhenCrewIsUnavailable(t *testing.T) {
+	repo := newDispatchTestRepo(t, "1700000000-123")
+	stub := &stubDispatchRunner{}
+	s := newDispatchServer(t, stub.run, stubDispatchRepos([]dispatchRepo{repo}, nil))
+	crewOf(t, s).listErr = errors.New("exit 1: secret path /state/crews")
+
+	rec := doDispatch(t, s, dispatchHTTPRequest("POST", dispatchRequestJSON(t, validDispatchRequest(repo, "1700000000-123"))))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status %d, want 502: %s", rec.Code, rec.Body)
+	}
+	if body := rec.Body.String(); strings.Contains(body, "secret") {
+		t.Errorf("crew's own words reached the response: %s", body)
+	}
+	if stub.count() != 0 {
+		t.Errorf("runner ran %d times", stub.count())
+	}
+}
+
+// `crew init` failing is a 500 whose body carries none of crew's words.
+func TestDispatchNewCrewInitFailure(t *testing.T) {
+	repo := newDispatchTestRepo(t)
+	stub := &stubDispatchRunner{}
+	s := newDispatchServer(t, stub.run, stubDispatchRepos([]dispatchRepo{repo}, nil))
+	crewOf(t, s).initErr = errors.New("crew init: exit 1: /state/crews: permission denied")
+
+	rec := doDispatch(t, s, dispatchHTTPRequest("POST", dispatchRequestJSON(t, validDispatchRequest(repo, dispatchNewCrew))))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status %d, want 500: %s", rec.Code, rec.Body)
+	}
+	if body := rec.Body.String(); strings.Contains(body, "/state") || strings.Contains(body, "permission") {
+		t.Errorf("crew's own words reached the response: %s", body)
+	}
+	if stub.count() != 0 {
+		t.Errorf("runner ran %d times", stub.count())
+	}
+}

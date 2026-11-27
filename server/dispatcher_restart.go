@@ -197,7 +197,11 @@ func (s *Server) handleRunRestart(w http.ResponseWriter, r *http.Request) {
 
 	// The repo checkout is the parent of the bus's common git dir, where crew
 	// runs.
-	oldPID := s.crewPIDText(r.Context(), filepath.Dir(filepath.Dir(run.CrewBus)), crew)
+	oldPID, err := s.crewPIDText(r.Context(), filepath.Dir(filepath.Dir(run.CrewBus)), crew)
+	if err != nil {
+		reply(http.StatusBadGateway, dispatcherResponse{Error: "could not read the crew's dispatcher pid"})
+		return
+	}
 	pid, err := strconv.Atoi(oldPID)
 	if err != nil {
 		pid = 0
@@ -239,7 +243,11 @@ func (s *Server) handleRunRestart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rlog.repo = repo.Path
-	if _, ok := s.crewRow(r.Context(), repo.Path, crew); !ok {
+	switch _, ok, err := s.crewRow(r.Context(), repo.Path, crew); {
+	case err != nil:
+		reply(http.StatusBadGateway, dispatcherResponse{Error: "could not list the repo's crews"})
+		return
+	case !ok:
 		reply(http.StatusNotFound, dispatcherResponse{Error: "crew is not a crew of this repo"})
 		return
 	}

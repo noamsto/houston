@@ -126,6 +126,7 @@ func TestJoinDispatchers(t *testing.T) {
 			disp(f).PID = nil
 			disp(f).Alive = new(false)
 		}, none},
+		{"dispatcher registered elsewhere", func(f *joinFixture) { disp(f).Where = "elsewhere" }, none},
 		{"empty overview", func(f *joinFixture) { f.ov = crewview.Overview{} }, none},
 	}
 	for _, c := range cases {

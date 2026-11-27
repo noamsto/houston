@@ -684,3 +684,16 @@ func TestDispatcherLaunchNeverSetsOldEnded(t *testing.T) {
 		t.Errorf("launch response carries old_ended: %s", rec.Body)
 	}
 }
+
+// A crew that cannot answer is a 502, not "the crew records no pid" and not
+// "not a crew of this repo".
+func TestRestartCrewUnavailable(t *testing.T) {
+	f := newRestartFixture(t)
+	f.fake(t).listErr = errors.New("exit 1")
+	rec, resp := f.post(t, "{}")
+	wantStatus(t, rec, http.StatusBadGateway)
+	if resp.Error != "could not read the crew's dispatcher pid" {
+		t.Errorf("error = %q", resp.Error)
+	}
+	f.noWindowOrKill(t)
+}

@@ -2,6 +2,7 @@ package runs
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"maps"
 	"sync"
@@ -77,19 +78,23 @@ func (e *eventTails) advance(ctx context.Context, bus, root string, feed *crewfe
 			return
 		}
 		e.mu.Lock()
-		t.warned = ""
 		if page.Reset {
 			t.fold = identityFold{}
 			t.crews = map[string]bool{}
 		}
 		rows := make([]crewfeed.Row, 0, len(page.Events))
+		skipped := 0
 		for _, ev := range page.Events {
 			off, ok := crewview.EventOffset(ev.ID)
 			if !ok {
+				skipped++
 				continue
 			}
 			rows = append(rows, crewfeed.Row{Offset: off, Line: ev.Row})
 			t.fold.Row(ev.Row)
+		}
+		if skipped > 0 {
+			t.warnLocked(bus, fmt.Sprintf("%d event(s) with an unreadable id skipped", skipped))
 		}
 		for _, id := range t.fold.ids {
 			if id.crew != "" {
@@ -104,6 +109,11 @@ func (e *eventTails) advance(ctx context.Context, bus, root string, feed *crewfe
 		}
 		first = false
 		if !page.More {
+			e.mu.Lock()
+			if skipped == 0 {
+				t.warned = ""
+			}
+			e.mu.Unlock()
 			return
 		}
 	}
@@ -112,13 +122,19 @@ func (e *eventTails) advance(ctx context.Context, bus, root string, feed *crewfe
 func (e *eventTails) fail(bus string, t *busTail, err error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if t == nil {
+	if t != nil {
+		t.warnLocked(bus, err.Error())
+	}
+}
+
+// warnLocked logs msg unless it is the last thing warned about for the bus, so
+// a condition that holds every tick is logged once. e.mu is held.
+func (t *busTail) warnLocked(bus, msg string) {
+	if t.warned == msg {
 		return
 	}
-	if msg := err.Error(); t.warned != msg {
-		t.warned = msg
-		slog.Warn("crew source: cannot read the bus events", "bus", bus, "err", err)
-	}
+	t.warned = msg
+	slog.Warn("crew source: bus events", "bus", bus, "problem", msg)
 }
 
 // identity is the fold of bus's rows so far: who each branch's worker is.

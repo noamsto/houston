@@ -123,3 +123,17 @@ func TestListCrews(t *testing.T) {
 		t.Errorf("calls = %v, want %v", calls, wantCall)
 	}
 }
+
+// Output that is neither crew's table nor empty is an error, not "no crews".
+func TestListCrewsUnrecognisedOutput(t *testing.T) {
+	var calls []call
+	if _, err := ListCrews(context.Background(), fakeRunner("usage: crew crews [--mine]\n", nil, &calls), "/repo", false); err == nil {
+		t.Error("unrecognised output was read as no crews")
+	}
+	if rows, err := ListCrews(context.Background(), fakeRunner("", nil, &calls), "/repo", false); err != nil || len(rows) != 0 {
+		t.Errorf("empty output = %v, %v; want no crews", rows, err)
+	}
+	if rows, err := ListCrews(context.Background(), fakeRunner("crew_id\tlast_event_s\tfirst_event_s\tworkers\tpid\talive\n", nil, &calls), "/repo", false); err != nil || len(rows) != 0 {
+		t.Errorf("header only = %v, %v; want no crews", rows, err)
+	}
+}

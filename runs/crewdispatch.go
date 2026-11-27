@@ -36,7 +36,7 @@ func joinDispatchers(ov crewview.Overview, wins []tmux.WindowOptions, panes []tm
 	best := map[string]string{} // pane id -> crew id
 	for _, w := range ov.Workers {
 		d := w.Dispatcher
-		if d == nil || d.Pane == nil || w.Crew == "" {
+		if d == nil || d.Pane == nil || w.Crew == "" || d.Where == "elsewhere" {
 			continue
 		}
 		crewID, paneID := w.Crew, strings.TrimSpace(*d.Pane)
