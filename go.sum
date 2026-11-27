@@ -1,12 +1,12 @@
 github.com/fsnotify/fsnotify v1.9.0 h1:2Ml+OJNzbYCTzsxtv8vKSFD9PbJjmhYF14k/jKC7S9k=
 github.com/fsnotify/fsnotify v1.9.0/go.mod h1:8jBTzvmWwFyi3Pb8djgCCO5IBqzKJ/Jwo8TRcHyHii0=
+github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
+github.com/google/go-cmp v0.7.0/go.mod h1:pXiqmnSA92OHEEa9HXL2W4E7lf9JzCmGVUdgjX3N/iU=
 github.com/gorilla/websocket v1.5.3 h1:saDtZ6Pbx/0u+bgYQ3q96pZgCzfhKXGPqt7kZ72aNNg=
 github.com/gorilla/websocket v1.5.3/go.mod h1:YR8l580nyteQvAITg2hZ9XVh4b55+EU/adAjf1fMHhE=
 github.com/noamsto/hookyard v0.0.0-20261126173833-d2e4a82c96c1 h1:8dS5IbYc/OkAb/N7qnKYmlBjDOM/4KGaE7C1R97ekaM=
 github.com/noamsto/hookyard v0.0.0-20261126173833-d2e4a82c96c1/go.mod h1:xTLb0GtvS26KvRKih/msuslA2/IDccGzHwjZXfYHkL8=
 github.com/noamsto/tmux-remux v0.11.0 h1:1kvl/4Bqt2B/Q8pL9fH7sIlykC86Y7dzi6dqH3MyJ+k=
 github.com/noamsto/tmux-remux v0.11.0/go.mod h1:IiBFj+/TcNLpupVjK5cCozHTRnSwsFo7STFEPxu60lA=
-golang.org/x/sys v0.13.0 h1:Af8nKPmuFypiUBjVoU9V20FiaFXOcuZI21p0ycVYYGE=
-golang.org/x/sys v0.13.0/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
 golang.org/x/sys v0.50.0 h1:dkKZEFTEKaLr1sjhs0WiKqoi8Jj5nHbS3Njmx1UoMJs=
 golang.org/x/sys v0.50.0/go.mod h1:hNLxWAXmnKAxqDtdwIYC4bM9oQPEecfsnNMuSxOs3og=

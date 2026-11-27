@@ -40,8 +40,8 @@ func paneRow(id, session string, win, idx int, cmd string, active bool, status, 
 		ID: id, Session: session, WindowIndex: win, PaneIndex: idx, Command: cmd, Active: active,
 		ServerPID: 1966, PID: panePID,
 		Extra: map[string]string{
-			"@claude_status": status, "@agent_screen": screen, "@claude_task": task,
-			"@crew_role": role, "start_time": start,
+			extraClaudeStatus: status, extraAgentScreen: screen, extraClaudeTask: task,
+			extraCrewRole: role, "start_time": start,
 		},
 	}
 }
@@ -168,7 +168,7 @@ func TestPaneExtraFormatsCarryTheServerIdentity(t *testing.T) {
 // The screen-scraped engines (pi, codex, cursor) carry no @claude_status, so
 // the pane listing must expose @agent_screen for a crew record to join them.
 func TestPaneExtraFormatsCarryAgentScreen(t *testing.T) {
-	if !slices.Contains(paneExtraFormats, "@agent_screen") {
+	if !slices.Contains(paneExtraFormats, extraAgentScreen) {
 		t.Error("extras lost @agent_screen: pi/codex/cursor panes would never join a crew record")
 	}
 }

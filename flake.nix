@@ -6,6 +6,7 @@
     # Only the Go toolchain comes from here: tmux-remux needs go >= 1.26.7, newer
     # than the go in the pinned nixpkgs, and bumping all of nixpkgs would drag
     # in new golangci-lint rules and a nilaway that does not build with go 1.27.
+    # Bump it on its own: `nix flake update nixpkgs-go`.
     nixpkgs-go.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-parts.url = "github:hercules-ci/flake-parts";
     git-hooks-nix.url = "github:cachix/git-hooks.nix";

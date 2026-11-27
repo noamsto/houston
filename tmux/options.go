@@ -2,7 +2,6 @@ package tmux
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -21,9 +20,20 @@ var windowExtraFormats = []string{
 	"@pr_check_state", "@pr_mergeable", "@window_task", "@git_root", "@crew_color",
 }
 
-var paneExtraFormats = []string{
-	"@claude_status", "@agent_screen", "@claude_task", "@crew_role", "start_time",
-}
+// flat wraps a free-text pane option so tmux joins embedded newlines with a
+// space. tmux-remux parses a pane listing strictly (one bad line fails the
+// whole call), and a newline inside @claude_task would otherwise split a row.
+// The wrapped name is also the key in PaneRow.Extra.
+func flat(name string) string { return "s/\n/ /:" + name }
+
+var (
+	extraClaudeStatus = flat("@claude_status")
+	extraAgentScreen  = flat("@agent_screen")
+	extraClaudeTask   = flat("@claude_task")
+	extraCrewRole     = flat("@crew_role")
+)
+
+var paneExtraFormats = []string{extraClaudeStatus, extraAgentScreen, extraClaudeTask, extraCrewRole, "start_time"}
 
 // WindowOptions is lazytmux's per-window enrichment. Every field may be empty:
 // a window with no linked issue or PR simply has none.
@@ -102,9 +112,6 @@ func (c *Client) ListWindowOptions() ([]WindowOptions, error) {
 	// decoration options once per window.
 	rc := c.remux().SetExtraFormats(nil, windowExtraFormats, nil)
 	out, err := rc.Run(context.Background(), []string{"list-windows", "-a", "-F", rc.WindowFormat()})
-	if errors.Is(err, rtmux.ErrNoServer) {
-		return nil, nil
-	}
 	if err != nil {
 		return nil, err
 	}
@@ -115,6 +122,12 @@ func (c *Client) ListPaneOptions() ([]PaneOptions, error) {
 	rows, err := c.remux().SetExtraFormats(nil, nil, paneExtraFormats).ListPanes(context.Background())
 	if err != nil {
 		return nil, err
+	}
+	// A running tmux server always has a pane; tmux-remux maps "no server" to
+	// an empty result, but callers must see it as an error, not as "every pane
+	// is gone" (a transient failure must not mark every run Gone).
+	if len(rows) == 0 {
+		return nil, rtmux.ErrNoServer
 	}
 	res := make([]PaneOptions, 0, len(rows))
 	for _, r := range rows {
@@ -158,9 +171,9 @@ func paneOptionsFromRow(r rtmux.PaneRow) PaneOptions {
 	}
 	return PaneOptions{
 		PaneID: r.ID, Target: fmt.Sprintf("%s:%d", r.Session, r.WindowIndex),
-		ClaudeStatus: x["@claude_status"], AgentScreen: x["@agent_screen"],
-		ClaudeTask: x["@claude_task"], Command: r.Command, Index: r.PaneIndex,
-		Active: r.Active, CrewRole: x["@crew_role"],
+		ClaudeStatus: x[extraClaudeStatus], AgentScreen: x[extraAgentScreen],
+		ClaudeTask: x[extraClaudeTask], Command: r.Command, Index: r.PaneIndex,
+		Active: r.Active, CrewRole: x[extraCrewRole],
 		ServerPID: serverPID, ServerStart: start, PanePID: r.PID,
 	}
 }
